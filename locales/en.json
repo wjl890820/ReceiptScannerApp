@@ -1,0 +1,50 @@
+{
+  "home": {
+    "title": "Hello, 王江龍!",
+    "subtitle": "Please select a receipt image and call Gemini to analyze it.",
+    "timeRange": {
+      "7d": "7 days",
+      "30d": "30 days",
+      "all": "All"
+    },
+    "pieChart": {
+      "totalLabel": "Total Spending",
+      "emptyData": "No data"
+    },
+    "insight": {
+      "noData": "No data",
+      "mainCategory": "Spending is mainly concentrated in 【{category}】（{percentage}%）",
+      "structureConcentrated": ", structure is concentrated"
+    },
+    "pro": {
+      "title": "Advanced Insights Pro",
+      "subtitleNoData": "Scan a receipt first to see spending structure and insights",
+      "subtitleWithData": "Unlock deeper insights and longer time ranges"
+    }
+  },
+  "pro": {
+    "title": "Advanced Insights Pro",
+    "back": "← Back",
+    "sections": {
+      "free": {
+        "title": "Current Features (Free)",
+        "features": {
+          "basicStats": "Basic spending category statistics",
+          "timeRanges": "7 days / 30 days / All time ranges",
+          "pieChart": "Pie chart visualization",
+          "basicInsights": "Basic spending insight alerts",
+          "receiptEdit": "Receipt recognition and editing"
+        }
+      },
+      "unlock": {
+        "title": "Pro Will Unlock",
+        "features": {
+          "deepAnalysis": "Deeper spending structure analysis",
+          "longerRanges": "Longer time ranges (e.g., monthly / yearly)",
+          "fineAlerts": "Finer spending alerts"
+        }
+      }
+    },
+    "footer": "Pro features coming soon, stay tuned!"
+  }
+}

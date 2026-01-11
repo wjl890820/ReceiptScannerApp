@@ -1,0 +1,50 @@
+{
+  "home": {
+    "title": "こんにちは、王江龍さん！",
+    "subtitle": "レシート画像を選択し、Geminiで解析してください。",
+    "timeRange": {
+      "7d": "7日",
+      "30d": "30日",
+      "all": "すべて"
+    },
+    "pieChart": {
+      "totalLabel": "総支出",
+      "emptyData": "データなし"
+    },
+    "insight": {
+      "noData": "データなし",
+      "mainCategory": "今期の支出は主に【{category}】（{percentage}%）に集中しています",
+      "structureConcentrated": "、構造が集中しています"
+    },
+    "pro": {
+      "title": "高度なインサイト Pro",
+      "subtitleNoData": "まずレシートをスキャンして、支出構造とインサイトを確認できます",
+      "subtitleWithData": "より深いインサイトとより長い期間を解除"
+    }
+  },
+  "pro": {
+    "title": "高度なインサイト Pro",
+    "back": "← 戻る",
+    "sections": {
+      "free": {
+        "title": "現在の機能（無料版）",
+        "features": {
+          "basicStats": "基本的な支出カテゴリ統計",
+          "timeRanges": "7日 / 30日 / すべての期間",
+          "pieChart": "円グラフの可視化",
+          "basicInsights": "基本的な支出インサイトアラート",
+          "receiptEdit": "レシート認識と編集"
+        }
+      },
+      "unlock": {
+        "title": "Proで解除される機能",
+        "features": {
+          "deepAnalysis": "より深い支出構造分析",
+          "longerRanges": "より長い期間（例：月次 / 年次）",
+          "fineAlerts": "より細かい支出アラート"
+        }
+      }
+    },
+    "footer": "Pro機能は近日公開予定です。お楽しみに！"
+  }
+}

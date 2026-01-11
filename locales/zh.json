@@ -1,0 +1,50 @@
+{
+  "home": {
+    "title": "你好， 王江龍！",
+    "subtitle": "请选择要识别的小票图片，并调用 Gemini 进行解析。",
+    "timeRange": {
+      "7d": "7天",
+      "30d": "30天",
+      "all": "全部"
+    },
+    "pieChart": {
+      "totalLabel": "总支出",
+      "emptyData": "暂无数据"
+    },
+    "insight": {
+      "noData": "暂无数据",
+      "mainCategory": "本期消费主要集中在【{category}】（{percentage}%）",
+      "structureConcentrated": "，结构偏集中"
+    },
+    "pro": {
+      "title": "高级洞察 Pro",
+      "subtitleNoData": "先扫描一张小票，即可看到消费结构与洞察",
+      "subtitleWithData": "解锁更深入的洞察与更长时间范围"
+    }
+  },
+  "pro": {
+    "title": "高级洞察 Pro",
+    "back": "← 返回",
+    "sections": {
+      "free": {
+        "title": "当前功能（免费版）",
+        "features": {
+          "basicStats": "基础消费分类统计",
+          "timeRanges": "7天 / 30天 / 全部时间范围",
+          "pieChart": "饼图可视化",
+          "basicInsights": "基础消费洞察提示",
+          "receiptEdit": "收据识别和编辑"
+        }
+      },
+      "unlock": {
+        "title": "Pro 将解锁",
+        "features": {
+          "deepAnalysis": "更深入的消费结构分析",
+          "longerRanges": "更长时间范围（如月度 / 年度）",
+          "fineAlerts": "更精细的消费提醒"
+        }
+      }
+    },
+    "footer": "Pro 功能即将推出，敬请期待！"
+  }
+}
