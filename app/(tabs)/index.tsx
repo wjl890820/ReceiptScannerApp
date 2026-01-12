@@ -3,17 +3,18 @@
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
+  SafeAreaView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Text as SvgText, TSpan } from 'react-native-svg';
 
 import {
@@ -26,13 +27,9 @@ import { listReceipts, saveReceipt, type ReceiptRow } from '@/lib/db';
 import { t } from '@/lib/i18n';
 
 // ---------- 本地分类（低成本，0 调用 AI）----------
-// 规则：如果 item.category 已经存在就保留；否则根据商品名做简单归类。
-// 你现在 Home 里能分类，说明你项目里可能已经有分类逻辑；
-// 这份逻辑的核心作用是：确保“分类字段最终写入 analysis.items[].category”，从而保存进历史。
 function inferCategory(name: string): string {
   const n = (name || '').toLowerCase();
 
-  // 饮料
   if (
     n.includes('お茶') ||
     n.includes('茶') ||
@@ -47,7 +44,6 @@ function inferCategory(name: string): string {
     return '饮料';
   }
 
-  // 零食/甜品
   if (
     n.includes('チョコ') ||
     n.includes('ビス') ||
@@ -62,7 +58,6 @@ function inferCategory(name: string): string {
     return '零食/甜品';
   }
 
-  // 主食（面包/米/面/便当）
   if (
     n.includes('ロール') ||
     n.includes('パン') ||
@@ -78,7 +73,6 @@ function inferCategory(name: string): string {
     return '主食';
   }
 
-  // 冷冻/熟食（惣菜、天ぷら、揚げ物等）
   if (
     n.includes('惣菜') ||
     n.includes('天') ||
@@ -93,7 +87,6 @@ function inferCategory(name: string): string {
     return '冷冻/熟食';
   }
 
-  // 生鲜（肉/鱼/蔬菜/菌菇）
   if (
     n.includes('牛') ||
     n.includes('豚') ||
@@ -112,7 +105,6 @@ function inferCategory(name: string): string {
     return '生鲜';
   }
 
-  // 调味料
   if (
     n.includes('みそ') ||
     n.includes('味噌') ||
@@ -144,7 +136,7 @@ function applyLocalCategories(analysis: ReceiptAnalysis): ReceiptAnalysis {
       quantity: typeof it?.quantity === 'number' ? it.quantity : 1,
       unitPrice: typeof it?.unitPrice === 'number' ? it.unitPrice : 0,
       lineTotal: typeof it?.lineTotal === 'number' ? it.lineTotal : 0,
-      category, // 关键：把分类字段写进 items
+      category,
     } as any;
   });
 
@@ -152,29 +144,6 @@ function applyLocalCategories(analysis: ReceiptAnalysis): ReceiptAnalysis {
     ...analysis,
     items: enrichedItems as any,
   };
-}
-
-function buildCategoryTotals(items: any[]) {
-  const map = new Map<string, number>();
-
-  for (const it of items) {
-    const cat = (it?.category || '未分类').trim() || '未分类';
-    const amt =
-      typeof it?.lineTotal === 'number'
-        ? it.lineTotal
-        : typeof it?.unitPrice === 'number' && typeof it?.quantity === 'number'
-          ? it.unitPrice * it.quantity
-          : 0;
-
-    map.set(cat, (map.get(cat) ?? 0) + (Number.isFinite(amt) ? amt : 0));
-  }
-
-  const arr = Array.from(map.entries()).map(([category, total]) => ({
-    category,
-    total,
-  }));
-  arr.sort((a, b) => b.total - a.total);
-  return arr;
 }
 // ---------- 本地分类结束 ----------
 
@@ -235,7 +204,6 @@ function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
   for (const receipt of receipts) {
     let items: ReceiptItem[] | null = null;
 
-    // 优先使用 user_items_json，否则使用 analysis_json
     if (receipt.user_items_json) {
       items = safeParseItems(receipt.user_items_json);
     } else {
@@ -285,7 +253,7 @@ type InsightContext = {
 };
 
 type InsightRule = {
-  priority: number; // 越高越优先
+  priority: number;
   level: InsightLevel;
   condition: (ctx: InsightContext) => boolean;
   messages: string[];
@@ -317,7 +285,6 @@ function computeInsightContext(
   );
   const nonEssentialPct = totalSpending > 0 ? (nonEssentialAmount / totalSpending) * 100 : 0;
 
-  // 计算收据级别的统计
   const receiptTotals: number[] = [];
   for (const receipt of receipts) {
     let items: ReceiptItem[] | null = null;
@@ -550,12 +517,77 @@ const INSIGHT_RULES: InsightRuleWithMessages[] = [
   },
 ];
 
-function generateInsight(context: InsightContext): { message: string; level: InsightLevel } | null {
+// Period-over-period comparison
+function computePeriodComparison(
+  receipts: ReceiptRow[],
+  timeRange: TimeRange
+): { category: string; change: number; from: number; to: number } | null {
+  if (timeRange === 'ALL' || receipts.length === 0) {
+    return null;
+  }
+
+  const now = Date.now();
+  const days = timeRange === '7D' ? 7 : 30;
+  const currentStart = now - days * 24 * 60 * 60 * 1000;
+  const previousStart = currentStart - days * 24 * 60 * 60 * 1000;
+  const previousEnd = currentStart;
+
+  const currentReceipts = receipts.filter((r) => r.created_at >= currentStart);
+  const previousReceipts = receipts.filter(
+    (r) => r.created_at >= previousStart && r.created_at < previousEnd
+  );
+
+  const currentData = aggregateCategoryData(currentReceipts);
+  const previousData = aggregateCategoryData(previousReceipts);
+
+  if (currentData.length === 0 || previousData.length === 0) {
+    return null;
+  }
+
+  // Find the category with the largest absolute change
+  const changes: Array<{ category: string; change: number; from: number; to: number }> = [];
+
+  for (const current of currentData) {
+    const previous = previousData.find((p) => p.category === current.category);
+    const prevPct = previous?.percentage || 0;
+    const currPct = current.percentage;
+    const change = currPct - prevPct;
+
+    if (Math.abs(change) > 2) {
+      // Only show significant changes (>2%)
+      changes.push({
+        category: current.category,
+        change,
+        from: prevPct,
+        to: currPct,
+      });
+    }
+  }
+
+  if (changes.length === 0) {
+    return null;
+  }
+
+  // Return the category with the largest absolute change
+  changes.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+  return changes[0];
+}
+
+type StructuredInsight = {
+  headline: string;
+  reasons: string[];
+  suggestion: string;
+  level: InsightLevel;
+};
+
+function generateStructuredInsight(
+  context: InsightContext,
+  periodComparison: { category: string; change: number; from: number; to: number } | null
+): StructuredInsight | null {
   if (context.totalSpending === 0) {
     return null;
   }
 
-  // 按优先级降序排序，找到第一个匹配的规则（最高优先级）
   const sortedRules = [...INSIGHT_RULES].sort((a, b) => b.priority - a.priority);
   const matchedRule = sortedRules.find((rule) => rule.condition(context));
 
@@ -563,7 +595,112 @@ function generateInsight(context: InsightContext): { message: string; level: Ins
     return null;
   }
 
-  // 随机选择一个消息模板（使用稳定的随机数，基于总金额）
+  const concentration = context.top1Pct + context.top2Pct;
+  const reasons: string[] = [];
+
+  // Build quantified reasons
+  if (context.top1Pct >= 50) {
+    reasons.push(
+      t('home.insight.reason.top1', {
+        category: context.top1Category || '',
+        percentage: String(Math.round(context.top1Pct)),
+      })
+    );
+  }
+
+  if (concentration >= 80) {
+    reasons.push(
+      t('home.insight.reason.concentration', {
+        percentage: String(Math.round(concentration)),
+      })
+    );
+  }
+
+  if (context.nonEssentialPct >= 35) {
+    reasons.push(
+      t('home.insight.reason.nonEssential', {
+        percentage: String(Math.round(context.nonEssentialPct)),
+      })
+    );
+  }
+
+  if (context.uncategorizedPct >= 20) {
+    reasons.push(
+      t('home.insight.reason.uncategorized', {
+        percentage: String(Math.round(context.uncategorizedPct)),
+      })
+    );
+  }
+
+  // Generate headline based on concentration
+  let headline = '';
+  if (concentration >= 80) {
+    headline = t('home.insight.headline.highConcentration', {
+      percentage: String(Math.round(concentration)),
+    });
+  } else if (concentration >= 60) {
+    headline = t('home.insight.headline.moderateConcentration', {
+      percentage: String(Math.round(concentration)),
+    });
+  } else {
+    headline = t('home.insight.headline.balanced');
+  }
+
+  // Add period comparison if available
+  if (periodComparison && Math.abs(periodComparison.change) > 2) {
+    const changeText =
+      periodComparison.change > 0
+        ? t('home.insight.comparison.increased', {
+            category: periodComparison.category,
+            change: String(Math.round(Math.abs(periodComparison.change))),
+            from: String(Math.round(periodComparison.from)),
+            to: String(Math.round(periodComparison.to)),
+          })
+        : t('home.insight.comparison.decreased', {
+            category: periodComparison.category,
+            change: String(Math.round(Math.abs(periodComparison.change))),
+            from: String(Math.round(periodComparison.from)),
+            to: String(Math.round(periodComparison.to)),
+          });
+    reasons.push(changeText);
+  }
+
+  // Generate suggestion based on the matched rule
+  let suggestion = '';
+  if (matchedRule.level === 'alert') {
+    if (context.top1Pct >= 60) {
+      suggestion = t('home.insight.suggestion.diversify');
+    } else if (context.nonEssentialPct >= 45) {
+      suggestion = t('home.insight.suggestion.controlNonEssential');
+    } else if (context.uncategorizedPct >= 35) {
+      suggestion = t('home.insight.suggestion.improveCategories');
+    }
+  } else if (matchedRule.level === 'warn') {
+    suggestion = t('home.insight.suggestion.monitor');
+  } else {
+    suggestion = t('home.insight.suggestion.maintain');
+  }
+
+  return {
+    headline,
+    reasons: reasons.length > 0 ? reasons : [t('home.insight.reason.general')],
+    suggestion,
+    level: matchedRule.level,
+  };
+}
+
+function generateInsight(context: InsightContext): { message: string; level: InsightLevel } | null {
+  if (context.totalSpending === 0) {
+    return null;
+  }
+
+  const sortedRules = [...INSIGHT_RULES].sort((a, b) => b.priority - a.priority);
+  const matchedRule = sortedRules.find((rule) => rule.condition(context));
+
+  if (!matchedRule) {
+    return null;
+  }
+
   const messageIndex = Math.floor((context.totalSpending % matchedRule.messages.length) || 0);
   const message = matchedRule.messages[messageIndex](context);
 
@@ -581,7 +718,7 @@ function generatePiePath(
   radius: number
 ): string[] {
   const paths: string[] = [];
-  let currentAngle = -90; // 从顶部开始
+  let currentAngle = -90;
 
   for (const item of data) {
     if (item.percentage === 0) continue;
@@ -620,7 +757,6 @@ function PieChart({ data, total, size = 200 }: PieChartProps) {
   const centerY = size / 2;
   const radius = size / 2 - 20;
 
-  // 过滤掉百分比为0的数据
   const validData = data.filter((item) => item.percentage > 0);
   const paths = generatePiePath(validData, centerX, centerY, radius);
 
@@ -670,19 +806,12 @@ type TimeRange = '7D' | '30D' | 'ALL';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [analysis, setAnalysis] = useState<ReceiptAnalysis | null>(null);
-  const [loading, setLoading] = useState(false);
+  const insets = useSafeAreaInsets();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('ALL');
-
-  // 是否已保存（防止重复保存）
-  const [savedId, setSavedId] = useState<string | null>(null);
-  const canSave = useMemo(
-    () => !!imageUri && !!analysis && !savedId,
-    [imageUri, analysis, savedId]
-  );
+  const [scanning, setScanning] = useState(false);
+  const [stickyHeight, setStickyHeight] = useState(0);
 
   // 加载所有收据用于饼图
   const loadReceipts = useCallback(async () => {
@@ -697,14 +826,7 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // 当保存成功后刷新收据列表
-  useEffect(() => {
-    if (savedId) {
-      loadReceipts();
-    }
-  }, [savedId, loadReceipts]);
-
-  // 当屏幕获得焦点时刷新数据（例如从 History 删除收据后返回）
+  // 当屏幕获得焦点时刷新数据
   useFocusEffect(
     useCallback(() => {
       loadReceipts();
@@ -733,119 +855,114 @@ export default function HomeScreen() {
     return categoryData.reduce((sum, item) => sum + item.amount, 0);
   }, [categoryData]);
 
-  // 生成基础洞察文本
-  const insightText = useMemo(() => {
-    if (totalAmount === 0) {
-      return t('home.insight.noData');
-    }
-
-    if (categoryData.length === 0) {
-      return t('home.insight.noData');
-    }
-
-    const topCategory = categoryData[0];
-    const percentage = Math.round(topCategory.percentage);
-    let text = t('home.insight.mainCategory', {
-      category: topCategory.category,
-      percentage: String(percentage),
-    });
-
-    if (topCategory.percentage >= 60) {
-      text += t('home.insight.structureConcentrated');
-    }
-
-    return text;
-  }, [categoryData, totalAmount]);
-
-  // 生成高级洞察（规则引擎）
-  const advancedInsight = useMemo(() => {
-    const context = computeInsightContext(filteredReceipts, categoryData);
-    return generateInsight(context);
+  // Compute insight context
+  const insightContext = useMemo(() => {
+    return computeInsightContext(filteredReceipts, categoryData);
   }, [filteredReceipts, categoryData]);
 
-  const itemsForUI = useMemo(() => {
-    const items = analysis?.items;
-    return Array.isArray(items) ? (items as any[]) : [];
-  }, [analysis]);
+  // Period-over-period comparison
+  const periodComparison = useMemo(() => {
+    return computePeriodComparison(receipts, timeRange);
+  }, [receipts, timeRange]);
 
-  const categoryTotals = useMemo(() => {
-    return buildCategoryTotals(itemsForUI);
-  }, [itemsForUI]);
+  // Generate structured insight
+  const structuredInsight = useMemo(() => {
+    return generateStructuredInsight(insightContext, periodComparison);
+  }, [insightContext, periodComparison]);
 
-  // 选择相册里的小票图片
-  const handlePickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('权限被拒绝', '请在系统设置中允许本应用访问相册。');
-      return;
+  // KPI data
+  const kpiData = useMemo(() => {
+    if (categoryData.length === 0) {
+      return null;
     }
+    const topCategory = categoryData[0];
+    const nonEssentialCategories = ['零食/甜品', '饮料', '外食'];
+    const nonEssentialAmount = categoryData
+      .filter((item) => nonEssentialCategories.includes(item.category))
+      .reduce((sum, item) => sum + item.amount, 0);
+    const nonEssentialPct = totalAmount > 0 ? (nonEssentialAmount / totalAmount) * 100 : 0;
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      // 你日志提示 MediaTypeOptions deprecated，这个先不动也能用
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 1,
-    });
+    return {
+      totalSpending: totalAmount,
+      topCategory: topCategory.category,
+      topCategoryPct: topCategory.percentage,
+      nonEssentialPct,
+    };
+  }, [categoryData, totalAmount]);
 
-    if (!result.canceled) {
-      const uri = result.assets[0]?.uri;
-      if (uri) {
-        setImageUri(uri);
-        setAnalysis(null);
-        setSavedId(null);
+  // 扫描小票
+  const handleScanReceipt = async () => {
+    try {
+      setScanning(true);
+
+      // 请求相册权限
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(t('home.scan.permissionDenied'), t('home.scan.permissionMessage'));
+        return;
       }
-    }
-  };
 
-  // 调用 Gemini 识别（识别后：把分类写回 analysis，再展示/再保存）
-  const handleAnalyze = async () => {
-    if (!imageUri) {
-      Alert.alert('提示', '请先选择一张小票照片。');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const raw = await analyzeReceiptImage(imageUri);
-
-      // 关键：把分类字段写进 analysis.items[].category
-      const enriched = applyLocalCategories(raw);
-
-      setAnalysis(enriched);
-      setSavedId(null);
-    } catch (err: any) {
-      console.error(err);
-      Alert.alert('识别失败', err?.message ?? '请稍后重试。');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 手动保存：保存“带分类字段”的 analysis（这样历史才不会全是未分类）
-  const handleSave = async () => {
-    if (!imageUri || !analysis) return;
-
-    try {
-      const id = await saveReceipt({
-        imageUri,
-        analysis, // 这里的 analysis 已经是 enriched 过的
+      // 选择图片
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'images',
+        quality: 1,
       });
 
-      setSavedId(id);
-      await loadReceipts(); // 刷新收据列表以更新饼图
-      Alert.alert('已保存', '这条记录已保存到历史。');
-    } catch (e: any) {
-      console.error(e);
-      Alert.alert('保存失败', e?.message ?? '请重试');
+      if (result.canceled) {
+        return;
+      }
+
+      const uri = result.assets[0]?.uri;
+      if (!uri) {
+        return;
+      }
+
+      // 分析小票
+      const raw = await analyzeReceiptImage(uri);
+      const enriched = applyLocalCategories(raw);
+
+      // 保存到历史
+      await saveReceipt({
+        imageUri: uri,
+        analysis: enriched,
+      });
+
+      // 刷新数据
+      await loadReceipts();
+
+      Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
+    } catch (err: any) {
+      console.error(err);
+      Alert.alert(t('home.scan.error'), err?.message ?? t('home.scan.errorMessage'));
+    } finally {
+      setScanning(false);
     }
   };
 
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>{t('home.title')}</Text>
-      <Text style={styles.subtitle}>{t('home.subtitle')}</Text>
+  // 只显示前5个类别
+  const topCategories = useMemo(() => {
+    return categoryData.slice(0, 5);
+  }, [categoryData]);
 
-      {/* 时间范围选择器 */}
-      <View style={styles.timeRangeContainer}>
+  // Calculate bottom padding for sticky button dynamically
+  // stickyHeight is measured via onLayout and includes the container's padding
+  // Use fallback height for initial render to prevent overlap before measurement
+  const FALLBACK_STICKY_HEIGHT = 88; // Conservative estimate: button (~48) + padding (40)
+  const bottomPadding = (stickyHeight || FALLBACK_STICKY_HEIGHT) + 16;
+
+  return (
+    <View style={styles.screenContainer}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          { paddingBottom: bottomPadding },
+        ]}
+      >
+        <Text style={styles.title}>{t('home.title')}</Text>
+        <Text style={styles.subtitle}>{t('home.subtitle')}</Text>
+
+        {/* 时间范围选择器 */}
+        <View style={styles.timeRangeContainer}>
         <Pressable
           style={[styles.timeRangeButton, timeRange === '7D' && styles.timeRangeButtonSelected]}
           onPress={() => setTimeRange('7D')}
@@ -855,37 +972,61 @@ export default function HomeScreen() {
               styles.timeRangeButtonText,
               timeRange === '7D' && styles.timeRangeButtonTextSelected,
             ]}
-            >
-              {t('home.timeRange.7d')}
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.timeRangeButton, timeRange === '30D' && styles.timeRangeButtonSelected]}
-            onPress={() => setTimeRange('30D')}
           >
-            <Text
-              style={[
-                styles.timeRangeButtonText,
-                timeRange === '30D' && styles.timeRangeButtonTextSelected,
-              ]}
-            >
-              {t('home.timeRange.30d')}
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.timeRangeButton, timeRange === 'ALL' && styles.timeRangeButtonSelected]}
-            onPress={() => setTimeRange('ALL')}
+            {t('home.timeRange.7d')}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.timeRangeButton, timeRange === '30D' && styles.timeRangeButtonSelected]}
+          onPress={() => setTimeRange('30D')}
+        >
+          <Text
+            style={[
+              styles.timeRangeButtonText,
+              timeRange === '30D' && styles.timeRangeButtonTextSelected,
+            ]}
           >
-            <Text
-              style={[
-                styles.timeRangeButtonText,
-                timeRange === 'ALL' && styles.timeRangeButtonTextSelected,
-              ]}
-            >
-              {t('home.timeRange.all')}
-            </Text>
+            {t('home.timeRange.30d')}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.timeRangeButton, timeRange === 'ALL' && styles.timeRangeButtonSelected]}
+          onPress={() => setTimeRange('ALL')}
+        >
+          <Text
+            style={[
+              styles.timeRangeButtonText,
+              timeRange === 'ALL' && styles.timeRangeButtonTextSelected,
+            ]}
+          >
+            {t('home.timeRange.all')}
+          </Text>
         </Pressable>
       </View>
+
+      {/* KPI Summary Card */}
+      {!loadingReceipts && kpiData && (
+        <View style={styles.kpiCard}>
+          <View style={styles.kpiRow}>
+            <View style={styles.kpiItem}>
+              <Text style={styles.kpiLabel}>{t('home.kpi.totalSpending')}</Text>
+              <Text style={styles.kpiValue}>
+                {Math.round(kpiData.totalSpending)} {t('home.kpi.currency')}
+              </Text>
+            </View>
+            <View style={styles.kpiItem}>
+              <Text style={styles.kpiLabel}>{t('home.kpi.topCategory')}</Text>
+              <Text style={styles.kpiValue}>
+                {kpiData.topCategory} ({Math.round(kpiData.topCategoryPct)}%)
+              </Text>
+            </View>
+            <View style={styles.kpiItem}>
+              <Text style={styles.kpiLabel}>{t('home.kpi.nonEssential')}</Text>
+              <Text style={styles.kpiValue}>{Math.round(kpiData.nonEssentialPct)}%</Text>
+            </View>
+          </View>
+        </View>
+      )}
 
       {/* 饼图 */}
       {!loadingReceipts && (
@@ -893,8 +1034,10 @@ export default function HomeScreen() {
           {totalAmount > 0 ? (
             <>
               <PieChart data={categoryData} total={totalAmount} />
+              
+              {/* 类别列表 - 只显示前5个 */}
               <View style={styles.categoryList}>
-                {categoryData.map((item) => {
+                {topCategories.map((item) => {
                   const color = CATEGORY_COLORS[item.category] || CATEGORY_COLORS['未分类'];
                   return (
                     <View key={item.category} style={styles.categoryListItem}>
@@ -910,26 +1053,42 @@ export default function HomeScreen() {
                   );
                 })}
               </View>
-              <Text style={styles.insightText}>{insightText}</Text>
-              {advancedInsight && (
-                <View style={styles.advancedInsightContainer}>
-                  <View style={styles.advancedInsightRow}>
-                    {advancedInsight.level === 'alert' && (
+
+              {/* Structured Insight Analysis */}
+              {structuredInsight && (
+                <View style={styles.insightAnalysisContainer}>
+                  <View style={styles.insightHeader}>
+                    {structuredInsight.level === 'alert' && (
                       <View style={[styles.insightBadge, styles.insightBadgeAlert]}>
                         <Text style={styles.insightBadgeText}>⚠</Text>
                       </View>
                     )}
-                    {advancedInsight.level === 'warn' && (
+                    {structuredInsight.level === 'warn' && (
                       <View style={[styles.insightBadge, styles.insightBadgeWarn]}>
                         <Text style={styles.insightBadgeText}>!</Text>
                       </View>
                     )}
-                    {advancedInsight.level === 'info' && (
+                    {structuredInsight.level === 'info' && (
                       <View style={[styles.insightBadge, styles.insightBadgeInfo]}>
                         <Text style={styles.insightBadgeText}>i</Text>
                       </View>
                     )}
-                    <Text style={styles.advancedInsightText}>{advancedInsight.message}</Text>
+                    <Text style={styles.insightHeadline}>{structuredInsight.headline}</Text>
+                  </View>
+                  <View style={styles.insightReasons}>
+                    {structuredInsight.reasons.map((reason, idx) => (
+                      <Text key={idx} style={styles.insightReasonText}>
+                        • {reason}
+                      </Text>
+                    ))}
+                  </View>
+                  <View style={styles.insightSuggestion}>
+                    <Text style={styles.insightSuggestionLabel}>
+                      {t('home.insight.suggestion.label')}:
+                    </Text>
+                    <Text style={styles.insightSuggestionText}>
+                      {structuredInsight.suggestion}
+                    </Text>
                   </View>
                 </View>
               )}
@@ -939,111 +1098,33 @@ export default function HomeScreen() {
               <Text style={styles.emptyStateText}>{t('home.pieChart.emptyData')}</Text>
             </View>
           )}
-
-          {/* 高级洞察 Pro 入口点 - 始终显示 */}
-          <Pressable
-            style={styles.proEntryCard}
-            onPress={() => router.push('/(tabs)/pro-insight')}
-          >
-            <View style={styles.proEntryContent}>
-              <Text style={styles.proEntryTitle}>{t('home.pro.title')}</Text>
-              <Text style={styles.proEntrySubtitle}>
-                {totalAmount <= 0
-                  ? t('home.pro.subtitleNoData')
-                  : t('home.pro.subtitleWithData')}
-              </Text>
-            </View>
-            <Text style={styles.proEntryArrow}>→</Text>
-          </Pressable>
         </View>
       )}
+      </ScrollView>
 
-      <View style={{ marginTop: 40 }}>
-        <Button title="从相册选择照片" onPress={handlePickImage} />
-      </View>
-
-      {imageUri && (
-        <View style={styles.imageWrapper}>
-          <Image source={{ uri: imageUri }} style={styles.receiptImage} />
-        </View>
-      )}
-
-      {imageUri && (
-        <View style={{ marginTop: 20 }}>
-          <Button
-            title={loading ? '识别中…' : '识别小票（调用 Gemini）'}
-            onPress={handleAnalyze}
-            disabled={loading}
-          />
-        </View>
-      )}
-
-      {analysis && (
-        <View style={styles.resultContainer}>
-          <Text style={styles.sectionTitle}>识别结果：</Text>
-
-          {analysis.merchant ? (
-            <Text style={styles.resultText}>商店：{analysis.merchant}</Text>
-          ) : null}
-
-          <Text style={styles.resultText}>
-            总金额：{analysis.total} {analysis.currency}
+      {/* Sticky Scan Button */}
+      <View
+        style={[styles.stickyButtonContainer, { paddingBottom: insets.bottom + 16 }]}
+        onLayout={(e) => setStickyHeight(e.nativeEvent.layout.height)}
+      >
+        <Pressable
+          style={[styles.scanButton, scanning && styles.scanButtonDisabled]}
+          onPress={handleScanReceipt}
+          disabled={scanning}
+        >
+          <Text style={styles.scanButtonText}>
+            {scanning ? t('home.scan.processing') : t('home.scan.button')}
           </Text>
-          <Text style={styles.resultText}>税额：{analysis.tax}</Text>
-
-          <View style={{ marginTop: 14 }}>
-            <Button
-              title={savedId ? '已保存到历史' : '保存到历史'}
-              onPress={handleSave}
-              disabled={!canSave}
-            />
-          </View>
-
-          {/* 分类汇总 */}
-          <Text style={[styles.sectionTitle, { marginTop: 18 }]}>分类汇总：</Text>
-          <View style={styles.catCard}>
-            {categoryTotals.length === 0 ? (
-              <Text style={styles.resultText}>暂无分类数据</Text>
-            ) : (
-              categoryTotals.map((c) => (
-                <View key={c.category} style={styles.catRow}>
-                  <Text style={styles.catName}>{c.category}</Text>
-                  <Text style={styles.catValue}>
-                    {Math.round(c.total)} {analysis.currency}
-                  </Text>
-                </View>
-              ))
-            )}
-          </View>
-
-          {/* 商品明细：右侧分类标签 */}
-          <Text style={[styles.sectionTitle, { marginTop: 18 }]}>商品明细：</Text>
-
-          {(!analysis.items || analysis.items.length === 0) && (
-            <Text style={styles.resultText}>未识别到商品。</Text>
-          )}
-
-          {itemsForUI.map((item: any, index: number) => (
-            <View key={index} style={styles.itemRow}>
-              <View style={{ flex: 1, paddingRight: 12 }}>
-                <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.itemDetail}>
-                  数量: {item.quantity}   单价: {item.unitPrice}   小计: {item.lineTotal}
-                </Text>
-              </View>
-
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{item.category || '未分类'}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-      )}
-    </ScrollView>
+        </Pressable>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenContainer: {
+    flex: 1,
+  },
   container: {
     paddingTop: 80,
     paddingHorizontal: 24,
@@ -1058,78 +1139,32 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#555',
   },
-  imageWrapper: {
+  timeRangeContainer: {
+    flexDirection: 'row',
     marginTop: 20,
-    alignItems: 'center',
-  },
-  receiptImage: {
-    width: 260,
-    height: 360,
-    resizeMode: 'contain',
-    borderRadius: 8,
-    backgroundColor: '#eee',
-  },
-  resultContainer: {
-    marginTop: 30,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
     marginBottom: 10,
-  },
-  resultText: {
-    fontSize: 15,
-    marginBottom: 6,
-  },
-  catCard: {
     backgroundColor: '#f3f3f3',
-    borderRadius: 12,
-    paddingVertical: 12,
+    borderRadius: 10,
+    padding: 4,
+  },
+  timeRangeButton: {
+    flex: 1,
+    paddingVertical: 8,
     paddingHorizontal: 12,
-  },
-  catRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-  },
-  catName: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  catValue: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd',
-  },
-  itemName: {
-    fontSize: 16,
-    fontWeight: '800',
-    marginBottom: 3,
-  },
-  itemDetail: {
-    fontSize: 13,
-    color: '#555',
-  },
-  badge: {
-    minWidth: 64,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#ececec',
-    borderRadius: 999,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 2,
   },
-  badgeText: {
-    fontSize: 12,
-    color: '#444',
+  timeRangeButtonSelected: {
+    backgroundColor: '#111',
+  },
+  timeRangeButtonText: {
+    fontSize: 14,
     fontWeight: '700',
+    color: '#666',
+  },
+  timeRangeButtonTextSelected: {
+    color: '#fff',
   },
   pieChartContainer: {
     marginTop: 30,
@@ -1173,16 +1208,8 @@ const styles = StyleSheet.create({
     minWidth: 50,
     textAlign: 'right',
   },
-  insightText: {
-    marginTop: 20,
-    paddingHorizontal: 12,
-    fontSize: 14,
-    color: '#555',
-    lineHeight: 20,
-    textAlign: 'center',
-  },
   advancedInsightContainer: {
-    marginTop: 12,
+    marginTop: 20,
     paddingHorizontal: 12,
   },
   advancedInsightRow: {
@@ -1229,62 +1256,112 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#999',
   },
-  proEntryCard: {
+  kpiCard: {
+    backgroundColor: '#f8f8f8',
+    borderRadius: 12,
+    padding: 16,
     marginTop: 20,
-    marginHorizontal: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  kpiRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  kpiItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  kpiLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 4,
+    fontWeight: '600',
+  },
+  kpiValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111',
+  },
+  insightAnalysisContainer: {
+    marginTop: 20,
+    paddingHorizontal: 12,
     backgroundColor: '#f8f8f8',
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
     borderColor: '#e0e0e0',
   },
-  proEntryContent: {
-    flex: 1,
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
   },
-  proEntryTitle: {
+  insightHeadline: {
+    flex: 1,
     fontSize: 16,
     fontWeight: '800',
     color: '#111',
+    marginLeft: 8,
+  },
+  insightReasons: {
+    marginBottom: 12,
+  },
+  insightReasonText: {
+    fontSize: 13,
+    color: '#555',
+    lineHeight: 20,
     marginBottom: 4,
   },
-  proEntrySubtitle: {
+  insightSuggestion: {
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  insightSuggestionLabel: {
     fontSize: 13,
-    color: '#666',
-    lineHeight: 18,
+    fontWeight: '700',
+    color: '#333',
+    marginBottom: 4,
   },
-  proEntryArrow: {
-    fontSize: 20,
-    color: '#999',
-    marginLeft: 12,
+  insightSuggestionText: {
+    fontSize: 14,
+    color: '#111',
+    fontWeight: '600',
+    lineHeight: 20,
   },
-  timeRangeContainer: {
-    flexDirection: 'row',
-    marginTop: 20,
-    marginBottom: 10,
-    backgroundColor: '#f3f3f3',
-    borderRadius: 10,
-    padding: 4,
+  stickyButtonContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 40,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
   },
-  timeRangeButton: {
-    flex: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+  scanButton: {
+    backgroundColor: '#111',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  timeRangeButtonSelected: {
-    backgroundColor: '#111',
+  scanButtonDisabled: {
+    opacity: 0.6,
   },
-  timeRangeButtonText: {
-    fontSize: 14,
+  scanButtonText: {
+    fontSize: 16,
     fontWeight: '700',
-    color: '#666',
-  },
-  timeRangeButtonTextSelected: {
     color: '#fff',
   },
 });
