@@ -1,7 +1,7 @@
 {
   "home": {
-    "title": "你好， 王江龍！",
-    "subtitle": "请选择要识别的小票图片，并调用 Gemini 进行解析。",
+    "title": "消费结构概览",
+    "subtitle": "基于小票自动生成",
     "timeRange": {
       "7d": "7天",
       "30d": "30天",
@@ -11,15 +11,82 @@
       "totalLabel": "总支出",
       "emptyData": "暂无数据"
     },
+    "kpi": {
+      "totalSpending": "总支出",
+      "topCategory": "主要类别",
+      "nonEssential": "非必需品",
+      "currency": "日元"
+    },
     "insight": {
       "noData": "暂无数据",
       "mainCategory": "本期消费主要集中在【{category}】（{percentage}%）",
-      "structureConcentrated": "，结构偏集中"
+      "structureConcentrated": "，结构偏集中",
+      "headline": {
+        "highConcentration": "高度集中（{percentage}%）",
+        "moderateConcentration": "中度集中（{percentage}%）",
+        "balanced": "消费结构均衡"
+      },
+      "reason": {
+        "top1": "主要类别【{category}】占比{percentage}%",
+        "concentration": "前两大类别合计占比{percentage}%",
+        "nonEssential": "非必需品支出占比{percentage}%",
+        "uncategorized": "未分类项目占比{percentage}%",
+        "general": "建议审视消费模式"
+      },
+      "comparison": {
+        "increased": "【{category}】增长+{change}%（{from}% → {to}%）",
+        "decreased": "【{category}】下降-{change}%（{from}% → {to}%）"
+      },
+      "suggestion": {
+        "label": "建议",
+        "diversify": "考虑分散支出到更多类别",
+        "controlNonEssential": "减少非必需品支出以改善财务状况",
+        "improveCategories": "完善分类以提高分析准确性",
+        "monitor": "监控消费模式并根据需要调整",
+        "maintain": "保持当前均衡的消费结构"
+      }
+    },
+    "scan": {
+      "button": "扫描小票",
+      "processing": "处理中…",
+      "analyzing": "分析小票中…",
+      "permissionDenied": "权限被拒绝",
+      "permissionMessage": "请在系统设置中允许本应用访问相册。",
+      "success": "成功",
+      "successMessage": "小票已保存到历史。",
+      "error": "错误",
+      "errorMessage": "请稍后重试。"
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "feedback": {
+      "title": "发送反馈",
+      "subtitle": "分享您的想法和建议"
     },
     "pro": {
       "title": "高级洞察 Pro",
-      "subtitleNoData": "先扫描一张小票，即可看到消费结构与洞察",
-      "subtitleWithData": "解锁更深入的洞察与更长时间范围"
+      "subtitle": "解锁更深入的洞察与更长时间范围"
+    },
+    "about": {
+      "title": "关于",
+      "version": "版本"
+    }
+  },
+  "feedback": {
+    "title": "发送反馈",
+    "subtitle": "我们很乐意听取您的意见",
+    "back": "返回",
+    "feedbackLabel": "反馈 / 问题",
+    "feedbackPlaceholder": "请描述您的问题或建议",
+    "emailLabel": "联系邮箱（可选）",
+    "emailPlaceholder": "your.email@example.com",
+    "submit": "提交",
+    "error": {
+      "title": "错误",
+      "required": "请输入您的反馈。",
+      "noEmailApp": "无法打开邮件应用，请检查设备设置。",
+      "generic": "无法打开邮件应用，请稍后重试。"
     }
   },
   "pro": {

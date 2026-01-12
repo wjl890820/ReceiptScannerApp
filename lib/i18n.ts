@@ -27,6 +27,10 @@ function detectLocale(): Locale {
 
 const currentLocale = detectLocale();
 
+export function getCurrentLocale(): Locale {
+  return currentLocale;
+}
+
 function getNestedValue(obj: any, path: string): string | undefined {
   const keys = path.split('.');
   let current: any = obj;

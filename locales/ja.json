@@ -1,7 +1,7 @@
 {
   "home": {
-    "title": "こんにちは、王江龍さん！",
-    "subtitle": "レシート画像を選択し、Geminiで解析してください。",
+    "title": "支出構成の概要",
+    "subtitle": "レシートから自動分析",
     "timeRange": {
       "7d": "7日",
       "30d": "30日",
@@ -11,15 +11,82 @@
       "totalLabel": "総支出",
       "emptyData": "データなし"
     },
+    "kpi": {
+      "totalSpending": "総支出",
+      "topCategory": "主要カテゴリ",
+      "nonEssential": "非必需品",
+      "currency": "円"
+    },
     "insight": {
       "noData": "データなし",
       "mainCategory": "今期の支出は主に【{category}】（{percentage}%）に集中しています",
-      "structureConcentrated": "、構造が集中しています"
+      "structureConcentrated": "、構造が集中しています",
+      "headline": {
+        "highConcentration": "高度な集中（{percentage}%）",
+        "moderateConcentration": "中程度の集中（{percentage}%）",
+        "balanced": "バランスの取れた支出構造"
+      },
+      "reason": {
+        "top1": "主要カテゴリ【{category}】が{percentage}%を占める",
+        "concentration": "上位2カテゴリが合計{percentage}%を占める",
+        "nonEssential": "非必需品支出が{percentage}%",
+        "uncategorized": "未分類項目が{percentage}%",
+        "general": "支出パターンの見直しを推奨"
+      },
+      "comparison": {
+        "increased": "【{category}】が+{change}%増加（{from}% → {to}%）",
+        "decreased": "【{category}】が-{change}%減少（{from}% → {to}%）"
+      },
+      "suggestion": {
+        "label": "推奨事項",
+        "diversify": "より多くのカテゴリに支出を分散することを検討",
+        "controlNonEssential": "財務健全性を改善するため非必需品支出を削減",
+        "improveCategories": "より良いインサイトのため項目の分類を改善",
+        "monitor": "支出パターンを監視し、必要に応じて調整",
+        "maintain": "現在のバランスの取れた支出構造を維持"
+      }
+    },
+    "scan": {
+      "button": "レシートをスキャン",
+      "processing": "処理中…",
+      "analyzing": "レシートを分析中…",
+      "permissionDenied": "権限が拒否されました",
+      "permissionMessage": "システム設定で写真へのアクセスを許可してください。",
+      "success": "成功",
+      "successMessage": "レシートが履歴に保存されました。",
+      "error": "エラー",
+      "errorMessage": "後でもう一度お試しください。"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "feedback": {
+      "title": "フィードバックを送信",
+      "subtitle": "ご意見やご提案をお聞かせください"
     },
     "pro": {
       "title": "高度なインサイト Pro",
-      "subtitleNoData": "まずレシートをスキャンして、支出構造とインサイトを確認できます",
-      "subtitleWithData": "より深いインサイトとより長い期間を解除"
+      "subtitle": "より深いインサイトとより長い期間を解除"
+    },
+    "about": {
+      "title": "について",
+      "version": "バージョン"
+    }
+  },
+  "feedback": {
+    "title": "フィードバックを送信",
+    "subtitle": "ご意見をお聞かせください",
+    "back": "戻る",
+    "feedbackLabel": "フィードバック / 問題",
+    "feedbackPlaceholder": "問題やご提案を説明してください",
+    "emailLabel": "連絡先メール（任意）",
+    "emailPlaceholder": "your.email@example.com",
+    "submit": "送信",
+    "error": {
+      "title": "エラー",
+      "required": "フィードバックを入力してください。",
+      "noEmailApp": "メールアプリを開けません。デバイス設定を確認してください。",
+      "generic": "メールアプリを開けません。後でもう一度お試しください。"
     }
   },
   "pro": {

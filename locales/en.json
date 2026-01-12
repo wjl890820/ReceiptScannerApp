@@ -1,7 +1,7 @@
 {
   "home": {
-    "title": "Hello, 王江龍!",
-    "subtitle": "Please select a receipt image and call Gemini to analyze it.",
+    "title": "Spending Overview",
+    "subtitle": "Automatically generated from receipts",
     "timeRange": {
       "7d": "7 days",
       "30d": "30 days",
@@ -11,15 +11,82 @@
       "totalLabel": "Total Spending",
       "emptyData": "No data"
     },
+    "kpi": {
+      "totalSpending": "Total Spending",
+      "topCategory": "Top Category",
+      "nonEssential": "Non-Essential",
+      "currency": "JPY"
+    },
     "insight": {
       "noData": "No data",
       "mainCategory": "Spending is mainly concentrated in 【{category}】（{percentage}%）",
-      "structureConcentrated": ", structure is concentrated"
+      "structureConcentrated": ", structure is concentrated",
+      "headline": {
+        "highConcentration": "High concentration ({percentage}%)",
+        "moderateConcentration": "Moderate concentration ({percentage}%)",
+        "balanced": "Balanced spending structure"
+      },
+      "reason": {
+        "top1": "Top category 【{category}】 accounts for {percentage}%",
+        "concentration": "Top 2 categories account for {percentage}%",
+        "nonEssential": "Non-essential spending at {percentage}%",
+        "uncategorized": "{percentage}% uncategorized items",
+        "general": "Review spending patterns"
+      },
+      "comparison": {
+        "increased": "【{category}】 increased by +{change}% ({from}% → {to}%)",
+        "decreased": "【{category}】 decreased by -{change}% ({from}% → {to}%)"
+      },
+      "suggestion": {
+        "label": "Recommendation",
+        "diversify": "Consider diversifying spending across more categories",
+        "controlNonEssential": "Reduce non-essential spending to improve financial health",
+        "improveCategories": "Improve item categorization for better insights",
+        "monitor": "Monitor spending patterns and adjust as needed",
+        "maintain": "Maintain current balanced spending structure"
+      }
+    },
+    "scan": {
+      "button": "Scan Receipt",
+      "processing": "Processing…",
+      "analyzing": "Analyzing receipt…",
+      "permissionDenied": "Permission Denied",
+      "permissionMessage": "Please allow access to photos in system settings.",
+      "success": "Success",
+      "successMessage": "Receipt saved to history.",
+      "error": "Error",
+      "errorMessage": "Please try again later."
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "feedback": {
+      "title": "Send Feedback",
+      "subtitle": "Share your thoughts and suggestions"
     },
     "pro": {
       "title": "Advanced Insights Pro",
-      "subtitleNoData": "Scan a receipt first to see spending structure and insights",
-      "subtitleWithData": "Unlock deeper insights and longer time ranges"
+      "subtitle": "Unlock deeper insights and longer time ranges"
+    },
+    "about": {
+      "title": "About",
+      "version": "Version"
+    }
+  },
+  "feedback": {
+    "title": "Send Feedback",
+    "subtitle": "We'd love to hear from you",
+    "back": "Back",
+    "feedbackLabel": "Feedback / Issue",
+    "feedbackPlaceholder": "Please describe your issue or suggestion",
+    "emailLabel": "Contact Email (Optional)",
+    "emailPlaceholder": "your.email@example.com",
+    "submit": "Submit",
+    "error": {
+      "title": "Error",
+      "required": "Please enter your feedback.",
+      "noEmailApp": "Cannot open email app. Please check your device settings.",
+      "generic": "Unable to open email app. Please try again later."
     }
   },
   "pro": {
