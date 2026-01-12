@@ -47,9 +47,27 @@ export default function TabLayout() {
         }}
       />
 
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="gearshape.fill" color={color} />
+          ),
+        }}
+      />
+
       {/* Pro 洞察说明页不应该出现在 TabBar 上 */}
       <Tabs.Screen
         name="pro-insight"
+        options={{
+          href: null,
+        }}
+      />
+
+      {/* Feedback 页面不应该出现在 TabBar 上 */}
+      <Tabs.Screen
+        name="feedback"
         options={{
           href: null,
         }}
