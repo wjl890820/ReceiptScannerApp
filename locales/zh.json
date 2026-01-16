@@ -48,15 +48,48 @@
     },
     "scan": {
       "button": "扫描小票",
+      "title": "扫描小票",
+      "takePhoto": "拍照",
+      "chooseFromLibrary": "从相册选择",
+      "cancel": "取消",
+      "confirmTitle": "确认识别这张小票？",
+      "confirmMessage": "将从图片中提取商品明细与总金额。",
+      "confirmAction": "开始识别",
+      "confirmCancel": "取消",
       "processing": "处理中…",
       "analyzing": "分析小票中…",
+      "selectSource": "选择图片来源",
+      "selectSourceMessage": "选择获取小票图片的方式",
+      "camera": "拍照",
+      "album": "相册",
       "permissionDenied": "权限被拒绝",
       "permissionMessage": "请在系统设置中允许本应用访问相册。",
+      "cameraPermissionMessage": "请在系统设置中允许本应用访问相机。",
       "success": "成功",
       "successMessage": "小票已保存到历史。",
       "error": "错误",
-      "errorMessage": "请稍后重试。"
+      "errorMessage": "请稍后重试。",
+      "rateLimit": "扫描过于频繁，请稍后再试。",
+      "payloadTooLarge": "图片过大，请重新拍摄更清晰的照片。",
+      "networkError": "网络错误，请检查网络连接。",
+      "serverError": "服务器错误，请稍后重试。"
+    },
+    "category": {
+      "Grocery": "生鲜杂货",
+      "Convenience": "便利店",
+      "Dining": "外食",
+      "Household": "日用品",
+      "Transport": "交通",
+      "Medical": "医疗",
+      "Entertainment": "娱乐",
+      "Other": "其他"
     }
+  },
+  "tabs": {
+    "home": "首页",
+    "history": "历史",
+    "settings": "设置",
+    "analysis": "分析"
   },
   "settings": {
     "title": "设置",
@@ -82,11 +115,16 @@
     "emailLabel": "联系邮箱（可选）",
     "emailPlaceholder": "your.email@example.com",
     "submit": "提交",
+    "submitting": "提交中...",
     "error": {
       "title": "错误",
       "required": "请输入您的反馈。",
       "noEmailApp": "无法打开邮件应用，请检查设备设置。",
-      "generic": "无法打开邮件应用，请稍后重试。"
+      "generic": "无法提交反馈，请稍后重试。"
+    },
+    "success": {
+      "message": "感谢您！您的反馈已成功提交。",
+      "button": "已提交"
     }
   },
   "pro": {
@@ -113,5 +151,75 @@
       }
     },
     "footer": "Pro 功能即将推出，敬请期待！"
+  },
+  "analysis": {
+    "title": "分析",
+    "loading": "加载中...",
+    "timeRange": {
+      "week": "本周",
+      "month": "本月",
+      "all": "全部"
+    },
+    "stats": {
+      "totalSpend": "总支出",
+      "grocerySpend": "生鲜支出",
+      "groceryOnly": "仅生鲜收据",
+      "topCategories": "主要类别",
+      "topMerchants": "主要商家",
+      "highestReceipt": "最高单笔",
+      "times": "次"
+    },
+    "priceRadar": {
+      "title": "价格雷达",
+      "subtitle": "常购商品的最便宜商家",
+      "noData": "暂无价格数据",
+      "needMore": "再扫描 {count} 张收据即可解锁价格雷达"
+    },
+    "categoryIndex": {
+      "title": "分类价格指数",
+      "category": "类别",
+      "items": "项"
+    }
+  },
+  "easterEgg": {
+    "ok": "确定"
+  },
+  "category": {
+    "produce": "生鲜果蔬",
+    "meat_seafood": "肉类海鲜",
+    "dairy_eggs": "乳制品鸡蛋",
+    "bakery": "烘焙食品",
+    "staples": "主食干货",
+    "snacks_sweets": "零食甜点",
+    "quick_meals": "熟食速食",
+    "condiments": "调味料",
+    "non_alcoholic_drinks": "无酒精饮料",
+    "alcohol": "酒类",
+    "household": "日用品卫生",
+    "other_grocery": "其他食品",
+    "uncategorized": "未分类",
+    "non_grocery": "非超市"
+  },
+  "permissions": {
+    "cameraDeniedTitle": "需要相机权限",
+    "cameraDeniedMessage": "请在系统设置中允许相机权限后再拍照。",
+    "libraryDeniedTitle": "需要相册权限",
+    "libraryDeniedMessage": "请在系统设置中允许相册权限后再选择图片。"
+  },
+  "ocr": {
+    "networkError": "网络错误，请检查网络后重试。",
+    "rateLimit": "请求过于频繁，请稍后再试。",
+    "payloadTooLarge": "图片过大，请重新拍摄更清晰的照片。",
+    "serverError": "服务器错误，请稍后重试。",
+    "invalidResponse": "返回结果异常，请重试。",
+    "failed": "识别失败，请重试。"
+  },
+  "toast": {
+    "saved": "已保存",
+    "saveFailed": "保存失败",
+    "updated": "已更新"
+  },
+  "grocery": {
+    "onlyNote": "分类统计仅对"超市小票"显示。"
   }
 }

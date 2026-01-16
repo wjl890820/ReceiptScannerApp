@@ -1,0 +1,158 @@
+// lib/groceryDetector.ts
+// Detect if a receipt is from a grocery/supermarket store
+
+/**
+ * Normalize merchant name for matching
+ * - Lowercase, trim
+ * - Remove spaces and common punctuation
+ * - Convert full-width to half-width where easy (at least remove "　" and unify "-")
+ */
+function normalizeMerchantName(name: string): string {
+  if (!name || typeof name !== 'string') return '';
+  
+  let normalized = name.trim().toLowerCase();
+  
+  // Remove full-width spaces
+  normalized = normalized.replace(/　/g, '');
+  // Remove regular spaces
+  normalized = normalized.replace(/\s+/g, '');
+  // Unify dashes/hyphens
+  normalized = normalized.replace(/[－—–−]/g, '-');
+  // Remove common punctuation
+  normalized = normalized.replace(/[.,;:!?()[\]{}'"]/g, '');
+  
+  return normalized;
+}
+
+/**
+ * Include list: Supermarket/grocery store keywords
+ */
+const INCLUDE_SUPERMARKETS = [
+  // Major chains (English and Japanese)
+  'aeon', 'イオン',
+  'maxvalu', 'マックスバリュ',
+  'daiei', 'ダイエー',
+  'mybasket', 'マイバスケット',
+  'life', 'ライフ',
+  'seiyu', '西友',
+  'ok', 'オーケー', 'okストア',
+  'gyomu', '業務スーパー', '業務',
+  'coop', 'コープ', 'seikyo', '生協',
+  'maruetsu', 'マルエツ',
+  'summit', 'サミット',
+  'inageya', 'いなげや',
+  'yorkbenimaru', 'ヨークベニマル',
+  'belc', 'ベルク',
+  'yaoko', 'ヤオコー',
+  'kasumi', 'カスミ',
+  'tokyustore', 'トウキョウストア',
+  'hanamasa', 'ハナマサ',
+  'donki', 'don quijote', 'ドンキホーテ',
+  'costco', 'コストコ',
+  'ropia', 'ロピア',
+  'seijoishii', '成城石井',
+  'apita', 'アピタ',
+  'piago', 'ピアゴ',
+  'uny', 'ユニー',
+  'fresco', 'フレッシュ',
+  // Generic grocery terms
+  'スーパー', 'supermarket', 'スーパーマーケット',
+  '食品館', '食料品', '食品',
+  'grocery', 'groceries',
+] as const;
+
+/**
+ * Exclude list: Non-grocery stores
+ */
+const EXCLUDE_NON_GROCERY = [
+  // Convenience stores
+  '7-eleven', 'セブンイレブン', 'セブン',
+  'lawson', 'ローソン',
+  'familymart', 'ファミリーマート', 'ファミマ',
+  'ministop', 'ミニストップ',
+  'newdays', 'ニューデイズ',
+  // Drugstores
+  'matsukiyo', 'マツキヨ', 'マツキヨココカラ',
+  'sugi', 'スギ', 'スギ薬局',
+  'tsuruha', 'ツルハ', 'ツルハドラッグ',
+  'sundrug', 'サンドラッグ',
+  'cocokara', 'ココカラ', 'ココカラファイン',
+  'welcia', 'ウェルシア',
+  // Restaurants/cafes (major chains)
+  'mcdonalds', 'マクドナルド',
+  'starbucks', 'スターバックス',
+  'kfc', 'ケンタッキー',
+  'mosburger', 'モスバーガー',
+  'sukiya', 'すき家',
+  'yoshinoya', '吉野家',
+  'matsuya', '松屋',
+  // E-commerce
+  'amazon', 'アマゾン',
+  'rakuten', '楽天',
+  // Delivery
+  'ubereats', 'ウーバーイーツ',
+  'demae', '出前館',
+] as const;
+
+/**
+ * Check if a merchant is a grocery/supermarket store
+ * 
+ * Rules:
+ * 1. If merchant matches exclude list -> false
+ * 2. Else if matches include list -> true
+ * 3. Else if generic grocery words present -> true
+ * 4. Else -> false
+ */
+export function isGroceryMerchant(
+  merchantRaw?: string | null,
+  merchantNormalized?: string | null
+): boolean {
+  // Use normalized if available, otherwise normalize raw
+  const merchantName = merchantNormalized || merchantRaw;
+  if (!merchantName) return false;
+
+  const normalized = normalizeMerchantName(merchantName);
+
+  // Rule 1: Check exclude list first
+  for (const excludeTerm of EXCLUDE_NON_GROCERY) {
+    if (normalized.includes(excludeTerm.toLowerCase())) {
+      return false;
+    }
+  }
+
+  // Rule 2: Check include list
+  for (const includeTerm of INCLUDE_SUPERMARKETS) {
+    if (normalized.includes(includeTerm.toLowerCase())) {
+      return true;
+    }
+  }
+
+  // Rule 3: Check generic grocery words
+  const genericGroceryWords = ['スーパー', 'supermarket', '食品館', '食料品', 'grocery'];
+  for (const word of genericGroceryWords) {
+    if (normalized.includes(word.toLowerCase())) {
+      return true;
+    }
+  }
+
+  // Rule 4: Default to false
+  return false;
+}
+
+/**
+ * Legacy function for backward compatibility
+ * @deprecated Use isGroceryMerchant instead
+ */
+export function isGroceryStore(merchantName: string | null | undefined): boolean {
+  return isGroceryMerchant(merchantName, null);
+}
+
+/**
+ * Get confidence level (0-1) for grocery detection
+ */
+export function getGroceryConfidence(
+  merchantRaw?: string | null,
+  merchantNormalized?: string | null
+): number {
+  return isGroceryMerchant(merchantRaw, merchantNormalized) ? 1.0 : 0.0;
+}

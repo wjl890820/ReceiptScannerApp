@@ -48,15 +48,48 @@
     },
     "scan": {
       "button": "レシートをスキャン",
+      "title": "レシートをスキャン",
+      "takePhoto": "撮影する",
+      "chooseFromLibrary": "アルバムから選ぶ",
+      "cancel": "キャンセル",
+      "confirmTitle": "この画像で認識しますか？",
+      "confirmMessage": "この画像から商品名と合計金額を抽出します。",
+      "confirmAction": "認識する",
+      "confirmCancel": "キャンセル",
       "processing": "処理中…",
       "analyzing": "レシートを分析中…",
+      "selectSource": "画像ソースを選択",
+      "selectSourceMessage": "レシート画像の取得方法を選択",
+      "camera": "カメラ",
+      "album": "フォトアルバム",
       "permissionDenied": "権限が拒否されました",
       "permissionMessage": "システム設定で写真へのアクセスを許可してください。",
+      "cameraPermissionMessage": "システム設定でカメラへのアクセスを許可してください。",
       "success": "成功",
       "successMessage": "レシートが履歴に保存されました。",
       "error": "エラー",
-      "errorMessage": "後でもう一度お試しください。"
+      "errorMessage": "後でもう一度お試しください。",
+      "rateLimit": "スキャンが多すぎます。後でもう一度お試しください。",
+      "payloadTooLarge": "画像が大きすぎます。より近くで写真を撮り直してください。",
+      "networkError": "ネットワークエラー。接続を確認してください。",
+      "serverError": "サーバーエラー。後でもう一度お試しください。"
+    },
+    "category": {
+      "Grocery": "生鮮・雑貨",
+      "Convenience": "コンビニ",
+      "Dining": "外食",
+      "Household": "日用品",
+      "Transport": "交通",
+      "Medical": "医療",
+      "Entertainment": "娯楽",
+      "Other": "その他"
     }
+  },
+  "tabs": {
+    "home": "ホーム",
+    "history": "履歴",
+    "settings": "設定",
+    "analysis": "分析"
   },
   "settings": {
     "title": "設定",
@@ -82,11 +115,16 @@
     "emailLabel": "連絡先メール（任意）",
     "emailPlaceholder": "your.email@example.com",
     "submit": "送信",
+    "submitting": "送信中...",
     "error": {
       "title": "エラー",
       "required": "フィードバックを入力してください。",
       "noEmailApp": "メールアプリを開けません。デバイス設定を確認してください。",
-      "generic": "メールアプリを開けません。後でもう一度お試しください。"
+      "generic": "フィードバックを送信できません。後でもう一度お試しください。"
+    },
+    "success": {
+      "message": "ありがとうございます！フィードバックが正常に送信されました。",
+      "button": "送信済み"
     }
   },
   "pro": {
@@ -113,5 +151,75 @@
       }
     },
     "footer": "Pro機能は近日公開予定です。お楽しみに！"
+  },
+  "analysis": {
+    "title": "分析",
+    "loading": "読み込み中...",
+    "timeRange": {
+      "week": "今週",
+      "month": "今月",
+      "all": "すべて"
+    },
+    "stats": {
+      "totalSpend": "総支出",
+      "grocerySpend": "食品支出",
+      "groceryOnly": "食品レシートのみ",
+      "topCategories": "主要カテゴリ",
+      "topMerchants": "主要店舗",
+      "highestReceipt": "最高額レシート",
+      "times": "回"
+    },
+    "priceRadar": {
+      "title": "価格レーダー",
+      "subtitle": "よく買う商品の最安店",
+      "noData": "価格データがまだありません",
+      "needMore": "あと {count} 枚スキャンすると価格レーダーが解除されます"
+    },
+    "categoryIndex": {
+      "title": "カテゴリ価格指数",
+      "category": "カテゴリ",
+      "items": "項目"
+    }
+  },
+  "easterEgg": {
+    "ok": "OK"
+  },
+  "category": {
+    "produce": "野菜・果物",
+    "meat_seafood": "肉・魚",
+    "dairy_eggs": "乳製品・卵",
+    "bakery": "パン・菓子パン",
+    "staples": "主食・乾物",
+    "snacks_sweets": "お菓子",
+    "quick_meals": "惣菜・即食",
+    "condiments": "調味料",
+    "non_alcoholic_drinks": "飲料（ノンアル）",
+    "alcohol": "酒類",
+    "household": "日用品・衛生",
+    "other_grocery": "その他食品",
+    "uncategorized": "未分類",
+    "non_grocery": "スーパー以外"
+  },
+  "permissions": {
+    "cameraDeniedTitle": "カメラの許可が必要です",
+    "cameraDeniedMessage": "設定でカメラへのアクセスを許可してください。",
+    "libraryDeniedTitle": "写真の許可が必要です",
+    "libraryDeniedMessage": "設定で写真へのアクセスを許可してください。"
+  },
+  "ocr": {
+    "networkError": "ネットワークエラーです。接続を確認して再試行してください。",
+    "rateLimit": "リクエストが多すぎます。しばらくしてから再試行してください。",
+    "payloadTooLarge": "画像が大きすぎます。もう一度撮影してください。",
+    "serverError": "サーバーエラーです。しばらくしてから再試行してください。",
+    "invalidResponse": "応答が不正です。再試行してください。",
+    "failed": "認識に失敗しました。再試行してください。"
+  },
+  "toast": {
+    "saved": "保存しました",
+    "saveFailed": "保存に失敗しました",
+    "updated": "更新しました"
+  },
+  "grocery": {
+    "onlyNote": "カテゴリ内訳はスーパーのレシートのみ表示されます。"
   }
 }

@@ -20,6 +20,9 @@ import {
   updateReceipt,
   type ReceiptRow,
 } from '@/lib/db';
+import { learnFromUserEdit } from '@/lib/receiptEnricher';
+import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
+import { t } from '@/lib/i18n';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -86,7 +89,7 @@ function buildCategorySummary(analysis: ReceiptAnalysis | { items: ReceiptItem[]
   if (!analysis?.items?.length) return [];
 
   for (const it of analysis.items) {
-    const cat = (it.category && String(it.category).trim()) || '未分类';
+    const cat = (it.category && String(it.category).trim()) || 'Other';
     const amt = toNum(it.lineTotal, 0);
     map.set(cat, (map.get(cat) ?? 0) + amt);
   }
@@ -115,17 +118,8 @@ export default function ReceiptDetailScreen() {
   const [draftLineTotal, setDraftLineTotal] = useState('');
   const [savingItem, setSavingItem] = useState(false);
 
-  // 分类选项
-  const categoryOptions = [
-    '生鲜',
-    '主食',
-    '冷冻/熟食',
-    '零食/甜品',
-    '饮料',
-    '日用品',
-    '外食',
-    '未分类',
-  ];
+  // 分类选项（使用grocery分类，包含other_grocery作为fallback）
+  const categoryOptions = [...GROCERY_CATEGORIES, 'uncategorized'] as Category[];
 
   const analysis = useMemo(() => {
     if (!receipt) return null;
@@ -198,7 +192,7 @@ export default function ReceiptDetailScreen() {
     if (index < 0 || index >= displayItems.length) return;
     const item = displayItems[index];
     setEditingItemIndex(index);
-    setDraftCategory(item.category || '未分类');
+    setDraftCategory(item.category || 'Other');
     setDraftQuantity(String(item.quantity || 1));
     setDraftLineTotal(String(item.lineTotal || 0));
     setItemEditOpen(true);
@@ -235,11 +229,18 @@ export default function ReceiptDetailScreen() {
       ...updatedItems[editingItemIndex],
       quantity: round0(quantity),
       lineTotal: round0(lineTotal),
-      category: draftCategory.trim() || '未分类',
+      category: draftCategory.trim() || 'Other',
     };
 
     try {
       setSavingItem(true);
+      
+      // 学习用户编辑的分类
+      const editedItem = updatedItems[editingItemIndex];
+      if (editedItem && editedItem.name && editedItem.category) {
+        await learnFromUserEdit(editedItem.name, editedItem.category);
+      }
+
       await updateReceipt({
         id: receipt.id,
         user_edited: 1,
@@ -302,7 +303,9 @@ export default function ReceiptDetailScreen() {
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.merchant}>{merchant}</Text>
-            <Text style={styles.date}>{formatDate(receipt.created_at)}</Text>
+            <Text style={styles.date}>
+              {formatDate(receipt.transaction_at || receipt.created_at)}
+            </Text>
           </View>
         </View>
 
@@ -332,7 +335,9 @@ export default function ReceiptDetailScreen() {
           ) : (
             categorySummary.map((x) => (
               <View key={x.category} style={styles.summaryRow}>
-                <Text style={styles.summaryLeft}>{x.category}</Text>
+                <Text style={styles.summaryLeft}>
+                  {t(`category.${x.category}`) || x.category}
+                </Text>
                 <Text style={styles.summaryRight}>
                   {round0(x.amount)} {currency}
                 </Text>
@@ -362,7 +367,9 @@ export default function ReceiptDetailScreen() {
                   </Text>
                 </View>
                 <View style={styles.tag}>
-                  <Text style={styles.tagText}>{it.category || '未分类'}</Text>
+                  <Text style={styles.tagText}>
+                    {it.category ? t(`category.${it.category}`) : t('category.uncategorized')}
+                  </Text>
                 </View>
               </Pressable>
             ))}
@@ -435,7 +442,7 @@ export default function ReceiptDetailScreen() {
                             draftCategory === cat && styles.categoryOptionTextSelected,
                           ]}
                         >
-                          {cat}
+                          {t(`category.${cat}`)}
                         </Text>
                       </View>
                     </Pressable>
