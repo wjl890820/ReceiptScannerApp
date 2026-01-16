@@ -1,18 +1,16 @@
 // app/(tabs)/index.tsx
 
-import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Button,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  View,
-  SafeAreaView,
+  View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Text as SvgText, TSpan } from 'react-native-svg';
@@ -22,9 +20,20 @@ import {
   type ReceiptAnalysis,
   type ReceiptItem,
 } from '@/lib/receiptAnalyzer';
+import { pingOcrEdge, probeSupabaseNetwork } from '@/lib/ocrService';
 
 import { listReceipts, saveReceipt, type ReceiptRow } from '@/lib/db';
-import { t } from '@/lib/i18n';
+import { t, getCurrentLocale } from '@/lib/i18n';
+import { applyCategoriesWithLearning } from '@/lib/receiptEnricher';
+import { isGroceryMerchant } from '@/lib/groceryDetector';
+import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
+import {
+  shouldTriggerMilestone,
+  hasShownMilestone,
+  markMilestoneShown,
+  generateEasterEggContent,
+  type Milestone,
+} from '@/lib/easterEggs';
 
 // ---------- 本地分类（低成本，0 调用 AI）----------
 function inferCategory(name: string): string {
@@ -122,6 +131,7 @@ function inferCategory(name: string): string {
   return '未分类';
 }
 
+// 保留applyLocalCategories作为fallback（已迁移到receiptEnricher）
 function applyLocalCategories(analysis: ReceiptAnalysis): ReceiptAnalysis {
   const items = Array.isArray(analysis.items) ? analysis.items : [];
   const enrichedItems: ReceiptItem[] = items.map((it: any) => {
@@ -199,9 +209,24 @@ function safeParseAnalysis(json: string | null): ReceiptAnalysis | null {
 }
 
 function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
+  // Filter to grocery receipts only
+  const groceryReceipts = receipts.filter((r) => {
+    // Use improved grocery detection
+    if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
+      return true;
+    }
+    // Fallback: check analysis_json for is_grocery flag
+    try {
+      const analysis = JSON.parse(r.analysis_json || '{}');
+      return analysis.is_grocery === true;
+    } catch {
+      return false;
+    }
+  });
+
   const categoryMap = new Map<string, number>();
 
-  for (const receipt of receipts) {
+  for (const receipt of groceryReceipts) {
     let items: ReceiptItem[] | null = null;
 
     if (receipt.user_items_json) {
@@ -218,7 +243,18 @@ function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
       if (lineTotal <= 0) continue;
 
       const category =
-        (typeof (item as any).category === 'string' && (item as any).category.trim()) || '未分类';
+        (typeof (item as any).category === 'string' && (item as any).category.trim()) || 'uncategorized';
+      
+      // Only count grocery categories, exclude non_grocery and uncategorized from analytics
+      if (isExcludedFromAnalytics(category)) {
+        continue;
+      }
+
+      // Only count valid grocery categories
+      if (!isGroceryCategory(category)) {
+        continue;
+      }
+
       categoryMap.set(category, (categoryMap.get(category) ?? 0) + lineTotal);
     }
   }
@@ -275,10 +311,10 @@ function computeInsightContext(
   const top2Category = categoryData.length > 1 ? categoryData[1].category : null;
   const top2Pct = categoryData.length > 1 ? categoryData[1].percentage : 0;
 
-  const uncategorizedAmount = totalsByCategory.get('未分类') || 0;
+  const uncategorizedAmount = totalsByCategory.get('uncategorized') || 0;
   const uncategorizedPct = totalSpending > 0 ? (uncategorizedAmount / totalSpending) * 100 : 0;
 
-  const nonEssentialCategories = ['零食/甜品', '饮料', '外食'];
+  const nonEssentialCategories = ['snacks', 'non_alcoholic_drinks', 'ready_meals'];
   const nonEssentialAmount = nonEssentialCategories.reduce(
     (sum, cat) => sum + (totalsByCategory.get(cat) || 0),
     0
@@ -811,6 +847,7 @@ export default function HomeScreen() {
   const [loadingReceipts, setLoadingReceipts] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('ALL');
   const [scanning, setScanning] = useState(false);
+  const successAlertShownRef = useRef(false); // Guard for duplicate success alerts
   const [stickyHeight, setStickyHeight] = useState(0);
 
   // 加载所有收据用于饼图
@@ -876,7 +913,7 @@ export default function HomeScreen() {
       return null;
     }
     const topCategory = categoryData[0];
-    const nonEssentialCategories = ['零食/甜品', '饮料', '外食'];
+    const nonEssentialCategories = ['snacks', 'non_alcoholic_drinks', 'ready_meals'];
     const nonEssentialAmount = categoryData
       .filter((item) => nonEssentialCategories.includes(item.category))
       .reduce((sum, item) => sum + item.amount, 0);
@@ -892,34 +929,165 @@ export default function HomeScreen() {
 
   // 扫描小票
   const handleScanReceipt = async () => {
+    // Once-guard: 防止重复触发
+    if (scanning) return;
+
     try {
       setScanning(true);
 
-      // 请求相册权限
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(t('home.scan.permissionDenied'), t('home.scan.permissionMessage'));
-        return;
+      // Network connectivity check (only in development)
+      if (__DEV__) {
+        try {
+          const probeResult = await probeSupabaseNetwork();
+          if (!probeResult.success) {
+            console.warn('[OCR] Network probe failed');
+          }
+          await pingOcrEdge();
+        } catch (pingError: any) {
+          console.warn('[OCR] Ping failed:', pingError.message);
+        }
       }
 
-      // 选择图片
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: 'images',
-        quality: 1,
+      // 选择图片来源：拍照或相册
+      const sourceChoice = await new Promise<'camera' | 'album' | 'cancel'>((resolve) => {
+        Alert.alert(
+          t('scan.title'),
+          '',
+          [
+            { text: t('scan.cancel'), style: 'cancel', onPress: () => resolve('cancel') },
+            { text: t('scan.takePhoto'), onPress: () => resolve('camera') },
+            { text: t('scan.chooseFromLibrary'), onPress: () => resolve('album') },
+          ],
+          { cancelable: true, onDismiss: () => resolve('cancel') }
+        );
       });
 
-      if (result.canceled) {
+      if (sourceChoice === 'cancel') {
+        setScanning(false);
         return;
       }
 
-      const uri = result.assets[0]?.uri;
-      if (!uri) {
-        return;
-      }
+      if (sourceChoice === 'camera') {
+            // 请求相机权限
+            const { status: cameraStatus } = await ImagePicker.requestCameraPermissionsAsync();
+            if (cameraStatus !== 'granted') {
+              Alert.alert(t('permissions.cameraDeniedTitle'), t('permissions.cameraDeniedMessage'));
+              setScanning(false);
+              return;
+            }
 
+            // 拍照
+            const cameraResult = await ImagePicker.launchCameraAsync({
+              mediaTypes: 'images',
+              quality: 1,
+              allowsEditing: false,
+            });
+
+            if (cameraResult.canceled) {
+              setScanning(false);
+              return;
+            }
+
+            const uri = cameraResult.assets[0]?.uri;
+            if (!uri) {
+              setScanning(false);
+              return;
+            }
+
+            // 确认识别对话框
+            const confirmResult = await new Promise<boolean>((resolve) => {
+              Alert.alert(
+                t('scan.confirmTitle'),
+                t('scan.confirmMessage'),
+                [
+                  { text: t('scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
+                  { text: t('scan.confirmAction'), onPress: () => resolve(true) },
+                ]
+              );
+            });
+
+            if (!confirmResult) {
+              setScanning(false);
+              return;
+            }
+
+        await processReceiptImage(uri);
+      } else if (sourceChoice === 'album') {
+        // 请求相册权限
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert(t('permissions.libraryDeniedTitle'), t('permissions.libraryDeniedMessage'));
+          setScanning(false);
+          return;
+        }
+
+        // 选择图片
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: 'images',
+          quality: 1,
+        });
+
+        if (result.canceled) {
+          setScanning(false);
+          return;
+        }
+
+        const uri = result.assets[0]?.uri;
+        if (!uri) {
+          setScanning(false);
+          return;
+        }
+
+        // 确认识别对话框
+        const confirmResult = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            t('scan.confirmTitle'),
+            t('scan.confirmMessage'),
+            [
+              { text: t('scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
+              { text: t('scan.confirmAction'), onPress: () => resolve(true) },
+            ]
+          );
+        });
+
+        if (!confirmResult) {
+          setScanning(false);
+          return;
+        }
+
+        await processReceiptImage(uri);
+      }
+    } catch (err: any) {
+      console.error('Scan error:', err);
+      
+      // Handle specific OCR error codes
+      let errorMessage = t('ocr.failed');
+      if (err?.code === 'RATE_LIMIT') {
+        errorMessage = t('ocr.rateLimit');
+      } else if (err?.code === 'PAYLOAD_TOO_LARGE') {
+        errorMessage = t('ocr.payloadTooLarge');
+      } else if (err?.code === 'NETWORK_ERROR') {
+        errorMessage = t('ocr.networkError');
+      } else if (err?.code === 'SERVER_ERROR') {
+        errorMessage = t('ocr.serverError');
+      } else if (err?.message) {
+        errorMessage = err.message;
+      }
+      
+      Alert.alert(t('home.scan.error'), errorMessage);
+      setScanning(false);
+    }
+  };
+
+  // 处理收据图片（提取为独立函数，避免重复代码）
+  const processReceiptImage = async (uri: string) => {
+    // Reset guard at start of new scan
+    successAlertShownRef.current = false;
+
+    try {
       // 分析小票
       const raw = await analyzeReceiptImage(uri);
-      const enriched = applyLocalCategories(raw);
+      const enriched = await applyCategoriesWithLearning(raw);
 
       // 保存到历史
       await saveReceipt({
@@ -930,12 +1098,56 @@ export default function HomeScreen() {
       // 刷新数据
       await loadReceipts();
 
-      Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
-    } catch (err: any) {
-      console.error(err);
-      Alert.alert(t('home.scan.error'), err?.message ?? t('home.scan.errorMessage'));
-    } finally {
+      // 检查复活节彩蛋
+      const allReceipts = await listReceipts();
+      const receiptCount = allReceipts.length;
+      const locale = getCurrentLocale();
+
+      const milestones: Milestone[] = [3, 5, 7, 10];
+      for (const milestone of milestones) {
+        if (shouldTriggerMilestone(receiptCount, milestone)) {
+          const hasShown = await hasShownMilestone(milestone);
+          if (!hasShown) {
+            const content = generateEasterEggContent(milestone, allReceipts, locale);
+            await markMilestoneShown(milestone);
+
+            // 显示复活节彩蛋（这会显示一个 Alert）
+            // 使用 Promise 等待用户关闭彩蛋
+            await new Promise<void>((resolve) => {
+              Alert.alert(
+                content.title,
+                content.bullets.join('\n\n') + (content.cta ? `\n\n${content.cta}` : ''),
+                [
+                  {
+                    text: t('easterEgg.ok'),
+                    style: 'default',
+                    onPress: () => resolve(),
+                  },
+                ]
+              );
+            });
+            // 复活节彩蛋关闭后，显示成功提示
+            if (!successAlertShownRef.current) {
+              successAlertShownRef.current = true;
+              Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
+            }
+            setScanning(false);
+            return;
+          }
+        }
+      }
+
+      // 如果没有显示复活节彩蛋，直接显示成功提示
+      if (!successAlertShownRef.current) {
+        successAlertShownRef.current = true;
+        Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
+      }
+      
       setScanning(false);
+    } catch (err: any) {
+      console.error('Process receipt image error:', err);
+      setScanning(false);
+      // 错误已在主流程中处理，这里不需要重复显示
     }
   };
 
