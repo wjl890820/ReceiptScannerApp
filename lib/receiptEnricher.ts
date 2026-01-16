@@ -96,7 +96,7 @@ function inferGroceryCategory(name: string): Category {
     return 'staples';
   }
 
-  // Quick meals (bento, frozen meals, instant foods)
+  // Quick meals (bento, ready-to-eat meals, instant foods - but NOT frozen)
   if (
     n.includes('弁当') ||
     n.includes('おにぎり') ||
@@ -108,13 +108,57 @@ function inferGroceryCategory(name: string): Category {
     n.includes('フライ') ||
     n.includes('コロッケ') ||
     n.includes('とり天') ||
-    n.includes('冷凍') ||
     n.includes('bento') ||
     n.includes('ready') ||
-    n.includes('frozen') ||
     n.includes('instant')
   ) {
     return 'quick_meals';
+  }
+
+  // Frozen foods (separate from quick_meals)
+  if (
+    n.includes('冷凍') ||
+    n.includes('冷凍食品') ||
+    n.includes('frozen') ||
+    n.includes('freezer')
+  ) {
+    return 'frozen_foods';
+  }
+
+  // Canned and preserved foods
+  if (
+    n.includes('缶詰') ||
+    n.includes('瓶詰') ||
+    n.includes('保存食') ||
+    n.includes('canned') ||
+    n.includes('preserved') ||
+    n.includes('jar')
+  ) {
+    return 'canned_preserved';
+  }
+
+  // Other beverages (sports drinks, energy drinks, etc.)
+  if (
+    n.includes('スポーツ') ||
+    n.includes('エナジー') ||
+    n.includes('栄養') ||
+    n.includes('sports') ||
+    n.includes('energy') ||
+    n.includes('isotonic')
+  ) {
+    return 'beverages_other';
+  }
+
+  // Health supplements
+  if (
+    n.includes('サプリ') ||
+    n.includes('ビタミン') ||
+    n.includes('栄養補助') ||
+    n.includes('supplement') ||
+    n.includes('vitamin') ||
+    n.includes('health')
+  ) {
+    return 'health_supplements';
   }
 
   // Snacks & Sweets

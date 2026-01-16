@@ -101,6 +101,11 @@
       "title": "高级洞察 Pro",
       "subtitle": "解锁更深入的洞察与更长时间范围"
     },
+    "privacy": {
+      "title": "隐私政策",
+      "subtitle": "我们如何处理您的数据",
+      "alert": "隐私政策：我们不会保存您的收据图片或完整内容。OCR使用数据仅用于成本追踪，已匿名化。所有收据数据均存储在您的设备本地。详情请参阅 PRIVACY_POLICY.md。"
+    },
     "about": {
       "title": "关于",
       "version": "版本"
@@ -196,6 +201,10 @@
     "non_alcoholic_drinks": "无酒精饮料",
     "alcohol": "酒类",
     "household": "日用品卫生",
+    "frozen_foods": "冷冻食品",
+    "canned_preserved": "罐头腌制品",
+    "beverages_other": "其他饮料",
+    "health_supplements": "健康补品",
     "other_grocery": "其他食品",
     "uncategorized": "未分类",
     "non_grocery": "非超市"

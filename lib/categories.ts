@@ -1,23 +1,32 @@
 // lib/categories.ts
-// Supermarket-only categorization taxonomy (fine but not verbose: 12 categories)
+// Supermarket-only categorization taxonomy (16 categories for better granularity)
 
 /**
  * Stable category keys for supermarket items only
  * These are stored in the database and used for analytics
  * Keys are English snake_case, display names come from i18n
+ * 
+ * Expanded to 16 categories:
+ * - Split condiments from quick_meals (seasonings vs ready meals)
+ * - Split alcohol from non_alcoholic_drinks (already separate)
+ * - Added more granular categories
  */
 export const GROCERY_CATEGORIES = [
   'produce',              // Vegetables/fruits
-  'meat_seafood',         // Meat & Seafood (separate from protein)
-  'dairy_eggs',           // Dairy & Eggs (separate category)
+  'meat_seafood',         // Meat & Seafood
+  'dairy_eggs',           // Dairy & Eggs
   'bakery',               // Bakery items (bread, pastries)
   'staples',              // Rice/noodles/bread base/beans
   'snacks_sweets',        // Snacks & Sweets
-  'quick_meals',          // Bento, frozen meals, instant foods
-  'condiments',           // Seasonings/sauces/spices
-  'non_alcoholic_drinks',  // Non-alcoholic drinks
-  'alcohol',              // Alcohol
+  'quick_meals',          // Bento, frozen meals, instant foods (ready-to-eat)
+  'condiments',           // Seasonings/sauces/spices (separate from quick_meals)
+  'non_alcoholic_drinks', // Non-alcoholic drinks (separate from alcohol)
+  'alcohol',              // Alcohol (separate from non_alcoholic_drinks)
   'household',            // Paper, detergent, hygiene
+  'frozen_foods',         // Frozen foods (separate category)
+  'canned_preserved',     // Canned and preserved foods
+  'beverages_other',      // Other beverages (sports drinks, energy drinks, etc.)
+  'health_supplements',   // Health supplements, vitamins
   'other_grocery',        // Other grocery items (fallback)
 ] as const;
 

@@ -101,6 +101,11 @@
       "title": "Advanced Insights Pro",
       "subtitle": "Unlock deeper insights and longer time ranges"
     },
+    "privacy": {
+      "title": "Privacy Policy",
+      "subtitle": "How we handle your data",
+      "alert": "Privacy Policy: We do NOT store your receipt images or full content. OCR usage data is anonymized for cost tracking only. All receipt data is stored locally on your device. See PRIVACY_POLICY.md for details."
+    },
     "about": {
       "title": "About",
       "version": "Version"
@@ -191,11 +196,15 @@
     "bakery": "Bakery",
     "staples": "Staples",
     "snacks_sweets": "Snacks & Sweets",
-    "quick_meals": "Quick Meals",
+    "quick_meals": "Ready Meals",
     "condiments": "Condiments & Seasonings",
     "non_alcoholic_drinks": "Non-Alcoholic Drinks",
     "alcohol": "Alcohol",
     "household": "Household & Hygiene",
+    "frozen_foods": "Frozen Foods",
+    "canned_preserved": "Canned & Preserved",
+    "beverages_other": "Other Beverages",
+    "health_supplements": "Health Supplements",
     "other_grocery": "Other Grocery",
     "uncategorized": "Uncategorized",
     "non_grocery": "Not Grocery"

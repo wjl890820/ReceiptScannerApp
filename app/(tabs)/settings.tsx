@@ -40,6 +40,27 @@ export default function SettingsScreen() {
         <Text style={styles.arrow}>→</Text>
       </Pressable>
 
+      {/* Privacy Policy */}
+      <Pressable
+        style={styles.section}
+        onPress={() => {
+          // Open privacy policy (can be a web view or markdown viewer in future)
+          // For now, we'll use Linking to open the file if available
+          // In production, this should open a web view or dedicated screen
+          import('expo-linking').then((Linking) => {
+            // For now, just show an alert with the key points
+            // In production, implement a proper privacy policy screen
+            alert(t('settings.privacy.alert'));
+          });
+        }}
+      >
+        <View style={styles.sectionContent}>
+          <Text style={styles.sectionTitle}>{t('settings.privacy.title')}</Text>
+          <Text style={styles.sectionSubtitle}>{t('settings.privacy.subtitle')}</Text>
+        </View>
+        <Text style={styles.arrow}>→</Text>
+      </Pressable>
+
       {/* About */}
       <View style={styles.aboutSection}>
         <Text style={styles.aboutTitle}>{t('settings.about.title')}</Text>

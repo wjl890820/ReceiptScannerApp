@@ -101,6 +101,11 @@
       "title": "高度なインサイト Pro",
       "subtitle": "より深いインサイトとより長い期間を解除"
     },
+    "privacy": {
+      "title": "プライバシーポリシー",
+      "subtitle": "データの取り扱いについて",
+      "alert": "プライバシーポリシー：レシート画像や全文は保存しません。OCR使用データはコスト追跡のみのため匿名化されています。すべてのレシートデータはデバイス上にローカルに保存されます。詳細は PRIVACY_POLICY.md をご覧ください。"
+    },
     "about": {
       "title": "について",
       "version": "バージョン"
@@ -196,6 +201,10 @@
     "non_alcoholic_drinks": "飲料（ノンアル）",
     "alcohol": "酒類",
     "household": "日用品・衛生",
+    "frozen_foods": "冷凍食品",
+    "canned_preserved": "缶詰・保存食",
+    "beverages_other": "その他飲料",
+    "health_supplements": "健康補助食品",
     "other_grocery": "その他食品",
     "uncategorized": "未分類",
     "non_grocery": "スーパー以外"
