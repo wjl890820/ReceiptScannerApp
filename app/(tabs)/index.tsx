@@ -994,17 +994,17 @@ export default function HomeScreen() {
               return;
             }
 
-            // 确认识别对话框
-            const confirmResult = await new Promise<boolean>((resolve) => {
-              Alert.alert(
-                t('scan.confirmTitle'),
-                t('scan.confirmMessage'),
-                [
-                  { text: t('scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
-                  { text: t('scan.confirmAction'), onPress: () => resolve(true) },
-                ]
-              );
-            });
+        // 确认识别对话框（包含隐私说明）
+        const confirmResult = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            t('scan.confirmTitle'),
+            `${t('scan.confirmMessage')}\n\n${t('ocr.privacyNotice')}`,
+            [
+              { text: t('scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
+              { text: t('scan.confirmAction'), onPress: () => resolve(true) },
+            ]
+          );
+        });
 
             if (!confirmResult) {
               setScanning(false);
@@ -1038,11 +1038,11 @@ export default function HomeScreen() {
           return;
         }
 
-        // 确认识别对话框
+        // 确认识别对话框（包含隐私说明）
         const confirmResult = await new Promise<boolean>((resolve) => {
           Alert.alert(
             t('scan.confirmTitle'),
-            t('scan.confirmMessage'),
+            `${t('scan.confirmMessage')}\n\n${t('ocr.privacyNotice')}`,
             [
               { text: t('scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
               { text: t('scan.confirmAction'), onPress: () => resolve(true) },

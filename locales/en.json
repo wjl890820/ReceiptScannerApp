@@ -221,5 +221,9 @@
   },
   "grocery": {
     "onlyNote": "Category breakdown is shown for grocery receipts only."
+  },
+  "ocr": {
+    "privacyNotice": "We record OCR request counts and token usage for cost analysis and abuse prevention. We do NOT store your images or receipt content.",
+    "privacyNoticeTitle": "Privacy Notice"
   }
 }
