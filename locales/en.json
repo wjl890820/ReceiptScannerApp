@@ -104,7 +104,8 @@
     "privacy": {
       "title": "Privacy Policy",
       "subtitle": "How we handle your data",
-      "alert": "Privacy Policy: We do NOT store your receipt images or full content. OCR usage data is anonymized for cost tracking only. All receipt data is stored locally on your device. See PRIVACY_POLICY.md for details."
+      "alert": "Privacy Policy: We do NOT store your receipt images or full content. OCR usage data is anonymized for cost tracking only. All receipt data is stored locally on your device. See PRIVACY_POLICY.md for details.",
+      "ok": "OK"
     },
     "about": {
       "title": "About",

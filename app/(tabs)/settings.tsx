@@ -2,7 +2,7 @@
 
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 
 import { t } from '@/lib/i18n';
@@ -44,14 +44,11 @@ export default function SettingsScreen() {
       <Pressable
         style={styles.section}
         onPress={() => {
-          // Open privacy policy (can be a web view or markdown viewer in future)
-          // For now, we'll use Linking to open the file if available
-          // In production, this should open a web view or dedicated screen
-          import('expo-linking').then((Linking) => {
-            // For now, just show an alert with the key points
-            // In production, implement a proper privacy policy screen
-            alert(t('settings.privacy.alert'));
-          });
+          Alert.alert(
+            t('settings.privacy.title'),
+            t('settings.privacy.alert'),
+            [{ text: t('settings.privacy.ok') || 'OK' }]
+          );
         }}
       >
         <View style={styles.sectionContent}>
