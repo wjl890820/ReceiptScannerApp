@@ -73,6 +73,7 @@ export function isStale(record: IdempotencyRecord): boolean {
 /**
  * Try to acquire processing lock (upsert IN_PROGRESS)
  * Returns true if lock acquired, false if already in progress
+ * Uses atomic update to prevent race conditions
  */
 export async function acquireProcessingLock(
   supabase: ReturnType<typeof createClient>,
@@ -82,38 +83,20 @@ export async function acquireProcessingLock(
   const expiresAt = new Date();
   expiresAt.setHours(expiresAt.getHours() + IDEMPOTENCY_TTL_HOURS);
 
-  // Try to insert or update to IN_PROGRESS
-  // If status is already SUCCEEDED/FAILED and not expired, this will fail (expected)
-  const { error } = await supabase
-    .from('ocr_idempotency')
-    .upsert(
-      {
-        idempotency_key: idempotencyKey,
-        device_hash: deviceHash,
-        status: 'IN_PROGRESS',
-        http_status: null,
-        response_json: null,
-        error_code: null,
-        expires_at: expiresAt.toISOString(),
-      },
-      {
-        onConflict: 'idempotency_key',
-        ignoreDuplicates: false,
-      }
-    );
+  // First, check existing record
+  const existing = await getIdempotencyRecord(supabase, idempotencyKey);
 
-  if (error) {
-    // Check if it's a constraint violation (status already SUCCEEDED/FAILED)
-    // or if another request is already IN_PROGRESS
-    const existing = await getIdempotencyRecord(supabase, idempotencyKey);
-    if (existing && existing.status === 'IN_PROGRESS' && !isStale(existing)) {
-      return false; // Lock already held
+  if (existing) {
+    // If already completed and not expired, return false
+    if ((existing.status === 'SUCCEEDED' || existing.status === 'FAILED') && !isExpired(existing)) {
+      return false;
     }
-    if (existing && (existing.status === 'SUCCEEDED' || existing.status === 'FAILED') && !isExpired(existing)) {
-      return false; // Already completed
+    // If IN_PROGRESS and not stale, return false
+    if (existing.status === 'IN_PROGRESS' && !isStale(existing)) {
+      return false;
     }
-    // If stale or expired, try to force update
-    if (existing && (isStale(existing) || isExpired(existing))) {
+    // If stale or expired, try to update atomically
+    if (isStale(existing) || isExpired(existing)) {
       const { error: updateError } = await supabase
         .from('ocr_idempotency')
         .update({
@@ -121,8 +104,45 @@ export async function acquireProcessingLock(
           updated_at: new Date().toISOString(),
           expires_at: expiresAt.toISOString(),
         })
-        .eq('idempotency_key', idempotencyKey);
-      return !updateError;
+        .eq('idempotency_key', idempotencyKey)
+        .eq('status', existing.status); // Only update if status hasn't changed (atomic check)
+      
+      if (updateError) {
+        // Another request may have updated it, check again
+        const recheck = await getIdempotencyRecord(supabase, idempotencyKey);
+        if (recheck && recheck.status === 'IN_PROGRESS' && !isStale(recheck)) {
+          return false;
+        }
+        // If still stale/expired or different status, allow retry
+        return !updateError;
+      }
+      return true;
+    }
+  }
+
+  // No existing record or expired, try to insert
+  const { error } = await supabase
+    .from('ocr_idempotency')
+    .insert({
+      idempotency_key: idempotencyKey,
+      device_hash: deviceHash,
+      status: 'IN_PROGRESS',
+      http_status: null,
+      response_json: null,
+      error_code: null,
+      expires_at: expiresAt.toISOString(),
+    });
+
+  if (error) {
+    // May have been inserted by concurrent request, check again
+    const recheck = await getIdempotencyRecord(supabase, idempotencyKey);
+    if (recheck && recheck.status === 'IN_PROGRESS' && !isStale(recheck)) {
+      return false;
+    }
+    // If still no record or stale, allow retry (may be unique constraint violation)
+    if (error.code === '23505') {
+      // Unique violation - another request inserted it
+      return false;
     }
     throw error;
   }
