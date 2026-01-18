@@ -12,11 +12,21 @@ export default ({ config }) => {
     ? existingPlugins
     : [...existingPlugins, 'expo-web-browser'];
 
+  // Add expo-secure-store plugin if not already present
+  const hasSecureStore = plugins.some(
+    (plugin) =>
+      plugin === 'expo-secure-store' ||
+      (Array.isArray(plugin) && plugin[0] === 'expo-secure-store')
+  );
+  const finalPlugins = hasSecureStore
+    ? plugins
+    : [...plugins, 'expo-secure-store'];
+
   return {
     ...config,
     slug: 'receiptscannerapp',
     scheme: 'receiptscannerapp',
-    plugins,
+    plugins: finalPlugins,
     ios: {
       ...(config.ios ?? {}),
       bundleIdentifier: 'com.receiptscannerapp.app',
