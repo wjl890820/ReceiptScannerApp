@@ -5,18 +5,27 @@ import * as ImageManipulator from 'expo-image-manipulator';
 const MODEL = 'gemini-2.0-flash';
 
 function getGeminiApiKey(): string {
-  // Expo SDK 49+ 推荐：Constants.expoConfig
-  const fromExpoConfig =
-    (Constants.expoConfig?.extra as any)?.geminiApiKey ??
-    (Constants.expoConfig?.extra as any)?.GEMINI_API_KEY;
+  try {
+    // Safely access Constants with fallback
+    const expoConfig = Constants?.expoConfig;
+    const manifest = Constants?.manifest;
+    
+    // Expo SDK 49+ 推荐：Constants.expoConfig
+    const fromExpoConfig =
+      (expoConfig?.extra as any)?.geminiApiKey ??
+      (expoConfig?.extra as any)?.GEMINI_API_KEY;
 
-  // 兼容旧的 Expo Go：Constants.manifest
-  const fromManifest =
-    (Constants.manifest as any)?.extra?.geminiApiKey ??
-    (Constants.manifest as any)?.extra?.GEMINI_API_KEY;
+    // 兼容旧的 Expo Go：Constants.manifest
+    const fromManifest =
+      (manifest as any)?.extra?.geminiApiKey ??
+      (manifest as any)?.extra?.GEMINI_API_KEY;
 
-  const key = (fromExpoConfig ?? fromManifest ?? '').trim();
-  return key;
+    const key = (fromExpoConfig ?? fromManifest ?? '').trim();
+    return key;
+  } catch (e) {
+    console.error('[ReceiptAnalyzer] Failed to get Gemini API key from Constants:', e);
+    return '';
+  }
 }
 
 // 商品分类 key（用于统计）

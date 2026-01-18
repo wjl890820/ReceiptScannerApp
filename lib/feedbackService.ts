@@ -2,29 +2,47 @@
 import Constants from 'expo-constants';
 
 function getSupabaseUrl(): string {
-  const fromExpoConfig =
-    (Constants.expoConfig?.extra as any)?.SUPABASE_URL ??
-    (Constants.expoConfig?.extra as any)?.supabaseUrl;
+  try {
+    // Safely access Constants with fallback
+    const expoConfig = Constants?.expoConfig;
+    const manifest = Constants?.manifest;
+    
+    const fromExpoConfig =
+      (expoConfig?.extra as any)?.SUPABASE_URL ??
+      (expoConfig?.extra as any)?.supabaseUrl;
 
-  const fromManifest =
-    (Constants.manifest as any)?.extra?.SUPABASE_URL ??
-    (Constants.manifest as any)?.extra?.supabaseUrl;
+    const fromManifest =
+      (manifest as any)?.extra?.SUPABASE_URL ??
+      (manifest as any)?.extra?.supabaseUrl;
 
-  const url = (fromExpoConfig ?? fromManifest ?? '').trim();
-  return url;
+    const url = (fromExpoConfig ?? fromManifest ?? '').trim();
+    return url;
+  } catch (e) {
+    console.error('[FeedbackService] Failed to get Supabase URL from Constants:', e);
+    return '';
+  }
 }
 
 function getSupabaseAnonKey(): string {
-  const fromExpoConfig =
-    (Constants.expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
-    (Constants.expoConfig?.extra as any)?.supabaseAnonKey;
+  try {
+    // Safely access Constants with fallback
+    const expoConfig = Constants?.expoConfig;
+    const manifest = Constants?.manifest;
+    
+    const fromExpoConfig =
+      (expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
+      (expoConfig?.extra as any)?.supabaseAnonKey;
 
-  const fromManifest =
-    (Constants.manifest as any)?.extra?.SUPABASE_ANON_KEY ??
-    (Constants.manifest as any)?.extra?.supabaseAnonKey;
+    const fromManifest =
+      (manifest as any)?.extra?.SUPABASE_ANON_KEY ??
+      (manifest as any)?.extra?.supabaseAnonKey;
 
-  const key = (fromExpoConfig ?? fromManifest ?? '').trim();
-  return key;
+    const key = (fromExpoConfig ?? fromManifest ?? '').trim();
+    return key;
+  } catch (e) {
+    console.error('[FeedbackService] Failed to get Supabase Anon Key from Constants:', e);
+    return '';
+  }
 }
 
 export type FeedbackPayload = {

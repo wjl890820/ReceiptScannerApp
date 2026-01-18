@@ -13,22 +13,37 @@ const translations: Record<Locale, any> = {
 };
 
 function detectLocale(): Locale {
-  const systemLocale = Localization.getLocales()[0]?.languageCode || 'en';
-  
-  if (systemLocale === 'zh' || systemLocale.startsWith('zh')) {
-    return 'zh';
+  try {
+    const locales = Localization.getLocales();
+    const systemLocale = locales?.[0]?.languageCode || 'en';
+    
+    if (systemLocale === 'zh' || systemLocale.startsWith('zh')) {
+      return 'zh';
+    }
+    if (systemLocale === 'ja' || systemLocale.startsWith('ja')) {
+      return 'ja';
+    }
+    
+    return 'en';
+  } catch (e) {
+    // Fallback to English if Localization API fails
+    console.warn('[i18n] Failed to detect locale, using English:', e);
+    return 'en';
   }
-  if (systemLocale === 'ja' || systemLocale.startsWith('ja')) {
-    return 'ja';
-  }
-  
-  return 'en';
 }
 
-const currentLocale = detectLocale();
+// Delay locale detection until first use to avoid initialization crashes
+let currentLocale: Locale | null = null;
+
+function getCurrentLocaleInternal(): Locale {
+  if (currentLocale === null) {
+    currentLocale = detectLocale();
+  }
+  return currentLocale;
+}
 
 export function getCurrentLocale(): Locale {
-  return currentLocale;
+  return getCurrentLocaleInternal();
 }
 
 function getNestedValue(obj: any, path: string): string | undefined {
@@ -47,24 +62,31 @@ function getNestedValue(obj: any, path: string): string | undefined {
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {
-  const localeTranslations = translations[currentLocale];
-  let value = getNestedValue(localeTranslations, key);
-  if (!value) {
-    // Fallback to English
-    value = getNestedValue(translations.en, key);
-  }
-  
-  if (!value) {
-    // Last resort: return key
+  try {
+    const locale = getCurrentLocaleInternal();
+    const localeTranslations = translations[locale];
+    let value = getNestedValue(localeTranslations, key);
+    if (!value) {
+      // Fallback to English
+      value = getNestedValue(translations.en, key);
+    }
+    
+    if (!value) {
+      // Last resort: return key
+      return key;
+    }
+    
+    // Replace placeholders if params provided
+    if (params) {
+      return value.replace(/\{(\w+)\}/g, (match, paramKey) => {
+        return params[paramKey] !== undefined ? String(params[paramKey]) : match;
+      });
+    }
+    
+    return value;
+  } catch (e) {
+    // Ultimate fallback: return key if translation fails
+    console.warn('[i18n] Translation failed for key:', key, e);
     return key;
   }
-  
-  // Replace placeholders if params provided
-  if (params) {
-    return value.replace(/\{(\w+)\}/g, (match, paramKey) => {
-      return params[paramKey] !== undefined ? String(params[paramKey]) : match;
-    });
-  }
-  
-  return value;
 }
