@@ -20,12 +20,12 @@ export default ({ config }) => {
     ios: {
       ...(config.ios ?? {}),
       bundleIdentifier: 'com.receiptscannerapp.app',
-      buildNumber: '1',
+      buildNumber: '2',
     },
     android: {
       ...(config.android ?? {}),
       package: 'com.receiptscannerapp.app',
-      versionCode: 1,
+      versionCode: 2,
     },
     extra: {
       ...(config.extra ?? {}),
