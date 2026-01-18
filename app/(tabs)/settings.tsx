@@ -1,17 +1,57 @@
 // app/(tabs)/settings.tsx
 
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import Constants from 'expo-constants';
+// Lazy import Constants to avoid initialization crashes
+let Constants: typeof import('expo-constants') | null = null;
 
 import { PRIVACY_POLICY_URL } from '@/constants/privacy';
 import { t } from '@/lib/i18n';
 
+async function getConstants() {
+  if (!Constants) {
+    try {
+      Constants = await import('expo-constants');
+    } catch (e) {
+      console.warn('[Settings] Failed to import Constants:', e);
+      return null;
+    }
+  }
+  return Constants;
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
-  const appVersion = Constants.expoConfig?.version || '1.0.0';
-  const appName = Constants.expoConfig?.name || 'Receipt Scanner';
+  
+  // Delay Constants access to avoid initialization crashes
+  const appInfo = useMemo(() => {
+    try {
+      // Try synchronous access first (may work if already loaded)
+      if (typeof require !== 'undefined') {
+        try {
+          const ConstantsSync = require('expo-constants');
+          return {
+            version: ConstantsSync?.expoConfig?.version || '1.0.0',
+            name: ConstantsSync?.expoConfig?.name || 'Receipt Scanner',
+          };
+        } catch {
+          // Fallback to async if require fails
+        }
+      }
+    } catch (e) {
+      console.warn('[Settings] Failed to access Constants synchronously:', e);
+    }
+    
+    // Fallback values
+    return {
+      version: '1.0.0',
+      name: 'Receipt Scanner',
+    };
+  }, []);
+  
+  const appVersion = appInfo.version;
+  const appName = appInfo.name;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>

@@ -1,14 +1,31 @@
 // lib/receiptAnalyzer.ts
-import Constants from 'expo-constants';
+// Lazy import Constants to avoid initialization crashes
+let Constants: typeof import('expo-constants') | null = null;
+
 import * as ImageManipulator from 'expo-image-manipulator';
 
 const MODEL = 'gemini-2.0-flash';
 
-function getGeminiApiKey(): string {
+async function getConstants() {
+  if (!Constants) {
+    try {
+      Constants = await import('expo-constants');
+    } catch (e) {
+      console.warn('[ReceiptAnalyzer] Failed to import Constants:', e);
+      return null;
+    }
+  }
+  return Constants;
+}
+
+async function getGeminiApiKey(): Promise<string> {
   try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
     // Safely access Constants with fallback
-    const expoConfig = Constants?.expoConfig;
-    const manifest = Constants?.manifest;
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
     
     // Expo SDK 49+ 推荐：Constants.expoConfig
     const fromExpoConfig =
@@ -101,7 +118,7 @@ async function compressToJpegBase64(uri: string): Promise<string> {
 }
 
 export async function analyzeReceiptImage(uri: string): Promise<ReceiptAnalysis> {
-  const GEMINI_API_KEY = getGeminiApiKey();
+  const GEMINI_API_KEY = await getGeminiApiKey();
 
   if (!GEMINI_API_KEY) {
     // 这里报错就说明：你的 app.config.js / .env 没有把 key 注入到 extra

@@ -1,5 +1,7 @@
 // lib/i18n.ts
-import * as Localization from 'expo-localization';
+// Lazy import to avoid initialization crashes on iOS
+let Localization: typeof import('expo-localization') | null = null;
+
 import en from '../locales/en.json';
 import ja from '../locales/ja.json';
 import zh from '../locales/zh.json';
@@ -12,7 +14,17 @@ const translations: Record<Locale, any> = {
   ja,
 };
 
-function detectLocale(): Locale {
+async function detectLocale(): Promise<Locale> {
+  // Lazy load Localization to avoid initialization crashes
+  if (!Localization) {
+    try {
+      Localization = await import('expo-localization');
+    } catch (e) {
+      console.warn('[i18n] Failed to import Localization, using English:', e);
+      return 'en';
+    }
+  }
+
   try {
     const locales = Localization.getLocales();
     const systemLocale = locales?.[0]?.languageCode || 'en';
@@ -34,12 +46,27 @@ function detectLocale(): Locale {
 
 // Delay locale detection until first use to avoid initialization crashes
 let currentLocale: Locale | null = null;
+let localePromise: Promise<Locale> | null = null;
 
 function getCurrentLocaleInternal(): Locale {
-  if (currentLocale === null) {
-    currentLocale = detectLocale();
+  // Synchronous fallback: return cached locale or default to 'en'
+  if (currentLocale !== null) {
+    return currentLocale;
   }
-  return currentLocale;
+  
+  // If not cached, start async detection but return 'en' immediately
+  if (!localePromise) {
+    localePromise = detectLocale().then((locale) => {
+      currentLocale = locale;
+      return locale;
+    }).catch(() => {
+      currentLocale = 'en';
+      return 'en';
+    });
+  }
+  
+  // Return default while detection is in progress
+  return 'en';
 }
 
 export function getCurrentLocale(): Locale {

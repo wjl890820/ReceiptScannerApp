@@ -13,9 +13,22 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import Constants from 'expo-constants';
+// Lazy import Constants to avoid initialization crashes
+let Constants: typeof import('expo-constants') | null = null;
 
 import { t, getCurrentLocale } from '@/lib/i18n';
+
+async function getAppVersion(): Promise<string> {
+  try {
+    if (!Constants) {
+      Constants = await import('expo-constants');
+    }
+    return Constants?.expoConfig?.version || '1.0.0';
+  } catch (e) {
+    console.warn('[Feedback] Failed to get app version from Constants:', e);
+    return '1.0.0';
+  }
+}
 
 export default function FeedbackScreen() {
   const router = useRouter();
@@ -29,7 +42,7 @@ export default function FeedbackScreen() {
     }
 
     try {
-      const appVersion = Constants.expoConfig?.version || '1.0.0';
+      const appVersion = await getAppVersion();
       const currentLanguage = getCurrentLocale();
       const platform = Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : 'Web';
 

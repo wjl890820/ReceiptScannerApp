@@ -1,5 +1,7 @@
 // lib/ocrService.ts
-import Constants from 'expo-constants';
+// Lazy import Constants to avoid initialization crashes
+let Constants: typeof import('expo-constants') | null = null;
+
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 
@@ -7,11 +9,26 @@ import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 
-function getSupabaseUrl(): string {
+async function getConstants() {
+  if (!Constants) {
+    try {
+      Constants = await import('expo-constants');
+    } catch (e) {
+      console.warn('[OCR] Failed to import Constants:', e);
+      return null;
+    }
+  }
+  return Constants;
+}
+
+async function getSupabaseUrl(): Promise<string> {
   try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
     // Safely access Constants with fallback
-    const expoConfig = Constants?.expoConfig;
-    const manifest = Constants?.manifest;
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
     
     const fromExpoConfig =
       (expoConfig?.extra as any)?.SUPABASE_URL ??
@@ -35,11 +52,14 @@ function getSupabaseUrl(): string {
   }
 }
 
-function getSupabaseAnonKey(): string {
+async function getSupabaseAnonKey(): Promise<string> {
   try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
     // Safely access Constants with fallback
-    const expoConfig = Constants?.expoConfig;
-    const manifest = Constants?.manifest;
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
     
     const fromExpoConfig =
       (expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
@@ -90,7 +110,7 @@ export type OCRServiceError = {
  * Temporary network probe: Test basic connectivity to Supabase
  */
 export async function probeSupabaseNetwork(): Promise<{ success: boolean; status?: number; error?: string }> {
-  const supabaseUrl = getSupabaseUrl();
+  const supabaseUrl = await getSupabaseUrl();
   
   if (!supabaseUrl) {
     return { success: false, error: 'SUPABASE_URL not configured' };
@@ -128,8 +148,8 @@ export async function probeSupabaseNetwork(): Promise<{ success: boolean; status
  * Temporary debug: Ping OCR Edge Function
  */
 export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
-  const supabaseUrl = getSupabaseUrl();
-  const supabaseAnonKey = getSupabaseAnonKey();
+  const supabaseUrl = await getSupabaseUrl();
+  const supabaseAnonKey = await getSupabaseAnonKey();
 
   if (!supabaseUrl) {
     throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
@@ -210,7 +230,8 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
   // Get app metadata (with safe access to Constants)
   let appVersion = '1.0.0';
   try {
-    appVersion = Constants?.expoConfig?.version || '1.0.0';
+    const ConstantsModule = await getConstants();
+    appVersion = ConstantsModule?.expoConfig?.version || '1.0.0';
   } catch (e) {
     console.warn('[OCR] Failed to get app version from Constants:', e);
   }

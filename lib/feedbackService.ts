@@ -1,11 +1,27 @@
 // lib/feedbackService.ts
-import Constants from 'expo-constants';
+// Lazy import Constants to avoid initialization crashes
+let Constants: typeof import('expo-constants') | null = null;
 
-function getSupabaseUrl(): string {
+async function getConstants() {
+  if (!Constants) {
+    try {
+      Constants = await import('expo-constants');
+    } catch (e) {
+      console.warn('[FeedbackService] Failed to import Constants:', e);
+      return null;
+    }
+  }
+  return Constants;
+}
+
+async function getSupabaseUrl(): Promise<string> {
   try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
     // Safely access Constants with fallback
-    const expoConfig = Constants?.expoConfig;
-    const manifest = Constants?.manifest;
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
     
     const fromExpoConfig =
       (expoConfig?.extra as any)?.SUPABASE_URL ??
@@ -23,11 +39,14 @@ function getSupabaseUrl(): string {
   }
 }
 
-function getSupabaseAnonKey(): string {
+async function getSupabaseAnonKey(): Promise<string> {
   try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
     // Safely access Constants with fallback
-    const expoConfig = Constants?.expoConfig;
-    const manifest = Constants?.manifest;
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
     
     const fromExpoConfig =
       (expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
@@ -54,7 +73,7 @@ export type FeedbackPayload = {
 };
 
 export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
-  const supabaseUrl = getSupabaseUrl();
+  const supabaseUrl = await getSupabaseUrl();
 
   if (!supabaseUrl) {
     throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
@@ -62,7 +81,7 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
 
   const edgeFunctionUrl = `${supabaseUrl}/functions/v1/send-feedback`;
 
-  const supabaseAnonKey = getSupabaseAnonKey();
+  const supabaseAnonKey = await getSupabaseAnonKey();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

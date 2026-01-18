@@ -1,6 +1,6 @@
 // app/(tabs)/_layout.tsx
 import { Tabs } from 'expo-router';
-import React from 'react';
+import React, { useMemo } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -10,6 +10,28 @@ import { t } from '@/lib/i18n';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+
+  // Delay t() calls to avoid triggering i18n/Localization initialization during module load
+  // Use useMemo to ensure translations are only accessed after component mount
+  const tabTitles = useMemo(() => {
+    try {
+      return {
+        home: t('tabs.home'),
+        history: t('tabs.history'),
+        settings: t('tabs.settings'),
+        analysis: t('tabs.analysis'),
+      };
+    } catch (e) {
+      // Fallback to English if translation fails
+      console.warn('[TabLayout] Translation failed, using fallback:', e);
+      return {
+        home: 'Home',
+        history: 'History',
+        settings: 'Settings',
+        analysis: 'Analysis',
+      };
+    }
+  }, []);
 
   return (
     <Tabs
@@ -22,7 +44,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: t('tabs.home'),
+          title: tabTitles.home,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="house.fill" color={color} />
           ),
@@ -33,7 +55,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="history/index"
         options={{
-          title: t('tabs.history'),
+          title: tabTitles.history,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="clock.fill" color={color} />
           ),
@@ -51,7 +73,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="settings"
         options={{
-          title: t('tabs.settings'),
+          title: tabTitles.settings,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="gearshape.fill" color={color} />
           ),
@@ -78,7 +100,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="analysis"
         options={{
-          title: t('tabs.analysis'),
+          title: tabTitles.analysis,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="chart.bar.fill" color={color} />
           ),
