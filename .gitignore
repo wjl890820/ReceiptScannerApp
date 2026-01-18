@@ -41,3 +41,18 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Local env
+.env
+
+# Supabase local artifacts
+supabase/.branches/
+supabase/.temp/
+
+# Deno local lock (keep repo clean)
+deno.lock
+
+# Local notes
+NETWORK_TROUBLESHOOTING.md
+VERIFICATION.md
+VERIFY_URL_FIX.md
