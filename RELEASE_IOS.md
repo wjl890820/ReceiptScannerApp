@@ -267,18 +267,18 @@ TRUNCATE TABLE ocr_ratelimit;
 - **EAS 配置**：`eas.json`（如存在）或通过 `eas build:configure` 创建
 ### 配置文件检查结果
 
-**app.json 位置：** `app.json`
+**app.json 位置：** \`app.json\`
 
-**app.config.js 位置：** `app.config.js`
+**app.config.js 位置：** \`app.config.js\`
 
 **eas.json 状态：** 不存在（需要运行 eas build:configure 创建）
 
 **当前配置值：**
-- Version: portrait
-- iOS Build Number:     },
-- Bundle Identifier: 1
+- Version: 1.0.0
+- iOS Build Number: 1
+- Bundle Identifier: com.receiptscannerapp.app
 
 **需要修改的位置：**
-1. `app.json` 第 5 行：`"version": "1.0.0"` → 更新为发布版本
-2. `app.json` 第 15 行：`"buildNumber": "1"` → 每次提交递增
-3. `app.config.js` 第 23 行：`buildNumber: '1'` → 与 app.json 保持一致
+1. \`app.json\` 第 5 行：\`"version": "1.0.0"\` → 更新为发布版本
+2. \`app.json\` 第 15 行：\`"buildNumber": "1"\` → 每次提交递增
+3. \`app.config.js\` 第 23 行：\`buildNumber: '1'\` → 与 app.json 保持一致
