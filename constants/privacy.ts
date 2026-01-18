@@ -7,4 +7,4 @@
  */
 export const PRIVACY_POLICY_URL =
   process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL ||
-  'https://ifgcizhnblkonbjzkfyb.supabase.co/storage/v1/object/public/legal/privacy-policy.html';
+  'https://ifgcizhnblkonbjzkfyb.supabase.co/functions/v1/privacy-policy';
