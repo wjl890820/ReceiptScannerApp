@@ -2,9 +2,10 @@
 
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 
+import { PRIVACY_POLICY_URL } from '@/constants/privacy';
 import { t } from '@/lib/i18n';
 
 export default function SettingsScreen() {
@@ -43,12 +44,26 @@ export default function SettingsScreen() {
       {/* Privacy Policy */}
       <Pressable
         style={styles.section}
-        onPress={() => {
-          Alert.alert(
-            t('settings.privacy.title'),
-            t('settings.privacy.alert'),
-            [{ text: t('settings.privacy.ok') || 'OK' }]
-          );
+        onPress={async () => {
+          try {
+            const canOpen = await Linking.canOpenURL(PRIVACY_POLICY_URL);
+            if (canOpen) {
+              await Linking.openURL(PRIVACY_POLICY_URL);
+            } else {
+              Alert.alert(
+                t('settings.privacy.title'),
+                t('settings.privacy.alert'),
+                [{ text: t('settings.privacy.ok') || 'OK' }]
+              );
+            }
+          } catch (error) {
+            // Fallback to alert if URL opening fails
+            Alert.alert(
+              t('settings.privacy.title'),
+              t('settings.privacy.alert'),
+              [{ text: t('settings.privacy.ok') || 'OK' }]
+            );
+          }
         }}
       >
         <View style={styles.sectionContent}>

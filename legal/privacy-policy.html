@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy / プライバシーポリシー / 隐私政策</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      color: #333;
+      background: #fff;
+    }
+    h1 { color: #000; border-bottom: 2px solid #007AFF; padding-bottom: 10px; }
+    h2 { color: #333; margin-top: 30px; }
+    .last-updated { color: #666; font-size: 0.9em; margin-bottom: 30px; }
+    .language-section { margin: 40px 0; padding: 20px; background: #f9f9f9; border-radius: 8px; }
+    .contact { margin-top: 30px; padding: 15px; background: #e8f4f8; border-radius: 5px; }
+    ul { padding-left: 20px; }
+    li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <div class="last-updated">Last updated: 2026-01-18</div>
+
+  <div class="language-section" lang="ja">
+    <h1>プライバシーポリシー</h1>
+    
+    <h2>1. データ収集</h2>
+    <p>Receipt Scanner アプリ（「当社」）は、以下のデータを収集・処理します：</p>
+    <ul>
+      <li><strong>レシート画像</strong>：撮影または選択した画像は、OCR（光学文字認識）処理のために一時的にサーバーに送信されます。画像は処理後すぐに削除され、永続的に保存されません。</li>
+      <li><strong>識別結果</strong>：商品名、価格、日付などの識別結果は、デバイス上にローカルにのみ保存されます。</li>
+      <li><strong>使用統計</strong>：匿名化された使用統計（リクエスト数、トークン使用量）を記録し、コスト分析と不正利用防止に使用します。</li>
+    </ul>
+
+    <h2>2. データの使用目的</h2>
+    <ul>
+      <li>レシート画像からテキストと構造化データを抽出する（OCR処理）</li>
+      <li>支出統計の集計（ローカルで計算）</li>
+      <li>API使用状況の監視と不正利用の防止</li>
+    </ul>
+
+    <h2>3. 第三者サービス</h2>
+    <p>当社は以下の第三者サービスを使用します：</p>
+    <ul>
+      <li><strong>Google Gemini API</strong>：レシート画像のOCR処理を実行します。画像はテキスト抽出のみのために送信され、処理後すぐに削除されます。</li>
+      <li><strong>Supabase</strong>：OCRサービスのホスティングとデータベース管理を提供します。画像は処理され、即座に破棄されます。</li>
+    </ul>
+
+    <h2>4. ログとプライバシー保護</h2>
+    <ul>
+      <li>デバイスIDとリクエストキーは、プライバシー保護のため8文字のプレフィックスのみ記録されます</li>
+      <li>レシートの全文、base64エンコードされた画像、商品明細などの機密情報はログに記録されません</li>
+      <li>すべてのログは構造化JSON形式で出力され、機密データは除外されます</li>
+    </ul>
+
+    <h2>5. データ保存と削除</h2>
+    <ul>
+      <li>すべての識別結果は、デバイス上のSQLiteデータベースにローカルにのみ保存されます</li>
+      <li>当社はこのデータにアクセスできません</li>
+      <li>アプリをアンインストールすることで、すべてのローカルデータが自動的に削除されます</li>
+      <li>アプリ内の設定から、いつでもデータを手動で削除できます</li>
+    </ul>
+
+    <h2>6. お問い合わせ</h2>
+    <p>プライバシーに関するご質問や懸念事項がございましたら、以下のメールアドレスまでご連絡ください：</p>
+    <div class="contact">
+      <strong>Email:</strong> wjl890820@gmail.com
+    </div>
+  </div>
+
+  <div class="language-section" lang="zh">
+    <h1>隐私政策</h1>
+    
+    <h2>1. 数据收集</h2>
+    <p>Receipt Scanner 应用（"我们"）收集和处理以下数据：</p>
+    <ul>
+      <li><strong>收据图片</strong>：拍摄或选择的图片会临时发送到服务器进行 OCR（光学字符识别）处理。图片在处理后立即删除，不会永久保存。</li>
+      <li><strong>识别结果</strong>：商品名称、价格、日期等识别结果仅存储在您的设备本地。</li>
+      <li><strong>使用统计</strong>：记录匿名化的使用统计（请求数、token 使用量），用于成本分析和防止滥用。</li>
+    </ul>
+
+    <h2>2. 数据用途</h2>
+    <ul>
+      <li>从收据图片中提取文本和结构化数据（OCR 处理）</li>
+      <li>支出统计的汇总（本地计算）</li>
+      <li>API 使用情况的监控和防止滥用</li>
+    </ul>
+
+    <h2>3. 第三方服务</h2>
+    <p>我们使用以下第三方服务：</p>
+    <ul>
+      <li><strong>Google Gemini API</strong>：执行收据图片的 OCR 处理。图片仅用于文本提取，处理后会立即删除。</li>
+      <li><strong>Supabase</strong>：提供 OCR 服务的托管和数据库管理。图片会被处理并立即丢弃。</li>
+    </ul>
+
+    <h2>4. 日志与隐私保护</h2>
+    <ul>
+      <li>设备 ID 和请求键仅记录 8 位前缀，以保护隐私</li>
+      <li>收据全文、base64 编码的图片、商品明细等敏感信息不会记录在日志中</li>
+      <li>所有日志以结构化 JSON 格式输出，敏感数据会被排除</li>
+    </ul>
+
+    <h2>5. 数据存储与删除</h2>
+    <ul>
+      <li>所有识别结果仅存储在设备本地的 SQLite 数据库中</li>
+      <li>我们无法访问此数据</li>
+      <li>卸载应用后，所有本地数据会自动删除</li>
+      <li>您可以在应用设置中随时手动删除数据</li>
+    </ul>
+
+    <h2>6. 联系我们</h2>
+    <p>如有隐私相关的疑问或担忧，请通过以下邮箱联系我们：</p>
+    <div class="contact">
+      <strong>Email:</strong> wjl890820@gmail.com
+    </div>
+  </div>
+
+  <div class="language-section" lang="en">
+    <h1>Privacy Policy</h1>
+    
+    <h2>1. Data Collection</h2>
+    <p>Receipt Scanner App ("we", "our", "us") collects and processes the following data:</p>
+    <ul>
+      <li><strong>Receipt Images</strong>：Images you capture or select are temporarily sent to our servers for OCR (Optical Character Recognition) processing. Images are deleted immediately after processing and are not permanently stored.</li>
+      <li><strong>Recognition Results</strong>：Product names, prices, dates, and other recognition results are stored only locally on your device.</li>
+      <li><strong>Usage Statistics</strong>：We record anonymized usage statistics (request counts, token usage) for cost analysis and abuse prevention.</li>
+    </ul>
+
+    <h2>2. Data Usage</h2>
+    <ul>
+      <li>Extract text and structured data from receipt images (OCR processing)</li>
+      <li>Aggregate spending statistics (computed locally)</li>
+      <li>Monitor API usage and prevent abuse</li>
+    </ul>
+
+    <h2>3. Third-Party Services</h2>
+    <p>We use the following third-party services:</p>
+    <ul>
+      <li><strong>Google Gemini API</strong>：Performs OCR processing on receipt images. Images are sent only for text extraction and are deleted immediately after processing.</li>
+      <li><strong>Supabase</strong>：Provides hosting for OCR services and database management. Images are processed and immediately discarded.</li>
+    </ul>
+
+    <h2>4. Logging and Privacy Protection</h2>
+    <ul>
+      <li>Device IDs and request keys are recorded only as 8-character prefixes to protect privacy</li>
+      <li>Sensitive information such as full receipt text, base64-encoded images, and product details are not logged</li>
+      <li>All logs are output in structured JSON format with sensitive data excluded</li>
+    </ul>
+
+    <h2>5. Data Storage and Deletion</h2>
+    <ul>
+      <li>All recognition results are stored only locally in a SQLite database on your device</li>
+      <li>We do not have access to this data</li>
+      <li>All local data is automatically deleted when you uninstall the app</li>
+      <li>You can manually delete data at any time from the app settings</li>
+    </ul>
+
+    <h2>6. Contact Us</h2>
+    <p>If you have any questions or concerns about privacy, please contact us at:</p>
+    <div class="contact">
+      <strong>Email:</strong> wjl890820@gmail.com
+    </div>
+  </div>
+</body>
+</html>

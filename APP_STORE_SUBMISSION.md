@@ -28,6 +28,15 @@ The app supports taking photos or selecting receipt images from your photo libra
 - 🔒 **隐私安全**：不上传原始图片，仅传输必要的识别数据
 - 🌐 **多语言支持**：支持中文、日文、英文界面
 
+## 隐私政策 URL
+
+**生产环境 URL：**
+```
+https://ifgcizhnblkonbjzkfyb.supabase.co/storage/v1/object/public/legal/privacy-policy.html
+```
+
+**注意：** 上传 `legal/privacy-policy.html` 到 Supabase Storage 后，确认 URL 正确。
+
 ## 隐私说明模板
 
 ### 数据收集与使用

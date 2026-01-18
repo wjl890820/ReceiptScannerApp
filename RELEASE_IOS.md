@@ -138,7 +138,10 @@ eas submit --platform ios --id <build-id>
 - ✅ 内容版权：你的版权信息
 
 ### 隐私与合规
-- ✅ **隐私政策 URL**：必须提供（见 `PRIVACY_POLICY.md` 或部署到网站）
+- ✅ **隐私政策 URL**：必须提供
+  - 生产环境 URL：`https://ifgcizhnblkonbjzkfyb.supabase.co/storage/v1/object/public/legal/privacy-policy.html`
+  - 文件位置：`legal/privacy-policy.html`（已上传到 Supabase Storage）
+  - 应用内入口：Settings → Privacy Policy（使用 `constants/privacy.ts` 中的 URL）
 - ✅ 数据收集声明：如实填写（见 `APP_STORE_SUBMISSION.md`）
 - ✅ 出口合规：如使用加密，需填写相应信息
 

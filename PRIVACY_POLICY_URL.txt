@@ -1,0 +1,20 @@
+# Privacy Policy URL
+
+After uploading `legal/privacy-policy.html` to Supabase Storage, update this file with the public URL.
+
+## Steps to upload:
+
+1. Open Supabase Dashboard → Storage
+2. Create bucket `legal` if it doesn't exist (set as Public)
+3. Upload `legal/privacy-policy.html` to the `legal` bucket root
+4. Copy the public URL (format: `https://<project-ref>.supabase.co/storage/v1/object/public/legal/privacy-policy.html`)
+5. Update this file with the URL
+6. Update `constants/privacy.ts` with the URL
+
+## Expected URL format:
+
+https://ifgcizhnblkonbjzkfyb.supabase.co/storage/v1/object/public/legal/privacy-policy.html
+
+## Current placeholder:
+
+https://ifgcizhnblkonbjzkfyb.supabase.co/storage/v1/object/public/legal/privacy-policy.html
