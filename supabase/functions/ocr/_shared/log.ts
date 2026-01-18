@@ -17,12 +17,17 @@ export interface LogEntry {
 /**
  * Sanitize and log request as JSON (one line)
  * NEVER logs: raw images, base64, receipt text, item details
+ * E) Strictly enforce 8-character prefix for all prefix fields
  */
 export function logRequest(entry: LogEntry): void {
+  // E) Ensure all prefix fields are exactly 8 characters
+  const devicePrefix = entry.device_hash_prefix.substring(0, 8).padEnd(8, '0');
+  const idempotencyPrefix = entry.idempotency_key_prefix.substring(0, 8).padEnd(8, '0');
+
   const sanitized: LogEntry = {
     request_id: entry.request_id,
-    device_hash_prefix: entry.device_hash_prefix.substring(0, 8),
-    idempotency_key_prefix: entry.idempotency_key_prefix.substring(0, 8),
+    device_hash_prefix: devicePrefix,
+    idempotency_key_prefix: idempotencyPrefix,
     status: entry.status,
     http_status: entry.http_status,
     latency_ms: entry.latency_ms,
@@ -37,6 +42,7 @@ export function logRequest(entry: LogEntry): void {
 
 /**
  * Log error (sanitized)
+ * E) Strictly enforce 8-character prefix
  */
 export function logError(
   requestId: string,
@@ -48,8 +54,8 @@ export function logError(
 ): void {
   logRequest({
     request_id: requestId,
-    device_hash_prefix: deviceHash,
-    idempotency_key_prefix: idempotencyKey,
+    device_hash_prefix: deviceHash.substring(0, 8),
+    idempotency_key_prefix: idempotencyKey.substring(0, 8),
     status: 'error',
     http_status: httpStatus,
     latency_ms: latencyMs,
@@ -60,6 +66,7 @@ export function logError(
 
 /**
  * Log success (sanitized)
+ * E) Strictly enforce 8-character prefix
  */
 export function logSuccess(
   requestId: string,
@@ -70,8 +77,8 @@ export function logSuccess(
 ): void {
   logRequest({
     request_id: requestId,
-    device_hash_prefix: deviceHash,
-    idempotency_key_prefix: idempotencyKey,
+    device_hash_prefix: deviceHash.substring(0, 8),
+    idempotency_key_prefix: idempotencyKey.substring(0, 8),
     status: 'success',
     http_status: httpStatus,
     latency_ms: latencyMs,

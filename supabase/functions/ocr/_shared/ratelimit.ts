@@ -1,8 +1,6 @@
 // supabase/functions/ocr/_shared/ratelimit.ts
 // Rate limiting: minute/day windows
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-
 const RATE_LIMIT_PER_MINUTE = parseInt(Deno.env.get('RATE_LIMIT_PER_MINUTE') || '6', 10);
 const RATE_LIMIT_PER_DAY = parseInt(Deno.env.get('RATE_LIMIT_PER_DAY') || '60', 10);
 
@@ -32,7 +30,8 @@ export function getDayBucket(): string {
  * Returns: { allowed: boolean, count: number, limit: number, window: string, retryAfterMs?: number }
  */
 export async function checkRateLimit(
-  supabase: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- supabase-js client type inference is incomplete in Deno environment
+  supabase: any,
   deviceHash: string
 ): Promise<{
   allowed: boolean;

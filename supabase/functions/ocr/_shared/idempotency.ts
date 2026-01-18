@@ -1,7 +1,6 @@
 // supabase/functions/ocr/_shared/idempotency.ts
 // Idempotency handling: read/write idempotency table, in-progress locking
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import type { OCRResponse } from './response.ts';
 
 export interface IdempotencyRecord {
@@ -32,7 +31,8 @@ export function validateIdempotencyKey(key: string): boolean {
  * Get existing idempotency record
  */
 export async function getIdempotencyRecord(
-  supabase: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- supabase-js client type inference is incomplete in Deno environment
+  supabase: any,
   idempotencyKey: string
 ): Promise<IdempotencyRecord | null> {
   const { data, error } = await supabase
@@ -76,7 +76,8 @@ export function isStale(record: IdempotencyRecord): boolean {
  * Uses atomic update to prevent race conditions
  */
 export async function acquireProcessingLock(
-  supabase: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- supabase-js client type inference is incomplete in Deno environment
+  supabase: any,
   idempotencyKey: string,
   deviceHash: string
 ): Promise<boolean> {
@@ -154,7 +155,8 @@ export async function acquireProcessingLock(
  * Save final result (SUCCEEDED or FAILED)
  */
 export async function saveIdempotencyResult(
-  supabase: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any -- supabase-js client type inference is incomplete in Deno environment
+  supabase: any,
   idempotencyKey: string,
   status: 'SUCCEEDED' | 'FAILED',
   httpStatus: number,

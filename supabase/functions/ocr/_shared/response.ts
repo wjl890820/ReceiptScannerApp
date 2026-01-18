@@ -20,7 +20,7 @@ export interface ErrorResponse {
     message: string;
     retryable: boolean;
     retry_after_ms?: number;
-    details?: Record<string, any>;
+    details?: Record<string, unknown>;
   };
 }
 
@@ -82,7 +82,7 @@ export function createErrorResponse(
   code: ErrorCode,
   message: string,
   retryAfterMs?: number,
-  details?: Record<string, any>
+  details?: Record<string, unknown>
 ): ErrorResponse {
   return {
     ok: false,
@@ -124,15 +124,18 @@ export function createSuccessResponse(
 
 /**
  * Create HTTP response with proper headers
+ * D) Always set x-request-id header to current requestId (even if body has cached request_id)
  */
 export function createHttpResponse(
   body: OCRResponse,
   status: number,
-  retryAfterMs?: number
+  retryAfterMs?: number,
+  requestId?: string
 ): Response {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'x-request-id': body.request_id,
+    // D) Use provided requestId or fallback to body.request_id
+    'x-request-id': requestId || body.request_id,
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-device-id, x-idempotency-key, x-parser-version',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
