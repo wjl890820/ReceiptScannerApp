@@ -1,0 +1,59 @@
+[1/3] deno check
+[2/3] deno lint
+[3/3] deno test
+[0m[38;5;245mrunning 7 tests from ./supabase/functions/ocr/tests/ocr.test.ts[0m
+Test 1: Success response structure ...
+[0m[38;5;245m------- output -------[0m
+{"request_id":"681ed074-de79-4852-847c-a07b744b9751","device_hash_prefix":"15ae84d9","idempotency_key_prefix":"ee117687","status":"success","http_status":200,"latency_ms":56,"timestamp":"2026-01-18T12:36:01.839Z"}
+[0m[38;5;245m----- output end -----[0m
+Test 1: Success response structure ... [0m[32mok[0m [0m[38;5;245m(58ms)[0m
+Test 2: Idempotency hit ...
+[0m[38;5;245m------- output -------[0m
+{"request_id":"3b115b67-a3a4-42b2-a743-8481bf96a1fa","device_hash_prefix":"9d171a01","idempotency_key_prefix":"ee217687","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:01.892Z"}
+{"request_id":"ab774472-0a0f-4c93-b0dc-39cb01afe47d","device_hash_prefix":"9d171a01","idempotency_key_prefix":"ee217687","status":"success","http_status":200,"latency_ms":0,"timestamp":"2026-01-18T12:36:01.904Z"}
+[0m[38;5;245m----- output end -----[0m
+Test 2: Idempotency hit ... [0m[32mok[0m [0m[38;5;245m(64ms)[0m
+Test 3: Concurrent idempotency ...
+[0m[38;5;245m------- output -------[0m
+{"request_id":"313e906d-16fc-4582-a020-5cdc05197947","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"rate_limited","http_status":429,"latency_ms":0,"error_code":"RATE_LIMITED","timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"824838b5-7af1-425f-be0e-b6e06d804c61","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"rate_limited","http_status":429,"latency_ms":0,"error_code":"RATE_LIMITED","timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"7e3dbb5a-448a-4a5a-ae0d-7891f3fc22d9","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"rate_limited","http_status":429,"latency_ms":0,"error_code":"RATE_LIMITED","timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"05e32860-7060-4cfb-a5eb-aa69fd964d8a","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"rate_limited","http_status":429,"latency_ms":0,"error_code":"RATE_LIMITED","timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"10af899c-4443-480c-976f-177fd918a90d","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"in_progress","http_status":202,"latency_ms":0,"timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"a6a477cd-9d9b-4c61-891d-bbd42f359a15","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"in_progress","http_status":202,"latency_ms":0,"timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"585f79d2-568c-4216-81ea-50ddc24e3b2e","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"in_progress","http_status":202,"latency_ms":0,"timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"946bae4d-3da9-492d-ba9a-e89d9813f561","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"in_progress","http_status":202,"latency_ms":0,"timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"cf022483-5d45-4167-b931-456c2dd5033e","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"in_progress","http_status":202,"latency_ms":0,"timestamp":"2026-01-18T12:36:01.905Z"}
+{"request_id":"560887e8-efe3-4e3e-9ea9-1cda825ff163","device_hash_prefix":"ca8573ce","idempotency_key_prefix":"ee317687","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:01.957Z"}
+[0m[38;5;245m----- output end -----[0m
+Test 3: Concurrent idempotency ... [0m[32mok[0m [0m[38;5;245m(53ms)[0m
+Test 4: Rate limit 429 ...
+[0m[38;5;245m------- output -------[0m
+{"request_id":"76216486-7bac-4de6-9991-4c3eb7dd37cb","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae0176","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:02.010Z"}
+{"request_id":"f1e93c36-7052-4a56-ad91-4b504d9cd12b","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae1176","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:02.063Z"}
+{"request_id":"d52b4cb9-bf26-4d72-812c-7e1bf7ca0eee","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae2176","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:02.115Z"}
+{"request_id":"d2a37551-5db7-42d6-b829-9437f679a870","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae3176","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:02.168Z"}
+{"request_id":"a34b541f-ef4a-4c3e-8bf6-a83c9a032919","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae4176","status":"success","http_status":200,"latency_ms":53,"timestamp":"2026-01-18T12:36:02.221Z"}
+{"request_id":"3eaffd2d-ef90-46ab-9537-59068d09adc0","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae5176","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:02.274Z"}
+{"request_id":"3a6ef51f-a521-4997-82d0-37e81d87e5e1","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae6176","status":"rate_limited","http_status":429,"latency_ms":0,"error_code":"RATE_LIMITED","timestamp":"2026-01-18T12:36:02.275Z"}
+{"request_id":"faf6e6c3-c8f8-4fac-bd5b-231521329fcb","device_hash_prefix":"195b6e83","idempotency_key_prefix":"eeae7176","status":"rate_limited","http_status":429,"latency_ms":1,"error_code":"RATE_LIMITED","timestamp":"2026-01-18T12:36:02.276Z"}
+[0m[38;5;245m----- output end -----[0m
+Test 4: Rate limit 429 ... [0m[32mok[0m [0m[38;5;245m(318ms)[0m
+Test 5: Invalid input 400 ...
+[0m[38;5;245m------- output -------[0m
+{"request_id":"48ec66a5-08b1-4719-8780-4e506219c7ae","device_hash_prefix":"c7bb4704","idempotency_key_prefix":"ee517687","status":"error","http_status":400,"latency_ms":0,"error_code":"INVALID_INPUT","timestamp":"2026-01-18T12:36:02.277Z"}
+[0m[38;5;245m----- output end -----[0m
+Test 5: Invalid input 400 ... [0m[32mok[0m [0m[38;5;245m(0ms)[0m
+Handler Test 1: Missing headers 400 ...
+[0m[38;5;245m------- output -------[0m
+{"request_id":"ec77ea78-a012-4175-88ad-65605fc76e88","device_hash_prefix":"c8fecf49","idempotency_key_prefix":"short-ke","status":"error","http_status":400,"latency_ms":0,"error_code":"INVALID_INPUT","timestamp":"2026-01-18T12:36:02.278Z"}
+[0m[38;5;245m----- output end -----[0m
+Handler Test 1: Missing headers 400 ... [0m[32mok[0m [0m[38;5;245m(0ms)[0m
+Handler Test 2: Authentication check ...
+[0m[38;5;245m------- output -------[0m
+{"request_id":"01178533-0e12-4daf-9e2a-85fe3c620a1b","device_hash_prefix":"761b1753","idempotency_key_prefix":"eea17687","status":"success","http_status":200,"latency_ms":52,"timestamp":"2026-01-18T12:36:02.330Z"}
+[0m[38;5;245m----- output end -----[0m
+Handler Test 2: Authentication check ... [0m[32mok[0m [0m[38;5;245m(52ms)[0m
+
+[0m[32mok[0m | 7 passed | 0 failed [0m[38;5;245m(557ms)[0m
+
