@@ -1,4 +1,8 @@
 {
-  "deno.enable": false,
-  "deno.lint": false
+  "deno.enable": true,
+  "deno.lint": true,
+  "deno.enablePaths": ["supabase/functions"],
+  "deno.disablePaths": ["app", "components", "lib", "ios", "android", "node_modules"],
+  "typescript.validate.enable": true,
+  "javascript.validate.enable": true
 }
