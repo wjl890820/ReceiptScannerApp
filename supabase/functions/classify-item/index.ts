@@ -4,6 +4,9 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 
+// Build ID for tracking deployments (每个请求都会打印)
+const BUILD_ID = `${new Date().toISOString()}_${Math.random().toString(16).slice(2)}`;
+
 // 可配置的 Gemini 模型（默认使用稳定的可用模型）
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
 const REQUEST_TIMEOUT_MS = 5000; // 5 seconds
@@ -221,6 +224,9 @@ function createFallbackResponse(): ClassifyResponse {
 }
 
 serve(async (req) => {
+  // 在 serve 函数的第一行打印 Build ID（必须保证每个请求都会打印）
+  console.log(`[classify-item] ENTRY build=${BUILD_ID}`);
+
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -234,9 +240,10 @@ serve(async (req) => {
     );
   }
 
-  // 在请求入口处打印最终模型名（只打印模型，不打印 key）
-  const GEMINI_MODEL_FINAL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
-  console.log(`[classify-item] model=${GEMINI_MODEL_FINAL}`);
+  // 读取模型并打印（不要打印 API key）
+  const modelName = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
+  console.log(`[classify-item] model=${modelName}`);
+  console.log(`[classify-item] endpoint=/v1beta/models/${modelName}:generateContent`);
 
   const requestId = req.headers.get('x-request-id') || 'unknown';
   const deviceId = req.headers.get('x-device-id') || 'unknown';
