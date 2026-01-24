@@ -67,6 +67,9 @@ export async function classifyViaEdgeFunction(
     }, 5000); // 5 second timeout
 
     try {
+      // Generate request ID for observability
+      const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
       const response = await fetch(edgeFunctionUrl, {
         method: 'POST',
         headers: {
@@ -74,6 +77,8 @@ export async function classifyViaEdgeFunction(
           Authorization: `Bearer ${supabaseAnonKey}`,
           apikey: supabaseAnonKey,
           'x-device-id': deviceId,
+          'x-client': 'app',
+          'x-request-id': requestId,
         },
         body: JSON.stringify(requestBody),
         signal: controller.signal,
