@@ -4,8 +4,8 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 
-// 可配置的 Gemini 模型（默认使用 latest）
-const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-1.5-flash-latest';
+// 可配置的 Gemini 模型（默认使用稳定的可用模型）
+const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
 const REQUEST_TIMEOUT_MS = 5000; // 5 seconds
 
 // Get GEMINI_API_KEY from Supabase secrets
@@ -92,13 +92,14 @@ Do NOT include markdown, do NOT include explanations outside JSON, do NOT includ
 
 /**
  * Call Gemini API with timeout
+ * 使用 v1beta generateContent API，URL 使用 query param key
  */
 async function callGemini(prompt: string): Promise<string> {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY not configured');
   }
 
-  // 注意：URL 中不再写死模型名，使用 GEMINI_MODEL 变量
+  // 按 v1beta 的 generateContent 正确拼 URL（使用 query param key）
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
   const controller = new AbortController();
@@ -124,7 +125,7 @@ async function callGemini(prompt: string): Promise<string> {
 
     if (!response.ok) {
       const text = await response.text();
-      // 打印错误详情（截断，不打印 key）
+      // 错误日志增强（但不泄露 key）：打印 status + response.text() 截断 500 字符
       console.warn(`[Gemini] status=${response.status} body=${text.slice(0, 500)}`);
       throw new Error(`Gemini API error: ${response.status} ${text.substring(0, 200)}`);
     }
@@ -237,11 +238,13 @@ serve(async (req) => {
     // Parse request body
     const body: ClassifyRequest = await req.json();
 
-    // Validate required fields
+    // 输入校验：rawName/normalizedName
+    // 如果 rawName 缺失，直接返回 fallback（success:true, categoryId:other_grocery, confidence:0）
     if (!body.rawName && !body.normalizedName) {
+      console.warn(`[${requestId}] Missing rawName/normalizedName, returning fallback`);
       return new Response(
-        JSON.stringify({ success: false, error: 'rawName or normalizedName is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify(createFallbackResponse()),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
