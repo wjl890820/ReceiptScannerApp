@@ -401,7 +401,8 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
 }
 
 /**
- * 列表：按时间倒序
+ * 列表：按时间升序（从过去到现在）
+ * 排序依据：优先 transaction_at（小票发生时间），没有则 fallback created_at
  * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
 export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
