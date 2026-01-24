@@ -222,3 +222,66 @@ i18n 初始化和分类标签统一化修复：
      node scripts/test-category-classifier.js
      ```
      - 应该看到所有测试通过
+
+i18n key 泄露与扫描相关 UI 修复：
+- **问题**：ActionSheet/Alert 显示原始 key（如 `scan.title`、`scan.takePhoto` 等）；部分界面先英文后中文闪烁；分类名可能直接显示 raw categoryId。
+- **原因**：
+  - 扫描弹窗使用 `t('scan.xxx')`，而 locales 中 key 位于 `home.scan.*`，`t()` 查不到则回退为 key，导致 raw key 展示。
+  - 根 layout 虽在 i18n 就绪后渲染，注释与流程不够明确。
+  - Receipt Detail 商品行用 `t(\`category.${it.category}\`)`，未统一走 `getCategoryLabel`，且缺 key 时可能显示 key。
+- **修复**：
+  1. **扫描相关 i18n**（`app/(tabs)/index.tsx`）：
+     - 所有 `t('scan.*')` 改为 `t('home.scan.*')`（与 `locales/*.json` 中 `home.scan` 一致）。
+     - 涉及：来源选择 Alert（title、cancel、takePhoto、chooseFromLibrary）、两次确认识别 Alert（confirmTitle、confirmMessage、confirmCancel、confirmAction）。
+     - 成功/错误 Alert、按钮文案已使用 `home.scan.*`，未改动。
+  2. **分类标签**（`app/(tabs)/history/[id].tsx`）：
+     - 商品行分类由 `t(\`category.${it.category}\`)` / `t('category.uncategorized')` 改为 `getCategoryLabel(it.category || 'uncategorized')`，统一走 `lib/categoryPalette`，避免 raw categoryId 或 key 泄露。
+     - 移除未使用的 `t` 导入。
+  3. **根 layout**（`app/_layout.tsx`）：
+     - 明确注释：在 i18n 就绪前不渲染 App，避免英文闪烁。
+     - 保持 `initI18n()` → `setIsReady(true)` → `SplashScreen.hideAsync()` 顺序，渲染前完成 i18n 初始化。
+- **验收**：
+  1. **扫描弹窗语言**：系统语言 zh/ja/en 下，点击「扫描小票」→ 来源选择 Alert 立即显示对应语言（如 zh：「扫描小票」「拍照」「从相册选择」「取消」），无 `scan.title` 等 raw key。
+  2. **无 raw key**：全应用 UI 中不出现 `scan.xxx`、`common.xxx`、`category.xxx` 等原始 key。
+  3. **无英文闪烁**：冷启动后首屏（含 Home、Tab 等）直接为系统语言，无先英后中/日闪烁。
+  4. **分类显示**：Receipt Detail 等处的分类均通过 `getCategoryLabel` 或 `t(\`category.${id}\`)` + fallback，无 `meat_seafood` 等 raw categoryId。
+
+相册多选与顺序处理功能：
+- **目标**：支持从相册多选照片，顺序处理每张图片，每张保存为独立收据。
+- **实现**：
+  1. **相册多选**（`app/(tabs)/index.tsx`）：
+     - `launchImageLibraryAsync` 启用 `allowsMultipleSelection: true` 和 `orderedSelection: true`
+     - 相机拍照仍为单张（不变）
+  2. **顺序处理逻辑**：
+     - 新增 `processMultipleReceiptImages(uris: string[])` 函数
+     - 顺序处理每张图片：`analyzeReceiptImage` → `applyCategoriesWithLearning` → `saveReceipt`
+     - 单张失败不影响后续处理，继续处理下一张
+     - 所有处理完成后统一刷新数据（`loadReceipts()`）
+  3. **进度显示**：
+     - 新增 `processingProgress` 状态：`{ current: number, total: number } | null`
+     - 扫描按钮显示进度：`"处理中 {current}/{total}"`（通过 `t('home.scan.processingMulti')`）
+     - 处理过程中按钮禁用，防止重复触发
+  4. **完成摘要**：
+     - 所有图片处理完成后显示摘要 Alert：`"完成：成功 {ok}，失败 {fail}"`（通过 `t('home.scan.doneSummary')`）
+     - 单张图片仍使用原有流程（包含复活节彩蛋逻辑），多张图片不触发复活节彩蛋
+  5. **i18n 字符串**（`locales/zh.json`, `locales/ja.json`, `locales/en.json`）：
+     - `home.scan.processingMulti`: "处理中 {current}/{total}" / "Processing {current}/{total}" / "処理中 {current}/{total}"
+     - `home.scan.doneSummary`: "完成：成功 {ok}，失败 {fail}" / "Done: {ok} succeeded, {fail} failed" / "完了：成功 {ok}、失敗 {fail}"
+     - `home.scan.confirmTitleMultiple`: "确认识别这 {count} 张小票？" / "Recognize these {count} receipts?" / "この {count} 枚の画像で認識しますか？"
+     - `home.scan.images`: "张图片" / "images" / "枚の画像"
+- **验收步骤**：
+  1. **多选功能**：
+     - 点击「扫描小票」→ 选择「从相册选择」
+     - 在相册中选择多张图片（iOS 支持多选）
+     - 确认对话框应显示 "确认识别这 N 张小票？"
+  2. **顺序处理**：
+     - 确认后，按钮应显示 "处理中 1/N"、"处理中 2/N" 等进度
+     - 每张图片应顺序处理（不是并行）
+     - 处理过程中按钮应禁用
+  3. **结果验证**：
+     - 所有图片处理完成后，应显示摘要 Alert（如 "完成：成功 3，失败 1"）
+     - 进入「历史」页面，应看到所有成功处理的收据（每张图片对应一条记录）
+     - 如果某张图片失败，其他图片仍应成功保存
+  4. **单张图片流程**（确保未破坏）：
+     - 选择单张图片时，仍使用原有流程（包含复活节彩蛋）
+     - 相机拍照仍为单张处理

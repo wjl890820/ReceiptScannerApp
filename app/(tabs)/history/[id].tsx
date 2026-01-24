@@ -22,7 +22,6 @@ import {
 } from '@/lib/db';
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
-import { t } from '@/lib/i18n';
 import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
@@ -373,7 +372,7 @@ export default function ReceiptDetailScreen() {
                 </View>
                 <View style={styles.tag}>
                   <Text style={styles.tagText}>
-                    {it.category ? t(`category.${it.category}`) : t('category.uncategorized')}
+                    {getCategoryLabel(it.category || 'uncategorized')}
                   </Text>
                 </View>
               </Pressable>

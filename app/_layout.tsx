@@ -12,12 +12,10 @@ export default function RootLayout() {
   useEffect(() => {
     async function prepare() {
       try {
-        // Initialize i18n before rendering
         await initI18n();
       } catch (e) {
         console.warn('[RootLayout] Failed to initialize i18n:', e);
       } finally {
-        // Hide splash screen after i18n is ready
         setIsReady(true);
         await SplashScreen.hideAsync();
       }
@@ -26,8 +24,9 @@ export default function RootLayout() {
     prepare();
   }, []);
 
+  // Do not render app until i18n is ready (avoids English flash on zh/ja)
   if (!isReady) {
-    return null; // Keep splash screen visible
+    return null;
   }
 
   return <Stack screenOptions={{ headerShown: false }} />;

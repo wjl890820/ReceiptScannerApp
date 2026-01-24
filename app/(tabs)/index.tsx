@@ -849,6 +849,7 @@ export default function HomeScreen() {
   const [loadingReceipts, setLoadingReceipts] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('ALL');
   const [scanning, setScanning] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState<{ current: number; total: number } | null>(null);
   const successAlertShownRef = useRef(false); // Guard for duplicate success alerts
   const [stickyHeight, setStickyHeight] = useState(0);
 
@@ -954,12 +955,12 @@ export default function HomeScreen() {
       // 选择图片来源：拍照或相册
       const sourceChoice = await new Promise<'camera' | 'album' | 'cancel'>((resolve) => {
         Alert.alert(
-          t('scan.title'),
+          t('home.scan.title'),
           '',
           [
-            { text: t('scan.cancel'), style: 'cancel', onPress: () => resolve('cancel') },
-            { text: t('scan.takePhoto'), onPress: () => resolve('camera') },
-            { text: t('scan.chooseFromLibrary'), onPress: () => resolve('album') },
+            { text: t('home.scan.cancel'), style: 'cancel', onPress: () => resolve('cancel') },
+            { text: t('home.scan.takePhoto'), onPress: () => resolve('camera') },
+            { text: t('home.scan.chooseFromLibrary'), onPress: () => resolve('album') },
           ],
           { cancelable: true, onDismiss: () => resolve('cancel') }
         );
@@ -1000,11 +1001,11 @@ export default function HomeScreen() {
         // 确认识别对话框（包含隐私说明）
         const confirmResult = await new Promise<boolean>((resolve) => {
           Alert.alert(
-            t('scan.confirmTitle'),
-            `${t('scan.confirmMessage')}\n\n${t('ocr.privacyNotice')}`,
+            t('home.scan.confirmTitle'),
+            `${t('home.scan.confirmMessage')}\n\n${t('ocr.privacyNotice')}`,
             [
-              { text: t('scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
-              { text: t('scan.confirmAction'), onPress: () => resolve(true) },
+              { text: t('home.scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
+              { text: t('home.scan.confirmAction'), onPress: () => resolve(true) },
             ]
           );
         });
@@ -1024,10 +1025,12 @@ export default function HomeScreen() {
           return;
         }
 
-        // 选择图片
+        // 选择图片（启用多选）
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: 'images',
           quality: 1,
+          allowsMultipleSelection: true,
+          orderedSelection: true,
         });
 
         if (result.canceled) {
@@ -1035,20 +1038,25 @@ export default function HomeScreen() {
           return;
         }
 
-        const uri = result.assets[0]?.uri;
-        if (!uri) {
+        const assets = result.assets || [];
+        if (assets.length === 0) {
           setScanning(false);
           return;
         }
 
         // 确认识别对话框（包含隐私说明）
+        const confirmTitle = assets.length === 1
+          ? t('home.scan.confirmTitle')
+          : t('home.scan.confirmTitleMultiple', { count: assets.length });
+        const confirmMessage = `${t('home.scan.confirmMessage')}\n\n${t('ocr.privacyNotice')}`;
+        
         const confirmResult = await new Promise<boolean>((resolve) => {
           Alert.alert(
-            t('scan.confirmTitle'),
-            `${t('scan.confirmMessage')}\n\n${t('ocr.privacyNotice')}`,
+            confirmTitle,
+            confirmMessage,
             [
-              { text: t('scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
-              { text: t('scan.confirmAction'), onPress: () => resolve(true) },
+              { text: t('home.scan.confirmCancel'), style: 'cancel', onPress: () => resolve(false) },
+              { text: t('home.scan.confirmAction'), onPress: () => resolve(true) },
             ]
           );
         });
@@ -1058,7 +1066,14 @@ export default function HomeScreen() {
           return;
         }
 
-        await processReceiptImage(uri);
+        // 处理多张图片（顺序处理）
+        if (assets.length === 1) {
+          // 单张图片，使用原有流程
+          await processReceiptImage(assets[0].uri);
+        } else {
+          // 多张图片，顺序处理
+          await processMultipleReceiptImages(assets.map(a => a.uri));
+        }
       }
     } catch (err: any) {
       console.error('Scan error:', err);
@@ -1078,6 +1093,74 @@ export default function HomeScreen() {
       }
       
       Alert.alert(t('home.scan.error'), errorMessage);
+      setScanning(false);
+    }
+  };
+
+  // 处理多张收据图片（顺序处理）
+  const processMultipleReceiptImages = async (uris: string[]) => {
+    const total = uris.length;
+    let successCount = 0;
+    let failCount = 0;
+    const errors: string[] = [];
+
+    try {
+      for (let i = 0; i < uris.length; i++) {
+        const uri = uris[i];
+        setProcessingProgress({ current: i + 1, total });
+
+        try {
+          // 分析小票
+          const raw = await analyzeReceiptImage(uri);
+          const enriched = await applyCategoriesWithLearning(raw);
+
+          // 保存到历史
+          await saveReceipt({
+            imageUri: uri,
+            analysis: enriched,
+          });
+
+          successCount++;
+        } catch (err: any) {
+          console.error(`[MultiScan] Failed to process image ${i + 1}/${total}:`, err);
+          failCount++;
+          
+          // 记录错误信息（简化）
+          let errorMsg = t('ocr.failed');
+          if (err?.code === 'RATE_LIMIT') {
+            errorMsg = t('ocr.rateLimit');
+          } else if (err?.code === 'PAYLOAD_TOO_LARGE') {
+            errorMsg = t('ocr.payloadTooLarge');
+          } else if (err?.code === 'NETWORK_ERROR') {
+            errorMsg = t('ocr.networkError');
+          } else if (err?.code === 'SERVER_ERROR') {
+            errorMsg = t('ocr.serverError');
+          } else if (err?.message) {
+            errorMsg = err.message;
+          }
+          errors.push(errorMsg);
+        }
+      }
+
+      // 刷新数据（只刷新一次，在所有处理完成后）
+      await loadReceipts();
+
+      // 清除进度
+      setProcessingProgress(null);
+
+      // 显示摘要
+      const summaryMessage = t('home.scan.doneSummary', { ok: successCount, fail: failCount });
+      Alert.alert(
+        t('home.scan.success'),
+        summaryMessage,
+        [{ text: t('easterEgg.ok') || 'OK', onPress: () => {} }]
+      );
+
+      setScanning(false);
+    } catch (err: any) {
+      console.error('[MultiScan] Unexpected error:', err);
+      setProcessingProgress(null);
+      Alert.alert(t('home.scan.error'), t('ocr.failed'));
       setScanning(false);
     }
   };
@@ -1328,7 +1411,14 @@ export default function HomeScreen() {
           disabled={scanning}
         >
           <Text style={styles.scanButtonText}>
-            {scanning ? t('home.scan.processing') : t('home.scan.button')}
+            {processingProgress
+              ? t('home.scan.processingMulti', {
+                  current: processingProgress.current,
+                  total: processingProgress.total,
+                })
+              : scanning
+              ? t('home.scan.processing')
+              : t('home.scan.button')}
           </Text>
         </Pressable>
       </View>
