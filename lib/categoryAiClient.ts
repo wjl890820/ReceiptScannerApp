@@ -70,6 +70,18 @@ export async function classifyViaEdgeFunction(
       // Generate request ID for observability
       const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+      // Debug: Print request headers (DEV only, never print keys)
+      if (__DEV__) {
+        console.log(`[CategoryAI] POST ${edgeFunctionUrl}`);
+        console.log(`[CategoryAI] SUPABASE_URL=${supabaseUrl}`);
+        console.log(`[CategoryAI] Headers check:`);
+        console.log(`[CategoryAI]   - apikey: ${supabaseAnonKey ? 'PRESENT' : 'MISSING'} (length: ${supabaseAnonKey?.length || 0})`);
+        console.log(`[CategoryAI]   - Authorization: ${supabaseAnonKey ? 'PRESENT (Bearer ...)' : 'MISSING'}`);
+        console.log(`[CategoryAI]   - x-device-id: ${deviceId ? 'PRESENT' : 'MISSING'}`);
+        console.log(`[CategoryAI]   - x-client: app`);
+        console.log(`[CategoryAI]   - x-request-id: ${requestId}`);
+      }
+
       const response = await fetch(edgeFunctionUrl, {
         method: 'POST',
         headers: {
@@ -95,7 +107,22 @@ export async function classifyViaEdgeFunction(
         if (_lastLogKey !== logKey) {
           _lastLogKey = logKey;
           if (__DEV__) {
-            console.warn(`[CategoryAI] Edge function returned status ${status}`);
+            // Enhanced error logging for 401
+            if (status === 401) {
+              console.error(`[CategoryAI] 401 Unauthorized - Edge function authentication failed`);
+              console.error(`[CategoryAI]   URL: ${edgeFunctionUrl}`);
+              console.error(`[CategoryAI]   apikey header: ${supabaseAnonKey ? 'PRESENT' : 'MISSING'}`);
+              console.error(`[CategoryAI]   Authorization header: ${supabaseAnonKey ? 'PRESENT' : 'MISSING'}`);
+              // Try to get response body for more details
+              try {
+                const errorText = await response.text();
+                console.error(`[CategoryAI]   Response body: ${errorText.substring(0, 200)}`);
+              } catch (e) {
+                // Ignore
+              }
+            } else {
+              console.warn(`[CategoryAI] Edge function returned status ${status}`);
+            }
           }
         }
         
