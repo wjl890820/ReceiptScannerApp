@@ -3,6 +3,11 @@
 let Constants: typeof import('expo-constants') | null = null;
 
 import * as ImageManipulator from 'expo-image-manipulator';
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+
+import { getDeviceId } from './deviceId';
+import { getCurrentLocale } from './i18n';
 
 const MODEL = 'gemini-2.0-flash';
 
@@ -18,7 +23,84 @@ async function getConstants() {
   return Constants;
 }
 
+async function getSupabaseUrl(): Promise<string> {
+  try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
+    // Safely access Constants with fallback
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
+    
+    const fromExpoConfig =
+      (expoConfig?.extra as any)?.SUPABASE_URL ??
+      (expoConfig?.extra as any)?.supabaseUrl;
+
+    const fromManifest =
+      (manifest as any)?.extra?.SUPABASE_URL ??
+      (manifest as any)?.extra?.supabaseUrl;
+
+    const url = (fromExpoConfig ?? fromManifest ?? '').trim();
+    return url;
+  } catch (e) {
+    console.error('[ReceiptAnalyzer] Failed to get Supabase URL from Constants:', e);
+    return '';
+  }
+}
+
+async function getSupabaseAnonKey(): Promise<string> {
+  try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
+    // Safely access Constants with fallback
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
+    
+    const fromExpoConfig =
+      (expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
+      (expoConfig?.extra as any)?.supabaseAnonKey;
+
+    const fromManifest =
+      (manifest as any)?.extra?.SUPABASE_ANON_KEY ??
+      (manifest as any)?.extra?.supabaseAnonKey;
+
+    const key = (fromExpoConfig ?? fromManifest ?? '').trim();
+    return key;
+  } catch (e) {
+    console.error('[ReceiptAnalyzer] Failed to get Supabase Anon Key from Constants:', e);
+    return '';
+  }
+}
+
+// 仅用于开发调试的直连 Gemini fallback
 async function getGeminiApiKey(): Promise<string> {
+  // 仅在 __DEV__ 且 DEV_DIRECT_GEMINI=true 时启用
+  if (!__DEV__) return '';
+  
+  // 检查 expo.extra 中的 DEV_DIRECT_GEMINI 开关
+  try {
+    const ConstantsModule = await getConstants();
+    if (!ConstantsModule) return '';
+    
+    const expoConfig = ConstantsModule?.expoConfig;
+    const manifest = ConstantsModule?.manifest;
+    
+    const fromExpoConfig =
+      (expoConfig?.extra as any)?.DEV_DIRECT_GEMINI ??
+      (expoConfig?.extra as any)?.devDirectGemini;
+    
+    const fromManifest =
+      (manifest as any)?.extra?.DEV_DIRECT_GEMINI ??
+      (manifest as any)?.extra?.devDirectGemini;
+    
+    const devDirectGemini = (fromExpoConfig ?? fromManifest ?? 'false').toString().toLowerCase() === 'true';
+    if (!devDirectGemini) return '';
+  } catch (e) {
+    console.warn('[ReceiptAnalyzer] Failed to check DEV_DIRECT_GEMINI:', e);
+    return '';
+  }
+  
   try {
     const ConstantsModule = await getConstants();
     if (!ConstantsModule) return '';
@@ -117,15 +199,130 @@ async function compressToJpegBase64(uri: string): Promise<string> {
   return result.base64;
 }
 
-export async function analyzeReceiptImage(uri: string): Promise<ReceiptAnalysis> {
+/**
+ * 调用 Supabase Edge Function 进行 OCR 识别
+ */
+async function analyzeReceiptImageViaEdgeFunction(
+  uri: string,
+  functionName: 'ocr-receipt' | 'ocr'
+): Promise<ReceiptAnalysis> {
+  // 临时调试日志：检查环境变量注入
+  console.log('[ENV] extra=', Constants.expoConfig?.extra);
+  console.log('[ENV] SUPABASE_URL(extra)=', Constants.expoConfig?.extra?.SUPABASE_URL);
+  console.log('[ENV] SUPABASE_ANON_KEY(extra)=', Constants.expoConfig?.extra?.SUPABASE_ANON_KEY);
+  
+  const supabaseUrl = await getSupabaseUrl();
+  const supabaseAnonKey = await getSupabaseAnonKey();
+
+  if (!supabaseUrl) {
+    throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
+  }
+
+  if (!supabaseAnonKey) {
+    throw new Error('Supabase Anon Key 未配置（请检查 .env / app.config.js / expo start -c）');
+  }
+
+  // 压缩并编码图片
+  const base64 = await compressToJpegBase64(uri);
+
+  // 获取设备 ID
+  const deviceId = await getDeviceId();
+
+  // 获取应用元数据
+  let appVersion = '1.0.0';
+  try {
+    const ConstantsModule = await getConstants();
+    appVersion = ConstantsModule?.expoConfig?.version || '1.0.0';
+  } catch (e) {
+    console.warn('[ReceiptAnalyzer] Failed to get app version from Constants:', e);
+  }
+  const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
+  const language = getCurrentLocale();
+
+  // 准备请求
+  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/${functionName}`;
+  
+  if (__DEV__) {
+    console.log(`[ReceiptAnalyzer] Calling Edge Function: ${functionName}`);
+  }
+
+  const requestBody = {
+    imageBase64: base64,
+    mimeType: 'image/jpeg' as const,
+    deviceId,
+    appVersion,
+    platform,
+    language,
+  };
+
+  const response = await fetch(edgeFunctionUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${supabaseAnonKey}`,
+      apikey: supabaseAnonKey,
+      'x-device-id': deviceId,
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  const responseText = await response.text();
+  let responseData: any;
+
+  try {
+    responseData = JSON.parse(responseText);
+  } catch (e) {
+    throw new Error(`服务器返回无效 JSON (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+  }
+
+  if (!response.ok) {
+    // 404 表示 function 不存在，可以尝试 fallback
+    if (response.status === 404) {
+      throw new Error('FUNCTION_NOT_FOUND');
+    }
+    
+    // 其他错误：包含 status 和 body snippet
+    const errorSnippet = responseText.substring(0, 200);
+    throw new Error(`Edge Function 请求失败 (HTTP ${response.status}): ${errorSnippet}`);
+  }
+
+  if (!responseData.success) {
+    const errorMessage = responseData?.error?.message || 'OCR 识别失败';
+    throw new Error(`OCR 识别失败: ${errorMessage}`);
+  }
+
+  const analysis = responseData.analysis;
+  if (!analysis || typeof analysis !== 'object') {
+    throw new Error('服务器返回的分析结果格式无效');
+  }
+
+  // 转换为 ReceiptAnalysis 格式
+  const receiptAnalysis: ReceiptAnalysis = {
+    merchant: typeof analysis.merchant === 'string' ? analysis.merchant : undefined,
+    items: Array.isArray(analysis.items) ? analysis.items : [],
+    total: typeof analysis.total === 'number' ? analysis.total : 0,
+    tax: typeof analysis.tax === 'number' ? analysis.tax : 0,
+    currency:
+      typeof analysis.currency === 'string' && analysis.currency.trim()
+        ? analysis.currency
+        : '¥',
+  };
+
+  return receiptAnalysis;
+}
+
+/**
+ * 直连 Gemini API（仅用于开发调试）
+ */
+async function analyzeReceiptImageDirectGemini(uri: string): Promise<ReceiptAnalysis> {
   const GEMINI_API_KEY = await getGeminiApiKey();
 
   if (!GEMINI_API_KEY) {
-    // 这里报错就说明：你的 app.config.js / .env 没有把 key 注入到 extra
-    throw new Error('Gemini API Key 未配置（请检查 .env / app.config.js / expo start -c）');
+    throw new Error('开发模式直连 Gemini 需要设置 DEV_DIRECT_GEMINI=true 并配置 GEMINI_API_KEY');
   }
 
   console.log(
+    '[ReceiptAnalyzer] [DEV] Using direct Gemini API (fallback mode)',
     'KEY fingerprint:',
     GEMINI_API_KEY.slice(0, 6) + '...' + GEMINI_API_KEY.slice(-4),
     'len=' + GEMINI_API_KEY.length
@@ -134,7 +331,7 @@ export async function analyzeReceiptImage(uri: string): Promise<ReceiptAnalysis>
   const base64 = await compressToJpegBase64(uri);
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-  console.log('发送到 Gemini 的 URL:', url);
+  console.log('[ReceiptAnalyzer] [DEV] 发送到 Gemini 的 URL:', url);
 
   const categorySpec = `
 categoryKey 必须从以下枚举中选择一个：
@@ -192,7 +389,7 @@ categoryKey 必须从以下枚举中选择一个：
     const rawText = await res.text();
     lastText = rawText;
 
-    console.log('Gemini 返回原始文本：', rawText);
+    console.log('[ReceiptAnalyzer] [DEV] Gemini 返回原始文本：', rawText);
 
     if (res.ok) {
       let modelReplyText = '';
@@ -205,7 +402,7 @@ categoryKey 必须从以下枚举中选择一个：
             .join('\n');
         }
       } catch (e) {
-        console.error('解析 Gemini 外层 JSON 失败：', e);
+        console.error('[ReceiptAnalyzer] [DEV] 解析 Gemini 外层 JSON 失败：', e);
         throw new Error('无法解析 Gemini 返回内容');
       }
 
@@ -215,7 +412,7 @@ categoryKey 必须从以下枚举中选择一个：
       try {
         parsed = extractJsonFromText(modelReplyText);
       } catch (e) {
-        console.error('从文本中抽取 JSON 失败：', e, '原始文本：', modelReplyText);
+        console.error('[ReceiptAnalyzer] [DEV] 从文本中抽取 JSON 失败：', e, '原始文本：', modelReplyText);
         throw new Error('无法从 Gemini 返回内容中解析出票据 JSON');
       }
 
@@ -242,4 +439,59 @@ categoryKey 必须从以下枚举中选择一个：
   }
 
   throw new Error(`识别失败（HTTP ${lastStatus}）：${lastText}`);
+}
+
+export async function analyzeReceiptImage(uri: string): Promise<ReceiptAnalysis> {
+  // 检查是否启用开发模式直连 Gemini fallback
+  let useDirectGemini = false;
+  if (__DEV__) {
+    try {
+      const ConstantsModule = await getConstants();
+      if (ConstantsModule) {
+        const expoConfig = ConstantsModule?.expoConfig;
+        const manifest = ConstantsModule?.manifest;
+        
+        const fromExpoConfig =
+          (expoConfig?.extra as any)?.DEV_DIRECT_GEMINI ??
+          (expoConfig?.extra as any)?.devDirectGemini;
+        
+        const fromManifest =
+          (manifest as any)?.extra?.DEV_DIRECT_GEMINI ??
+          (manifest as any)?.extra?.devDirectGemini;
+        
+        useDirectGemini = (fromExpoConfig ?? fromManifest ?? 'false').toString().toLowerCase() === 'true';
+      }
+    } catch (e) {
+      console.warn('[ReceiptAnalyzer] Failed to check DEV_DIRECT_GEMINI:', e);
+    }
+  }
+  
+  if (useDirectGemini) {
+    // 开发调试模式：直连 Gemini
+    try {
+      return await analyzeReceiptImageDirectGemini(uri);
+    } catch (error: any) {
+      console.warn('[ReceiptAnalyzer] [DEV] Direct Gemini fallback failed:', error.message);
+      // fallback 失败时，继续尝试 Edge Function
+    }
+  }
+
+  // 主路径：调用 Supabase Edge Function
+  // 优先尝试 ocr-receipt，如果 404 则回退到 ocr
+  try {
+    return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr-receipt');
+  } catch (error: any) {
+    // 如果是 404（function 不存在），尝试回退到 ocr
+    if (error.message === 'FUNCTION_NOT_FOUND') {
+      console.log('[ReceiptAnalyzer] ocr-receipt not found, falling back to ocr');
+      try {
+        return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr');
+      } catch (fallbackError: any) {
+        throw new Error(`Edge Function 调用失败（ocr-receipt 404，ocr 也失败）: ${fallbackError.message}`);
+      }
+    }
+    
+    // 其他错误直接抛出
+    throw error;
+  }
 }

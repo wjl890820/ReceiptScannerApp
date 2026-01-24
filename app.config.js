@@ -1,4 +1,5 @@
-import 'dotenv/config';
+// 确保 dotenv 配置在顶部执行
+require('dotenv').config();
 
 export default ({ config }) => {
   // Safe plugins merge: avoid duplicates
@@ -39,9 +40,11 @@ export default ({ config }) => {
     },
     extra: {
       ...(config.extra ?? {}),
-      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
       SUPABASE_URL: process.env.SUPABASE_URL,
       SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+      // GEMINI_API_KEY 已移除：客户端不再需要，OCR 通过 Supabase Edge Function 处理
+      // 仅开发调试时可通过 DEV_DIRECT_GEMINI=true 启用直连 Gemini fallback
+      DEV_DIRECT_GEMINI: process.env.DEV_DIRECT_GEMINI || 'false',
     },
   };
 };

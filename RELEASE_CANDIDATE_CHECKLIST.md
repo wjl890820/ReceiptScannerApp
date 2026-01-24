@@ -205,11 +205,30 @@ grep -n "return null" app/(tabs)/analysis.tsx
 
 ### 日志 3: 扫描流程
 ```
+[ReceiptAnalyzer] Calling Edge Function: ocr-receipt
 [OCR] Analyzing receipt image
 [OCR] Request sent to Edge Function
 [OCR] Response received: success=true
 ```
-**预期**: OCR 流程正常，无网络错误
+**预期**: OCR 流程正常，无网络错误，不再出现 Gemini API Key 相关错误
+
+### ✅ P0-8: OCR 架构验证（客户端无 Gemini Key）
+**测试步骤**:
+1. 检查 `app.config.js`，确认 `expo.extra` 中不包含 `GEMINI_API_KEY`
+2. 检查 `.env` 文件，确认可以不设置 `GEMINI_API_KEY`（或设置但不注入到客户端）
+3. 真机扫描一张小票，确认成功调用 Edge Function
+4. 检查控制台日志，确认不再出现 "Gemini API Key 未配置" 错误
+
+**验收标准**:
+- ✅ `app.config.js` 的 `expo.extra` 中不包含 `GEMINI_API_KEY`
+- ✅ 客户端 OCR 通过 Supabase Edge Function 完成（优先 `ocr-receipt`，失败 404 再回退到 `ocr`）
+- ✅ 不再出现 "Gemini API Key 未配置" 错误
+- ✅ 如果 Edge Function 失败，显示明确的错误信息（function 失败/网络/401/500）
+
+**验证代码位置**:
+- `app.config.js` - 确认 `GEMINI_API_KEY` 已移除
+- `lib/receiptAnalyzer.ts` - 确认主路径调用 Edge Function
+- `lib/receiptAnalyzer.ts` - 确认 DEV_DIRECT_GEMINI fallback 仅在开发模式且显式启用时可用
 
 ---
 
