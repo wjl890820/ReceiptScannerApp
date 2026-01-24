@@ -271,6 +271,11 @@ async function initIfNeeded() {
 
       // 所有迁移完成后才设置 _inited 标志
       _inited = true;
+
+      // DEV: Print schema once after initialization
+      if (__DEV__) {
+        await debugReceiptsSchema();
+      }
     } catch (error) {
       // 如果初始化失败，清除 Promise 以便重试
       _initPromise = null;
