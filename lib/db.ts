@@ -389,49 +389,14 @@ async function debugReceiptsSchema(): Promise<void> {
 let _schemaEnsured = false;
 let _schemaEnsurePromise: Promise<void> | null = null;
 
-// hasTransactionAtColumn 函数已移除，统一使用 detectTransactionAtColumn
-
-export async function ensureSchema(): Promise<void> {
-  // 如果已经确保过，直接返回
-  if (_schemaEnsured) {
-    return;
-  }
-
-  // 如果正在确保中，等待完成
-  if (_schemaEnsurePromise) {
-    await _schemaEnsurePromise;
-    return;
-  }
-
-  // 开始确保 schema
-  _schemaEnsurePromise = (async () => {
-    try {
-      // 先确保数据库已初始化（这会执行迁移）
-      await initIfNeeded();
-      
-      // ensureSchema 不再需要，迁移逻辑已在 initIfNeeded 中处理
-
-      // 标记为已确保
-      _schemaEnsured = true;
-    } catch (error) {
-      // 重置状态，允许重试
-      _schemaEnsured = false;
-      _schemaEnsurePromise = null;
-      throw error;
-    } finally {
-      _schemaEnsurePromise = null;
-    }
-  })();
-
-  await _schemaEnsurePromise;
-}
+// hasTransactionAtColumn 和 ensureSchema 函数已移除
+// 迁移逻辑在 initIfNeeded 中处理，所有查询函数直接使用 detectTransactionAtColumn 检测列是否存在
 
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
  */
 export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
   await initIfNeeded();
-  await ensureSchema(); // 确保 schema 完整后再插入
   const db = await getDb();
 
   const id = nanoid();
