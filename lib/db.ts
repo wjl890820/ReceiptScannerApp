@@ -524,6 +524,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
  */
 export async function deleteReceipt(id: string): Promise<void> {
   await initIfNeeded();
+  await ensureSchema(); // 确保 schema 完整
   const db = await getDb();
   await db.runAsync(`DELETE FROM receipts WHERE id = ?`, [id]);
 }
@@ -533,6 +534,7 @@ export async function deleteReceipt(id: string): Promise<void> {
  */
 export async function clearReceipts(): Promise<void> {
   await initIfNeeded();
+  await ensureSchema(); // 确保 schema 完整
   const db = await getDb();
   await db.runAsync(`DELETE FROM receipts`);
 }
@@ -553,6 +555,7 @@ export async function updateReceipt(params: {
   user_items_json?: string | null;
 }): Promise<void> {
   await initIfNeeded();
+  await ensureSchema(); // 确保 schema 完整
   const db = await getDb();
 
   const sets: string[] = [];
