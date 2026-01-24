@@ -91,23 +91,38 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     body: JSON.stringify(requestBody),
   });
 
+  // DEV: Print response status
+  if (__DEV__) {
+    console.log(`[Feedback] Response status: ${response.status} ${response.statusText}`);
+  }
+
+  // Read response text (for both success and error cases)
+  let responseText = '';
+  try {
+    responseText = await response.text();
+    // DEV: Print response text (truncated to 300 chars)
+    if (__DEV__) {
+      const truncatedText = responseText.length > 300 ? responseText.substring(0, 300) + '...' : responseText;
+      console.log(`[Feedback] Response text (${responseText.length} chars):`, truncatedText);
+    }
+  } catch (e) {
+    if (__DEV__) {
+      console.warn('[Feedback] Failed to read response text:', e);
+    }
+  }
+
   if (!response.ok) {
     const status = response.status;
     let errorMessage = '提交失败';
     
-    try {
-      const errorText = await response.text();
-      if (errorText) {
-        try {
-          const errorJson = JSON.parse(errorText);
-          errorMessage = errorJson.error || errorJson.message || errorMessage;
-        } catch {
-          // Not JSON, use text as-is (truncated)
-          errorMessage = errorText.length > 100 ? errorText.substring(0, 100) + '...' : errorText;
-        }
+    if (responseText) {
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorMessage = errorJson.error || errorJson.message || errorMessage;
+      } catch {
+        // Not JSON, use text as-is (truncated)
+        errorMessage = responseText.length > 100 ? responseText.substring(0, 100) + '...' : responseText;
       }
-    } catch (e) {
-      // Failed to read error text
     }
 
     // Log error (without sensitive data)
@@ -127,8 +142,17 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     }
   }
 
-  // Success - log once
+  // Success - log response details in DEV
   if (__DEV__) {
     console.log('[Feedback] Submission successful');
+    // Try to parse success response if it's JSON
+    if (responseText) {
+      try {
+        const successJson = JSON.parse(responseText);
+        console.log('[Feedback] Success response:', JSON.stringify(successJson, null, 2));
+      } catch {
+        // Not JSON, that's fine
+      }
+    }
   }
 }
