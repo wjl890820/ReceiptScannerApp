@@ -312,10 +312,79 @@ async function initIfNeeded() {
 export { initIfNeeded };
 
 /**
+ * 确保 receipts 表 schema 完整（特别是 transaction_at 列）
+ * 在所有查询 receipts 之前必须调用此函数
+ * 幂等：可以安全地多次调用
+ */
+let _schemaEnsured = false;
+let _schemaEnsurePromise: Promise<void> | null = null;
+
+export async function ensureSchema(): Promise<void> {
+  // 如果已经确保过，直接返回
+  if (_schemaEnsured) {
+    return;
+  }
+
+  // 如果正在确保中，等待完成
+  if (_schemaEnsurePromise) {
+    await _schemaEnsurePromise;
+    return;
+  }
+
+  // 开始确保 schema
+  _schemaEnsurePromise = (async () => {
+    try {
+      // 先确保数据库已初始化
+      await initIfNeeded();
+      const db = await getDb();
+
+      // 检查 receipts 表是否存在 transaction_at 列
+      const tableInfo = await db.getAllAsync<{ name: string; type: string }>(
+        `PRAGMA table_info(receipts)`
+      );
+      const columnNames = new Set(tableInfo.map((col) => col.name));
+
+      // 如果不存在 transaction_at 列，添加它
+      if (!columnNames.has('transaction_at')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN transaction_at INTEGER`);
+          // 创建索引
+          await db.runAsync(
+            `CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at ON receipts(transaction_at ASC)`
+          );
+          if (__DEV__) {
+            console.log('[DB] Added transaction_at column to receipts table');
+          }
+        } catch (e: any) {
+          // 如果列已存在（并发情况），忽略错误
+          if (!e?.message?.includes('duplicate column')) {
+            console.error('[DB] Failed to add transaction_at column:', e);
+            throw e;
+          }
+        }
+      }
+
+      // 标记为已确保
+      _schemaEnsured = true;
+    } catch (error) {
+      // 重置状态，允许重试
+      _schemaEnsured = false;
+      _schemaEnsurePromise = null;
+      throw error;
+    } finally {
+      _schemaEnsurePromise = null;
+    }
+  })();
+
+  await _schemaEnsurePromise;
+}
+
+/**
  * 保存一条记录（你现在是“手动保存”按钮触发）
  */
 export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
   await initIfNeeded();
+  await ensureSchema(); // 确保 schema 完整后再插入
   const db = await getDb();
 
   const id = nanoid();
@@ -390,6 +459,7 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
  */
 export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
   await initIfNeeded();
+  await ensureSchema(); // 确保 schema 完整后再查询
   const db = await getDb();
 
   const rows = await db.getAllAsync<ReceiptRow>(
@@ -422,6 +492,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
  */
 export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   await initIfNeeded();
+  await ensureSchema(); // 确保 schema 完整后再查询
   const db = await getDb();
 
   const row = await db.getFirstAsync<ReceiptRow>(
