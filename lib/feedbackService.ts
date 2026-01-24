@@ -1,50 +1,134 @@
 // lib/feedbackService.ts
-import Constants from 'expo-constants';
+// Submit feedback via Supabase Edge Function
+
 import { getSupabaseUrl, getSupabaseAnonKey } from './env';
+import { getDeviceId } from './deviceId';
+import { getCurrentLocale } from './i18n';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+import { listReceipts } from './db';
 
 export type FeedbackPayload = {
-  feedback: string;
-  email?: string;
-  appVersion: string;
-  platform: string;
-  language: string;
+  message: string; // Required: feedback content
+  email?: string; // Optional: contact email
+  locale?: string;
+  appVersion?: string;
+  platform?: string;
+  deviceId?: string;
+  receiptId?: string | null; // Optional: most recent receipt ID if available
 };
 
+/**
+ * Submit feedback to Supabase Edge Function
+ * POST {SUPABASE_URL}/functions/v1/send-feedback
+ */
 export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
   const supabaseUrl = getSupabaseUrl();
+  const supabaseAnonKey = getSupabaseAnonKey();
 
-  if (!supabaseUrl) {
-    throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('Supabase 未配置');
   }
 
   const edgeFunctionUrl = `${supabaseUrl}/functions/v1/send-feedback`;
 
-  const supabaseAnonKey = getSupabaseAnonKey();
+  // Get device ID
+  const deviceId = await getDeviceId();
+  
+  // Get app version
+  const appVersion = Constants.expoConfig?.version || '1.0.0';
+  
+  // Get platform
+  const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
+  
+  // Get locale
+  const locale = getCurrentLocale();
+  
+  // Get most recent receipt ID (if available)
+  let receiptId: string | null = null;
+  try {
+    const receipts = await listReceipts(1); // Get only the most recent one
+    if (receipts.length > 0) {
+      receiptId = receipts[0].id;
+    }
+  } catch (e) {
+    // Ignore errors when fetching receipt ID
+    if (__DEV__) {
+      console.warn('[Feedback] Failed to get recent receipt ID:', e);
+    }
+  }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+  const requestBody = {
+    message: payload.message,
+    email: payload.email || null,
+    locale: payload.locale || locale,
+    appVersion: payload.appVersion || appVersion,
+    platform: payload.platform || platform,
+    deviceId: payload.deviceId || deviceId,
+    receiptId: receiptId,
   };
 
-  if (supabaseAnonKey) {
-    headers['Authorization'] = `Bearer ${supabaseAnonKey}`;
+  // Log request (without sensitive data)
+  if (__DEV__) {
+    console.log('[Feedback] Submitting feedback:', {
+      messageLength: requestBody.message.length,
+      hasEmail: !!requestBody.email,
+      locale: requestBody.locale,
+      appVersion: requestBody.appVersion,
+      platform: requestBody.platform,
+      hasReceiptId: !!requestBody.receiptId,
+    });
   }
 
   const response = await fetch(edgeFunctionUrl, {
     method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${supabaseAnonKey}`,
+      apikey: supabaseAnonKey,
+      'x-device-id': deviceId,
+    },
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `反馈提交失败（HTTP ${response.status}）：${errorText || response.statusText}`
-    );
+    const status = response.status;
+    let errorMessage = '提交失败';
+    
+    try {
+      const errorText = await response.text();
+      if (errorText) {
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.error || errorJson.message || errorMessage;
+        } catch {
+          // Not JSON, use text as-is (truncated)
+          errorMessage = errorText.length > 100 ? errorText.substring(0, 100) + '...' : errorText;
+        }
+      }
+    } catch (e) {
+      // Failed to read error text
+    }
+
+    // Log error (without sensitive data)
+    if (__DEV__) {
+      console.error(`[Feedback] Submission failed (HTTP ${status}):`, errorMessage);
+    }
+
+    // Provide user-friendly error message
+    if (status >= 500) {
+      throw new Error('提交失败（服务器错误）');
+    } else if (status === 429) {
+      throw new Error('提交失败（请求过于频繁）');
+    } else if (status >= 400) {
+      throw new Error('提交失败（请求错误）');
+    } else {
+      throw new Error(`提交失败（网络错误）`);
+    }
   }
 
-  const result = await response.json().catch(() => ({}));
-  
-  if (result.error) {
-    throw new Error(result.error || '反馈提交失败');
+  // Success - log once
+  if (__DEV__) {
+    console.log('[Feedback] Submission successful');
   }
 }

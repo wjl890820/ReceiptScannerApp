@@ -129,12 +129,13 @@
     "error": {
       "title": "错误",
       "required": "请输入您的反馈。",
-      "noEmailApp": "无法打开邮件应用，请检查设备设置。",
-      "generic": "无法提交反馈，请稍后重试。"
+      "network": "提交失败（网络错误）",
+      "server": "提交失败（服务器错误）",
+      "generic": "提交失败，请稍后重试。"
     },
     "success": {
-      "message": "感谢您！您的反馈已成功提交。",
-      "button": "已提交"
+      "message": "已提交",
+      "title": "成功"
     }
   },
   "pro": {

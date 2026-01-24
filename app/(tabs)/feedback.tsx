@@ -4,8 +4,6 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   Alert,
-  Linking,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,27 +11,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
-// Lazy import Constants to avoid initialization crashes
-let Constants: typeof import('expo-constants') | null = null;
 
-import { t, getCurrentLocale } from '@/lib/i18n';
-
-async function getAppVersion(): Promise<string> {
-  try {
-    if (!Constants) {
-      Constants = await import('expo-constants');
-    }
-    return Constants?.expoConfig?.version || '1.0.0';
-  } catch (e) {
-    console.warn('[Feedback] Failed to get app version from Constants:', e);
-    return '1.0.0';
-  }
-}
+import { t } from '@/lib/i18n';
+import { submitFeedback } from '@/lib/feedbackService';
 
 export default function FeedbackScreen() {
   const router = useRouter();
   const [feedback, setFeedback] = useState('');
   const [email, setEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
     if (!feedback.trim()) {
@@ -41,34 +27,43 @@ export default function FeedbackScreen() {
       return;
     }
 
+    if (submitting) {
+      return; // Prevent duplicate submissions
+    }
+
     try {
-      const appVersion = await getAppVersion();
-      const currentLanguage = getCurrentLocale();
-      const platform = Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : 'Web';
+      setSubmitting(true);
 
-      const subject = encodeURIComponent(`[ReceiptScannerApp Feedback] v${appVersion}`);
+      await submitFeedback({
+        message: feedback.trim(),
+        email: email.trim() || undefined,
+      });
+
+      // Success: show alert and clear form
+      Alert.alert(
+        t('feedback.success.title') || '成功',
+        t('feedback.success.message'),
+        [{ text: 'OK', onPress: () => {} }]
+      );
       
-      let body = `Feedback / Issue:\n\n${feedback.trim()}\n\n\nContext:\n\nSystem Info:\n- App Version: ${appVersion}\n- Platform: ${platform}\n- Language: ${currentLanguage}`;
-      
-      if (email.trim()) {
-        body += `\n- Contact Email: ${email.trim()}`;
-      }
-
-      const encodedBody = encodeURIComponent(body);
-      const mailtoUrl = `mailto:your_email@example.com?subject=${subject}&body=${encodedBody}`;
-
-      const canOpen = await Linking.canOpenURL(mailtoUrl);
-      if (canOpen) {
-        await Linking.openURL(mailtoUrl);
-        // 清空表单
-        setFeedback('');
-        setEmail('');
-      } else {
-        Alert.alert(t('feedback.error.title'), t('feedback.error.noEmailApp'));
-      }
+      setFeedback('');
+      setEmail('');
     } catch (error: any) {
-      console.error('打开邮件失败:', error);
-      Alert.alert(t('feedback.error.title'), t('feedback.error.generic'));
+      console.error('[Feedback] Submission error:', error);
+      
+      // Determine error message based on error text
+      let errorMessage = t('feedback.error.generic');
+      const errorText = error?.message || '';
+      
+      if (errorText.includes('网络') || errorText.includes('network')) {
+        errorMessage = t('feedback.error.network');
+      } else if (errorText.includes('服务器') || errorText.includes('server')) {
+        errorMessage = t('feedback.error.server');
+      }
+      
+      Alert.alert(t('feedback.error.title'), errorMessage);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -103,8 +98,14 @@ export default function FeedbackScreen() {
           onChangeText={setEmail}
         />
 
-        <Pressable style={styles.submitButton} onPress={handleSubmit}>
-          <Text style={styles.submitButtonText}>{t('feedback.submit')}</Text>
+        <Pressable 
+          style={[styles.submitButton, submitting && styles.submitButtonDisabled]} 
+          onPress={handleSubmit}
+          disabled={submitting}
+        >
+          <Text style={styles.submitButtonText}>
+            {submitting ? t('feedback.submitting') : t('feedback.submit')}
+          </Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -162,6 +163,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 32,
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
   },
   submitButtonText: {
     fontSize: 16,

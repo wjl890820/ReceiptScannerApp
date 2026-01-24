@@ -425,6 +425,78 @@ AI 兜底分类（PR3 - Supabase Edge Function）：
      - 多次扫描失败的商品
      - 相同类型的错误（如超时、网络错误）应该只记录一次
 
+反馈功能修复（App 内提交）：
+- **问题**：反馈功能使用 mailto 跳转到系统邮箱，用户体验不佳，且硬编码了邮件地址。
+- **修复**：
+  1. **更新 `lib/feedbackService.ts`**：
+     - 实现 `submitFeedback(payload: FeedbackPayload): Promise<void>`
+     - 调用 Supabase Edge Function：`POST {SUPABASE_URL}/functions/v1/send-feedback`
+     - 请求头：`Authorization: Bearer {SUPABASE_ANON_KEY}`、`apikey`、`x-device-id`
+     - 请求体包含：`message`（必填）、`email`（可选）、`locale`、`appVersion`、`platform`、`deviceId`、`receiptId`（最近一次扫描的收据 ID，如有）
+     - 自动获取：deviceId（通过 `getDeviceId()`）、appVersion（从 Constants）、platform（从 Platform.OS）、locale（从 `getCurrentLocale()`）、receiptId（从 `listReceipts(1)` 获取最近一条）
+     - 错误处理：
+       - HTTP 状态非 2xx：根据状态码返回友好的错误消息（网络错误/服务器错误/请求错误）
+       - 网络错误：返回"提交失败（网络错误）"
+       - 开发模式：记录请求日志（不含敏感数据）
+  2. **更新 `app/(tabs)/feedback.tsx`**：
+     - 移除 `Linking.openURL('mailto:...')` 和 `MailCompose` 相关代码
+     - 改为调用 `submitFeedback()` 函数
+     - 添加 `submitting` 状态，防止重复提交
+     - 成功时：显示 Alert "已提交"，清空输入框
+     - 失败时：显示 Alert 错误消息（根据错误类型显示不同消息），不清空输入
+     - 提交按钮在提交中时显示"提交中..."并禁用
+  3. **更新 locales**（`locales/zh.json`、`locales/ja.json`、`locales/en.json`）：
+     - 移除 `feedback.error.noEmailApp`（不再需要）
+     - 添加 `feedback.error.network`："提交失败（网络错误）"
+     - 添加 `feedback.error.server`："提交失败（服务器错误）"
+     - 更新 `feedback.success.message`："已提交"（简化）
+     - 添加 `feedback.success.title`："成功"
+- **Supabase Edge Function 参考**（`supabase/functions/send-feedback/index.ts` 骨架）：
+  ```typescript
+  // Expected request body:
+  {
+    message: string;        // Required: feedback content
+    email?: string | null;  // Optional: contact email
+    locale: string;         // e.g., 'zh', 'ja', 'en'
+    appVersion: string;     // e.g., '1.0.0'
+    platform: 'ios' | 'android' | 'web';
+    deviceId: string;      // Device identifier
+    receiptId?: string | null; // Optional: most recent receipt ID
+  }
+  
+  // Expected response (2xx):
+  {
+    success: true;
+    message?: string; // Optional success message
+  }
+  
+  // Error response (non-2xx):
+  // Client will show user-friendly error message
+  ```
+- **验收步骤**：
+  1. **验证不跳转邮箱**：
+     - 进入 Settings -> Feedback 页面
+     - 输入反馈内容，点击"提交"
+     - 应该不会跳转到系统邮箱 App
+     - 应该显示 Alert "已提交"（成功时）或错误消息（失败时）
+  2. **验证请求日志**：
+     - 提交反馈时，检查控制台日志
+     - 应该看到 `[Feedback] Submitting feedback:` 日志（不含敏感数据）
+     - 成功时应该看到 `[Feedback] Submission successful`
+     - 失败时应该看到 `[Feedback] Submission failed (HTTP XXX):` 错误信息
+  3. **验证成功流程**：
+     - Edge Function 返回 2xx 时
+     - UI 应该显示 Alert "已提交"
+     - 输入框应该被清空
+  4. **验证失败流程**：
+     - 模拟网络错误或 Edge Function 返回非 2xx
+     - UI 应该显示 Alert 错误消息（根据错误类型：网络错误/服务器错误/请求错误）
+     - 输入框不应该被清空（用户可以重试）
+     - 不应该崩溃
+  5. **验证防重复提交**：
+     - 点击"提交"后，按钮应该显示"提交中..."并禁用
+     - 在提交完成前，再次点击应该无效
+
 相册多选与顺序处理功能：
 - **目标**：支持从相册多选照片，顺序处理每张图片，每张保存为独立收据。
 - **实现**：

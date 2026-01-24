@@ -129,12 +129,13 @@
     "error": {
       "title": "Error",
       "required": "Please enter your feedback.",
-      "noEmailApp": "Cannot open email app. Please check your device settings.",
-      "generic": "Unable to submit feedback. Please try again later."
+      "network": "Submission failed (network error)",
+      "server": "Submission failed (server error)",
+      "generic": "Submission failed. Please try again later."
     },
     "success": {
-      "message": "Thank you! Your feedback has been submitted successfully.",
-      "button": "Submitted"
+      "message": "Submitted",
+      "title": "Success"
     }
   },
   "pro": {
