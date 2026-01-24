@@ -687,6 +687,60 @@ SQLite 迁移修复（真机启动报错修复）：
      - 收据应该按时间排序（从过去到现在）
      - 如果迁移成功，应该使用 `transaction_at` 排序；否则使用 `created_at` 排序
 
+SQLite transaction_at 彻底修复（V1 封板前最终修复）：
+- **问题根源**：
+  - **Promise 被当作 true**：如果 `detectTransactionAtColumn` 是 async 函数，调用时缺少 `await`，会导致 `hasTx` 是 Promise 对象（永远 truthy），永远走 transaction_at 分支
+  - SQLite 在某些设备上，ALTER TABLE 已失败但代码仍假设成功
+  - 某些查询在 initIfNeeded 之前被调用
+  - 某些 SQL 在 prepareAsync 时已经硬编码了 transaction_at
+- **修复策略**：
+  1. **统一函数命名**：
+     - 将 `detectTransactionAtColumn` 重命名为 `receiptsHasTransactionAt`
+     - 确保所有调用点都有 `await`，保证返回 boolean 而不是 Promise
+  2. **强一致的单一入口**：
+     - 维护全局缓存：`let _receiptsHasTransactionAt: boolean | null = null;`
+     - 提供函数：`async function receiptsHasTransactionAt(db): Promise<boolean>`
+     - 若缓存非 null：直接返回缓存
+     - 否则执行：`PRAGMA table_info(receipts)`，检查 `name === 'transaction_at'`
+     - 将结果写入缓存并返回
+     - 如果 PRAGMA 失败：缓存置为 false 并返回 false（绝不能 throw 导致启动失败）
+  3. **100% 不可能引用不存在列的 SQL 拼接**：
+     - `listReceipts()`: 先 `const hasTx = await receiptsHasTransactionAt(db);`，再拼接 SELECT 和 ORDER BY
+     - `getReceipt()`: 先 `const hasTx = await receiptsHasTransactionAt(db);`，再拼接 SELECT
+     - `saveReceipt()`: 先 `const hasTx = await receiptsHasTransactionAt(db);`，INSERT 的列名单与 values 占位必须与 hasTx 分支严格一致
+     - 所有查询都有 try/catch fallback：一旦执行报错，立即用"只依赖 created_at"的 SQL 重试一次
+  4. **迁移逻辑改成"尽力而为，不影响运行"**：
+     - 在 `initIfNeeded()` 里，await 打开 db 后，先运行迁移尝试
+     - 迁移失败：只记录 warn，并把 `_receiptsHasTransactionAt=false`
+     - 迁移成功：把 `_receiptsHasTransactionAt=true`
+     - 迁移失败不影响应用启动
+  5. **一次性 DEV 日志**（仅 DEV）：
+     - 在 `initIfNeeded()` 完成后（只打印一次）
+     - 打印 `PRAGMA table_info(receipts)` 的结果（列名数组）
+     - 打印 `_receiptsHasTransactionAt` 最终值
+- **技术细节**：
+  - 所有 SQL 拼接只能通过 `await receiptsHasTransactionAt(db)` 得到 boolean
+  - transaction_at 永远不能直接写进 SQL 字符串，必须在运行时动态拼接
+  - 所有 SQL 使用模板字符串，transaction_at 只能出现在 `${hasTx ? ... : ...}` 中
+  - 双重保险：主查询失败时，fallback 查询只依赖 created_at，确保不会崩溃
+- **验收标准**：
+  1. **真机旧库（没有 transaction_at）冷启动**：
+     - 不再出现 `no such column: transaction_at` 错误
+     - 应用应该正常启动，不崩溃
+  2. **不扫描直接进 Home/History/Feedback**：
+     - 不报错
+     - 所有页面应该正常加载
+  3. **扫描保存正常**：
+     - 扫描一张小票，应该能正常保存
+     - 如果迁移成功，transaction_at 会被保存；如果迁移失败，只保存 created_at
+  4. **排序/筛选**：
+     - 若迁移成功，后续排序/筛选按 transaction_at
+     - 若迁移失败，自动回退 created_at 且功能可用
+  5. **DEV 日志验证**：
+     - 在开发模式下，控制台应该看到：
+       - `[DB] receipts schema columns: [...]`（列名数组）
+       - `[DB] _receiptsHasTransactionAt: true/false`（最终值）
+
 SQLite 迁移彻底修复（V1 封板前最后一次修复）：
 - **问题根源**：
   - SQLite 在某些设备上，ALTER TABLE 已失败但代码仍假设成功
