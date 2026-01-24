@@ -589,3 +589,45 @@ History 排序与 Home 默认筛选修复：
   4. **单张图片流程**（确保未破坏）：
      - 选择单张图片时，仍使用原有流程（包含复活节彩蛋）
      - 相机拍照仍为单张处理
+
+SQLite 迁移修复（transaction_at 列）：
+- **问题**：
+  - 真机报错：`no such column: transaction_at`
+  - `listReceipts`/`getReceipt` 等 SQL 已引用 `transaction_at`，但迁移未生效或执行顺序不对
+  - 查询可能在迁移完成之前就执行了
+- **修复**（`lib/db.ts`）：
+  1. **创建 `ensureSchema()` 函数**：
+     - 专门确保 `receipts` 表的 `transaction_at` 列存在
+     - 使用 `PRAGMA table_info(receipts)` 检查列是否存在
+     - 如果不存在，执行 `ALTER TABLE receipts ADD COLUMN transaction_at INTEGER`
+     - 创建索引：`CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at ON receipts(transaction_at ASC)`
+     - 幂等设计：可以安全地多次调用，使用 `_schemaEnsured` 标志和 `_schemaEnsurePromise` 防止并发重复执行
+     - 错误处理：捕获并发情况下的 "duplicate column" 错误并忽略
+  2. **在所有查询 receipts 之前调用 `ensureSchema()`**：
+     - `listReceipts()`: 在查询前调用 `await ensureSchema()`
+     - `getReceipt()`: 在查询前调用 `await ensureSchema()`
+     - `saveReceipt()`: 在插入前调用 `await ensureSchema()`
+  3. **执行顺序保证**：
+     - 先调用 `await initIfNeeded()` 确保数据库已初始化
+     - 再调用 `await ensureSchema()` 确保 schema 完整
+     - 最后执行查询/插入操作
+- **技术细节**：
+  - `ensureSchema()` 使用单例模式，确保只执行一次迁移
+  - 如果迁移失败，重置状态允许重试
+  - 开发模式下记录迁移日志
+- **验收步骤**：
+  1. **真机测试**：
+     - 在真机上启动应用（如果有旧数据库，应该自动迁移）
+     - 进入 History 页面，应该能正常加载，不再出现 `no such column: transaction_at` 错误
+     - 进入 Home 页面，应该能正常加载收据列表
+     - 扫描并保存一张新小票，应该能正常保存
+  2. **验证迁移**：
+     - 在开发模式下，控制台应该看到 `[DB] Added transaction_at column to receipts table` 日志（仅第一次）
+     - 检查数据库，`receipts` 表应该包含 `transaction_at` 列
+     - 旧数据应该能正常查询（`transaction_at` 为 NULL，查询时使用 `COALESCE(transaction_at, created_at)`）
+  3. **验证向后兼容**：
+     - 旧数据（没有 `transaction_at`）应该能正常显示
+     - 新数据（有 `transaction_at`）应该使用 `transaction_at` 排序
+  4. **验证幂等性**：
+     - 多次调用 `ensureSchema()` 不应该报错
+     - 不应该重复添加列或索引
