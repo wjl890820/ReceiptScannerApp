@@ -685,3 +685,108 @@ SQLite 迁移修复（transaction_at 列）：
      - 模拟 Edge Function 返回空响应 -> App 应该显示失败
      - 模拟 Edge Function 返回非 JSON -> App 应该显示失败
      - 模拟 Edge Function 返回 `{ok: true}`（但没有 success）-> App 应该显示失败
+
+classify-item Edge Function 部署：
+- **目标**：
+  - 新增 Supabase Edge Function：`classify-item`
+  - 使用 GEMINI_API_KEY 仅存放在 Supabase secrets（不进入 App / Git）
+  - 返回结构与 App 端一致：`{ success: true, categoryId, confidence, reason }`
+  - 支持多语言输入（locale），但输出只需要 categoryId/confidence/reason
+  - 404 彻底消失，App 端 AI fallback 开始计数 ai=Z，other_grocery 明显下降
+- **实现**（`supabase/functions/classify-item/index.ts`）：
+  1. **Deno Edge Function 标准入口**：
+     - 使用 `serve` from `deno.land/std@0.168.0/http/server.ts`
+     - 只允许 POST；OPTIONS 直接返回 204
+  2. **CORS 配置**：
+     - 允许 app 调用（至少允许 authorization, apikey, content-type, x-device-id, x-client, x-request-id）
+  3. **环境变量**：
+     - 从 Supabase secrets 读取 `GEMINI_API_KEY`（必须）
+  4. **请求解析**：
+     - body 必须包含至少 `rawName` 或 `normalizedName`
+     - 支持可选字段：`merchantName`, `price`, `locale`, `deviceId`, `appVersion`, `platform`
+  5. **Gemini 调用**：
+     - 模型：`gemini-1.5-flash`（便宜快，分类足够）
+     - 超时：5s（AbortController）
+     - Prompt 明确要求：只输出 JSON，不要 markdown，不要解释
+  6. **强校验**：
+     - JSON parse 失败 → fallback
+     - categoryId 不在白名单 → fallback
+     - confidence 非法 → fallback
+     - fallback 返回：`{ success: true, categoryId: "other_grocery", confidence: 0.0, reason: "fallback" }`
+     - 注意：即使 fallback，也要 `success: true`（让 App 端逻辑稳定，不要把"AI 不确定"当成网络错误）
+  7. **分类白名单**（必须与 `lib/categories.ts` 一致）：
+     - `produce`, `meat_seafood`, `dairy_eggs`, `bakery`, `staples`, `snacks_sweets`, `quick_meals`, `condiments`, `non_alcoholic_drinks`, `alcohol`, `household`, `frozen_foods`, `canned_preserved`, `beverages_other`, `health_supplements`, `other_grocery`, `uncategorized`
+  8. **日志**（仅 DEV / 或少量）：
+     - 打印 `x-request-id`、商品名、最终 categoryId、confidence（不要打印 key）
+- **部署步骤**：
+  1. **安装 Supabase CLI**（如果还没有）：
+     ```bash
+     # macOS
+     brew install supabase/tap/supabase
+     
+     # 或使用 npm
+     npm install -g supabase
+     ```
+  2. **登录 Supabase**：
+     ```bash
+     supabase login
+     ```
+  3. **设置 GEMINI_API_KEY secret**：
+     ```bash
+     supabase secrets set GEMINI_API_KEY="你的key" --project-ref <你的project_ref>
+     ```
+     - 注意：`<你的project_ref>` 可以从 Supabase Dashboard URL 获取（例如：`https://xxx.supabase.co` 中的 `xxx`）
+     - 或使用 `supabase link --project-ref <project_ref>` 链接项目
+  4. **部署函数**：
+     ```bash
+     supabase functions deploy classify-item --project-ref <你的project_ref>
+     ```
+  5. **验证部署**：
+     - 在 Supabase Dashboard → Edge Functions 应该看到新增 `classify-item`
+     - URL 变为：`.../functions/v1/classify-item`
+- **Dashboard Test 验证**：
+  - 在 Supabase Dashboard 的 `classify-item` → Test
+  - Request body 示例：
+    ```json
+    {
+      "rawName": "明治おいしい牛乳",
+      "normalizedName": "明治おいしい牛乳",
+      "merchantName": "ヨークベニマル",
+      "price": 289,
+      "locale": "ja",
+      "platform": "ios",
+      "appVersion": "1.0.0",
+      "deviceId": "test"
+    }
+    ```
+  - 期望 response（示例）：
+    ```json
+    {
+      "success": true,
+      "categoryId": "dairy_eggs",
+      "confidence": 0.7,
+      "reason": "milk"
+    }
+    ```
+- **App 端验证**：
+  - App 端已经在调用：`POST ${SUPABASE_URL}/functions/v1/classify-item`
+  - 部署后真机日志应该从：
+    - `Edge function returned status 404`
+    - 变成：`200 + ai=Z 计数开始增长`
+  - 同时 `other_grocery` 占比下降
+  - 在开发模式下，控制台应该看到分类统计：`[CategoryClassifier] Stats: mapping=X rules=Y ai=Z fallback=W`
+- **验收标准**：
+  1. **Supabase Dashboard Test 成功**：
+     - 输入测试用例，返回 `{ success: true, categoryId, confidence, reason }`
+     - categoryId 必须在白名单内
+     - confidence 在 0-1 之间
+  2. **真机测试**：
+     - 扫描一张小票，App 端日志应该看到 `ai=Z` 计数（Z > 0）
+     - 不再出现 404 错误
+     - `other_grocery` 占比应该下降（因为 AI 能正确分类更多商品）
+  3. **Fallback 验证**：
+     - 如果 Gemini API 失败或返回无效结果，应该返回 `{ success: true, categoryId: "other_grocery", confidence: 0.0, reason: "fallback" }`
+     - App 端不应该报错，应该正常处理
+  4. **安全验证**：
+     - GEMINI_API_KEY 只在 Supabase secrets 中，不在 App 代码或 Git 中
+     - Edge Function 日志不打印 API key
