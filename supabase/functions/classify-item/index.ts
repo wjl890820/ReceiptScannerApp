@@ -99,8 +99,10 @@ async function callGemini(prompt: string): Promise<string> {
     throw new Error('GEMINI_API_KEY not configured');
   }
 
+  // 明确规则：secret 里必须是 gemini-2.5-flash，代码里再拼 models/，避免 models/models/...
   // 按 v1beta 的 generateContent 正确拼 URL（使用 query param key）
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const modelName = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -231,6 +233,10 @@ serve(async (req) => {
       { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
+
+  // 在请求入口处打印最终模型名（只打印模型，不打印 key）
+  const GEMINI_MODEL_FINAL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
+  console.log(`[classify-item] model=${GEMINI_MODEL_FINAL}`);
 
   const requestId = req.headers.get('x-request-id') || 'unknown';
   const deviceId = req.headers.get('x-device-id') || 'unknown';
