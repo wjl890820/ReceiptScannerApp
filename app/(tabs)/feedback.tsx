@@ -51,16 +51,22 @@ export default function FeedbackScreen() {
     } catch (error: any) {
       console.error('[Feedback] Submission error:', error);
       
-      // Determine error message based on error text
+      // D) UI 行为：失败显示 Alert：标题"提交失败"，内容为简短可读原因
       let errorMessage = t('feedback.error.generic');
       const errorText = error?.message || '';
       
-      if (errorText.includes('网络') || errorText.includes('network')) {
+      // 根据错误类型显示不同的错误消息
+      if (errorText.includes('网络') || errorText.includes('network') || errorText.includes('无法读取')) {
         errorMessage = t('feedback.error.network');
-      } else if (errorText.includes('服务器') || errorText.includes('server')) {
+      } else if (errorText.includes('服务器') || errorText.includes('server') || errorText.includes('HTTP 5')) {
         errorMessage = t('feedback.error.server');
+      } else if (errorText.includes('未配置') || errorText.includes('Supabase')) {
+        errorMessage = '提交失败（未配置）';
+      } else if (errorText.includes('格式错误') || errorText.includes('空响应') || errorText.includes('未确认成功')) {
+        errorMessage = '提交失败（服务器响应异常）';
       }
       
+      // 显示错误 Alert，不清空输入（用户可以重试）
       Alert.alert(t('feedback.error.title'), errorMessage);
     } finally {
       setSubmitting(false);

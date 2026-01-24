@@ -631,3 +631,57 @@ SQLite 迁移修复（transaction_at 列）：
   4. **验证幂等性**：
      - 多次调用 `ensureSchema()` 不应该报错
      - 不应该重复添加列或索引
+
+反馈提交修复（上线标准）：
+- **问题**：
+  - App 端日志显示 "Submission successful"，但 Supabase function Logs 无 invocation
+  - 邮箱未收到反馈
+  - 存在"未命中函数 / 或误判成功"的问题
+- **修复**（`lib/feedbackService.ts`、`app/(tabs)/feedback.tsx`）：
+  1. **统一 URL 与 headers**（A）：
+     - URL 必须为 `${SUPABASE_URL}/functions/v1/send-feedback`
+     - headers 必须包含：
+       - `Authorization: Bearer ${SUPABASE_ANON_KEY}`
+       - `apikey: ${SUPABASE_ANON_KEY}`
+       - `Content-Type: application/json`
+       - `x-device-id: deviceId`
+       - `x-client: app`（新增）
+       - `x-request-id: ${Date.now()}-${Math.random().toString(16).slice(2)}`（新增，用于可观测性）
+  2. **严格成功判定**（B）：
+     - fetch 后先读取 `status` 和 `text`
+     - 如果 `!response.ok` -> throw，错误信息包含 status 与 text 前 300 字
+     - `text` 为空 -> throw（不能当成功）
+     - JSON parse 失败 -> throw
+     - 仅当 `json.success === true` 才算成功；否则 throw（把 json 原样附带在错误里，DEV 下）
+     - 不允许使用 `ok` 字段，必须使用 `success` 字段（与 Dashboard Test 保持一致）
+  3. **DEV 可观测日志**（C）：
+     - 在 `__DEV__` 下输出一次性日志：
+       - `[Feedback] POST {url}`
+       - `[Feedback] status=xxx`
+       - `[Feedback] body=...(截断 300)`
+     - 不在生产环境打印 body
+  4. **UI 行为**（D）：
+     - 提交中按钮禁用 + loading（已实现）
+     - 只有在严格成功判定通过后才显示 "已提交/成功"
+     - 失败显示 Alert：标题"提交失败"，内容为简短可读原因（网络/服务器/解析/未配置）
+     - 失败时不清空输入（用户可以重试）
+- **验收标准**（E）：
+  1. **真机提交一次后，Supabase Logs（send-feedback）出现 invocation**：
+     - 在 Supabase Dashboard -> Edge Functions -> send-feedback -> Logs
+     - 应该能看到一次 invocation，包含 `x-request-id` header
+     - 如果看不到 invocation，说明请求未到达 Edge Function
+  2. **App 端能看到 status 与 body（DEV 下）**：
+     - 在开发模式下，控制台应该看到：
+       - `[Feedback] POST https://xxx.supabase.co/functions/v1/send-feedback`
+       - `[Feedback] status=200`
+       - `[Feedback] body={"success":true,"resend":{"id":"xxx"}}`
+     - 如果 status 不是 200，应该看到错误日志
+  3. **邮箱能收到反馈；若未收到，也必须在 App 明确提示**：
+     - 如果 Edge Function 返回 `{success: true}`，App 应该显示"已提交"
+     - 如果 Edge Function 返回 `{success: false}` 或没有 `success` 字段，App 应该显示"提交失败（服务器未确认成功）"
+     - 不能默默成功（即使 status 200 但 success !== true 也要报错）
+  4. **验证严格成功判定**：
+     - 模拟 Edge Function 返回 `{success: false}` -> App 应该显示失败
+     - 模拟 Edge Function 返回空响应 -> App 应该显示失败
+     - 模拟 Edge Function 返回非 JSON -> App 应该显示失败
+     - 模拟 Edge Function 返回 `{ok: true}`（但没有 success）-> App 应该显示失败
