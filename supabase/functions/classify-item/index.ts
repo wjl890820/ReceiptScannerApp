@@ -4,8 +4,8 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 
-const GEMINI_MODEL = 'gemini-1.5-flash';
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+// 可配置的 Gemini 模型（默认使用 latest）
+const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-1.5-flash-latest';
 const REQUEST_TIMEOUT_MS = 5000; // 5 seconds
 
 // Get GEMINI_API_KEY from Supabase secrets
@@ -98,15 +98,17 @@ async function callGemini(prompt: string): Promise<string> {
     throw new Error('GEMINI_API_KEY not configured');
   }
 
+  // 注意：URL 中不再写死模型名，使用 GEMINI_MODEL 变量
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(GEMINI_API_URL, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-goog-api-key': GEMINI_API_KEY,
       },
       body: JSON.stringify({
         contents: [
@@ -121,8 +123,10 @@ async function callGemini(prompt: string): Promise<string> {
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Gemini API error: ${response.status} ${errorText.substring(0, 200)}`);
+      const text = await response.text();
+      // 打印错误详情（截断，不打印 key）
+      console.warn(`[Gemini] status=${response.status} body=${text.slice(0, 500)}`);
+      throw new Error(`Gemini API error: ${response.status} ${text.substring(0, 200)}`);
     }
 
     const data = await response.json();
