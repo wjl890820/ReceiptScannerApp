@@ -311,17 +311,16 @@ async function initIfNeeded() {
       // 所有迁移完成后才设置 _inited 标志
       _inited = true;
 
-      // DEV: 一次性日志（仅 DEV）
+      // 临时"核爆式验证"（DEV ONLY）
       if (__DEV__) {
         try {
-          const tableInfo = await db.getAllAsync<{ name: string; type: string }>(
-            `PRAGMA table_info(receipts)`
+          const rows = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(receipts)`);
+          console.log(
+            '[DB][FINAL SCHEMA]',
+            rows.map((r) => r.name).join(', ')
           );
-          const columnNames = tableInfo.map((col) => col.name);
-          console.log('[DB] receipts schema columns:', columnNames);
-          console.log('[DB] _receiptsHasTransactionAt:', _receiptsHasTransactionAt);
         } catch (e) {
-          console.warn('[DB] Failed to print schema debug:', e);
+          console.warn('[DB] Failed to print final schema:', e);
         }
       }
     } catch (error) {
@@ -376,30 +375,7 @@ async function initIfNeeded() {
  */
 export { initIfNeeded };
 
-/**
- * Debug function to print receipts table schema (DEV only)
- */
-async function debugReceiptsSchema(): Promise<void> {
-  if (!__DEV__) {
-    return;
-  }
-
-  try {
-    await initIfNeeded();
-    const db = await getDb();
-    const tableInfo = await db.getAllAsync<{ cid: number; name: string; type: string; notnull: number; dflt_value: any; pk: number }>(
-      `PRAGMA table_info(receipts)`
-    );
-    console.log('[DB] receipts schema:', tableInfo.map((col) => ({
-      name: col.name,
-      type: col.type,
-      notnull: col.notnull,
-      pk: col.pk,
-    })));
-  } catch (error) {
-    console.error('[DB] Failed to debug schema:', error);
-  }
-}
+// debugReceiptsSchema 函数已移除，改为在 initIfNeeded 最后直接打印
 
 /**
  * 确保 receipts 表 schema 完整（特别是 transaction_at 列）
@@ -456,12 +432,11 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
     }
   }
 
-  // ⚠️ 动态检测列是否存在，动态拼接 SQL
-  // 关键：必须 await 得到 boolean，不能是 Promise
+  // detect 必须发生在函数最开始
   const hasTx = await receiptsHasTransactionAt(db);
 
+  // 完全分离的两套 INSERT，互不包含对方字段名
   if (hasTx) {
-    // 列存在，可以插入 transaction_at
     await db.runAsync(
       `
       INSERT INTO receipts (
@@ -486,7 +461,6 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
       ]
     );
   } else {
-    // 列不存在，不插入 transaction_at
     await db.runAsync(
       `
       INSERT INTO receipts (
@@ -516,30 +490,28 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
 
 /**
  * 列表：按时间倒序
- * ⚠️ 关键：SQL 必须动态生成，不能硬编码 transaction_at
+ * ⚠️ 关键：使用完全分离的两套 SQL，禁止条件拼接
  */
 export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
   await initIfNeeded();
   const db = await getDb();
 
-  // ⚠️ 强制检测列是否存在
-  // 关键：必须 await 得到 boolean，不能是 Promise
+  // detect 必须发生在函数最开始
   const hasTx = await receiptsHasTransactionAt(db);
 
-  try {
-    // 动态构建 SQL
-    const transactionAtSelect = hasTx
-      ? `COALESCE(transaction_at, created_at) AS transaction_at`
-      : `created_at AS transaction_at`;
-    const orderBy = hasTx
-      ? `ORDER BY COALESCE(transaction_at, created_at) ASC`
-      : `ORDER BY created_at ASC`;
+  if (__DEV__) {
+    console.log('[DB] listReceipts using', hasTx ? 'TX SQL' : 'CREATED_AT SQL');
+  }
 
-    const rows = await db.getAllAsync<ReceiptRow>(
-      `
+  // 完全分离的两套 SQL，互不包含对方字段名
+  let sql: string;
+  let params: any[];
+
+  if (hasTx) {
+    sql = `
       SELECT
         id, created_at,
-        ${transactionAtSelect},
+        COALESCE(transaction_at, created_at) AS transaction_at,
         image_uri,
         merchant_raw, merchant_normalized,
         total, tax, currency,
@@ -550,72 +522,55 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
         note,
         user_items_json
       FROM receipts
-      ${orderBy}
+      ORDER BY COALESCE(transaction_at, created_at) ASC
       LIMIT ?
-      `,
-      [limit]
-    );
-
-    return rows ?? [];
-  } catch (e: any) {
-    // ⚠️ 兜底保险：如果 SQL 执行失败，使用只依赖 created_at 的查询
-    if (__DEV__) {
-      console.warn('[DB] Fallback to created_at due to schema mismatch:', e?.message);
-    }
-
-    // 使用最安全的 SQL（只依赖 created_at）
-    try {
-      const rows = await db.getAllAsync<ReceiptRow>(
-        `
-        SELECT
-          id, created_at,
-          created_at AS transaction_at,
-          image_uri,
-          merchant_raw, merchant_normalized,
-          total, tax, currency,
-          analysis_json,
-          COALESCE(user_edited, 0) as user_edited,
-          final_total,
-          final_category,
-          note,
-          user_items_json
-        FROM receipts
-        ORDER BY created_at ASC
-        LIMIT ?
-        `,
-        [limit]
-      );
-      return rows ?? [];
-    } catch (fallbackError) {
-      console.error('[DB] Fallback query also failed:', fallbackError);
-      return [];
-    }
+    `;
+    params = [limit];
+  } else {
+    sql = `
+      SELECT
+        id, created_at,
+        created_at AS transaction_at,
+        image_uri,
+        merchant_raw, merchant_normalized,
+        total, tax, currency,
+        analysis_json,
+        COALESCE(user_edited, 0) as user_edited,
+        final_total,
+        final_category,
+        note,
+        user_items_json
+      FROM receipts
+      ORDER BY created_at ASC
+      LIMIT ?
+    `;
+    params = [limit];
   }
+
+  const rows = await db.getAllAsync<ReceiptRow>(sql, params);
+  return rows ?? [];
 }
 
 /**
  * 详情：按 id 获取一条
- * ⚠️ 关键：SQL 必须动态生成，不能硬编码 transaction_at
+ * ⚠️ 关键：使用完全分离的两套 SQL，禁止条件拼接
  */
 export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   await initIfNeeded();
   const db = await getDb();
 
-  // ⚠️ 强制检测列是否存在
-  // 关键：必须 await 得到 boolean，不能是 Promise
+  // detect 必须发生在函数最开始
   const hasTx = await receiptsHasTransactionAt(db);
 
-  try {
-    // 动态构建 SQL
-    const transactionAtSelect = hasTx
-      ? `COALESCE(transaction_at, created_at) AS transaction_at`
-      : `created_at AS transaction_at`;
+  // 完全分离的两套 SQL，互不包含对方字段名
+  let sql: string;
+  let params: any[];
 
-    const row = await db.getFirstAsync<ReceiptRow>(
-      `
+  if (hasTx) {
+    sql = `
       SELECT
         id, created_at,
-        ${transactionAtSelect},
+        COALESCE(transaction_at, created_at) AS transaction_at,
         image_uri,
         merchant_raw, merchant_normalized,
         total, tax, currency,
@@ -628,44 +583,31 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       FROM receipts
       WHERE id = ?
       LIMIT 1
-      `,
-      [id]
-    );
-
-    return row ?? null;
-  } catch (e: any) {
-    // ⚠️ 兜底保险：如果 SQL 执行失败，使用只依赖 created_at 的查询
-    if (__DEV__) {
-      console.warn('[DB] Fallback to created_at due to schema mismatch:', e?.message);
-    }
-
-    try {
-      const row = await db.getFirstAsync<ReceiptRow>(
-        `
-        SELECT
-          id, created_at,
-          created_at AS transaction_at,
-          image_uri,
-          merchant_raw, merchant_normalized,
-          total, tax, currency,
-          analysis_json,
-          COALESCE(user_edited, 0) as user_edited,
-          final_total,
-          final_category,
-          note,
-          user_items_json
-        FROM receipts
-        WHERE id = ?
-        LIMIT 1
-        `,
-        [id]
-      );
-      return row ?? null;
-    } catch (fallbackError) {
-      console.error('[DB] Fallback query also failed:', fallbackError);
-      return null;
-    }
+    `;
+    params = [id];
+  } else {
+    sql = `
+      SELECT
+        id, created_at,
+        created_at AS transaction_at,
+        image_uri,
+        merchant_raw, merchant_normalized,
+        total, tax, currency,
+        analysis_json,
+        COALESCE(user_edited, 0) as user_edited,
+        final_total,
+        final_category,
+        note,
+        user_items_json
+      FROM receipts
+      WHERE id = ?
+      LIMIT 1
+    `;
+    params = [id];
   }
+
+  const row = await db.getFirstAsync<ReceiptRow>(sql, params);
+  return row ?? null;
 }
 
 /**
