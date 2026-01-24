@@ -97,7 +97,7 @@ Do NOT include markdown, do NOT include explanations outside JSON, do NOT includ
  * Call Gemini API with timeout
  * 使用 v1beta generateContent API，URL 使用 query param key
  */
-async function callGemini(prompt: string): Promise<string> {
+async function callGemini(prompt: string, t0?: number, tFetch?: number): Promise<string> {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY not configured');
   }
@@ -128,6 +128,12 @@ async function callGemini(prompt: string): Promise<string> {
     });
 
     clearTimeout(timeoutId);
+
+    // 性能定界：打印 fetch 完成时间（如果传入了时间参数）
+    if (t0 !== undefined && tFetch !== undefined) {
+      const fetchEndTime = Date.now();
+      console.log(`[classify-item] t=${fetchEndTime - t0}ms gemini_fetch_done dt=${fetchEndTime - tFetch}ms status=${response.status}`);
+    }
 
     if (!response.ok) {
       const text = await response.text();
@@ -227,6 +233,10 @@ serve(async (req) => {
   // 在 serve 函数的第一行打印 Build ID（必须保证每个请求都会打印）
   console.log(`[classify-item] ENTRY build=${BUILD_ID}`);
 
+  // 性能定界：开始计时
+  const t0 = Date.now();
+  console.log(`[classify-item] t=0ms start`);
+
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -244,6 +254,7 @@ serve(async (req) => {
   const modelName = Deno.env.get('GEMINI_MODEL') ?? 'gemini-1.5-flash';
   console.log(`[classify-item] model=${modelName}`);
   console.log(`[classify-item] endpoint=/v1beta/models/${modelName}:generateContent`);
+  console.log(`[classify-item] timeout_ms=${REQUEST_TIMEOUT_MS}`);
 
   const requestId = req.headers.get('x-request-id') || 'unknown';
   const deviceId = req.headers.get('x-device-id') || 'unknown';
@@ -279,13 +290,18 @@ serve(async (req) => {
 
     // Generate prompt
     const prompt = generatePrompt(rawName, normalizedName, merchantName, price, locale);
+    console.log(`[classify-item] t=${Date.now() - t0}ms prompt_ready`);
 
     // Call Gemini
     let geminiText: string;
     try {
-      geminiText = await callGemini(prompt);
+      const tFetch = Date.now();
+      console.log(`[classify-item] t=${Date.now() - t0}ms gemini_fetch_start`);
+      geminiText = await callGemini(prompt, t0, tFetch);
+      console.log(`[classify-item] t=${Date.now() - t0}ms gemini_fetch_done dt=${Date.now() - tFetch}ms`);
     } catch (error: any) {
       console.warn(`[${requestId}] Gemini call failed:`, error.message);
+      console.log(`[classify-item] t=${Date.now() - t0}ms gemini_fetch_failed`);
       return new Response(
         JSON.stringify(createFallbackResponse()),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
