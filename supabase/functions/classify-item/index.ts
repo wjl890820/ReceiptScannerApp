@@ -9,7 +9,7 @@ const BUILD_ID = `${new Date().toISOString()}_${Math.random().toString(16).slice
 
 // 可配置的 Gemini 模型（默认使用稳定的可用模型）
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
-const REQUEST_TIMEOUT_MS = 5000; // 5 seconds
+const REQUEST_TIMEOUT_MS = 12000; // 12 seconds
 
 // Get GEMINI_API_KEY from Supabase secrets
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
