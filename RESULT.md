@@ -338,6 +338,93 @@ i18n key 泄露与扫描相关 UI 修复：
      - 如果之前有通用映射（merchant_hint=''），应该直接命中
      - 如果没有通用映射，应该使用规则匹配，然后自动学习（confidence >= 0.85）
 
+AI 兜底分类（PR3 - Supabase Edge Function）：
+- **目标**：添加 AI 兜底分类作为最后手段，通过 Supabase Edge Function，包含熔断器和自动学习。
+- **实现**：
+  1. **AI 客户端**（`lib/categoryAiClient.ts`）：
+     - 导出 `classifyViaEdgeFunction(input: AiClassifyInput): Promise<AiClassifyResult | null>`
+     - 使用 `getSupabaseUrl()` 和 `getSupabaseAnonKey()` 从 env helper 读取配置
+     - POST 请求到 `${SUPABASE_URL}/functions/v1/classify-item`
+     - 请求头：`Authorization: Bearer {SUPABASE_ANON_KEY}`、`apikey`、`x-device-id`
+     - 请求体 JSON：`{ rawName, normalizedName, merchantName, price, locale, deviceId, appVersion, platform }`
+     - 超时控制：使用 `AbortController` 强制 5000ms 超时
+     - 错误处理：
+       - HTTP 状态非 2xx：返回 null，记录调试日志（每个会话每个状态码只记录一次）
+       - 响应缺少 categoryId：返回 null
+       - 网络错误/超时：返回 null，优雅降级
+     - 日志去重：使用会话级别的 `_lastLogKey` 避免重复日志
+  2. **分类器更新**（`lib/categoryClassifier.ts`）：
+     - 更新 `ClassifyOutput` 类型：`source: 'mapping' | 'rules' | 'ai' | 'fallback'`
+     - 更新统计：添加 `ai` 计数（`mapping/rules/ai/fallback`）
+     - 分类顺序：`mapping` > `rules` > `ai` > `fallback`
+     - AI 调用条件：仅在 `rules confidence < 0.8` 且 `mapping miss` 时调用
+     - 熔断器（in-memory singleton）：
+       - 状态：`consecutiveFailures`、`blockedUntil`（ms 时间戳）、`lastLogKey`
+       - 规则：
+         - 如果 `blockedUntil > Date.now()` => 跳过 AI 调用
+         - AI 失败时：`consecutiveFailures++`
+         - 如果 `consecutiveFailures >= 3` => 设置 `blockedUntil = now + 10 minutes`
+         - AI 成功时：重置 `consecutiveFailures=0`、`blockedUntil=0`
+     - AI 结果处理：
+       - 如果 `confidence >= 0.6` 且 categoryId 有效：
+         - 返回 `{categoryId, confidence, source:'ai', reason}`
+         - 自动学习到本地映射：`learnCategoryMapping(normalizedName, merchantHint, categoryId, confidence)`
+         - merchantHint = 标准化后的 merchantName 或 ''
+       - 否则：降级到 fallback
+     - 失败处理：所有失败（网络错误、超时、无效响应）都优雅降级到 fallback，不会中断扫描
+  3. **统计和日志**（`lib/receiptEnricher.ts`）：
+     - 每张收据处理完成后输出：`[CategoryClassifier] Stats: mapping=X rules=Y ai=Z fallback=W`
+  4. **测试脚本**（`scripts/test-category-classifier.js`）：
+     - 添加 `SIMULATE_AI=1` 环境变量开关，模拟 AI 路径（无需网络）
+     - 现有规则测试仍然通过
+- **Supabase Edge Function 参考**（`supabase/functions/classify-item/index.ts` 骨架）：
+  ```typescript
+  // Expected request body:
+  {
+    rawName: string;
+    normalizedName: string;
+    merchantName?: string | null;
+    price?: number | null;
+    locale?: string;
+    deviceId: string;
+    appVersion: string;
+    platform: 'ios' | 'android' | 'web';
+  }
+  
+  // Expected response JSON:
+  {
+    categoryId: string;  // Must be one of GROCERY_CATEGORIES
+    confidence: number;  // 0.0 ~ 1.0
+    reason?: string;    // Optional explanation
+  }
+  
+  // Error response (any non-2xx status):
+  // Client will gracefully degrade to fallback
+  ```
+- **验收步骤**：
+  1. **验证 AI 调用**：
+     - 扫描包含无法通过规则匹配的商品（confidence < 0.8）
+     - 检查控制台日志，应该看到 `[CategoryClassifier] Stats: mapping=X rules=Y ai=Z fallback=W`
+     - 如果 AI 成功，`ai` 计数应该 > 0
+  2. **验证熔断器**：
+     - 模拟 3 次连续 AI 失败（例如：断开网络或 Edge Function 返回 500）
+     - 第 4 次扫描时，应该跳过 AI 调用（熔断器打开）
+     - 检查控制台日志，应该看到 "Circuit breaker opened" 警告（仅一次）
+     - 等待 10 分钟后，熔断器应该自动恢复
+  3. **验证自动学习**：
+     - 扫描无法通过规则匹配的商品，AI 返回分类（confidence >= 0.6）
+     - 再次扫描相同商品（相同商家），应该直接命中映射（source='mapping'）
+  4. **验证优雅降级**：
+     - 断开网络或 Edge Function 不可用
+     - 扫描应该继续完成，所有商品应该降级到 fallback（`other_grocery`）
+     - 不应该出现崩溃或阻塞
+  5. **验证超时**：
+     - 模拟 Edge Function 响应延迟 > 5 秒
+     - 应该看到超时日志（仅一次），然后降级到 fallback
+  6. **验证日志去重**：
+     - 多次扫描失败的商品
+     - 相同类型的错误（如超时、网络错误）应该只记录一次
+
 相册多选与顺序处理功能：
 - **目标**：支持从相册多选照片，顺序处理每张图片，每张保存为独立收据。
 - **实现**：

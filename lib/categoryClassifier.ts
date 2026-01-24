@@ -1,12 +1,12 @@
 // lib/categoryClassifier.ts
-// Unified category classification service (rules-first + local mapping)
-// Strategy: mapping (priority) -> rules -> fallback
-// No AI calls in this module (PR1 constraint)
+// Unified category classification service (rules-first + local mapping + AI fallback)
+// Strategy: mapping (priority) -> rules -> ai -> fallback
 
 import type { Category } from './categories';
 import { ALL_CATEGORIES } from './categories';
 import { getLearnedCategory, learnCategoryMapping } from './categoryLearner';
 import { normalizeMerchantName } from './productNormalizer';
+import { classifyViaEdgeFunction, type AiClassifyInput } from './categoryAiClient';
 
 export type ClassifyInput = {
   rawName: string;
@@ -19,7 +19,7 @@ export type ClassifyInput = {
 export type ClassifyOutput = {
   categoryId: string;
   confidence: number;
-  source: 'mapping' | 'rules' | 'fallback';
+  source: 'mapping' | 'rules' | 'ai' | 'fallback';
   reason?: string;
 };
 
@@ -27,6 +27,7 @@ export type ClassifyOutput = {
 let classificationStats: {
   mapping: number;
   rules: number;
+  ai: number;
   fallback: number;
 } | null = null;
 
@@ -34,7 +35,7 @@ let classificationStats: {
  * Reset classification statistics (call at start of each receipt)
  */
 export function resetClassificationStats(): void {
-  classificationStats = { mapping: 0, rules: 0, fallback: 0 };
+  classificationStats = { mapping: 0, rules: 0, ai: 0, fallback: 0 };
 }
 
 /**
@@ -43,9 +44,62 @@ export function resetClassificationStats(): void {
 export function getClassificationStats(): {
   mapping: number;
   rules: number;
+  ai: number;
   fallback: number;
 } | null {
   return classificationStats;
+}
+
+// Circuit breaker state (in-memory singleton)
+type CircuitBreakerState = {
+  consecutiveFailures: number;
+  blockedUntil: number; // ms timestamp
+  lastLogKey: string | null;
+};
+
+let circuitBreaker: CircuitBreakerState = {
+  consecutiveFailures: 0,
+  blockedUntil: 0,
+  lastLogKey: null,
+};
+
+/**
+ * Check if circuit breaker allows AI call
+ */
+function isCircuitBreakerOpen(): boolean {
+  const now = Date.now();
+  if (circuitBreaker.blockedUntil > now) {
+    return true; // Circuit is open (blocked)
+  }
+  return false; // Circuit is closed (allowed)
+}
+
+/**
+ * Record AI failure in circuit breaker
+ */
+function recordAiFailure(): void {
+  circuitBreaker.consecutiveFailures++;
+  
+  // If 3 or more consecutive failures, block for 10 minutes
+  if (circuitBreaker.consecutiveFailures >= 3) {
+    circuitBreaker.blockedUntil = Date.now() + 10 * 60 * 1000; // 10 minutes
+    const logKey = 'circuit-breaker-open';
+    if (circuitBreaker.lastLogKey !== logKey) {
+      circuitBreaker.lastLogKey = logKey;
+      if (__DEV__) {
+        console.warn('[CategoryClassifier] Circuit breaker opened: too many AI failures, blocking for 10 minutes');
+      }
+    }
+  }
+}
+
+/**
+ * Record AI success in circuit breaker
+ */
+function recordAiSuccess(): void {
+  circuitBreaker.consecutiveFailures = 0;
+  circuitBreaker.blockedUntil = 0;
+  circuitBreaker.lastLogKey = null;
 }
 
 /**
@@ -243,7 +297,69 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
     };
   }
 
-  // 3. Fallback
+  // 3. AI fallback (only when rules confidence < 0.8 and mapping miss)
+  if (!isCircuitBreakerOpen()) {
+    try {
+      const aiInput: AiClassifyInput = {
+        rawName,
+        normalizedName: normalized,
+        merchantName: merchantName || undefined,
+        price: input.price,
+        locale: input.locale,
+      };
+
+      const aiResult = await classifyViaEdgeFunction(aiInput);
+
+      if (aiResult && aiResult.confidence >= 0.6) {
+        // Validate categoryId is in our list
+        if (ALL_CATEGORIES.includes(aiResult.categoryId as Category)) {
+          // Record success
+          recordAiSuccess();
+          
+          if (classificationStats) classificationStats.ai++;
+          
+          // Auto-learn AI result to local mapping
+          const merchantHint = merchantName ? normalizeMerchantName(merchantName) : '';
+          await learnCategoryMapping(
+            normalized,
+            merchantHint || null,
+            aiResult.categoryId,
+            aiResult.confidence
+          );
+          
+          return {
+            categoryId: aiResult.categoryId,
+            confidence: aiResult.confidence,
+            source: 'ai',
+            reason: aiResult.reason || 'AI classification',
+          };
+        }
+      }
+      
+      // AI returned low confidence or invalid category - record as failure
+      if (aiResult) {
+        recordAiFailure();
+      } else {
+        // AI call failed (null result) - record as failure
+        recordAiFailure();
+      }
+    } catch (error: any) {
+      // Unexpected error during AI call - record as failure
+      recordAiFailure();
+      if (__DEV__) {
+        console.warn('[CategoryClassifier] AI call error:', error.message);
+      }
+    }
+  } else {
+    // Circuit breaker is open - skip AI call
+    const logKey = 'circuit-breaker-skip';
+    if (circuitBreaker.lastLogKey !== logKey) {
+      circuitBreaker.lastLogKey = logKey;
+      // Don't log every skip to avoid spam - only log once per session
+    }
+  }
+
+  // 4. Fallback
   if (classificationStats) classificationStats.fallback++;
   return {
     categoryId: 'other_grocery',

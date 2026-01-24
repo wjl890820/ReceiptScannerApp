@@ -319,6 +319,7 @@ export async function applyCategoriesWithLearning(
       '[CategoryClassifier] Stats:',
       `mapping=${stats.mapping}`,
       `rules=${stats.rules}`,
+      `ai=${stats.ai}`,
       `fallback=${stats.fallback}`
     );
   }

@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 /**
- * Test script for category classifier (rules-based)
+ * Test script for category classifier (rules-based + optional AI simulation)
  * Run with: node scripts/test-category-classifier.js
+ * 
+ * Set SIMULATE_AI=1 to mock AI path without network:
+ *   SIMULATE_AI=1 node scripts/test-category-classifier.js
  * 
  * This script simulates the classification logic without requiring React Native environment
  * Tests rule-based matching for Japanese grocery receipts
  */
+
+const SIMULATE_AI = process.env.SIMULATE_AI === '1';
 
 // Test cases: Japanese product names with expected category and source
 const testCases = [
@@ -187,8 +192,30 @@ function classifyByRules(name) {
   return null;
 }
 
-// Test function (simulates classifyItem without mapping/AI)
+// Mock AI classification (only used when SIMULATE_AI=1)
+function mockAiClassification(rawName) {
+  if (!SIMULATE_AI) return null;
+  
+  // Simple mock: return a category for unknown items (simulating AI fallback)
+  // In real scenario, this would call Edge Function
+  const n = (rawName || '').toLowerCase();
+  
+  // Mock AI might classify some unknown items
+  if (n.includes('商品') || n.includes('item')) {
+    return {
+      categoryId: 'other_grocery',
+      confidence: 0.7,
+      reason: 'Mock AI classification',
+    };
+  }
+  
+  return null;
+}
+
+// Test function (simulates classifyItem: mapping -> rules -> ai -> fallback)
 function testClassification(testCase) {
+  // 1. Mapping (not tested in this script - would require DB)
+  // 2. Rules
   const ruleResult = classifyByRules(testCase.rawName);
   
   let result = {
@@ -203,7 +230,18 @@ function testClassification(testCase) {
       confidence: ruleResult.confidence,
       source: 'rules',
     };
+  } else if (SIMULATE_AI) {
+    // 3. AI fallback (only when rules confidence < 0.8)
+    const aiResult = mockAiClassification(testCase.rawName);
+    if (aiResult && aiResult.confidence >= 0.6) {
+      result = {
+        categoryId: aiResult.categoryId,
+        confidence: aiResult.confidence,
+        source: 'ai',
+      };
+    }
   }
+  // 4. Fallback (already set above)
 
   const passed = 
     result.categoryId === testCase.expectedCategory &&
@@ -217,7 +255,10 @@ function testClassification(testCase) {
 }
 
 // Run tests
-console.log('Testing Category Classifier (Rules-Based)\n');
+console.log(`Testing Category Classifier (Rules-Based${SIMULATE_AI ? ' + AI Simulation' : ''})\n`);
+if (SIMULATE_AI) {
+  console.log('Note: SIMULATE_AI=1 enabled - AI path will be simulated for items without rule matches\n');
+}
 console.log('='.repeat(60));
 
 let passedCount = 0;
