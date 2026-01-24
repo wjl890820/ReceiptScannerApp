@@ -1,6 +1,7 @@
 // lib/categoryLearner.ts
 import * as SQLite from 'expo-sqlite';
 import { ALL_CATEGORIES, type Category } from './categories';
+import { initIfNeeded } from './db';
 
 // Re-export for backward compatibility (deprecated, use categories.ts)
 /** @deprecated Use GROCERY_CATEGORIES from './categories' instead */
@@ -9,6 +10,9 @@ export const STANDARD_CATEGORIES = ALL_CATEGORIES as readonly string[];
 let _db: SQLite.SQLiteDatabase | null = null;
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  // 确保数据库已初始化（包括 item_category_mapping 表）
+  await initIfNeeded();
+  
   if (!_db) {
     _db = await SQLite.openDatabaseAsync('receipts.db');
   }

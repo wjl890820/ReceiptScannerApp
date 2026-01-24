@@ -1,131 +1,18 @@
 // lib/receiptAnalyzer.ts
-// Lazy import Constants to avoid initialization crashes
-let Constants: typeof import('expo-constants') | null = null;
-
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
+import {
+  getSupabaseUrl,
+  getSupabaseAnonKey,
+  getGeminiApiKey,
+  isDevDirectGeminiEnabled,
+} from './env';
 
 const MODEL = 'gemini-2.0-flash';
-
-async function getConstants() {
-  if (!Constants) {
-    try {
-      Constants = await import('expo-constants');
-    } catch (e) {
-      console.warn('[ReceiptAnalyzer] Failed to import Constants:', e);
-      return null;
-    }
-  }
-  return Constants;
-}
-
-async function getSupabaseUrl(): Promise<string> {
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    // Safely access Constants with fallback
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.SUPABASE_URL ??
-      (expoConfig?.extra as any)?.supabaseUrl;
-
-    const fromManifest =
-      (manifest as any)?.extra?.SUPABASE_URL ??
-      (manifest as any)?.extra?.supabaseUrl;
-
-    const url = (fromExpoConfig ?? fromManifest ?? '').trim();
-    return url;
-  } catch (e) {
-    console.error('[ReceiptAnalyzer] Failed to get Supabase URL from Constants:', e);
-    return '';
-  }
-}
-
-async function getSupabaseAnonKey(): Promise<string> {
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    // Safely access Constants with fallback
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
-      (expoConfig?.extra as any)?.supabaseAnonKey;
-
-    const fromManifest =
-      (manifest as any)?.extra?.SUPABASE_ANON_KEY ??
-      (manifest as any)?.extra?.supabaseAnonKey;
-
-    const key = (fromExpoConfig ?? fromManifest ?? '').trim();
-    return key;
-  } catch (e) {
-    console.error('[ReceiptAnalyzer] Failed to get Supabase Anon Key from Constants:', e);
-    return '';
-  }
-}
-
-// 仅用于开发调试的直连 Gemini fallback
-async function getGeminiApiKey(): Promise<string> {
-  // 仅在 __DEV__ 且 DEV_DIRECT_GEMINI=true 时启用
-  if (!__DEV__) return '';
-  
-  // 检查 expo.extra 中的 DEV_DIRECT_GEMINI 开关
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.DEV_DIRECT_GEMINI ??
-      (expoConfig?.extra as any)?.devDirectGemini;
-    
-    const fromManifest =
-      (manifest as any)?.extra?.DEV_DIRECT_GEMINI ??
-      (manifest as any)?.extra?.devDirectGemini;
-    
-    const devDirectGemini = (fromExpoConfig ?? fromManifest ?? 'false').toString().toLowerCase() === 'true';
-    if (!devDirectGemini) return '';
-  } catch (e) {
-    console.warn('[ReceiptAnalyzer] Failed to check DEV_DIRECT_GEMINI:', e);
-    return '';
-  }
-  
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    // Safely access Constants with fallback
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    // Expo SDK 49+ 推荐：Constants.expoConfig
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.geminiApiKey ??
-      (expoConfig?.extra as any)?.GEMINI_API_KEY;
-
-    // 兼容旧的 Expo Go：Constants.manifest
-    const fromManifest =
-      (manifest as any)?.extra?.geminiApiKey ??
-      (manifest as any)?.extra?.GEMINI_API_KEY;
-
-    const key = (fromExpoConfig ?? fromManifest ?? '').trim();
-    return key;
-  } catch (e) {
-    console.error('[ReceiptAnalyzer] Failed to get Gemini API key from Constants:', e);
-    return '';
-  }
-}
 
 // 商品分类 key（用于统计）
 export type CategoryKey =
@@ -211,8 +98,8 @@ async function analyzeReceiptImageViaEdgeFunction(
   console.log('[ENV] SUPABASE_URL(extra)=', Constants.expoConfig?.extra?.SUPABASE_URL);
   console.log('[ENV] SUPABASE_ANON_KEY(extra)=', Constants.expoConfig?.extra?.SUPABASE_ANON_KEY);
   
-  const supabaseUrl = await getSupabaseUrl();
-  const supabaseAnonKey = await getSupabaseAnonKey();
+  const supabaseUrl = getSupabaseUrl();
+  const supabaseAnonKey = getSupabaseAnonKey();
 
   if (!supabaseUrl) {
     throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
@@ -229,13 +116,7 @@ async function analyzeReceiptImageViaEdgeFunction(
   const deviceId = await getDeviceId();
 
   // 获取应用元数据
-  let appVersion = '1.0.0';
-  try {
-    const ConstantsModule = await getConstants();
-    appVersion = ConstantsModule?.expoConfig?.version || '1.0.0';
-  } catch (e) {
-    console.warn('[ReceiptAnalyzer] Failed to get app version from Constants:', e);
-  }
+  const appVersion = Constants.expoConfig?.version || '1.0.0';
   const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
   const language = getCurrentLocale();
 
@@ -315,7 +196,7 @@ async function analyzeReceiptImageViaEdgeFunction(
  * 直连 Gemini API（仅用于开发调试）
  */
 async function analyzeReceiptImageDirectGemini(uri: string): Promise<ReceiptAnalysis> {
-  const GEMINI_API_KEY = await getGeminiApiKey();
+  const GEMINI_API_KEY = getGeminiApiKey();
 
   if (!GEMINI_API_KEY) {
     throw new Error('开发模式直连 Gemini 需要设置 DEV_DIRECT_GEMINI=true 并配置 GEMINI_API_KEY');
@@ -443,28 +324,7 @@ categoryKey 必须从以下枚举中选择一个：
 
 export async function analyzeReceiptImage(uri: string): Promise<ReceiptAnalysis> {
   // 检查是否启用开发模式直连 Gemini fallback
-  let useDirectGemini = false;
-  if (__DEV__) {
-    try {
-      const ConstantsModule = await getConstants();
-      if (ConstantsModule) {
-        const expoConfig = ConstantsModule?.expoConfig;
-        const manifest = ConstantsModule?.manifest;
-        
-        const fromExpoConfig =
-          (expoConfig?.extra as any)?.DEV_DIRECT_GEMINI ??
-          (expoConfig?.extra as any)?.devDirectGemini;
-        
-        const fromManifest =
-          (manifest as any)?.extra?.DEV_DIRECT_GEMINI ??
-          (manifest as any)?.extra?.devDirectGemini;
-        
-        useDirectGemini = (fromExpoConfig ?? fromManifest ?? 'false').toString().toLowerCase() === 'true';
-      }
-    } catch (e) {
-      console.warn('[ReceiptAnalyzer] Failed to check DEV_DIRECT_GEMINI:', e);
-    }
-  }
+  const useDirectGemini = isDevDirectGeminiEnabled();
   
   if (useDirectGemini) {
     // 开发调试模式：直连 Gemini

@@ -936,15 +936,16 @@ export default function HomeScreen() {
       setScanning(true);
 
       // Network connectivity check (only in development)
+      // Note: probe/ping failures are logged internally (once per session) to avoid spam
       if (__DEV__) {
         try {
-          const probeResult = await probeSupabaseNetwork();
-          if (!probeResult.success) {
-            console.warn('[OCR] Network probe failed');
-          }
+          await probeSupabaseNetwork();
           await pingOcrEdge();
         } catch (pingError: any) {
-          console.warn('[OCR] Ping failed:', pingError.message);
+          // Errors are already logged internally, only log unexpected errors here
+          if (__DEV__ && pingError.message && !pingError.message.includes('not configured')) {
+            console.warn('[OCR] Unexpected ping error:', pingError.message);
+          }
         }
       }
 

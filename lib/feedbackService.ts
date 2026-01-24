@@ -1,68 +1,6 @@
 // lib/feedbackService.ts
-// Lazy import Constants to avoid initialization crashes
-let Constants: typeof import('expo-constants') | null = null;
-
-async function getConstants() {
-  if (!Constants) {
-    try {
-      Constants = await import('expo-constants');
-    } catch (e) {
-      console.warn('[FeedbackService] Failed to import Constants:', e);
-      return null;
-    }
-  }
-  return Constants;
-}
-
-async function getSupabaseUrl(): Promise<string> {
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    // Safely access Constants with fallback
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.SUPABASE_URL ??
-      (expoConfig?.extra as any)?.supabaseUrl;
-
-    const fromManifest =
-      (manifest as any)?.extra?.SUPABASE_URL ??
-      (manifest as any)?.extra?.supabaseUrl;
-
-    const url = (fromExpoConfig ?? fromManifest ?? '').trim();
-    return url;
-  } catch (e) {
-    console.error('[FeedbackService] Failed to get Supabase URL from Constants:', e);
-    return '';
-  }
-}
-
-async function getSupabaseAnonKey(): Promise<string> {
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    // Safely access Constants with fallback
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
-      (expoConfig?.extra as any)?.supabaseAnonKey;
-
-    const fromManifest =
-      (manifest as any)?.extra?.SUPABASE_ANON_KEY ??
-      (manifest as any)?.extra?.supabaseAnonKey;
-
-    const key = (fromExpoConfig ?? fromManifest ?? '').trim();
-    return key;
-  } catch (e) {
-    console.error('[FeedbackService] Failed to get Supabase Anon Key from Constants:', e);
-    return '';
-  }
-}
+import Constants from 'expo-constants';
+import { getSupabaseUrl, getSupabaseAnonKey } from './env';
 
 export type FeedbackPayload = {
   feedback: string;
@@ -73,7 +11,7 @@ export type FeedbackPayload = {
 };
 
 export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
-  const supabaseUrl = await getSupabaseUrl();
+  const supabaseUrl = getSupabaseUrl();
 
   if (!supabaseUrl) {
     throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
@@ -81,7 +19,7 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
 
   const edgeFunctionUrl = `${supabaseUrl}/functions/v1/send-feedback`;
 
-  const supabaseAnonKey = await getSupabaseAnonKey();
+  const supabaseAnonKey = getSupabaseAnonKey();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

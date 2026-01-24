@@ -1,81 +1,12 @@
 // lib/ocrService.ts
-// Lazy import Constants to avoid initialization crashes
-let Constants: typeof import('expo-constants') | null = null;
-
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
-
-async function getConstants() {
-  if (!Constants) {
-    try {
-      Constants = await import('expo-constants');
-    } catch (e) {
-      console.warn('[OCR] Failed to import Constants:', e);
-      return null;
-    }
-  }
-  return Constants;
-}
-
-async function getSupabaseUrl(): Promise<string> {
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    // Safely access Constants with fallback
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.SUPABASE_URL ??
-      (expoConfig?.extra as any)?.supabaseUrl;
-
-    const fromManifest =
-      (manifest as any)?.extra?.SUPABASE_URL ??
-      (manifest as any)?.extra?.supabaseUrl;
-
-    const url = (fromExpoConfig ?? fromManifest ?? '').trim();
-    
-    // Validate URL contains correct project ref (dev only)
-    if (__DEV__ && url && !url.includes('ifgcizhnblkonbjzkfyb')) {
-      console.warn('[OCR] WARNING: URL does not contain expected project ref');
-    }
-    
-    return url;
-  } catch (e) {
-    console.error('[OCR] Failed to get Supabase URL from Constants:', e);
-    return '';
-  }
-}
-
-async function getSupabaseAnonKey(): Promise<string> {
-  try {
-    const ConstantsModule = await getConstants();
-    if (!ConstantsModule) return '';
-    
-    // Safely access Constants with fallback
-    const expoConfig = ConstantsModule?.expoConfig;
-    const manifest = ConstantsModule?.manifest;
-    
-    const fromExpoConfig =
-      (expoConfig?.extra as any)?.SUPABASE_ANON_KEY ??
-      (expoConfig?.extra as any)?.supabaseAnonKey;
-
-    const fromManifest =
-      (manifest as any)?.extra?.SUPABASE_ANON_KEY ??
-      (manifest as any)?.extra?.supabaseAnonKey;
-
-    const key = (fromExpoConfig ?? fromManifest ?? '').trim();
-    return key;
-  } catch (e) {
-    console.error('[OCR] Failed to get Supabase Anon Key from Constants:', e);
-    return '';
-  }
-}
+import { getSupabaseUrl, getSupabaseAnonKey } from './env';
 
 /**
  * Compress and encode image to base64
@@ -106,20 +37,31 @@ export type OCRServiceError = {
   message: string;
 };
 
+// Track if we've already logged probe/ping failure in this session
+let _probeFailureLogged = false;
+let _pingFailureLogged = false;
+
 /**
  * Temporary network probe: Test basic connectivity to Supabase
  */
 export async function probeSupabaseNetwork(): Promise<{ success: boolean; status?: number; error?: string }> {
-  const supabaseUrl = await getSupabaseUrl();
+  const supabaseUrl = getSupabaseUrl();
   
   if (!supabaseUrl) {
+    // Only log once per session to avoid spam
+    if (!_probeFailureLogged) {
+      console.warn('[Network Probe] SUPABASE_URL not configured in extra');
+      _probeFailureLogged = true;
+    }
     return { success: false, error: 'SUPABASE_URL not configured' };
   }
   
   // Test basic connectivity with a simple GET request
   const probeUrl = `${supabaseUrl}/rest/v1/`;
   
-  console.log('[Network Probe] Testing connectivity to:', probeUrl);
+  if (__DEV__) {
+    console.log('[Network Probe] Testing connectivity to:', probeUrl);
+  }
   
   try {
     const response = await fetch(probeUrl, {
@@ -127,16 +69,20 @@ export async function probeSupabaseNetwork(): Promise<{ success: boolean; status
       // No headers needed for basic connectivity test
     });
     
-    console.log('[Network Probe] Response status:', response.status);
-    console.log('[Network Probe] Response ok:', response.ok);
+    if (__DEV__) {
+      console.log('[Network Probe] Response status:', response.status);
+    }
     
     return {
       success: true,
       status: response.status,
     };
   } catch (error: any) {
-    console.error('[Network Probe] Fetch failed:', error.message);
-    console.error('[Network Probe] Error type:', error.name);
+    // Network failure, not config issue - only log once per session
+    if (!_probeFailureLogged) {
+      console.warn('[Network Probe] Network request failed:', error.message);
+      _probeFailureLogged = true;
+    }
     return {
       success: false,
       error: error.message || 'Network request failed',
@@ -148,15 +94,30 @@ export async function probeSupabaseNetwork(): Promise<{ success: boolean; status
  * Temporary debug: Ping OCR Edge Function
  */
 export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
-  const supabaseUrl = await getSupabaseUrl();
-  const supabaseAnonKey = await getSupabaseAnonKey();
+  const supabaseUrl = getSupabaseUrl();
+  const supabaseAnonKey = getSupabaseAnonKey();
 
+  // Only return error if config is actually missing, not if network fails
   if (!supabaseUrl) {
-    throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
+    if (!_pingFailureLogged) {
+      console.warn('[OCR] SUPABASE_URL not configured in extra');
+      _pingFailureLogged = true;
+    }
+    return {
+      status: 0,
+      body: { error: 'SUPABASE_URL not configured' },
+    };
   }
 
   if (!supabaseAnonKey) {
-    throw new Error('Supabase Anon Key 未配置（请检查 .env / app.config.js / expo start -c）');
+    if (!_pingFailureLogged) {
+      console.warn('[OCR] SUPABASE_ANON_KEY not configured in extra');
+      _pingFailureLogged = true;
+    }
+    return {
+      status: 0,
+      body: { error: 'SUPABASE_ANON_KEY not configured' },
+    };
   }
 
   const deviceId = await getDeviceId();
@@ -167,7 +128,6 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
   }
 
   try {
-    
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
@@ -178,7 +138,6 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
       },
       body: JSON.stringify({ ping: true }),
     });
-    
 
     const responseText = await response.text();
     let responseData: any;
@@ -194,9 +153,11 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
       body: responseData,
     };
   } catch (error: any) {
-    console.error('[OCR Debug] pingOcrEdge - Fetch error:', error.message);
-    console.error('[OCR Debug] pingOcrEdge - Error type:', error.name);
-    console.error('[OCR Debug] pingOcrEdge - Error stack:', error.stack?.substring(0, 200));
+    // Network failure, not config issue - only log once per session
+    if (!_pingFailureLogged) {
+      console.warn('[OCR] Ping network error:', error.message);
+      _pingFailureLogged = true;
+    }
     return {
       status: 0,
       body: { error: error.message || 'Network error' },
@@ -210,8 +171,6 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
 export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAnalysis> {
   const supabaseUrl = getSupabaseUrl();
   const supabaseAnonKey = getSupabaseAnonKey();
-
-  // Temporary debug logs
 
   if (!supabaseUrl) {
     throw new Error('Supabase URL 未配置（请检查 .env / app.config.js / expo start -c）');
@@ -227,14 +186,8 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
   // Get device ID
   const deviceId = await getDeviceId();
 
-  // Get app metadata (with safe access to Constants)
-  let appVersion = '1.0.0';
-  try {
-    const ConstantsModule = await getConstants();
-    appVersion = ConstantsModule?.expoConfig?.version || '1.0.0';
-  } catch (e) {
-    console.warn('[OCR] Failed to get app version from Constants:', e);
-  }
+  // Get app metadata
+  const appVersion = Constants.expoConfig?.version || '1.0.0';
   const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
   const language = getCurrentLocale();
 

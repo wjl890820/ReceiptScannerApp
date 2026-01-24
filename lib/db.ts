@@ -92,6 +92,15 @@ async function initIfNeeded() {
 
         CREATE INDEX IF NOT EXISTS idx_receipts_created_at
           ON receipts(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS item_category_mapping (
+          normalized_name TEXT PRIMARY KEY NOT NULL,
+          category TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_item_category_mapping_updated_at
+          ON item_category_mapping(updated_at DESC);
       `);
 
       // 安全迁移：检查并添加新字段（如果不存在）
@@ -154,12 +163,54 @@ async function initIfNeeded() {
     } catch (error) {
       // 如果初始化失败，清除 Promise 以便重试
       _initPromise = null;
+      
+      // 开发模式：如果迁移失败且可能是由于不兼容的 schema，尝试重置数据库
+      if (__DEV__) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (
+          errorMessage.includes('no such table') ||
+          errorMessage.includes('duplicate column') ||
+          errorMessage.includes('syntax error')
+        ) {
+          console.warn('[DB] Migration failed, attempting to reset database in dev mode:', errorMessage);
+          try {
+            const db = await getDb();
+            
+            // 尝试删除所有表并重新创建
+            await db.execAsync(`
+              DROP TABLE IF EXISTS item_category_mapping;
+              DROP TABLE IF EXISTS receipts;
+            `);
+            
+            // 关闭连接
+            await db.closeAsync();
+            _db = null;
+            
+            // 重置状态
+            _inited = false;
+            _initPromise = null;
+            
+            // 重试初始化（会重新创建所有表）
+            console.log('[DB] Retrying initialization after reset...');
+            return await initIfNeeded();
+          } catch (resetError) {
+            console.error('[DB] Failed to reset database:', resetError);
+            throw error; // 抛出原始错误
+          }
+        }
+      }
+      
       throw error;
     }
   })();
 
   await _initPromise;
 }
+
+/**
+ * 导出初始化函数供其他模块使用（如 categoryLearner）
+ */
+export { initIfNeeded };
 
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
