@@ -12,6 +12,7 @@ import { nanoid } from 'nanoid/non-secure';
 export type ReceiptRow = {
   id: string;
   created_at: number;
+  transaction_at: number | null; // Receipt transaction date (from receipt itself), fallback to created_at if null
 
   image_uri: string;
 
@@ -77,6 +78,7 @@ async function initIfNeeded() {
         CREATE TABLE IF NOT EXISTS receipts (
           id TEXT PRIMARY KEY NOT NULL,
           created_at INTEGER NOT NULL,
+          transaction_at INTEGER,
 
           image_uri TEXT NOT NULL,
 
@@ -92,6 +94,9 @@ async function initIfNeeded() {
 
         CREATE INDEX IF NOT EXISTS idx_receipts_created_at
           ON receipts(created_at DESC);
+        
+        CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at
+          ON receipts(transaction_at ASC);
 
         CREATE TABLE IF NOT EXISTS item_category_mapping (
           normalized_name TEXT NOT NULL,
@@ -160,6 +165,17 @@ async function initIfNeeded() {
       if (!columnNames.has('user_items_json')) {
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN user_items_json TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) {
+            throw e;
+          }
+        }
+      }
+      if (!columnNames.has('transaction_at')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN transaction_at INTEGER`);
+          // Create index for transaction_at
+          await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at ON receipts(transaction_at ASC)`);
         } catch (e: any) {
           if (!e?.message?.includes('duplicate column')) {
             throw e;
@@ -320,19 +336,42 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
 
   const analysisJson = JSON.stringify(params.analysis);
 
+  // Extract transaction_at from analysis.transactionDate
+  // Try to parse transactionDate string to timestamp, fallback to null
+  let transactionAt: number | null = null;
+  if (params.analysis.transactionDate) {
+    try {
+      // Try parsing as ISO string first
+      const isoDate = new Date(params.analysis.transactionDate);
+      if (!isNaN(isoDate.getTime())) {
+        transactionAt = isoDate.getTime();
+      } else {
+        // Try using dateParser for custom formats
+        const { parseReceiptDateTime } = await import('./dateParser');
+        transactionAt = parseReceiptDateTime(params.analysis.transactionDate, false);
+      }
+    } catch (e) {
+      // If parsing fails, leave as null (will fallback to created_at in queries)
+      if (__DEV__) {
+        console.warn('[DB] Failed to parse transactionDate:', params.analysis.transactionDate, e);
+      }
+    }
+  }
+
   await db.runAsync(
     `
     INSERT INTO receipts (
-      id, created_at,
+      id, created_at, transaction_at,
       image_uri,
       merchant_raw, merchant_normalized,
       total, tax, currency,
       analysis_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       id,
       now,
+      transactionAt,
       params.imageUri,
       merchantRaw,
       merchantNormalized,
@@ -357,6 +396,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
     `
     SELECT
       id, created_at,
+      COALESCE(transaction_at, created_at) as transaction_at,
       image_uri,
       merchant_raw, merchant_normalized,
       total, tax, currency,
@@ -367,7 +407,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
       note,
       user_items_json
     FROM receipts
-    ORDER BY created_at DESC
+    ORDER BY COALESCE(transaction_at, created_at) ASC
     LIMIT ?
     `,
     [limit]
@@ -388,6 +428,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
     `
     SELECT
       id, created_at,
+      COALESCE(transaction_at, created_at) as transaction_at,
       image_uri,
       merchant_raw, merchant_normalized,
       total, tax, currency,

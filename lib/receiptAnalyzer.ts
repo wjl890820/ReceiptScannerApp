@@ -41,6 +41,7 @@ export type ReceiptAnalysis = {
   total: number;
   tax: number;
   currency: string;
+  transactionDate?: string; // ISO string or date string from receipt
 };
 
 function extractJsonFromText(text: string): any {

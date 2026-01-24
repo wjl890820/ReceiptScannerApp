@@ -3,7 +3,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -28,6 +28,7 @@ import { applyCategoriesWithLearning } from '@/lib/receiptEnricher';
 import { isGroceryMerchant } from '@/lib/groceryDetector';
 import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
 import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
+import { getHomeTimeRange, setHomeTimeRange } from '@/lib/settingsStore';
 import {
   shouldTriggerMilestone,
   hasShownMilestone,
@@ -847,11 +848,40 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
-  const [timeRange, setTimeRange] = useState<TimeRange>('ALL');
+  const [timeRange, setTimeRange] = useState<TimeRange>('30D'); // Default to 30D
   const [scanning, setScanning] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<{ current: number; total: number } | null>(null);
   const successAlertShownRef = useRef(false); // Guard for duplicate success alerts
   const [stickyHeight, setStickyHeight] = useState(0);
+
+  // Load time range preference on mount
+  useEffect(() => {
+    async function loadTimeRange() {
+      try {
+        const savedRange = await getHomeTimeRange();
+        setTimeRange(savedRange);
+      } catch (e) {
+        // If loading fails, keep default (30D)
+        if (__DEV__) {
+          console.warn('[Home] Failed to load time range preference:', e);
+        }
+      }
+    }
+    loadTimeRange();
+  }, []);
+
+  // Save time range preference when changed
+  const handleTimeRangeChange = useCallback(async (newRange: TimeRange) => {
+    setTimeRange(newRange);
+    try {
+      await setHomeTimeRange(newRange);
+    } catch (e) {
+      // If saving fails, log but don't block UI
+      if (__DEV__) {
+        console.warn('[Home] Failed to save time range preference:', e);
+      }
+    }
+  }, []);
 
   // 加载所有收据用于饼图
   const loadReceipts = useCallback(async () => {
@@ -873,7 +903,7 @@ export default function HomeScreen() {
     }, [loadReceipts])
   );
 
-  // 根据时间范围过滤收据
+  // 根据时间范围过滤收据（使用 transaction_at，fallback 到 created_at）
   const filteredReceipts = useMemo(() => {
     if (timeRange === 'ALL') {
       return receipts;
@@ -883,7 +913,10 @@ export default function HomeScreen() {
     const days = timeRange === '7D' ? 7 : 30;
     const cutoffTime = now - days * 24 * 60 * 60 * 1000;
 
-    return receipts.filter((receipt) => receipt.created_at >= cutoffTime);
+    return receipts.filter((receipt) => {
+      const receiptTime = receipt.transaction_at || receipt.created_at;
+      return receiptTime >= cutoffTime;
+    });
   }, [receipts, timeRange]);
 
   // 聚合类别数据
@@ -1263,7 +1296,7 @@ export default function HomeScreen() {
         <View style={styles.timeRangeContainer}>
         <Pressable
           style={[styles.timeRangeButton, timeRange === '7D' && styles.timeRangeButtonSelected]}
-          onPress={() => setTimeRange('7D')}
+          onPress={() => handleTimeRangeChange('7D')}
         >
           <Text
             style={[
@@ -1276,7 +1309,7 @@ export default function HomeScreen() {
         </Pressable>
         <Pressable
           style={[styles.timeRangeButton, timeRange === '30D' && styles.timeRangeButtonSelected]}
-          onPress={() => setTimeRange('30D')}
+          onPress={() => handleTimeRangeChange('30D')}
         >
           <Text
             style={[
@@ -1289,7 +1322,7 @@ export default function HomeScreen() {
         </Pressable>
         <Pressable
           style={[styles.timeRangeButton, timeRange === 'ALL' && styles.timeRangeButtonSelected]}
-          onPress={() => setTimeRange('ALL')}
+          onPress={() => handleTimeRangeChange('ALL')}
         >
           <Text
             style={[

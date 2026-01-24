@@ -180,7 +180,7 @@ export default function HistoryScreen() {
               </View>
 
               <Text style={styles.meta}>
-                {formatDate(item.created_at)} · 税 {item.tax}
+                {formatDate(item.transaction_at || item.created_at)} · 税 {item.tax}
               </Text>
 
               {topCats.length > 0 ? (

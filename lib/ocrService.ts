@@ -289,6 +289,10 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
         typeof analysis.currency === 'string' && analysis.currency.trim()
           ? analysis.currency
           : 'JPY',
+      transactionDate:
+        typeof analysis.transactionDate === 'string' && analysis.transactionDate.trim()
+          ? analysis.transactionDate.trim()
+          : undefined,
     };
 
     return receiptAnalysis;

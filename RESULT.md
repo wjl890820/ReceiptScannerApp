@@ -425,6 +425,59 @@ AI 兜底分类（PR3 - Supabase Edge Function）：
      - 多次扫描失败的商品
      - 相同类型的错误（如超时、网络错误）应该只记录一次
 
+History 排序与 Home 默认筛选修复：
+- **问题**：
+  - History 列表按扫描时间（created_at）排序，而不是小票上的实际交易时间
+  - Home 页面默认选中"全部"，用户每次都需要手动切换到 30 天
+- **修复**：
+  1. **History 排序**（`lib/db.ts`、`app/(tabs)/history/index.tsx`）：
+     - 添加 `transaction_at` 字段到 `ReceiptRow` 类型和数据库 schema
+     - 数据库迁移：如果旧表没有 `transaction_at`，自动添加字段（允许 NULL）
+     - 添加索引：`idx_receipts_transaction_at` 用于排序
+     - `saveReceipt` 更新：
+       - 从 `analysis.transactionDate` 提取交易日期
+       - 使用 `parseReceiptDateTime` 解析为 timestamp（支持多种日期格式）
+       - 如果解析失败，保存为 NULL（查询时 fallback 到 created_at）
+     - `listReceipts` 更新：
+       - 排序改为：`ORDER BY COALESCE(transaction_at, created_at) ASC`（从过去到现在）
+       - SELECT 语句返回：`COALESCE(transaction_at, created_at) as transaction_at`
+     - `getReceipt` 更新：同样返回 `COALESCE(transaction_at, created_at) as transaction_at`
+     - History 列表显示：使用 `item.transaction_at || item.created_at` 显示日期
+  2. **Home 默认筛选**（`lib/settingsStore.ts`、`app/(tabs)/index.tsx`）：
+     - 创建 `lib/settingsStore.ts`：
+       - `getHomeTimeRange()`: 从 SecureStore 读取，默认返回 '30D'
+       - `setHomeTimeRange(range)`: 保存到 SecureStore
+       - 使用 `expo-secure-store`（项目已有）
+     - Home 屏幕更新：
+       - 默认 `timeRange` 状态改为 '30D'（而不是 'ALL'）
+       - 组件加载时：`useEffect` 调用 `getHomeTimeRange()` 读取保存的偏好
+       - 用户切换时：`handleTimeRangeChange` 调用 `setHomeTimeRange()` 保存偏好
+       - 所有 `setTimeRange` 调用改为 `handleTimeRangeChange`
+     - 时间过滤逻辑更新：使用 `transaction_at || created_at` 进行过滤
+- **技术细节**：
+  - `transaction_at` 字段允许 NULL，查询时使用 `COALESCE(transaction_at, created_at)` fallback
+  - 日期解析：优先尝试 ISO 格式，失败则使用 `parseReceiptDateTime` 支持多种格式
+  - 持久化存储：使用 SecureStore（已有依赖），失败时降级到默认值，不阻塞 UI
+- **验收步骤**：
+  1. **验证 History 排序**：
+     - 扫描多张小票（不同日期的小票）
+     - 进入 History 页面
+     - 列表应该按小票上的交易时间排序（从过去到现在，ASC）
+     - 如果小票没有 transactionDate，应该 fallback 到 created_at（扫描时间）
+  2. **验证 Home 默认筛选**：
+     - 首次进入 Home 页面
+     - 应该默认选中"30天"（而不是"全部"）
+     - 切换为"7天"或"全部"，退出应用再进入
+     - 应该保持上次选择（30天/7天/全部）
+  3. **验证 transaction_at 提取**：
+     - 扫描一张包含日期的小票（OCR 应该识别出 transactionDate）
+     - 检查数据库，应该看到 `transaction_at` 字段有值（timestamp）
+     - History 列表应该使用这个时间排序和显示
+  4. **验证向后兼容**：
+     - 如果设备已有旧数据（没有 transaction_at）
+     - 启动应用后，旧数据应该使用 created_at 排序和显示
+     - 新扫描的小票应该使用 transaction_at（如果有）
+
 反馈功能修复（App 内提交）：
 - **问题**：反馈功能使用 mailto 跳转到系统邮箱，用户体验不佳，且硬编码了邮件地址。
 - **修复**：
