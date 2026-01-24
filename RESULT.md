@@ -686,6 +686,43 @@ SQLite 迁移修复（真机启动报错修复）：
      - 进入 Home 页面，应该能正常加载收据列表
      - 收据应该按时间排序（从过去到现在）
      - 如果迁移成功，应该使用 `transaction_at` 排序；否则使用 `created_at` 排序
+
+SQLite 迁移彻底修复（V1 封板前最后一次修复）：
+- **问题根源**：
+  - SQLite 在某些设备上，ALTER TABLE 已失败但代码仍假设成功
+  - 某些查询在 initIfNeeded 之前被调用
+  - 某些 SQL 在 prepareAsync 时已经硬编码了 transaction_at
+  - 即使逻辑上做了 fallback，SQLite 仍然直接抛错
+- **解决方案**：
+  - **核心原则**：transaction_at 永远不能直接写进 SQL 字符串，必须在运行时动态拼接
+  - **强制 schema 探测层**：
+    - 新增 `detectTransactionAtColumn(db)` 函数，使用缓存避免频繁 PRAGMA 查询
+    - 所有 SQL 在执行前必须调用此函数确认列是否存在
+  - **迁移逻辑改进**：
+    - 在 `initIfNeeded()` 中执行迁移，但允许失败（不 throw）
+    - 如果 ALTER TABLE 失败，更新缓存为 `false`，应用仍可正常启动
+  - **查询函数彻底重构**：
+    - `listReceipts()`: 动态拼接 SQL，根据列是否存在选择不同的 SELECT 和 ORDER BY
+    - `getReceipt()`: 动态拼接 SQL，根据列是否存在选择不同的 SELECT
+    - `saveReceipt()`: 动态拼接 SQL，根据列是否存在决定是否插入 transaction_at
+    - 所有查询都有 try-catch fallback，如果主查询失败，使用只依赖 created_at 的 SQL 再查一次
+  - **禁止的做法**：
+    - ❌ 在 SQL 中直接写 transaction_at
+    - ❌ 假设 ALTER TABLE 一定成功
+    - ❌ catch 后什么都不做
+- **技术细节**：
+  - 使用 `_receiptsHasTransactionAt` 缓存列是否存在
+  - 所有 SQL 使用模板字符串动态拼接，transaction_at 只能出现在 `${hasTx ? ... : ...}` 中
+  - 双重保险：主查询失败时，fallback 查询只依赖 created_at，确保不会崩溃
+- **验收标准**：
+  1. **冷启动**（不扫描、不进入 History、不点击 Feedback）：
+     - ❌ 不出现 transaction_at 错误
+  2. **旧数据设备**（删除 App、重新安装、不扫描）：
+     - ❌ 不出现错误
+  3. **扫描 + History**（扫一张小票、进入 History）：
+     - 正常显示，按时间排序
+  4. **Feedback**（提交反馈）：
+     - 不依赖 transaction_at，也不报错
   5. **向后兼容验证**：
      - 如果设备已有旧数据库（没有 `transaction_at` 列）
      - 启动应用后，应该自动添加列（迁移）
