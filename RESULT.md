@@ -632,6 +632,66 @@ SQLite 迁移修复（transaction_at 列）：
      - 多次调用 `ensureSchema()` 不应该报错
      - 不应该重复添加列或索引
 
+SQLite 迁移修复（真机启动报错修复）：
+- **问题**：
+  - 真机启动即报错：`no such column: transaction_at`
+  - 查询在迁移完成之前就执行了，直接引用 `transaction_at` 列导致崩溃
+  - 即使有 `ensureSchema()`，查询仍然可能在迁移完成前执行
+- **修复**（`lib/db.ts`）：
+  1. **确保迁移必定执行**：
+     - 在 `initIfNeeded()` 中执行迁移逻辑（检查并添加 `transaction_at` 列）
+     - 迁移逻辑在表创建后立即执行，确保幂等性
+  2. **添加列存在性缓存**：
+     - 使用 `_hasTransactionAtColumn` 缓存列是否存在（避免频繁 PRAGMA 查询）
+     - 在迁移完成后更新缓存
+  3. **查询兜底逻辑**（关键）：
+     - 在 `listReceipts()` 和 `getReceipt()` 中：
+       - 先检查 `transaction_at` 列是否存在（使用缓存）
+       - 若存在：
+         - SELECT 返回 `COALESCE(transaction_at, created_at) AS transaction_at`
+         - ORDER BY `COALESCE(transaction_at, created_at) ASC`
+       - 若不存在（旧库）：
+         - 不引用 `transaction_at` 列
+         - 用 `created_at AS transaction_at` 作为别名返回
+         - ORDER BY `created_at ASC`
+     - 这样即使迁移失败或未完成，查询也不会崩溃
+  4. **DEV schema debug**：
+     - 新增 `debugReceiptsSchema()` 函数（仅在 `__DEV__` 下执行）
+     - 在 `initIfNeeded()` 完成后打印一次 receipts 表 schema
+     - 输出格式：`[DB] receipts schema: [{ name, type, notnull, pk }, ...]`
+  5. **迁移幂等性**：
+     - 使用 `PRAGMA table_info(receipts)` 检查列是否存在
+     - 如果列已存在，跳过 ALTER TABLE（处理并发情况）
+     - 创建索引使用 `CREATE INDEX IF NOT EXISTS`
+- **技术细节**：
+  - 迁移逻辑在 `initIfNeeded()` 中执行，确保每次打开数据库时都会检查
+  - 查询使用动态 SQL 构建，根据列是否存在选择不同的 SELECT 和 ORDER BY
+  - 缓存机制避免频繁查询 PRAGMA，提高性能
+  - 即使迁移失败，查询也能正常工作（使用 created_at 作为 fallback）
+- **验收步骤**：
+  1. **清理并重新启动**：
+     ```bash
+     npx expo start --dev-client --clear
+     ```
+  2. **真机启动验证**：
+     - 在真机上启动应用
+     - 应该不再出现 `no such column: transaction_at` 错误
+     - 应用应该正常启动，不崩溃
+  3. **控制台日志验证**（DEV 模式）：
+     - 应该看到一次 `[DB] receipts schema:` 日志
+     - schema 应该包含 `transaction_at` 列（如果迁移成功）
+     - 如果迁移成功，应该看到 `[DB] Added transaction_at column to receipts table` 日志
+  4. **功能验证**：
+     - 进入 History 页面，应该能正常加载收据列表
+     - 进入 Home 页面，应该能正常加载收据列表
+     - 收据应该按时间排序（从过去到现在）
+     - 如果迁移成功，应该使用 `transaction_at` 排序；否则使用 `created_at` 排序
+  5. **向后兼容验证**：
+     - 如果设备已有旧数据库（没有 `transaction_at` 列）
+     - 启动应用后，应该自动添加列（迁移）
+     - 旧数据应该能正常查询和显示
+     - 新扫描的小票应该能正常保存（包含 `transaction_at` 字段）
+
 反馈提交修复（上线标准）：
 - **问题**：
   - App 端日志显示 "Submission successful"，但 Supabase function Logs 无 invocation

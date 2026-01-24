@@ -50,6 +50,9 @@ let _db: SQLite.SQLiteDatabase | null = null;
 let _inited = false;
 let _initPromise: Promise<void> | null = null;
 
+// Cache for transaction_at column existence (to avoid frequent PRAGMA queries)
+let _hasTransactionAtColumn: boolean | null = null;
+
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_db) return _db;
   _db = await SQLite.openDatabaseAsync('receipts.db');
@@ -123,6 +126,9 @@ async function initIfNeeded() {
         `PRAGMA table_info(receipts)`
       );
       const columnNames = new Set(tableInfo.map((col) => col.name));
+      
+      // Cache transaction_at column existence
+      _hasTransactionAtColumn = columnNames.has('transaction_at');
 
       // 只添加不存在的列，使用 try-catch 防止并发情况下的重复添加
       if (!columnNames.has('user_edited')) {
@@ -176,10 +182,16 @@ async function initIfNeeded() {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN transaction_at INTEGER`);
           // Create index for transaction_at
           await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at ON receipts(transaction_at ASC)`);
+          _hasTransactionAtColumn = true; // Update cache after successful migration
+          if (__DEV__) {
+            console.log('[DB] Added transaction_at column to receipts table');
+          }
         } catch (e: any) {
           if (!e?.message?.includes('duplicate column')) {
             throw e;
           }
+          // If column already exists (concurrent case), update cache
+          _hasTransactionAtColumn = true;
         }
       }
 
@@ -312,12 +324,60 @@ async function initIfNeeded() {
 export { initIfNeeded };
 
 /**
+ * Debug function to print receipts table schema (DEV only)
+ */
+async function debugReceiptsSchema(): Promise<void> {
+  if (!__DEV__) {
+    return;
+  }
+
+  try {
+    await initIfNeeded();
+    const db = await getDb();
+    const tableInfo = await db.getAllAsync<{ cid: number; name: string; type: string; notnull: number; dflt_value: any; pk: number }>(
+      `PRAGMA table_info(receipts)`
+    );
+    console.log('[DB] receipts schema:', tableInfo.map((col) => ({
+      name: col.name,
+      type: col.type,
+      notnull: col.notnull,
+      pk: col.pk,
+    })));
+  } catch (error) {
+    console.error('[DB] Failed to debug schema:', error);
+  }
+}
+
+/**
  * 确保 receipts 表 schema 完整（特别是 transaction_at 列）
  * 在所有查询 receipts 之前必须调用此函数
  * 幂等：可以安全地多次调用
  */
 let _schemaEnsured = false;
 let _schemaEnsurePromise: Promise<void> | null = null;
+
+/**
+ * Check if transaction_at column exists (with caching)
+ */
+async function hasTransactionAtColumn(): Promise<boolean> {
+  // If cached, return cached value
+  if (_hasTransactionAtColumn !== null) {
+    return _hasTransactionAtColumn;
+  }
+
+  // Ensure DB is initialized
+  await initIfNeeded();
+  const db = await getDb();
+
+  // Check column existence
+  const tableInfo = await db.getAllAsync<{ name: string; type: string }>(
+    `PRAGMA table_info(receipts)`
+  );
+  const columnNames = new Set(tableInfo.map((col) => col.name));
+  _hasTransactionAtColumn = columnNames.has('transaction_at');
+
+  return _hasTransactionAtColumn;
+}
 
 export async function ensureSchema(): Promise<void> {
   // 如果已经确保过，直接返回
@@ -334,33 +394,28 @@ export async function ensureSchema(): Promise<void> {
   // 开始确保 schema
   _schemaEnsurePromise = (async () => {
     try {
-      // 先确保数据库已初始化
+      // 先确保数据库已初始化（这会执行迁移）
       await initIfNeeded();
-      const db = await getDb();
-
-      // 检查 receipts 表是否存在 transaction_at 列
-      const tableInfo = await db.getAllAsync<{ name: string; type: string }>(
-        `PRAGMA table_info(receipts)`
-      );
-      const columnNames = new Set(tableInfo.map((col) => col.name));
-
-      // 如果不存在 transaction_at 列，添加它
-      if (!columnNames.has('transaction_at')) {
+      
+      // 检查并确保 transaction_at 列存在
+      const hasColumn = await hasTransactionAtColumn();
+      if (!hasColumn) {
+        const db = await getDb();
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN transaction_at INTEGER`);
-          // 创建索引
           await db.runAsync(
             `CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at ON receipts(transaction_at ASC)`
           );
+          _hasTransactionAtColumn = true; // Update cache
           if (__DEV__) {
             console.log('[DB] Added transaction_at column to receipts table');
           }
         } catch (e: any) {
-          // 如果列已存在（并发情况），忽略错误
           if (!e?.message?.includes('duplicate column')) {
             console.error('[DB] Failed to add transaction_at column:', e);
             throw e;
           }
+          _hasTransactionAtColumn = true; // Update cache even on duplicate error
         }
       }
 
@@ -462,11 +517,22 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
   await ensureSchema(); // 确保 schema 完整后再查询
   const db = await getDb();
 
+  // Check if transaction_at column exists (use cached value)
+  const hasTransactionAt = await hasTransactionAtColumn();
+
+  // Build query based on column existence
+  const transactionAtSelect = hasTransactionAt
+    ? `COALESCE(transaction_at, created_at) as transaction_at`
+    : `created_at as transaction_at`;
+  const orderBy = hasTransactionAt
+    ? `ORDER BY COALESCE(transaction_at, created_at) ASC`
+    : `ORDER BY created_at ASC`;
+
   const rows = await db.getAllAsync<ReceiptRow>(
     `
     SELECT
       id, created_at,
-      COALESCE(transaction_at, created_at) as transaction_at,
+      ${transactionAtSelect},
       image_uri,
       merchant_raw, merchant_normalized,
       total, tax, currency,
@@ -477,7 +543,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
       note,
       user_items_json
     FROM receipts
-    ORDER BY COALESCE(transaction_at, created_at) ASC
+    ${orderBy}
     LIMIT ?
     `,
     [limit]
@@ -495,11 +561,19 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   await ensureSchema(); // 确保 schema 完整后再查询
   const db = await getDb();
 
+  // Check if transaction_at column exists (use cached value)
+  const hasTransactionAt = await hasTransactionAtColumn();
+
+  // Build query based on column existence
+  const transactionAtSelect = hasTransactionAt
+    ? `COALESCE(transaction_at, created_at) as transaction_at`
+    : `created_at as transaction_at`;
+
   const row = await db.getFirstAsync<ReceiptRow>(
     `
     SELECT
       id, created_at,
-      COALESCE(transaction_at, created_at) as transaction_at,
+      ${transactionAtSelect},
       image_uri,
       merchant_raw, merchant_normalized,
       total, tax, currency,
