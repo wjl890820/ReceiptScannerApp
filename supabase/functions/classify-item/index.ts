@@ -8,7 +8,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 const BUILD_ID = `${new Date().toISOString()}_${Math.random().toString(16).slice(2)}`;
 
 // 可配置的 Gemini 模型（默认使用稳定的可用模型）
-const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-1.5-flash';
+const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
 const REQUEST_TIMEOUT_MS = 5000; // 5 seconds
 
 // Get GEMINI_API_KEY from Supabase secrets
@@ -102,9 +102,9 @@ async function callGemini(prompt: string, t0?: number, tFetch?: number): Promise
     throw new Error('GEMINI_API_KEY not configured');
   }
 
-  // 明确规则：secret 里必须是模型名（如 gemini-1.5-flash），代码里再拼 models/，避免 models/models/...
+  // 明确规则：secret 里必须是模型名（如 gemini-2.5-flash），代码里再拼 models/，避免 models/models/...
   // 按 v1beta 的 generateContent 正确拼 URL（使用 query param key）
-  const modelName = Deno.env.get('GEMINI_MODEL') ?? 'gemini-1.5-flash';
+  const modelName = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
 
   const controller = new AbortController();
@@ -251,7 +251,7 @@ serve(async (req) => {
   }
 
   // 读取模型并打印（不要打印 API key）
-  const modelName = Deno.env.get('GEMINI_MODEL') ?? 'gemini-1.5-flash';
+  const modelName = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
   console.log(`[classify-item] model=${modelName}`);
   console.log(`[classify-item] endpoint=/v1beta/models/${modelName}:generateContent`);
   console.log(`[classify-item] timeout_ms=${REQUEST_TIMEOUT_MS}`);
