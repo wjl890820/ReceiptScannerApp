@@ -61,24 +61,35 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /**
- * 强制 schema 探测层：检测 transaction_at 列是否存在
- * ⚠️ 关键：所有 SQL 在执行前必须调用此函数确认列是否存在
+ * 强一致的单一入口：检测 transaction_at 列是否存在
+ * ⚠️ 关键：所有 SQL 拼接只能通过 await receiptsHasTransactionAt(db) 得到 boolean
+ * 
+ * 规则：
+ * - 若缓存非 null：直接返回缓存
+ * - 否则执行：PRAGMA table_info(receipts)，检查 name === 'transaction_at'
+ * - 将结果写入缓存并返回
+ * - 如果 PRAGMA 失败：缓存置为 false 并返回 false（绝不能 throw 导致启动失败）
  */
-async function detectTransactionAtColumn(db: SQLite.SQLiteDatabase): Promise<boolean> {
-  // 如果已缓存，直接返回
+async function receiptsHasTransactionAt(db: SQLite.SQLiteDatabase): Promise<boolean> {
+  // 若缓存非 null：直接返回缓存
   if (_receiptsHasTransactionAt !== null) {
     return _receiptsHasTransactionAt;
   }
 
+  // 否则执行 PRAGMA table_info(receipts)
   try {
     const rows = await db.getAllAsync<{ name: string }>(
       `PRAGMA table_info(receipts)`
     );
+    // 检查 name === 'transaction_at'
     _receiptsHasTransactionAt = rows.some((r) => r.name === 'transaction_at');
     return _receiptsHasTransactionAt;
   } catch (e) {
-    // 如果表不存在或其他错误，假设列不存在
+    // 如果 PRAGMA 失败：缓存置为 false 并返回 false（绝不能 throw 导致启动失败）
     _receiptsHasTransactionAt = false;
+    if (__DEV__) {
+      console.warn('[DB] Failed to check transaction_at column (non-fatal):', e);
+    }
     return false;
   }
 }
@@ -152,7 +163,7 @@ async function initIfNeeded() {
       const columnNames = new Set(tableInfo.map((col) => col.name));
       
       // 检测 transaction_at 列是否存在
-      const hasColumn = await detectTransactionAtColumn(db);
+      const hasColumn = await receiptsHasTransactionAt(db);
 
       // 只添加不存在的列，使用 try-catch 防止并发情况下的重复添加
       if (!columnNames.has('user_edited')) {
@@ -300,9 +311,18 @@ async function initIfNeeded() {
       // 所有迁移完成后才设置 _inited 标志
       _inited = true;
 
-      // DEV: Print schema once after initialization
+      // DEV: 一次性日志（仅 DEV）
       if (__DEV__) {
-        await debugReceiptsSchema();
+        try {
+          const tableInfo = await db.getAllAsync<{ name: string; type: string }>(
+            `PRAGMA table_info(receipts)`
+          );
+          const columnNames = tableInfo.map((col) => col.name);
+          console.log('[DB] receipts schema columns:', columnNames);
+          console.log('[DB] _receiptsHasTransactionAt:', _receiptsHasTransactionAt);
+        } catch (e) {
+          console.warn('[DB] Failed to print schema debug:', e);
+        }
       }
     } catch (error) {
       // 如果初始化失败，清除 Promise 以便重试
@@ -437,7 +457,8 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
   }
 
   // ⚠️ 动态检测列是否存在，动态拼接 SQL
-  const hasTx = await detectTransactionAtColumn(db);
+  // 关键：必须 await 得到 boolean，不能是 Promise
+  const hasTx = await receiptsHasTransactionAt(db);
 
   if (hasTx) {
     // 列存在，可以插入 transaction_at
@@ -502,7 +523,8 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
   const db = await getDb();
 
   // ⚠️ 强制检测列是否存在
-  const hasTx = await detectTransactionAtColumn(db);
+  // 关键：必须 await 得到 boolean，不能是 Promise
+  const hasTx = await receiptsHasTransactionAt(db);
 
   try {
     // 动态构建 SQL
@@ -580,7 +602,8 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   const db = await getDb();
 
   // ⚠️ 强制检测列是否存在
-  const hasTx = await detectTransactionAtColumn(db);
+  // 关键：必须 await 得到 boolean，不能是 Promise
+  const hasTx = await receiptsHasTransactionAt(db);
 
   try {
     // 动态构建 SQL
