@@ -95,7 +95,7 @@ async function initIfNeeded() {
 
         CREATE TABLE IF NOT EXISTS item_category_mapping (
           normalized_name TEXT NOT NULL,
-          merchant_hint TEXT,
+          merchant_hint TEXT NOT NULL DEFAULT '',
           category_id TEXT NOT NULL,
           confidence REAL NOT NULL DEFAULT 1.0,
           updated_at INTEGER NOT NULL,
@@ -107,6 +107,9 @@ async function initIfNeeded() {
         
         CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name
           ON item_category_mapping(normalized_name);
+        
+        CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name_hint
+          ON item_category_mapping(normalized_name, merchant_hint);
       `);
 
       // 安全迁移：检查并添加新字段（如果不存在）
@@ -171,13 +174,13 @@ async function initIfNeeded() {
         );
         const oldColumnNames = new Set(oldTableInfo.map((col) => col.name));
         
-        // 如果表存在但没有新字段，需要迁移
+        // 如果表存在但没有 merchant_hint 字段，需要迁移
         if (oldColumnNames.size > 0 && !oldColumnNames.has('merchant_hint')) {
-          // 创建新表
+          // 创建新表（merchant_hint 默认值为 ''）
           await db.execAsync(`
             CREATE TABLE IF NOT EXISTS item_category_mapping_new (
               normalized_name TEXT NOT NULL,
-              merchant_hint TEXT,
+              merchant_hint TEXT NOT NULL DEFAULT '',
               category_id TEXT NOT NULL,
               confidence REAL NOT NULL DEFAULT 1.0,
               updated_at INTEGER NOT NULL,
@@ -185,7 +188,12 @@ async function initIfNeeded() {
             );
             
             INSERT INTO item_category_mapping_new (normalized_name, merchant_hint, category_id, confidence, updated_at)
-            SELECT normalized_name, NULL as merchant_hint, category as category_id, 1.0 as confidence, updated_at
+            SELECT 
+              normalized_name, 
+              COALESCE(merchant_hint, '') as merchant_hint,
+              COALESCE(category_id, category) as category_id,
+              COALESCE(confidence, 1.0) as confidence,
+              updated_at
             FROM item_category_mapping;
             
             DROP TABLE item_category_mapping;
@@ -196,6 +204,34 @@ async function initIfNeeded() {
             
             CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name
               ON item_category_mapping(normalized_name);
+            
+            CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name_hint
+              ON item_category_mapping(normalized_name, merchant_hint);
+          `);
+        } else if (oldColumnNames.size > 0 && oldColumnNames.has('merchant_hint')) {
+          // 表已存在 merchant_hint，但可能为 NULL，需要更新为 ''
+          // 同时确保 confidence 字段存在
+          if (!oldColumnNames.has('confidence')) {
+            await db.runAsync(`ALTER TABLE item_category_mapping ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0`);
+          }
+          
+          // 更新所有 NULL merchant_hint 为 ''
+          await db.runAsync(`
+            UPDATE item_category_mapping 
+            SET merchant_hint = '' 
+            WHERE merchant_hint IS NULL
+          `);
+          
+          // 确保索引存在
+          await db.execAsync(`
+            CREATE INDEX IF NOT EXISTS idx_item_category_mapping_updated_at
+              ON item_category_mapping(updated_at DESC);
+            
+            CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name
+              ON item_category_mapping(normalized_name);
+            
+            CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name_hint
+              ON item_category_mapping(normalized_name, merchant_hint);
           `);
         }
       } catch (e: any) {

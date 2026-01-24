@@ -21,6 +21,7 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 
 /**
  * Learn category mapping (from user edit or high-confidence classification)
+ * merchantHint: normalized merchant name or empty string '' for general mapping
  */
 export async function learnCategoryMapping(
   normalizedName: string,
@@ -33,6 +34,11 @@ export async function learnCategoryMapping(
   const db = await getDb();
   const now = Date.now();
 
+  // Normalize merchant hint: null or empty string becomes ''
+  const normalizedMerchantHint = merchantHint 
+    ? merchantHint.trim().toLowerCase() 
+    : '';
+
   await db.runAsync(
     `
     INSERT OR REPLACE INTO item_category_mapping 
@@ -41,7 +47,7 @@ export async function learnCategoryMapping(
     `,
     [
       normalizedName.trim().toLowerCase(),
-      merchantHint ? merchantHint.trim().toLowerCase() : null,
+      normalizedMerchantHint,
       categoryId.trim(),
       confidence,
       now,
@@ -61,6 +67,9 @@ export async function learnCategoryFromEdit(
 
 /**
  * Get learned category (with optional merchant hint)
+ * Strategy:
+ *  a) Query merchant-specific row (merchant_hint = normalized merchant) first
+ *  b) Fallback to merchant_hint = '' row (general mapping)
  */
 export async function getLearnedCategory(
   normalizedName: string,
@@ -69,9 +78,11 @@ export async function getLearnedCategory(
   if (!normalizedName) return null;
 
   const db = await getDb();
+  const normalized = normalizedName.trim().toLowerCase();
   
   // Try with merchant hint first (more specific)
   if (merchantHint) {
+    const normalizedMerchantHint = merchantHint.trim().toLowerCase();
     const rowWithHint = await db.getFirstAsync<{ category_id: string }>(
       `
       SELECT category_id FROM item_category_mapping
@@ -79,22 +90,22 @@ export async function getLearnedCategory(
       ORDER BY confidence DESC, updated_at DESC
       LIMIT 1
       `,
-      [normalizedName.trim().toLowerCase(), merchantHint.trim().toLowerCase()]
+      [normalized, normalizedMerchantHint]
     );
     if (rowWithHint?.category_id) {
       return rowWithHint.category_id;
     }
   }
   
-  // Fallback to without merchant hint (general mapping)
+  // Fallback to without merchant hint (general mapping: merchant_hint = '')
   const row = await db.getFirstAsync<{ category_id: string }>(
     `
     SELECT category_id FROM item_category_mapping
-    WHERE normalized_name = ? AND (merchant_hint IS NULL OR merchant_hint = '')
+    WHERE normalized_name = ? AND merchant_hint = ''
     ORDER BY confidence DESC, updated_at DESC
     LIMIT 1
     `,
-    [normalizedName.trim().toLowerCase()]
+    [normalized]
   );
 
   return row?.category_id ?? null;

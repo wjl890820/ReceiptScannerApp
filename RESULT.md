@@ -288,6 +288,56 @@ i18n key 泄露与扫描相关 UI 修复：
      - 扫描包含规则匹配商品的收据（如"牛乳"、"ビール"、"パン"、"りんご"）
      - 这些商品应该通过规则匹配分类（source='rules'），confidence >= 0.8
 
+分类学习持久化与商家感知（PR2）：
+- **目标**：让分类学习持久化且支持商家感知，提高准确率。
+- **实现**：
+  1. **数据库迁移**（`lib/db.ts`）：
+     - 确保 `item_category_mapping` 表结构：
+       - `normalized_name TEXT NOT NULL`
+       - `merchant_hint TEXT NOT NULL DEFAULT ''`（使用空字符串而非 NULL）
+       - `category_id TEXT NOT NULL`
+       - `confidence REAL NOT NULL DEFAULT 1.0`
+       - `updated_at INTEGER NOT NULL`
+       - 复合主键：`(normalized_name, merchant_hint)`
+     - 迁移逻辑：
+       - 如果旧表存在但没有 `merchant_hint` 字段：创建新表，迁移数据（将 NULL merchant_hint 转换为 ''）
+       - 如果旧表已有 `merchant_hint` 但可能为 NULL：更新所有 NULL 为 ''，确保 `confidence` 字段存在
+       - 确保索引存在：`idx_item_category_mapping_updated_at`、`idx_item_category_mapping_name`、`idx_item_category_mapping_name_hint`
+     - 向后兼容：迁移不会丢失用户数据，所有现有映射都会保留
+  2. **分类学习器更新**（`lib/categoryLearner.ts`）：
+     - `learnCategoryMapping`：将 `null` merchantHint 转换为 ''（空字符串），确保一致性
+     - `getLearnedCategory`：查询策略：
+       a) 优先查询商家特定映射（`merchant_hint = normalized merchant`）
+       b) 回退到通用映射（`merchant_hint = ''`）
+     - 支持商家感知：同一商品在不同商家可以有不同分类
+  3. **分类器自动学习**（`lib/categoryClassifier.ts`）：
+     - 规则分类后，如果 `confidence >= 0.85`，自动调用 `learnCategoryMapping` 保存学习结果
+     - merchantHint 使用标准化后的商家名称，如果未知则为 ''
+     - 高置信度规则匹配会自动持久化，下次扫描相同商品时直接命中映射
+- **迁移说明**：
+  - 迁移是自动的，用户无需手动操作
+  - 首次启动应用时会自动检测并迁移表结构
+  - 如果迁移失败（开发模式），会自动重置数据库（仅开发模式）
+  - 生产环境：迁移失败会记录警告，但不会重置数据库
+- **验收步骤**：
+  1. **验证迁移**：
+     - 如果设备已有旧数据，启动应用后检查数据库
+     - 所有 `merchant_hint` 应该为 ''（空字符串）而不是 NULL
+     - 所有现有映射应该保留
+  2. **验证商家感知学习**：
+     - 扫描来自商家 A 的小票（如"セブンイレブン"），包含商品"牛乳"
+     - 编辑该商品分类为"乳制品/蛋"（这会学习商家特定的映射）
+     - 扫描来自商家 B 的小票（如"イオン"），包含相同商品"牛乳"
+     - 如果商家 B 没有特定映射，应该使用通用映射或规则匹配
+  3. **验证自动学习**：
+     - 扫描包含高置信度规则匹配商品的收据（如"牛乳" confidence=0.9、"ビール" confidence=0.9）
+     - 这些商品应该自动学习到映射表
+     - 再次扫描相同商品（相同商家），应该直接命中映射（source='mapping'，confidence=1.0）
+  4. **验证通用映射**：
+     - 扫描商品"牛乳"（无商家信息或商家未知）
+     - 如果之前有通用映射（merchant_hint=''），应该直接命中
+     - 如果没有通用映射，应该使用规则匹配，然后自动学习（confidence >= 0.85）
+
 相册多选与顺序处理功能：
 - **目标**：支持从相册多选照片，顺序处理每张图片，每张保存为独立收据。
 - **实现**：

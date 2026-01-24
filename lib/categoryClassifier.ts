@@ -5,7 +5,7 @@
 
 import type { Category } from './categories';
 import { ALL_CATEGORIES } from './categories';
-import { getLearnedCategory } from './categoryLearner';
+import { getLearnedCategory, learnCategoryMapping } from './categoryLearner';
 import { normalizeMerchantName } from './productNormalizer';
 
 export type ClassifyInput = {
@@ -223,6 +223,18 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
   const ruleResult = classifyByRules(rawName);
   if (ruleResult && ruleResult.confidence >= 0.8) {
     if (classificationStats) classificationStats.rules++;
+    
+    // Auto-learn high-confidence rule matches (>= 0.85)
+    if (ruleResult.confidence >= 0.85) {
+      const merchantHint = merchantName ? normalizeMerchantName(merchantName) : '';
+      await learnCategoryMapping(
+        normalized,
+        merchantHint || null,
+        ruleResult.category,
+        ruleResult.confidence
+      );
+    }
+    
     return {
       categoryId: ruleResult.category,
       confidence: ruleResult.confidence,
