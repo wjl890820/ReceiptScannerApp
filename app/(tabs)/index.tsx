@@ -571,10 +571,14 @@ function computePeriodComparison(
   const previousStart = currentStart - days * 24 * 60 * 60 * 1000;
   const previousEnd = currentStart;
 
-  const currentReceipts = receipts.filter((r) => r.created_at >= currentStart);
-  const previousReceipts = receipts.filter(
-    (r) => r.created_at >= previousStart && r.created_at < previousEnd
-  );
+  const currentReceipts = receipts.filter((r) => {
+    const receiptTime = r.transaction_at || r.created_at;
+    return receiptTime >= currentStart;
+  });
+  const previousReceipts = receipts.filter((r) => {
+    const receiptTime = r.transaction_at || r.created_at;
+    return receiptTime >= previousStart && receiptTime < previousEnd;
+  });
 
   const currentData = aggregateCategoryData(currentReceipts);
   const previousData = aggregateCategoryData(previousReceipts);
