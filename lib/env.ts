@@ -15,8 +15,9 @@ export function getExtra(): Record<string, any> {
     }
     
     // Fallback to manifest (older SDKs / Expo Go)
-    if (Constants.manifest?.extra) {
-      return Constants.manifest.extra as Record<string, any>;
+    const manifest = Constants.manifest as any;
+    if (manifest?.extra) {
+      return manifest.extra as Record<string, any>;
     }
     
     // Fallback to manifest2 (if present, SDK 50+)

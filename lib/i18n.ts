@@ -1,12 +1,10 @@
 // lib/i18n.ts
-// Lazy import to avoid initialization crashes on iOS
-let Localization: typeof import('expo-localization') | null = null;
-
+import * as Localization from 'expo-localization';
 import en from '../locales/en.json';
 import ja from '../locales/ja.json';
 import zh from '../locales/zh.json';
 
-type Locale = 'en' | 'zh' | 'ja';
+export type Locale = 'en' | 'zh' | 'ja';
 
 const translations: Record<Locale, any> = {
   en,
@@ -14,17 +12,11 @@ const translations: Record<Locale, any> = {
   ja,
 };
 
-async function detectLocale(): Promise<Locale> {
-  // Lazy load Localization to avoid initialization crashes
-  if (!Localization) {
-    try {
-      Localization = await import('expo-localization');
-    } catch (e) {
-      console.warn('[i18n] Failed to import Localization, using English:', e);
-      return 'en';
-    }
-  }
-
+/**
+ * Detect system locale and return supported locale
+ * Only supports 'zh' | 'ja' | 'en', others fallback to 'en'
+ */
+function detectLocale(): Locale {
   try {
     const locales = Localization.getLocales();
     const systemLocale = locales?.[0]?.languageCode || 'en';
@@ -44,33 +36,29 @@ async function detectLocale(): Promise<Locale> {
   }
 }
 
-// Delay locale detection until first use to avoid initialization crashes
-let currentLocale: Locale | null = null;
-let localePromise: Promise<Locale> | null = null;
+// Initialize locale synchronously at module load
+let currentLocale: Locale = detectLocale();
+let isInitialized = false;
 
-function getCurrentLocaleInternal(): Locale {
-  // Synchronous fallback: return cached locale or default to 'en'
-  if (currentLocale !== null) {
-    return currentLocale;
+/**
+ * Initialize i18n (call this before app renders)
+ * Returns a promise that resolves when initialization is complete
+ */
+export async function initI18n(): Promise<void> {
+  if (isInitialized) {
+    return;
   }
   
-  // If not cached, start async detection but return 'en' immediately
-  if (!localePromise) {
-    localePromise = detectLocale().then((locale) => {
-      currentLocale = locale;
-      return locale;
-    }).catch(() => {
-      currentLocale = 'en';
-      return 'en';
-    });
-  }
-  
-  // Return default while detection is in progress
-  return 'en';
+  // Re-detect locale to ensure we have the latest system language
+  currentLocale = detectLocale();
+  isInitialized = true;
 }
 
+/**
+ * Get current locale (synchronous, always available after initI18n)
+ */
 export function getCurrentLocale(): Locale {
-  return getCurrentLocaleInternal();
+  return currentLocale;
 }
 
 function getNestedValue(obj: any, path: string): string | undefined {
@@ -90,8 +78,8 @@ function getNestedValue(obj: any, path: string): string | undefined {
 
 export function t(key: string, params?: Record<string, string | number>): string {
   try {
-    const locale = getCurrentLocaleInternal();
-    const localeTranslations = translations[locale];
+    const locale = getCurrentLocale();
+    const localeTranslations = translations[locale] || translations.en;
     let value = getNestedValue(localeTranslations, key);
     if (!value) {
       // Fallback to English

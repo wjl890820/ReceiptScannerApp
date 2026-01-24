@@ -1,13 +1,19 @@
 // lib/receiptEnricher.ts
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
-import { getLearnedCategory, learnCategoryFromEdit } from './categoryLearner';
-import { normalizeProductName } from './productNormalizer';
-import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from './categories';
+import { learnCategoryFromEdit } from './categoryLearner';
+import { normalizeProductName, normalizeMerchantName } from './productNormalizer';
+import { ALL_CATEGORIES, type Category } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
+import {
+  classifyItem,
+  resetClassificationStats,
+  getClassificationStats,
+  type ClassifyInput,
+} from './categoryClassifier';
 
 /**
  * Infer grocery category based on product name (rule-based fallback)
- * Returns one of the 12 grocery categories or 'uncategorized'
+ * @deprecated Use classifyItem from categoryClassifier instead
  */
 function inferGroceryCategory(name: string): Category {
   const n = (name || '').toLowerCase();
@@ -251,6 +257,7 @@ function inferGroceryCategory(name: string): Category {
 /**
  * Apply categories with learning (grocery-only categorization)
  * Only categorizes items if the receipt is from a grocery store
+ * Uses unified categoryClassifier service
  */
 export async function applyCategoriesWithLearning(
   analysis: ReceiptAnalysis
@@ -260,8 +267,11 @@ export async function applyCategoriesWithLearning(
 
   // Detect if this is a grocery receipt
   const merchantRaw = analysis.merchant || '';
-  const merchantNormalized = analysis.merchant_normalized || null;
+  const merchantNormalized = (analysis as any).merchant_normalized || null;
   const isGrocery = isGroceryMerchant(merchantRaw, merchantNormalized);
+
+  // Reset classification stats for this receipt
+  resetClassificationStats();
 
   for (const it of items) {
     const name = typeof it?.name === 'string' ? it.name : '';
@@ -273,32 +283,26 @@ export async function applyCategoriesWithLearning(
       // Non-grocery receipt: mark all items as non_grocery
       category = 'non_grocery';
     } else {
-      // Grocery receipt: categorize items
+      // Grocery receipt: use unified classifier
+      const classifyInput: ClassifyInput = {
+        rawName: name,
+        normalizedName: normalized.normalizedName,
+        merchantName: merchantRaw || merchantNormalized || undefined,
+        price: typeof it?.lineTotal === 'number' ? it.lineTotal : undefined,
+      };
 
-      // 1. Priority: use learned category from user edits
-      let learnedCategory = await getLearnedCategory(normalized.normalizedName);
-      if (learnedCategory && ALL_CATEGORIES.includes(learnedCategory as Category)) {
-        category = learnedCategory as Category;
-      }
-      // 2. If item already has a valid category (from AI or previous processing)
-      else if (typeof it?.category === 'string' && it.category.trim()) {
-        const existingCategory = it.category.trim();
-        if (ALL_CATEGORIES.includes(existingCategory as Category)) {
-          category = existingCategory as Category;
-        } else {
-          // Invalid category, infer new one
-          category = inferGroceryCategory(name);
-        }
-      }
-    // 3. Otherwise use rule-based inference
-    else {
-      category = inferGroceryCategory(name);
-    }
+      const classification = await classifyItem(classifyInput);
+      category = classification.categoryId;
 
-    // Fallback to other_grocery if still uncategorized but in grocery receipt
-    if (category === 'uncategorized' && isGrocery) {
-      category = 'other_grocery';
-    }
+      // If item already has a valid category from OCR/AI, use it if classifier returned fallback
+      if (
+        classification.source === 'fallback' &&
+        typeof (it as any)?.category === 'string' &&
+        (it as any).category.trim() &&
+        ALL_CATEGORIES.includes((it as any).category.trim() as Category)
+      ) {
+        category = (it as any).category.trim() as Category;
+      }
     }
 
     enrichedItems.push({
@@ -308,11 +312,23 @@ export async function applyCategoriesWithLearning(
     } as any);
   }
 
+  // Log classification statistics (once per receipt)
+  const stats = getClassificationStats();
+  if (stats && __DEV__) {
+    console.log(
+      '[CategoryClassifier] Stats:',
+      `mapping=${stats.mapping}`,
+      `rules=${stats.rules}`,
+      `ai=${stats.ai}`,
+      `fallback=${stats.fallback}`
+    );
+  }
+
   return {
     ...analysis,
     items: enrichedItems as any,
     is_grocery: isGrocery, // Add flag to analysis for later filtering
-  };
+  } as any;
 }
 
 /**

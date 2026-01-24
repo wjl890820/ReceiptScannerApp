@@ -12,7 +12,8 @@ import {
 } from 'react-native';
 
 import { listReceipts, type ReceiptRow } from '@/lib/db';
-import { t, getCurrentLocale } from '@/lib/i18n';
+import { t } from '@/lib/i18n';
+import { getCategoryLabel } from '@/lib/categoryPalette';
 import { calculateStats, type TimeRange } from '@/lib/statsCalculator';
 import {
   extractProductPrices,
@@ -247,7 +248,7 @@ export default function AnalysisScreen() {
             return (
               <View key={idx} style={styles.statRow}>
                 <Text style={styles.statLabel}>
-                  {t(`category.${categoryKey}`) || categoryKey}
+                  {getCategoryLabel(categoryKey)}
                 </Text>
                 <Text style={styles.statValue}>¥{Math.round(item.amount).toLocaleString()}</Text>
               </View>
@@ -322,7 +323,7 @@ export default function AnalysisScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{t('analysis.categoryIndex.title')}</Text>
           <Text style={styles.cardSubtitle}>
-            {t('analysis.categoryIndex.category')}: {categoryIndex.category}
+            {t('analysis.categoryIndex.category')}: {getCategoryLabel(categoryIndex.category)}
           </Text>
 
           {categoryIndex.merchantAverages.map((merchant, idx) => (

@@ -27,6 +27,7 @@ import { t, getCurrentLocale } from '@/lib/i18n';
 import { applyCategoriesWithLearning } from '@/lib/receiptEnricher';
 import { isGroceryMerchant } from '@/lib/groceryDetector';
 import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
+import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
 import {
   shouldTriggerMilestone,
   hasShownMilestone,
@@ -158,27 +159,7 @@ function applyLocalCategories(analysis: ReceiptAnalysis): ReceiptAnalysis {
 // ---------- 本地分类结束 ----------
 
 // ====== 饼图相关 ======
-const CATEGORIES = [
-  '生鲜',
-  '主食',
-  '冷冻/熟食',
-  '零食/甜品',
-  '饮料',
-  '日用品',
-  '外食',
-  '未分类',
-] as const;
-
-const CATEGORY_COLORS: Record<string, string> = {
-  生鲜: '#FF6B6B',
-  主食: '#4ECDC4',
-  '冷冻/熟食': '#45B7D1',
-  '零食/甜品': '#FFA07A',
-  饮料: '#98D8C8',
-  日用品: '#F7DC6F',
-  外食: '#BB8FCE',
-  未分类: '#95A5A6',
-};
+// Note: Category colors and labels are now provided by lib/categoryPalette.ts
 
 type CategoryData = {
   category: string;
@@ -376,12 +357,18 @@ const INSIGHT_RULES: InsightRuleWithMessages[] = [
     level: 'alert',
     condition: (ctx) => ctx.top1Pct >= 60,
     messages: [
-      (ctx) =>
-        `消费高度集中在【${ctx.top1Category}】（${Math.round(ctx.top1Pct)}%），建议分散支出。`,
-      (ctx) =>
-        `【${ctx.top1Category}】占比过高（${Math.round(ctx.top1Pct)}%），消费结构需要优化。`,
-      (ctx) =>
-        `超过六成支出用于【${ctx.top1Category}】（${Math.round(ctx.top1Pct)}%），建议平衡消费。`,
+      (ctx) => {
+        const label = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        return `消费高度集中在【${label}】（${Math.round(ctx.top1Pct)}%），建议分散支出。`;
+      },
+      (ctx) => {
+        const label = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        return `【${label}】占比过高（${Math.round(ctx.top1Pct)}%），消费结构需要优化。`;
+      },
+      (ctx) => {
+        const label = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        return `超过六成支出用于【${label}】（${Math.round(ctx.top1Pct)}%），建议平衡消费。`;
+      },
     ],
   },
   {
@@ -389,12 +376,18 @@ const INSIGHT_RULES: InsightRuleWithMessages[] = [
     level: 'warn',
     condition: (ctx) => ctx.top1Pct >= 50,
     messages: [
-      (ctx) =>
-        `【${ctx.top1Category}】占比较高（${Math.round(ctx.top1Pct)}%），注意消费平衡。`,
-      (ctx) =>
-        `消费主要集中在【${ctx.top1Category}】（${Math.round(ctx.top1Pct)}%），建议多样化。`,
-      (ctx) =>
-        `【${ctx.top1Category}】支出占比达${Math.round(ctx.top1Pct)}%，可考虑分散。`,
+      (ctx) => {
+        const label = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        return `【${label}】占比较高（${Math.round(ctx.top1Pct)}%），注意消费平衡。`;
+      },
+      (ctx) => {
+        const label = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        return `消费主要集中在【${label}】（${Math.round(ctx.top1Pct)}%），建议多样化。`;
+      },
+      (ctx) => {
+        const label = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        return `【${label}】支出占比达${Math.round(ctx.top1Pct)}%，可考虑分散。`;
+      },
     ],
   },
   {
@@ -402,12 +395,21 @@ const INSIGHT_RULES: InsightRuleWithMessages[] = [
     level: 'warn',
     condition: (ctx) => ctx.top1Pct + ctx.top2Pct >= 80,
     messages: [
-      (ctx) =>
-        `前两大类别【${ctx.top1Category}】和【${ctx.top2Category}】合计占比${Math.round(ctx.top1Pct + ctx.top2Pct)}%，消费较为集中。`,
-      (ctx) =>
-        `【${ctx.top1Category}】和【${ctx.top2Category}】共占${Math.round(ctx.top1Pct + ctx.top2Pct)}%，建议增加其他类别支出。`,
-      (ctx) =>
-        `消费集中在【${ctx.top1Category}】和【${ctx.top2Category}】（合计${Math.round(ctx.top1Pct + ctx.top2Pct)}%），可适当分散。`,
+      (ctx) => {
+        const label1 = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        const label2 = ctx.top2Category ? getCategoryLabel(ctx.top2Category) : '';
+        return `前两大类别【${label1}】和【${label2}】合计占比${Math.round(ctx.top1Pct + ctx.top2Pct)}%，消费较为集中。`;
+      },
+      (ctx) => {
+        const label1 = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        const label2 = ctx.top2Category ? getCategoryLabel(ctx.top2Category) : '';
+        return `【${label1}】和【${label2}】共占${Math.round(ctx.top1Pct + ctx.top2Pct)}%，建议增加其他类别支出。`;
+      },
+      (ctx) => {
+        const label1 = ctx.top1Category ? getCategoryLabel(ctx.top1Category) : '';
+        const label2 = ctx.top2Category ? getCategoryLabel(ctx.top2Category) : '';
+        return `消费集中在【${label1}】和【${label2}】（合计${Math.round(ctx.top1Pct + ctx.top2Pct)}%），可适当分散。`;
+      },
     ],
   },
   {
@@ -800,7 +802,7 @@ function PieChart({ data, total, size = 200 }: PieChartProps) {
     <View style={{ alignItems: 'center', marginVertical: 20 }}>
       <Svg width={size} height={size}>
         {validData.map((item, index) => {
-          const color = CATEGORY_COLORS[item.category] || CATEGORY_COLORS['未分类'];
+          const color = getCategoryColor(item.category);
           return (
             <Path
               key={item.category}
@@ -1251,11 +1253,11 @@ export default function HomeScreen() {
               {/* 类别列表 - 只显示前5个 */}
               <View style={styles.categoryList}>
                 {topCategories.map((item) => {
-                  const color = CATEGORY_COLORS[item.category] || CATEGORY_COLORS['未分类'];
+                  const color = getCategoryColor(item.category);
                   return (
                     <View key={item.category} style={styles.categoryListItem}>
                       <View style={[styles.categoryDot, { backgroundColor: color }]} />
-                      <Text style={styles.categoryName}>{item.category}</Text>
+                      <Text style={styles.categoryName}>{getCategoryLabel(item.category)}</Text>
                       <Text style={styles.categoryAmount}>
                         {Math.round(item.amount)} JPY
                       </Text>

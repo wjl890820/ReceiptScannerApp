@@ -79,3 +79,146 @@ SQLite 数据库修复（item_category_mapping 表）：
   3. 验证 OCR 功能正常：
      - 扫描应该成功完成
      - 如果配置正确但网络失败，应该看到明确的网络错误信息，而不是"未配置"错误
+
+i18n 初始化和分类标签统一化修复：
+- **问题**：页面进入时先显示英文后显示中文的闪烁；分类名称在全站显示不一致（直接显示 category_id 如 meat_seafood / other_grocery）
+- **原因**：
+  - i18n 使用 lazy loading，在首次使用时才检测 locale，导致初始闪烁
+  - 分类显示直接使用 category_id，没有统一的标签映射
+- **修复**：
+  - 创建 `lib/categoryLabels.ts`：
+    - 提供所有分类的三语标签映射（zh/ja/en）
+    - 导出 `getCategoryLabel(categoryId, locale)` helper 函数
+  - 修改 `lib/i18n.ts`：
+    - 移除 lazy loading，改为同步初始化
+    - 添加 `initI18n()` 函数用于在 app 启动时初始化
+    - locale 取值规则：优先系统语言（expo-localization），仅支持 'zh' | 'ja' | 'en'，其他 fallback 到 'en'
+  - 修改 `app/_layout.tsx`：
+    - 使用 `expo-splash-screen` 防止 auto-hide
+    - 在渲染前调用 `initI18n()` 等待 i18n ready
+    - i18n 初始化完成后再 hide splash screen 并渲染 App
+  - 更新所有显示 category_id 的地方使用 `getCategoryLabel()`：
+    - `app/(tabs)/index.tsx`: Home 饼图 legend 列表、insight 消息中的分类名称
+    - `app/(tabs)/history/[id].tsx`: 分类汇总、分类编辑选项
+    - `app/(tabs)/analysis.tsx`: 所有分类输出（topCategories、categoryIndex）
+- **验证步骤**：
+  1. 验证无闪烁：
+     - 启动应用（iOS 系统语言设为中文）
+     - 应该直接显示中文界面，无英文闪烁
+     - 切换系统语言为日文/英文，重启应用，应该直接显示对应语言
+  2. 验证分类三语正常：
+     - 扫描一张超市小票
+     - 进入 Home 页面，查看饼图 legend，分类应该显示为中文标签（如"肉鱼海鲜"而不是"meat_seafood"）
+     - 进入 Analysis 页面，查看"主要类别"，分类应该显示为中文标签
+     - 进入 Receipt Detail 页面，查看"分类汇总"，分类应该显示为中文标签
+     - 编辑商品分类时，分类选项应该显示为中文标签
+     - 切换系统语言为日文/英文，重复上述步骤，分类应该显示为对应语言的标签
+
+分类配色统一和饼图/列表/详情一致：
+- **问题**：分类颜色在不同组件中硬编码，不一致；分类名称直接显示 categoryId（如 meat_seafood）
+- **原因**：
+  - 颜色在多个组件中硬编码（CATEGORY_COLORS），不同组件可能使用不同颜色
+  - 分类名称直接使用 categoryId，没有统一的 i18n 接口
+- **修复**：
+  - 创建 `lib/categoryPalette.ts` 统一配色和标签获取：
+    - `getCategoryColor(categoryId)`: 返回统一的颜色（hex），同一 categoryId 永远返回同一个颜色
+    - `getCategoryLabel(categoryId)`: 使用 `t(\`category.${categoryId}\`)` 获取标签，fallback 到 categoryId
+    - `getCategoryColorMap()`: 获取完整颜色映射（用于调试）
+    - 提供至少 18 种颜色（16 个 grocery + 2 个 special），颜色选择避免过浅或过深
+  - 更新所有使用分类的地方：
+    - `app/(tabs)/index.tsx`:
+      - 移除硬编码的 `CATEGORY_COLORS` 和 `CATEGORIES`
+      - 饼图使用 `getCategoryColor(item.category)` 设置 fill
+      - 分类列表使用 `getCategoryColor(item.category)` 设置圆点颜色
+      - 分类名称使用 `getCategoryLabel(item.category)`（不再需要 getCurrentLocale 参数）
+      - Insight 消息中的分类名称也使用 `getCategoryLabel()`
+    - `app/(tabs)/history/[id].tsx`:
+      - 分类汇总列表添加左侧色条（使用 `getCategoryColor()`）
+      - 分类名称使用 `getCategoryLabel()`（不再需要 getCurrentLocale 参数）
+      - 分类编辑选项使用 `getCategoryLabel()`
+    - `app/(tabs)/analysis.tsx`:
+      - 所有分类输出使用 `getCategoryLabel()`（不再需要 getCurrentLocale 参数）
+  - 确保 locales 文件包含所有分类的翻译：
+    - `locales/zh.json`: 已有 `category.*` 翻译键（18 个分类）
+    - `locales/ja.json`: 已有 `category.*` 翻译键（18 个分类）
+    - `locales/en.json`: 已有 `category.*` 翻译键（18 个分类）
+- **验证步骤**：
+  1. 验证配色一致：
+     - 扫描一张包含多个分类的超市小票
+     - 进入 Home 页面，查看饼图和分类列表
+     - 同一分类在饼图和列表中的颜色应该完全一致
+     - 进入 Receipt Detail 页面，查看"分类汇总"
+     - 分类汇总中的颜色应该与 Home 页面的饼图颜色一致
+  2. 验证分类名称显示：
+     - 所有地方不应该再出现 `meat_seafood` 这种 raw id
+     - 应该显示为对应的中文标签（如"肉类海鲜"）
+     - 切换系统语言为日文/英文，分类名称应该显示为对应语言的标签
+  3. 验证无英文闪烁：
+     - 由于 i18n 已在 app 启动时初始化（见之前的修复），分类名称应该直接显示正确语言
+     - 如果仍有闪烁，检查 `app/_layout.tsx` 中的 `initI18n()` 是否在渲染前完成
+  4. 验证颜色可见性：
+     - 所有颜色在白色背景上应该清晰可见
+     - 颜色不应该过浅导致看不清，也不应该过深导致文字看不清
+
+分类准确率提升（混合分类方案）：
+- **目标**：显著提升分类准确率（V1 核心），采用"规则优先 + AI 兜底 + 本地学习映射"的混合分类方案
+- **现状**：原有分类逻辑分散在多个文件，准确率低，缺乏可持续迭代机制
+- **修复**：
+  - 创建 `lib/categoryClassifier.ts` 统一分类服务：
+    - 输入：`{ rawName, normalizedName, merchantName?, price?, locale? }`
+    - 输出：`{ categoryId, confidence, source, reason? }`
+    - source 枚举：'mapping' | 'rules' | 'ai' | 'fallback'
+  - 实现分层策略（严格按顺序执行）：
+    1. **本地映射优先**（最高权重）：
+       - key：normalizedName + optional merchantHint
+       - 命中则 confidence=1.0, source='mapping'
+    2. **规则/词典匹配**（高置信）：
+       - 基于关键词、常见商品词、店铺特征等
+       - 给出 confidence（0.8~0.95）
+       - 高置信度（>=0.85）自动学习到 mapping 表
+    3. **AI 兜底**（仅处理剩余不确定项）：
+       - 通过 Supabase Edge Function `/functions/v1/classify-item` 调用
+       - 只允许从现有 category_id 列表中选择
+       - 输出必须包含 categoryId 与 confidence(0~1)
+       - 若 confidence < 0.6 -> 返回 fallback
+       - 高置信度（>=0.85）自动学习到 mapping 表
+    4. **fallback**：categoryId='other_grocery', confidence=0.0
+  - 更新数据库表结构：
+    - `item_category_mapping` 表添加 `merchant_hint` 和 `confidence` 字段
+    - 主键改为 `(normalized_name, merchant_hint)` 复合键
+    - 添加自动迁移逻辑（兼容旧表结构）
+  - 学习机制：
+    - 用户编辑分类时自动写入 mapping 表
+    - 高置信度分类（mapping/rules/ai>=0.85）自动学习
+    - 写入时去重/更新（INSERT OR REPLACE）
+  - 更新 `lib/categoryLearner.ts`：
+    - 支持新的表结构（merchant_hint, confidence）
+    - 提供 `learnCategoryMapping()` 和 `getLearnedCategory()` 函数
+    - 查询时优先匹配带 merchant_hint 的映射，fallback 到通用映射
+  - 更新 `lib/receiptEnricher.ts`：
+    - 使用统一的 `classifyItem()` 函数
+    - 添加分类统计日志（每张小票输出一次）
+  - 创建测试脚本 `scripts/test-category-classifier.js`：
+    - 模拟分类逻辑，测试规则匹配
+    - 可独立运行，无需 React Native 环境
+- **验证步骤**：
+  1. 验证 mapping 表创建成功：
+     - 启动应用并扫描一张小票
+     - 不应该再出现 "no such table: item_category_mapping" 错误
+     - 检查数据库，应该看到表结构包含 `merchant_hint` 和 `confidence` 字段
+  2. 验证分类准确率提升：
+     - 扫描一张包含常见商品的超市小票（如：牛乳、りんご、パン等）
+     - 检查控制台日志，应该看到 `[CategoryClassifier] Stats: mapping=X rules=Y ai=Z fallback=W`
+     - 进入 Receipt Detail 页面，查看商品分类，应该看到正确的分类（如"乳制品/蛋"而不是"other_grocery"）
+  3. 验证学习机制：
+     - 编辑一个商品的分类（如将"不明商品"改为"生鲜蔬果"）
+     - 扫描另一张包含相同商品的小票
+     - 该商品应该自动分类为"生鲜蔬果"（source='mapping'）
+  4. 验证规则匹配：
+     - 扫描包含规则匹配商品的收据（如"牛乳"、"ビール"、"パン"）
+     - 这些商品应该通过规则匹配分类（source='rules'），confidence >= 0.8
+  5. 运行测试脚本：
+     ```bash
+     node scripts/test-category-classifier.js
+     ```
+     - 应该看到所有测试通过

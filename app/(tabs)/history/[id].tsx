@@ -23,6 +23,7 @@ import {
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
 import { t } from '@/lib/i18n';
+import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -333,16 +334,20 @@ export default function ReceiptDetailScreen() {
               <Text style={{ color: '#666' }}>暂无分类信息</Text>
             </View>
           ) : (
-            categorySummary.map((x) => (
-              <View key={x.category} style={styles.summaryRow}>
-                <Text style={styles.summaryLeft}>
-                  {t(`category.${x.category}`) || x.category}
-                </Text>
-                <Text style={styles.summaryRight}>
-                  {round0(x.amount)} {currency}
-                </Text>
-              </View>
-            ))
+            categorySummary.map((x) => {
+              const color = getCategoryColor(x.category);
+              return (
+                <View key={x.category} style={styles.summaryRow}>
+                  <View style={[styles.categoryColorBar, { backgroundColor: color }]} />
+                  <Text style={styles.summaryLeft}>
+                    {getCategoryLabel(x.category)}
+                  </Text>
+                  <Text style={styles.summaryRight}>
+                    {round0(x.amount)} {currency}
+                  </Text>
+                </View>
+              );
+            })
           )}
         </View>
 
@@ -442,7 +447,7 @@ export default function ReceiptDetailScreen() {
                             draftCategory === cat && styles.categoryOptionTextSelected,
                           ]}
                         >
-                          {t(`category.${cat}`)}
+                          {getCategoryLabel(cat)}
                         </Text>
                       </View>
                     </Pressable>
@@ -544,8 +549,15 @@ const styles = StyleSheet.create({
   },
   summaryRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 6,
+    gap: 8,
+  },
+  categoryColorBar: {
+    width: 4,
+    height: 20,
+    borderRadius: 2,
   },
   summaryLeft: {
     fontSize: 16,

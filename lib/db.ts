@@ -94,13 +94,19 @@ async function initIfNeeded() {
           ON receipts(created_at DESC);
 
         CREATE TABLE IF NOT EXISTS item_category_mapping (
-          normalized_name TEXT PRIMARY KEY NOT NULL,
-          category TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
+          normalized_name TEXT NOT NULL,
+          merchant_hint TEXT,
+          category_id TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 1.0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (normalized_name, merchant_hint)
         );
 
         CREATE INDEX IF NOT EXISTS idx_item_category_mapping_updated_at
           ON item_category_mapping(updated_at DESC);
+        
+        CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name
+          ON item_category_mapping(normalized_name);
       `);
 
       // 安全迁移：检查并添加新字段（如果不存在）
@@ -155,6 +161,47 @@ async function initIfNeeded() {
           if (!e?.message?.includes('duplicate column')) {
             throw e;
           }
+        }
+      }
+
+      // 迁移 item_category_mapping 表结构（如果存在旧表）
+      try {
+        const oldTableInfo = await db.getAllAsync<{ name: string; type: string }>(
+          `PRAGMA table_info(item_category_mapping)`
+        );
+        const oldColumnNames = new Set(oldTableInfo.map((col) => col.name));
+        
+        // 如果表存在但没有新字段，需要迁移
+        if (oldColumnNames.size > 0 && !oldColumnNames.has('merchant_hint')) {
+          // 创建新表
+          await db.execAsync(`
+            CREATE TABLE IF NOT EXISTS item_category_mapping_new (
+              normalized_name TEXT NOT NULL,
+              merchant_hint TEXT,
+              category_id TEXT NOT NULL,
+              confidence REAL NOT NULL DEFAULT 1.0,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY (normalized_name, merchant_hint)
+            );
+            
+            INSERT INTO item_category_mapping_new (normalized_name, merchant_hint, category_id, confidence, updated_at)
+            SELECT normalized_name, NULL as merchant_hint, category as category_id, 1.0 as confidence, updated_at
+            FROM item_category_mapping;
+            
+            DROP TABLE item_category_mapping;
+            ALTER TABLE item_category_mapping_new RENAME TO item_category_mapping;
+            
+            CREATE INDEX IF NOT EXISTS idx_item_category_mapping_updated_at
+              ON item_category_mapping(updated_at DESC);
+            
+            CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name
+              ON item_category_mapping(normalized_name);
+          `);
+        }
+      } catch (e: any) {
+        // 如果迁移失败，忽略（可能是表不存在或已是最新结构）
+        if (!e?.message?.includes('no such table')) {
+          console.warn('[DB] Failed to migrate item_category_mapping:', e);
         }
       }
 
