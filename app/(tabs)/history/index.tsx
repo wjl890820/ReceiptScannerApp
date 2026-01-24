@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { listReceipts, type ReceiptRow } from '@/lib/db';
+import { formatJPY } from '@/lib/formatJPY';
 
 type CategoryKey =
   | 'fresh'
@@ -175,7 +176,7 @@ export default function HistoryScreen() {
                   {item.merchant_normalized || item.merchant_raw || '未知商店'}
                 </Text>
                 <Text style={styles.total}>
-                  {item.total} {item.currency}
+                  {formatJPY(item.total)}
                 </Text>
               </View>
 

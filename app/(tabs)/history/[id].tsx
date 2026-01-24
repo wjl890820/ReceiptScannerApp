@@ -23,6 +23,7 @@ import {
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
 import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
+import { formatJPY } from '@/lib/formatJPY';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -310,7 +311,7 @@ export default function ReceiptDetailScreen() {
         </View>
 
         <Text style={styles.total}>
-          {displayTotal} {currency}
+          {formatJPY(displayTotal)}
         </Text>
         {receipt.user_edited === 1 && receipt.user_items_json && (
           <Text style={styles.overrideHint}>
@@ -342,7 +343,7 @@ export default function ReceiptDetailScreen() {
                     {getCategoryLabel(x.category)}
                   </Text>
                   <Text style={styles.summaryRight}>
-                    {round0(x.amount)} {currency}
+                    {formatJPY(x.amount)}
                   </Text>
                 </View>
               );
@@ -367,7 +368,7 @@ export default function ReceiptDetailScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemName}>{it.name}</Text>
                   <Text style={styles.itemMeta}>
-                    数量 {it.quantity} · 小计 {it.lineTotal} {currency}
+                    数量 {it.quantity} · 小计 {formatJPY(it.lineTotal)}
                   </Text>
                 </View>
                 <View style={styles.tag}>
@@ -477,7 +478,7 @@ export default function ReceiptDetailScreen() {
                   editable={!savingItem}
                 />
                 <Text style={styles.hint}>
-                  单位：{currency}
+                  单位：日元
                 </Text>
               </>
             )}

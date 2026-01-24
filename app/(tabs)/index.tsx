@@ -28,6 +28,7 @@ import { applyCategoriesWithLearning } from '@/lib/receiptEnricher';
 import { isGroceryMerchant } from '@/lib/groceryDetector';
 import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
 import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
+import { formatJPY } from '@/lib/formatJPY';
 import { getHomeTimeRange, setHomeTimeRange } from '@/lib/settingsStore';
 import {
   shouldTriggerMilestone,
@@ -547,11 +548,11 @@ const INSIGHT_RULES: InsightRuleWithMessages[] = [
       ctx.avgReceiptTotal > 0 && ctx.maxReceiptTotal >= ctx.avgReceiptTotal * 2.5,
     messages: [
       (ctx) =>
-        `存在单笔大额消费（${Math.round(ctx.maxReceiptTotal)} JPY），是平均值的${Math.round((ctx.maxReceiptTotal / ctx.avgReceiptTotal) * 10) / 10}倍。`,
+        `存在单笔大额消费（${formatJPY(ctx.maxReceiptTotal)}），是平均值的${Math.round((ctx.maxReceiptTotal / ctx.avgReceiptTotal) * 10) / 10}倍。`,
       (ctx) =>
-        `最大单笔消费${Math.round(ctx.maxReceiptTotal)} JPY，显著高于平均值${Math.round(ctx.avgReceiptTotal)} JPY。`,
+        `最大单笔消费${formatJPY(ctx.maxReceiptTotal)}，显著高于平均值${formatJPY(ctx.avgReceiptTotal)}。`,
       (ctx) =>
-        `单笔最大支出${Math.round(ctx.maxReceiptTotal)} JPY，远超平均${Math.round(ctx.avgReceiptTotal)} JPY。`,
+        `单笔最大支出${formatJPY(ctx.maxReceiptTotal)}，远超平均${formatJPY(ctx.avgReceiptTotal)}。`,
     ],
   },
 ];
@@ -1346,7 +1347,7 @@ export default function HomeScreen() {
             <View style={styles.kpiItem}>
               <Text style={styles.kpiLabel}>{t('home.kpi.totalSpending')}</Text>
               <Text style={styles.kpiValue}>
-                {Math.round(kpiData.totalSpending)} {t('home.kpi.currency')}
+                {formatJPY(kpiData.totalSpending)}
               </Text>
             </View>
             <View style={styles.kpiItem}>
@@ -1379,7 +1380,7 @@ export default function HomeScreen() {
                       <View style={[styles.categoryDot, { backgroundColor: color }]} />
                       <Text style={styles.categoryName}>{getCategoryLabel(item.category)}</Text>
                       <Text style={styles.categoryAmount}>
-                        {Math.round(item.amount)} JPY
+                        {formatJPY(item.amount)}
                       </Text>
                       <Text style={styles.categoryPercentage}>
                         {Math.round(item.percentage)}%
