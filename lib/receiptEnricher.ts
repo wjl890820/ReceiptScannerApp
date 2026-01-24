@@ -292,7 +292,7 @@ export async function applyCategoriesWithLearning(
       };
 
       const classification = await classifyItem(classifyInput);
-      category = classification.categoryId;
+      category = classification.categoryId as Category;
 
       // If item already has a valid category from OCR/AI, use it if classifier returned fallback
       if (
@@ -314,12 +314,11 @@ export async function applyCategoriesWithLearning(
 
   // Log classification statistics (once per receipt)
   const stats = getClassificationStats();
-  if (stats && __DEV__) {
+  if (stats) {
     console.log(
       '[CategoryClassifier] Stats:',
       `mapping=${stats.mapping}`,
       `rules=${stats.rules}`,
-      `ai=${stats.ai}`,
       `fallback=${stats.fallback}`
     );
   }

@@ -246,6 +246,48 @@ i18n key 泄露与扫描相关 UI 修复：
   3. **无英文闪烁**：冷启动后首屏（含 Home、Tab 等）直接为系统语言，无先英后中/日闪烁。
   4. **分类显示**：Receipt Detail 等处的分类均通过 `getCategoryLabel` 或 `t(\`category.${id}\`)` + fallback，无 `meat_seafood` 等 raw categoryId。
 
+分类器统一化（PR1 - 规则优先 + 本地映射）：
+- **目标**：提升分类准确率，统一分类逻辑到一个模块，使用规则优先 + 本地映射策略（不含 AI）。
+- **实现**：
+  1. **创建 `lib/categoryClassifier.ts`**（简化版，不含 AI）：
+     - 导出类型：`ClassifyInput`、`ClassifyOutput`
+     - 导出函数：`classifyItem(input: ClassifyInput): Promise<ClassifyOutput>`
+     - 分类策略（按顺序）：
+       a) **本地映射优先**：通过 `getLearnedCategory` 查询已学习的映射，命中则 `confidence=1.0`、`source='mapping'`
+       b) **规则匹配**：基于关键词的确定性规则（针对日本超市收据），覆盖主要类别（dairy_eggs、produce、meat_seafood、bakery、staples、quick_meals、frozen_foods、canned_preserved、beverages_other、health_supplements、snacks_sweets、non_alcoholic_drinks、alcohol、condiments、household），返回 `confidence 0.8~0.95` 和简短 reason
+       c) **fallback**：`other_grocery`、`confidence=0.0`、`source='fallback'`
+     - 统计功能：`resetClassificationStats()`、`getClassificationStats()`（每张收据统计 mapping/rules/fallback 数量）
+  2. **更新 `lib/receiptEnricher.ts`**：
+     - `applyCategoriesWithLearning` 已使用 `classifyItem`（无需修改）
+     - 更新日志：移除对 `stats.ai` 的引用，只记录 `mapping`、`rules`、`fallback`
+     - 每张收据处理完成后输出：`[CategoryClassifier] Stats: mapping=X rules=Y fallback=Z`
+  3. **测试脚本 `scripts/test-category-classifier.js`**：
+     - 包含 17 个日本商品测试用例，覆盖主要类别和 fallback
+     - 验证规则匹配逻辑（独立运行，无需 React Native 环境）
+     - 所有测试通过 ✅
+- **技术细节**：
+  - 规则匹配顺序优化：先检查更具体的模式（如"牛乳"），再检查通用模式（如"牛"），避免误匹配
+  - 规则 confidence 范围：0.8~0.95（根据匹配确定性）
+  - 本地映射 confidence：1.0（用户编辑或高置信度学习）
+  - fallback confidence：0.0（无法分类）
+- **验收步骤**：
+  1. **运行测试脚本**：
+     ```bash
+     node scripts/test-category-classifier.js
+     ```
+     - 应该看到所有 17 个测试通过
+  2. **验证分类器集成**：
+     - 扫描一张超市小票
+     - 检查控制台日志，应该看到 `[CategoryClassifier] Stats: mapping=X rules=Y fallback=Z`
+     - 进入 Receipt Detail 页面，查看商品分类，应该看到正确的分类（如"牛乳"→"乳制品/蛋"）
+  3. **验证本地映射**：
+     - 编辑一个商品的分类（如将"不明商品"改为"生鲜蔬果"）
+     - 扫描另一张包含相同商品的小票
+     - 该商品应该自动分类为"生鲜蔬果"（source='mapping'）
+  4. **验证规则匹配**：
+     - 扫描包含规则匹配商品的收据（如"牛乳"、"ビール"、"パン"、"りんご"）
+     - 这些商品应该通过规则匹配分类（source='rules'），confidence >= 0.8
+
 相册多选与顺序处理功能：
 - **目标**：支持从相册多选照片，顺序处理每张图片，每张保存为独立收据。
 - **实现**：
