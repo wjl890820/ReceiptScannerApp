@@ -50,49 +50,17 @@ let _db: SQLite.SQLiteDatabase | null = null;
 let _inited = false;
 let _initPromise: Promise<void> | null = null;
 
-// Cache for transaction_at column existence (to avoid frequent PRAGMA queries)
-// ⚠️ 关键：这个变量控制所有 SQL 中是否引用 transaction_at
-let _receiptsHasTransactionAt: boolean | null = null;
+// 数据库版本升级：使用 receipts_v2.db（强制新 schema，包含 transaction_at）
+const DB_NAME = 'receipts_v2.db';
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_db) return _db;
-  _db = await SQLite.openDatabaseAsync('receipts.db');
+  _db = await SQLite.openDatabaseAsync(DB_NAME);
   return _db;
 }
 
-/**
- * 强一致的单一入口：检测 transaction_at 列是否存在
- * ⚠️ 关键：所有 SQL 拼接只能通过 await receiptsHasTransactionAt(db) 得到 boolean
- * 
- * 规则：
- * - 若缓存非 null：直接返回缓存
- * - 否则执行：PRAGMA table_info(receipts)，检查 name === 'transaction_at'
- * - 将结果写入缓存并返回
- * - 如果 PRAGMA 失败：缓存置为 false 并返回 false（绝不能 throw 导致启动失败）
- */
-async function receiptsHasTransactionAt(db: SQLite.SQLiteDatabase): Promise<boolean> {
-  // 若缓存非 null：直接返回缓存
-  if (_receiptsHasTransactionAt !== null) {
-    return _receiptsHasTransactionAt;
-  }
-
-  // 否则执行 PRAGMA table_info(receipts)
-  try {
-    const rows = await db.getAllAsync<{ name: string }>(
-      `PRAGMA table_info(receipts)`
-    );
-    // 检查 name === 'transaction_at'
-    _receiptsHasTransactionAt = rows.some((r) => r.name === 'transaction_at');
-    return _receiptsHasTransactionAt;
-  } catch (e) {
-    // 如果 PRAGMA 失败：缓存置为 false 并返回 false（绝不能 throw 导致启动失败）
-    _receiptsHasTransactionAt = false;
-    if (__DEV__) {
-      console.warn('[DB] Failed to check transaction_at column (non-fatal):', e);
-    }
-    return false;
-  }
-}
+// receiptsHasTransactionAt 函数已删除
+// 新数据库 receipts_v2.db 强制包含 transaction_at 列，不再需要检测
 
 async function initIfNeeded() {
   // 如果已经初始化完成，直接返回
@@ -161,9 +129,6 @@ async function initIfNeeded() {
         `PRAGMA table_info(receipts)`
       );
       const columnNames = new Set(tableInfo.map((col) => col.name));
-      
-      // 检测 transaction_at 列是否存在
-      const hasColumn = await receiptsHasTransactionAt(db);
 
       // 只添加不存在的列，使用 try-catch 防止并发情况下的重复添加
       if (!columnNames.has('user_edited')) {
@@ -212,27 +177,7 @@ async function initIfNeeded() {
           }
         }
       }
-      // ⚠️ 迁移逻辑：只负责"尽力而为"，不再假设成功
-      if (!hasColumn) {
-        try {
-          await db.runAsync(`ALTER TABLE receipts ADD COLUMN transaction_at INTEGER`);
-          await db.runAsync(
-            `CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at ON receipts(transaction_at ASC)`
-          );
-          // 迁移成功，更新缓存
-          _receiptsHasTransactionAt = true;
-          if (__DEV__) {
-            console.log('[DB] Added transaction_at column to receipts table');
-          }
-        } catch (e: any) {
-          // ⚠️ 允许失败，不能 throw
-          // ALTER TABLE 在某些设备上可能失败，但不应该阻止应用启动
-          _receiptsHasTransactionAt = false;
-          if (__DEV__) {
-            console.warn('[DB] Failed to add transaction_at column (non-fatal):', e?.message);
-          }
-        }
-      }
+      // 新数据库 receipts_v2.db 已包含 transaction_at 列，无需迁移
 
       // 迁移 item_category_mapping 表结构（如果存在旧表）
       try {
@@ -377,13 +322,7 @@ export { initIfNeeded };
 
 // debugReceiptsSchema 函数已移除，改为在 initIfNeeded 最后直接打印
 
-/**
- * 确保 receipts 表 schema 完整（特别是 transaction_at 列）
- * 在所有查询 receipts 之前必须调用此函数
- * 幂等：可以安全地多次调用
- */
-// hasTransactionAtColumn 和 ensureSchema 函数已移除
-// 迁移逻辑在 initIfNeeded 中处理，所有查询函数直接使用 receiptsHasTransactionAt 检测列是否存在
+// 新数据库 receipts_v2.db 强制包含 transaction_at 列，不再需要复杂的检测和迁移逻辑
 
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
@@ -490,123 +429,65 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
 
 /**
  * 列表：按时间倒序
- * ⚠️ 关键：使用完全分离的两套 SQL，禁止条件拼接
+ * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
 export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
   await initIfNeeded();
   const db = await getDb();
 
-  // detect 必须发生在函数最开始
-  const hasTx = await receiptsHasTransactionAt(db);
+  const rows = await db.getAllAsync<ReceiptRow>(
+    `
+    SELECT
+      id, created_at,
+      COALESCE(transaction_at, created_at) AS transaction_at,
+      image_uri,
+      merchant_raw, merchant_normalized,
+      total, tax, currency,
+      analysis_json,
+      COALESCE(user_edited, 0) as user_edited,
+      final_total,
+      final_category,
+      note,
+      user_items_json
+    FROM receipts
+    ORDER BY COALESCE(transaction_at, created_at) ASC
+    LIMIT ?
+    `,
+    [limit]
+  );
 
-  if (__DEV__) {
-    console.log('[DB] listReceipts using', hasTx ? 'TX SQL' : 'CREATED_AT SQL');
-  }
-
-  // 完全分离的两套 SQL，互不包含对方字段名
-  let sql: string;
-  let params: any[];
-
-  if (hasTx) {
-    sql = `
-      SELECT
-        id, created_at,
-        COALESCE(transaction_at, created_at) AS transaction_at,
-        image_uri,
-        merchant_raw, merchant_normalized,
-        total, tax, currency,
-        analysis_json,
-        COALESCE(user_edited, 0) as user_edited,
-        final_total,
-        final_category,
-        note,
-        user_items_json
-      FROM receipts
-      ORDER BY COALESCE(transaction_at, created_at) ASC
-      LIMIT ?
-    `;
-    params = [limit];
-  } else {
-    sql = `
-      SELECT
-        id, created_at,
-        created_at AS transaction_at,
-        image_uri,
-        merchant_raw, merchant_normalized,
-        total, tax, currency,
-        analysis_json,
-        COALESCE(user_edited, 0) as user_edited,
-        final_total,
-        final_category,
-        note,
-        user_items_json
-      FROM receipts
-      ORDER BY created_at ASC
-      LIMIT ?
-    `;
-    params = [limit];
-  }
-
-  const rows = await db.getAllAsync<ReceiptRow>(sql, params);
   return rows ?? [];
 }
 
 /**
  * 详情：按 id 获取一条
- * ⚠️ 关键：使用完全分离的两套 SQL，禁止条件拼接
+ * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
 export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   await initIfNeeded();
   const db = await getDb();
 
-  // detect 必须发生在函数最开始
-  const hasTx = await receiptsHasTransactionAt(db);
+  const row = await db.getFirstAsync<ReceiptRow>(
+    `
+    SELECT
+      id, created_at,
+      COALESCE(transaction_at, created_at) AS transaction_at,
+      image_uri,
+      merchant_raw, merchant_normalized,
+      total, tax, currency,
+      analysis_json,
+      COALESCE(user_edited, 0) as user_edited,
+      final_total,
+      final_category,
+      note,
+      user_items_json
+    FROM receipts
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
 
-  // 完全分离的两套 SQL，互不包含对方字段名
-  let sql: string;
-  let params: any[];
-
-  if (hasTx) {
-    sql = `
-      SELECT
-        id, created_at,
-        COALESCE(transaction_at, created_at) AS transaction_at,
-        image_uri,
-        merchant_raw, merchant_normalized,
-        total, tax, currency,
-        analysis_json,
-        COALESCE(user_edited, 0) as user_edited,
-        final_total,
-        final_category,
-        note,
-        user_items_json
-      FROM receipts
-      WHERE id = ?
-      LIMIT 1
-    `;
-    params = [id];
-  } else {
-    sql = `
-      SELECT
-        id, created_at,
-        created_at AS transaction_at,
-        image_uri,
-        merchant_raw, merchant_normalized,
-        total, tax, currency,
-        analysis_json,
-        COALESCE(user_edited, 0) as user_edited,
-        final_total,
-        final_category,
-        note,
-        user_items_json
-      FROM receipts
-      WHERE id = ?
-      LIMIT 1
-    `;
-    params = [id];
-  }
-
-  const row = await db.getFirstAsync<ReceiptRow>(sql, params);
   return row ?? null;
 }
 

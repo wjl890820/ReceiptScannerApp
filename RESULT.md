@@ -738,8 +738,70 @@ SQLite transaction_at 彻底修复（V1 封板前最终修复）：
      - 若迁移失败，自动回退 created_at 且功能可用
   5. **DEV 日志验证**：
      - 在开发模式下，控制台应该看到：
-       - `[DB] receipts schema columns: [...]`（列名数组）
-       - `[DB] _receiptsHasTransactionAt: true/false`（最终值）
+     - `[DB] receipts schema columns: [...]`（列名数组）
+     - `[DB] _receiptsHasTransactionAt: true/false`（最终值）
+
+SQLite transaction_at 最终修复（数据库版本升级）：
+- **方案**：数据库版本切换（强制新 schema）
+- **问题根源**：
+  - 旧数据库 `receipts.db` 可能没有 `transaction_at` 列
+  - 复杂的迁移和 fallback 逻辑仍然可能在某些设备上失败
+  - 条件拼接 SQL 仍然存在风险
+- **修复策略**（破坏性升级，V1 前允许）：
+  1. **修改数据库文件名**（关键）：
+     - 原来：`receipts.db`
+     - 改为：`receipts_v2.db`
+     - 这是最关键的一步，等价于一次"正式 schema 版本升级"
+     - 新数据库强制包含 `transaction_at` 列
+  2. **删除所有复杂兜底逻辑**：
+     - 删除 `_receiptsHasTransactionAt` 缓存变量
+     - 删除 `receiptsHasTransactionAt` / `detectTransactionAtColumn` 函数
+     - 删除所有 try/catch fallback SQL
+     - 假设 `transaction_at` 一定存在（因为新数据库强制包含）
+  3. **receipts 表定义中直接包含 transaction_at**：
+     ```sql
+     CREATE TABLE IF NOT EXISTS receipts (
+       id TEXT PRIMARY KEY NOT NULL,
+       created_at INTEGER NOT NULL,
+       transaction_at INTEGER,
+       ...
+     );
+     ```
+  4. **查询统一使用 transaction_at（干净）**：
+     ```sql
+     SELECT
+       *,
+       COALESCE(transaction_at, created_at) AS transaction_at
+     FROM receipts
+     ORDER BY COALESCE(transaction_at, created_at) ASC
+     ```
+     - 不再判断，不再 fallback
+     - 所有查询直接使用 `transaction_at`
+  5. **简化所有函数**：
+     - `listReceipts()`: 直接使用包含 `transaction_at` 的 SQL
+     - `getReceipt()`: 直接使用包含 `transaction_at` 的 SQL
+     - `saveReceipt()`: 直接插入 `transaction_at` 字段
+- **技术细节**：
+  - 数据库文件名从 `receipts.db` 升级到 `receipts_v2.db`
+  - 旧数据库 `receipts.db` 已弃用（用户需要重新扫描小票）
+  - 新数据库强制包含 `transaction_at` 列，所有查询直接使用
+  - 不再需要复杂的检测、迁移、fallback 逻辑
+- **验收标准**：
+  1. **新安装/升级后**：
+     - 应用使用 `receipts_v2.db` 数据库
+     - 不再出现 `no such column: transaction_at` 错误
+     - 所有查询正常执行
+  2. **扫描保存**：
+     - 扫描一张小票，应该能正常保存（包含 `transaction_at` 字段）
+  3. **History/Home 加载**：
+     - 应该正常加载，按 `transaction_at` 排序
+  4. **DEV 日志验证**：
+     - 控制台应该看到：`[DB][FINAL SCHEMA] id, created_at, transaction_at, ...`
+     - 应该包含 `transaction_at` 列
+- **注意事项**：
+  - 这是破坏性升级：旧数据库 `receipts.db` 中的数据不会自动迁移
+  - 用户需要重新扫描小票（V1 前允许）
+  - 如果用户需要保留旧数据，需要手动迁移（不在本次任务范围内）
 
 SQLite 迁移彻底修复（V1 封板前最后一次修复）：
 - **问题根源**：
