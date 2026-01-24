@@ -386,9 +386,6 @@ async function debugReceiptsSchema(): Promise<void> {
  * 在所有查询 receipts 之前必须调用此函数
  * 幂等：可以安全地多次调用
  */
-let _schemaEnsured = false;
-let _schemaEnsurePromise: Promise<void> | null = null;
-
 // hasTransactionAtColumn 和 ensureSchema 函数已移除
 // 迁移逻辑在 initIfNeeded 中处理，所有查询函数直接使用 detectTransactionAtColumn 检测列是否存在
 
@@ -440,7 +437,6 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
   }
 
   // ⚠️ 动态检测列是否存在，动态拼接 SQL
-  const db = await getDb();
   const hasTx = await detectTransactionAtColumn(db);
 
   if (hasTx) {
