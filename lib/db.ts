@@ -407,7 +407,7 @@ async function debugReceiptsSchema(): Promise<void> {
  * 幂等：可以安全地多次调用
  */
 // hasTransactionAtColumn 和 ensureSchema 函数已移除
-// 迁移逻辑在 initIfNeeded 中处理，所有查询函数直接使用 detectTransactionAtColumn 检测列是否存在
+// 迁移逻辑在 initIfNeeded 中处理，所有查询函数直接使用 receiptsHasTransactionAt 检测列是否存在
 
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
