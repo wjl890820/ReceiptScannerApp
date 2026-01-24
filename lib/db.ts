@@ -323,6 +323,7 @@ export { initIfNeeded };
 // debugReceiptsSchema 函数已移除，改为在 initIfNeeded 最后直接打印
 
 // 新数据库 receipts_v2.db 强制包含 transaction_at 列，不再需要复杂的检测和迁移逻辑
+// 旧数据库 receipts.db 已弃用，用户需要重新扫描小票（V1 前允许的破坏性升级）
 
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
@@ -371,58 +372,30 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
     }
   }
 
-  // detect 必须发生在函数最开始
-  const hasTx = await receiptsHasTransactionAt(db);
-
-  // 完全分离的两套 INSERT，互不包含对方字段名
-  if (hasTx) {
-    await db.runAsync(
-      `
-      INSERT INTO receipts (
-        id, created_at, transaction_at,
-        image_uri,
-        merchant_raw, merchant_normalized,
-        total, tax, currency,
-        analysis_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        id,
-        now,
-        transactionAt,
-        params.imageUri,
-        merchantRaw,
-        merchantNormalized,
-        total,
-        tax,
-        currency,
-        analysisJson,
-      ]
-    );
-  } else {
-    await db.runAsync(
-      `
-      INSERT INTO receipts (
-        id, created_at,
-        image_uri,
-        merchant_raw, merchant_normalized,
-        total, tax, currency,
-        analysis_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        id,
-        now,
-        params.imageUri,
-        merchantRaw,
-        merchantNormalized,
-        total,
-        tax,
-        currency,
-        analysisJson,
-      ]
-    );
-  }
+  // 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
+  await db.runAsync(
+    `
+    INSERT INTO receipts (
+      id, created_at, transaction_at,
+      image_uri,
+      merchant_raw, merchant_normalized,
+      total, tax, currency,
+      analysis_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      id,
+      now,
+      transactionAt,
+      params.imageUri,
+      merchantRaw,
+      merchantNormalized,
+      total,
+      tax,
+      currency,
+      analysisJson,
+    ]
+  );
 
   return id;
 }
