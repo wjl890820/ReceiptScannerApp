@@ -1,4 +1,11 @@
 {
+  "common": {
+    "uncategorizedTag": "分類待ち",
+    "unknownMerchant": "不明な店舗"
+  },
+  "errors": {
+    "invalidAnonKey": "Anon key が JWT 形式ではありません（publishable key を入れている可能性があります）。Supabase 設定 → API → Legacy anon key (eyJ...) を確認してください。"
+  },
   "home": {
     "title": "支出構成の概要",
     "subtitle": "レシートから自動分析",
@@ -15,7 +22,8 @@
       "totalSpending": "総支出",
       "topCategory": "主要カテゴリ",
       "nonEssential": "非必需品",
-      "currency": "円"
+      "currency": "円",
+      "uncategorizedHint": "未分類の商品が {count} 件あり、カテゴリ集計には含まれていません"
     },
     "insight": {
       "noData": "データなし",
@@ -95,6 +103,50 @@
     "settings": "設定",
     "analysis": "分析"
   },
+  "history": {
+    "errors": {
+      "loadTitle": "読み込みに失敗しました",
+      "loadMessage": "履歴を読み込めませんでした"
+    },
+    "batchDelete": {
+      "select": "選択",
+      "cancel": "キャンセル",
+      "selectAll": "全選択",
+      "deleteSelected": "削除（{n}件選択）",
+      "confirmTitle": "レシートを削除しますか？",
+      "confirmMessage": "選択した {n} 枚のレシートを削除します。元に戻せません。",
+      "confirmCancel": "キャンセル",
+      "confirmDelete": "削除",
+      "deleteFailed": "削除に失敗しました。もう一度お試しください。"
+    },
+    "detail": {
+      "loadMessage": "この記録を読み込めませんでした",
+      "inputErrorTitle": "入力エラー",
+      "qtyError": "数量は1以上で入力してください",
+      "totalError": "合計は0より大きい値を入力してください",
+      "savedTitle": "保存しました",
+      "saveFailedTitle": "保存に失敗しました",
+      "retry": "もう一度お試しください",
+      "deleteConfirmTitle": "削除してよろしいですか？",
+      "deleteConfirmMessage": "削除すると元に戻せません。削除しますか？",
+      "deletedTitle": "削除しました",
+      "deleteFailedTitle": "削除に失敗しました",
+      "loading": "読み込み中…",
+      "edit": {
+        "cancel": "キャンセル",
+        "title": "商品を編集",
+        "saving": "保存中…",
+        "save": "保存",
+        "name": "商品名",
+        "category": "カテゴリ",
+        "quantity": "数量",
+        "quantityPlaceholder": "数量を入力",
+        "subtotal": "合計",
+        "subtotalPlaceholder": "合計を入力",
+        "unitNote": "単位：円"
+      }
+    }
+  },
   "settings": {
     "title": "設定",
     "feedback": {
@@ -131,11 +183,14 @@
       "required": "フィードバックを入力してください。",
       "network": "送信失敗（ネットワークエラー）",
       "server": "送信失敗（サーバーエラー）",
-      "generic": "送信失敗。後でもう一度お試しください。"
+      "generic": "送信失敗。後でもう一度お試しください。",
+      "notConfigured": "送信失敗（未設定）",
+      "badResponse": "送信失敗（サーバー応答エラー）"
     },
     "success": {
       "message": "送信済み",
-      "title": "成功"
+      "title": "成功",
+      "fallbackTitle": "成功"
     }
   },
   "pro": {
@@ -184,7 +239,9 @@
       "title": "価格レーダー",
       "subtitle": "よく買う商品の最安店",
       "noData": "価格データがまだありません",
-      "needMore": "あと {count} 枚スキャンすると価格レーダーが解除されます"
+      "needMore": "あと {count} 枚スキャンすると価格レーダーが解除されます",
+      "lockedHint": "あと {count} 件のレシートで利用できます",
+      "unlockedHint": "利用可能です"
     },
     "categoryIndex": {
       "title": "カテゴリ価格指数",
@@ -215,6 +272,18 @@
     "uncategorized": "未分類",
     "non_grocery": "スーパー以外"
   },
+  "categoriesShort": {
+    "snacks_sweets": "お菓子",
+    "non_alcoholic_drinks": "飲料",
+    "quick_meals": "惣菜",
+    "household": "日用品",
+    "meat_seafood": "肉・魚",
+    "beverages_other": "他飲料",
+    "health_supplements": "補助",
+    "canned_preserved": "缶詰",
+    "dairy_eggs": "乳・卵",
+    "condiments": "調味料"
+  },
   "permissions": {
     "cameraDeniedTitle": "カメラの許可が必要です",
     "cameraDeniedMessage": "設定でカメラへのアクセスを許可してください。",
@@ -236,6 +305,48 @@
   },
   "grocery": {
     "onlyNote": "カテゴリ内訳はスーパーのレシートのみ表示されます。"
+  },
+  "analysisV2": {
+    "sections": {
+      "story": "今期の洞察",
+      "changes": "前期比較",
+      "tips": "できるアクション"
+    },
+    "story": {
+      "conclusion": "最近の支出は主に「{catLabel}」（約 {pct}% / ¥{amt}）です。",
+      "explainQuickMeals": "最近お忙しいかもしれません。",
+      "explainSnacks": "気分転換や間食が増えているかもしれません。",
+      "explainDrinks": "最近飲み物の購入が多いかもしれません。",
+      "explainDefault": "このカテゴリの支出を気にしてみてください。",
+      "fallback": "データがまだ少ないため、まず概要をお見せします。"
+    },
+    "changes": {
+      "spendUp": "この{periodDays}日間の総支出は前期間より ¥{delta} 増えました。",
+      "spendDown": "この{periodDays}日間の総支出は前期間より ¥{delta} 減りました。",
+      "categoryShareUp": "「{catLabel}」の割合が {change}% 増（{from}% → {to}%）。",
+      "categoryShareDown": "「{catLabel}」の割合が {change}% 減（{from}% → {to}%）。",
+      "merchantMore": "この期間は {merchant} での支出が多めです。"
+    },
+    "tips": {
+      "saveQuick": "節約したいなら、惣菜・お菓子の一部を主食や生鮮に替えると、一般的に安くなります。",
+      "healthSnacksDrinks": "食生活を整えたいなら、お菓子・飲料の一部をフルーツ・ヨーグルト・無糖飲料に替えてみてください。",
+      "timeQuick": "時短したいなら、定番のコンボを2つ決めておくのも手です（例：ヨーグルト+フルーツ / 鶏むね+サラダ）。"
+    },
+    "confidence": {
+      "low": "記録が少なめのため、結論は参考程度に。",
+      "med": "記録が増えてくると、より安定した洞察になります。",
+      "high": "データが十分なため、結論の信頼性は高めです。"
+    },
+    "pro": {
+      "title": "深度洞察（Pro）",
+      "teaser1": "よく買う5商品、値上がりしてる？",
+      "teaser2": "どの店だと予算オーバーしやすい？",
+      "teaser3": "今月の支出構造の3つの変化",
+      "alert": "サブスクで解放。月20枚まで込み、超えた分は追加パックで購入可能。"
+    },
+    "labels": {
+      "other": "その他"
+    }
   },
   "ocr": {
     "privacyNotice": "コスト分析と不正利用防止のため、OCRリクエスト回数とトークン使用量を記録します。画像やレシートの全文は保存しません。",

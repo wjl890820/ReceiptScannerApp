@@ -41,9 +41,9 @@ export default function FeedbackScreen() {
 
       // Success: show alert and clear form
       Alert.alert(
-        t('feedback.success.title') || '成功',
+        t('feedback.success.title') || t('feedback.success.fallbackTitle'),
         t('feedback.success.message'),
-        [{ text: 'OK', onPress: () => {} }]
+        [{ text: t('easterEgg.ok'), onPress: () => {} }]
       );
       
       setFeedback('');
@@ -61,9 +61,9 @@ export default function FeedbackScreen() {
       } else if (errorText.includes('服务器') || errorText.includes('server') || errorText.includes('HTTP 5')) {
         errorMessage = t('feedback.error.server');
       } else if (errorText.includes('未配置') || errorText.includes('Supabase')) {
-        errorMessage = '提交失败（未配置）';
+        errorMessage = t('feedback.error.notConfigured');
       } else if (errorText.includes('格式错误') || errorText.includes('空响应') || errorText.includes('未确认成功')) {
-        errorMessage = '提交失败（服务器响应异常）';
+        errorMessage = t('feedback.error.badResponse');
       }
       
       // 显示错误 Alert，不清空输入（用户可以重试）

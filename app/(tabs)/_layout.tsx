@@ -51,7 +51,16 @@ export default function TabLayout() {
         }}
       />
 
-      {/* 注意：history 是一个文件夹路由，因此 Tab 指向 history/index */}
+      <Tabs.Screen
+        name="analysis"
+        options={{
+          title: tabTitles.analysis,
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="chart.bar.fill" color={color} />
+          ),
+        }}
+      />
+
       <Tabs.Screen
         name="history/index"
         options={{
@@ -62,12 +71,9 @@ export default function TabLayout() {
         }}
       />
 
-      {/* 详情页不应该出现在 TabBar 上 */}
       <Tabs.Screen
         name="history/[id]"
-        options={{
-          href: null,
-        }}
+        options={{ href: null }}
       />
 
       <Tabs.Screen
@@ -80,31 +86,14 @@ export default function TabLayout() {
         }}
       />
 
-      {/* Pro 洞察说明页不应该出现在 TabBar 上 */}
       <Tabs.Screen
         name="pro-insight"
-        options={{
-          href: null,
-        }}
+        options={{ href: null }}
       />
 
-      {/* Feedback 页面不应该出现在 TabBar 上 */}
       <Tabs.Screen
         name="feedback"
-        options={{
-          href: null,
-        }}
-      />
-
-      {/* Analysis 页面 */}
-      <Tabs.Screen
-        name="analysis"
-        options={{
-          title: tabTitles.analysis,
-          tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="chart.bar.fill" color={color} />
-          ),
-        }}
+        options={{ href: null }}
       />
     </Tabs>
   );

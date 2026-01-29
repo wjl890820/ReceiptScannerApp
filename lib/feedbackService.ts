@@ -1,7 +1,7 @@
 // lib/feedbackService.ts
 // Submit feedback via Supabase Edge Function
 
-import { getSupabaseUrl, getSupabaseAnonKey } from './env';
+import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import Constants from 'expo-constants';
@@ -28,6 +28,17 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
 
   if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error('Supabase 未配置');
+  }
+
+  if (!isJwtLike(supabaseAnonKey)) {
+    if (__DEV__) {
+      console.warn(
+        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
+      );
+    }
+    throw new Error(
+      'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
+    );
   }
 
   // A) 统一 URL
@@ -82,9 +93,8 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     'x-request-id': requestId,
   };
 
-  // C) DEV 可观测日志
   if (__DEV__) {
-    console.log(`[Feedback] POST ${edgeFunctionUrl}`);
+    console.log('[Feedback] POST /functions/v1/send-feedback');
   }
 
   const response = await fetch(edgeFunctionUrl, {

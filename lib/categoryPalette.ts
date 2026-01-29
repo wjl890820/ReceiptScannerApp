@@ -52,21 +52,47 @@ export function getCategoryColor(categoryId: string): string {
 }
 
 /**
- * Get i18n label for a category ID
- * Uses t(`category.${categoryId}`) with fallback to categoryId
- * Note: Uses 'category' key (not 'categories') to match existing locale files
+ * Get i18n label for a category ID.
+ * Never returns raw key; unknown keys fall back to other_grocery label.
  */
 export function getCategoryLabel(categoryId: string): string {
   const i18nKey = `category.${categoryId}`;
   const label = t(i18nKey);
-  
-  // If translation exists and is different from the key, return it
-  if (label && label !== i18nKey) {
-    return label;
+  if (label && label !== i18nKey) return label;
+  return t('category.other_grocery');
+}
+
+/**
+ * Item-level tag display for History/Detail: 待分类 vs localized category, never raw key / non_grocery.
+ * - classification_status !== 'ok' or category empty → "待分类"
+ * - category === 'non_grocery' → hide tag (visible: false)
+ * - else → show getCategoryLabel(category)
+ */
+export function getItemTagDisplay(item: {
+  category?: string | null;
+  classification_status?: string;
+}): { visible: boolean; label: string } {
+  const status = (item.classification_status as 'ok' | 'pending' | 'failed' | 'fallback') || 'ok';
+  const category = typeof item.category === 'string' ? item.category.trim() || null : null;
+  const hasValidCategory = !!category && category !== 'uncategorized';
+
+  if (category === 'non_grocery') {
+    return { visible: false, label: '' };
   }
-  
-  // Fallback to categoryId (should not happen if i18n keys are complete)
-  return categoryId;
+  if (status !== 'ok' || !hasValidCategory) {
+    return { visible: true, label: t('common.uncategorizedTag') };
+  }
+  return { visible: true, label: getCategoryLabel(category) };
+}
+
+/**
+ * Short label for KPI/narrow space; falls back to full label if no short key.
+ */
+export function getCategoryShortLabel(categoryId: string): string {
+  const shortKey = `categoriesShort.${categoryId}`;
+  const short = t(shortKey);
+  if (short && short !== shortKey) return short;
+  return getCategoryLabel(categoryId);
 }
 
 /**

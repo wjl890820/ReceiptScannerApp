@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -22,8 +21,10 @@ import {
 } from '@/lib/db';
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
-import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
+import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
+import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
 import { formatJPY } from '@/lib/formatJPY';
+import { t } from '@/lib/i18n';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -90,7 +91,11 @@ function buildCategorySummary(analysis: ReceiptAnalysis | { items: ReceiptItem[]
   if (!analysis?.items?.length) return [];
 
   for (const it of analysis.items) {
-    const cat = (it.category && String(it.category).trim()) || 'Other';
+    const status = (it as any).classification_status as string | undefined;
+    const cat = (it.category && String(it.category).trim()) || '';
+    if (!cat || cat === 'non_grocery' || isExcludedFromAnalytics(cat)) continue;
+    if (status !== 'ok' && status !== undefined) continue;
+    if (!isGroceryCategory(cat)) continue;
     const amt = toNum(it.lineTotal, 0);
     map.set(cat, (map.get(cat) ?? 0) + amt);
   }
@@ -99,7 +104,6 @@ function buildCategorySummary(analysis: ReceiptAnalysis | { items: ReceiptItem[]
     category,
     amount,
   }));
-
   arr.sort((a, b) => b.amount - a.amount);
   return arr;
 }
@@ -154,7 +158,7 @@ export default function ReceiptDetailScreen() {
     receipt?.merchant_normalized ||
     receipt?.merchant_raw ||
     analysis?.merchant ||
-    '未知商店';
+    t('common.unknownMerchant');
 
   const currency = receipt?.currency || analysis?.currency || 'JPY';
 
@@ -178,7 +182,7 @@ export default function ReceiptDetailScreen() {
       setReceipt(row ?? null);
     } catch (e: any) {
       console.error(e);
-      Alert.alert('读取失败', e?.message ?? '无法读取该记录');
+      Alert.alert(t('history.errors.loadTitle'), e?.message ?? t('history.detail.loadMessage'));
       setReceipt(null);
     } finally {
       setLoading(false);
@@ -214,13 +218,13 @@ export default function ReceiptDetailScreen() {
     // 验证输入
     const quantity = toNum(draftQuantity.trim(), 0);
     if (quantity < 1) {
-      Alert.alert('输入错误', '数量必须大于等于 1');
+      Alert.alert(t('history.detail.inputErrorTitle'), t('history.detail.qtyError'));
       return;
     }
 
     const lineTotal = toNum(draftLineTotal.trim(), 0);
     if (lineTotal <= 0) {
-      Alert.alert('输入错误', '小计必须大于 0');
+      Alert.alert(t('history.detail.inputErrorTitle'), t('history.detail.totalError'));
       return;
     }
 
@@ -250,10 +254,10 @@ export default function ReceiptDetailScreen() {
 
       setItemEditOpen(false);
       await load();
-      Alert.alert('已保存');
+      Alert.alert(t('history.detail.savedTitle'));
     } catch (e: any) {
       console.error(e);
-      Alert.alert('保存失败', e?.message ?? '请重试');
+      Alert.alert(t('history.detail.saveFailedTitle'), e?.message ?? t('history.detail.retry'));
     } finally {
       setSavingItem(false);
     }
@@ -262,30 +266,34 @@ export default function ReceiptDetailScreen() {
   const onDelete = async () => {
     if (!receipt) return;
 
-    Alert.alert('确认删除', '删除后无法恢复，确定要删除吗？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteReceipt(receipt.id);
-            Alert.alert('已删除');
-            router.back();
-          } catch (e: any) {
-            console.error(e);
-            Alert.alert('删除失败', e?.message ?? '请重试');
-          }
+    Alert.alert(
+      t('history.detail.deleteConfirmTitle'),
+      t('history.detail.deleteConfirmMessage'),
+      [
+        { text: t('history.detail.edit.cancel'), style: 'cancel' },
+        {
+          text: t('history.batchDelete.confirmDelete'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteReceipt(receipt.id);
+              Alert.alert(t('history.detail.deletedTitle'));
+              router.back();
+            } catch (e: any) {
+              console.error(e);
+              Alert.alert(t('history.detail.deleteFailedTitle'), e?.message ?? t('history.detail.retry'));
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
   if (loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator />
-        <Text style={{ marginTop: 10 }}>加载中…</Text>
+        <Text style={{ marginTop: 10 }}>{t('history.detail.loading')}</Text>
       </View>
     );
   }
@@ -319,12 +327,6 @@ export default function ReceiptDetailScreen() {
           </Text>
         )}
         <Text style={styles.tax}>税 {receipt.tax}</Text>
-
-        {receipt.image_uri ? (
-          <View style={styles.imageWrap}>
-            <Image source={{ uri: receipt.image_uri }} style={styles.image} />
-          </View>
-        ) : null}
 
         {/* 分类汇总 */}
         <Text style={styles.h2}>分类汇总：</Text>
@@ -371,11 +373,15 @@ export default function ReceiptDetailScreen() {
                     数量 {it.quantity} · 小计 {formatJPY(it.lineTotal)}
                   </Text>
                 </View>
-                <View style={styles.tag}>
-                  <Text style={styles.tagText}>
-                    {getCategoryLabel(it.category || 'uncategorized')}
-                  </Text>
-                </View>
+                {(() => {
+                  const tag = getItemTagDisplay(it as any);
+                  if (!tag.visible) return null;
+                  return (
+                    <View style={styles.tag}>
+                      <Text style={styles.tagText}>{tag.label}</Text>
+                    </View>
+                  );
+                })()}
               </Pressable>
             ))}
           </View>
@@ -404,15 +410,15 @@ export default function ReceiptDetailScreen() {
           <View style={styles.modalHeader}>
             <Pressable onPress={closeItemEditor} disabled={savingItem}>
               <Text style={[styles.modalHeaderBtn, savingItem && { opacity: 0.5 }]}>
-                取消
+                {t('history.detail.edit.cancel')}
               </Text>
             </Pressable>
 
-            <Text style={styles.modalTitle}>编辑商品</Text>
+            <Text style={styles.modalTitle}>{t('history.detail.edit.title')}</Text>
 
             <Pressable onPress={onSaveItemEdit} disabled={savingItem}>
               <Text style={[styles.modalHeaderBtn, savingItem && { opacity: 0.5 }]}>
-                {savingItem ? '保存中…' : '保存'}
+                {savingItem ? t('history.detail.edit.saving') : t('history.detail.edit.save')}
               </Text>
             </Pressable>
           </View>
@@ -420,14 +426,14 @@ export default function ReceiptDetailScreen() {
           <ScrollView contentContainerStyle={styles.modalBody}>
             {editingItemIndex >= 0 && editingItemIndex < displayItems.length && (
               <>
-                <Text style={styles.label}>商品名称</Text>
+                <Text style={styles.label}>{t('history.detail.edit.name')}</Text>
                 <Text style={[styles.input, { color: '#666' }]}>
                   {displayItems[editingItemIndex].name}
                 </Text>
 
                 <View style={{ height: 14 }} />
 
-                <Text style={styles.label}>分类</Text>
+                <Text style={styles.label}>{t('history.detail.edit.category')}</Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
                   {categoryOptions.map((cat) => (
                     <Pressable
@@ -456,11 +462,11 @@ export default function ReceiptDetailScreen() {
 
                 <View style={{ height: 14 }} />
 
-                <Text style={styles.label}>数量</Text>
+                <Text style={styles.label}>{t('history.detail.edit.quantity')}</Text>
                 <TextInput
                   value={draftQuantity}
                   onChangeText={setDraftQuantity}
-                  placeholder="请输入数量"
+                  placeholder={t('history.detail.edit.quantityPlaceholder')}
                   keyboardType="numeric"
                   style={styles.input}
                   editable={!savingItem}
@@ -468,17 +474,17 @@ export default function ReceiptDetailScreen() {
 
                 <View style={{ height: 14 }} />
 
-                <Text style={styles.label}>小计</Text>
+                <Text style={styles.label}>{t('history.detail.edit.subtotal')}</Text>
                 <TextInput
                   value={draftLineTotal}
                   onChangeText={setDraftLineTotal}
-                  placeholder="请输入小计"
+                  placeholder={t('history.detail.edit.subtotalPlaceholder')}
                   keyboardType="numeric"
                   style={styles.input}
                   editable={!savingItem}
                 />
                 <Text style={styles.hint}>
-                  单位：日元
+                  {t('history.detail.edit.unitNote')}
                 </Text>
               </>
             )}
@@ -521,19 +527,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: '#666',
     marginBottom: 18,
-  },
-  imageWrap: {
-    backgroundColor: '#f3f3f3',
-    borderRadius: 16,
-    padding: 10,
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  image: {
-    width: '100%',
-    height: 280,
-    resizeMode: 'contain',
-    borderRadius: 12,
   },
   h2: {
     fontSize: 22,

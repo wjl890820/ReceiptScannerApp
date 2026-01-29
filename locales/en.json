@@ -1,4 +1,11 @@
 {
+  "common": {
+    "uncategorizedTag": "Uncategorized",
+    "unknownMerchant": "Unknown store"
+  },
+  "errors": {
+    "invalidAnonKey": "Anon key is not a JWT (you may have used the publishable key). Go to Supabase Settings → API → Legacy anon key (eyJ...)."
+  },
   "home": {
     "title": "Spending Overview",
     "subtitle": "Automatically generated from receipts",
@@ -15,7 +22,8 @@
       "totalSpending": "Total Spending",
       "topCategory": "Top Category",
       "nonEssential": "Non-Essential",
-      "currency": "JPY"
+      "currency": "JPY",
+      "uncategorizedHint": "{count} items are pending classification and not included in category stats"
     },
     "insight": {
       "noData": "No data",
@@ -95,6 +103,50 @@
     "settings": "Settings",
     "analysis": "Analysis"
   },
+  "history": {
+    "errors": {
+      "loadTitle": "Load failed",
+      "loadMessage": "Could not load history"
+    },
+    "batchDelete": {
+      "select": "Select",
+      "cancel": "Cancel",
+      "selectAll": "Select all",
+      "deleteSelected": "Delete ({n} selected)",
+      "confirmTitle": "Delete receipts?",
+      "confirmMessage": "You are about to delete {n} receipt(s). This cannot be undone.",
+      "confirmCancel": "Cancel",
+      "confirmDelete": "Delete",
+      "deleteFailed": "Delete failed. Please try again."
+    },
+    "detail": {
+      "loadMessage": "Could not load this record",
+      "inputErrorTitle": "Input error",
+      "qtyError": "Quantity must be at least 1",
+      "totalError": "Subtotal must be greater than 0",
+      "savedTitle": "Saved",
+      "saveFailedTitle": "Save failed",
+      "retry": "Please try again",
+      "deleteConfirmTitle": "Confirm delete",
+      "deleteConfirmMessage": "Once deleted, this cannot be undone. Delete?",
+      "deletedTitle": "Deleted",
+      "deleteFailedTitle": "Delete failed",
+      "loading": "Loading…",
+      "edit": {
+        "cancel": "Cancel",
+        "title": "Edit item",
+        "saving": "Saving…",
+        "save": "Save",
+        "name": "Item name",
+        "category": "Category",
+        "quantity": "Quantity",
+        "quantityPlaceholder": "Enter quantity",
+        "subtotal": "Subtotal",
+        "subtotalPlaceholder": "Enter subtotal",
+        "unitNote": "Unit: JPY"
+      }
+    }
+  },
   "settings": {
     "title": "Settings",
     "feedback": {
@@ -131,11 +183,14 @@
       "required": "Please enter your feedback.",
       "network": "Submission failed (network error)",
       "server": "Submission failed (server error)",
-      "generic": "Submission failed. Please try again later."
+      "generic": "Submission failed. Please try again later.",
+      "notConfigured": "Submission failed (not configured)",
+      "badResponse": "Submission failed (server response error)"
     },
     "success": {
       "message": "Submitted",
-      "title": "Success"
+      "title": "Success",
+      "fallbackTitle": "Success"
     }
   },
   "pro": {
@@ -184,7 +239,9 @@
       "title": "Price Radar",
       "subtitle": "Cheapest store for your frequent items",
       "noData": "No price data available yet",
-      "needMore": "Scan {count} more receipt(s) to unlock Price Radar"
+      "needMore": "Scan {count} more receipt(s) to unlock Price Radar",
+      "lockedHint": "Scan {count} more receipts to unlock",
+      "unlockedHint": "Unlocked"
     },
     "categoryIndex": {
       "title": "Category Price Index",
@@ -215,6 +272,18 @@
     "uncategorized": "Uncategorized",
     "non_grocery": "Not Grocery"
   },
+  "categoriesShort": {
+    "snacks_sweets": "Snacks",
+    "non_alcoholic_drinks": "Drinks",
+    "quick_meals": "Meals",
+    "household": "Household",
+    "meat_seafood": "Meat",
+    "beverages_other": "Beverages",
+    "health_supplements": "Supplements",
+    "canned_preserved": "Canned",
+    "dairy_eggs": "Dairy",
+    "condiments": "Condiments"
+  },
   "permissions": {
     "cameraDeniedTitle": "Camera Permission Required",
     "cameraDeniedMessage": "Please allow camera access in Settings to take a photo.",
@@ -236,6 +305,48 @@
   },
   "grocery": {
     "onlyNote": "Category breakdown is shown for grocery receipts only."
+  },
+  "analysisV2": {
+    "sections": {
+      "story": "This period",
+      "changes": "Vs previous period",
+      "tips": "Actionable tips"
+    },
+    "story": {
+      "conclusion": "Lately you’ve spent most on 「{catLabel}」（about {pct}% / ¥{amt}).",
+      "explainQuickMeals": "You may have been busier lately.",
+      "explainSnacks": "You may have been snacking or treating yourself more.",
+      "explainDrinks": "You may have been buying more drinks lately.",
+      "explainDefault": "Worth keeping an eye on this category.",
+      "fallback": "Not enough data yet — here’s an overview for now."
+    },
+    "changes": {
+      "spendUp": "Total spending over the last {periodDays} days is ¥{delta} higher than the previous period.",
+      "spendDown": "Total spending over the last {periodDays} days is ¥{delta} lower than the previous period.",
+      "categoryShareUp": "「{catLabel}」 share went up {change}% ({from}% → {to}%).",
+      "categoryShareDown": "「{catLabel}」 share went down {change}% ({from}% → {to}%).",
+      "merchantMore": "You’ve been spending more at {merchant} lately."
+    },
+    "tips": {
+      "saveQuick": "If you want to save a bit, swapping some ready meals or snacks for staples or fresh produce often helps.",
+      "healthSnacksDrinks": "If you want to eat a bit healthier, try swapping some snacks or drinks for fruit, yogurt, or sugar-free options.",
+      "timeQuick": "If you’re short on time, having 2 go-to combos (e.g. yogurt + fruit / chicken + salad) can help."
+    },
+    "confidence": {
+      "low": "Few recent records — insights are indicative only.",
+      "med": "More records will make insights more reliable.",
+      "high": "Enough data for solid insights."
+    },
+    "pro": {
+      "title": "Deep insights (Pro)",
+      "teaser1": "Have your top 5 products gone up in price?",
+      "teaser2": "Where do you tend to overspend?",
+      "teaser3": "3 changes in this month’s spending structure",
+      "alert": "Unlock with a subscription; 20 scans/month included, top-ups available."
+    },
+    "labels": {
+      "other": "Other"
+    }
   },
   "ocr": {
     "privacyNotice": "We record OCR request counts and token usage for cost analysis and abuse prevention. We do NOT store your images or receipt content.",
