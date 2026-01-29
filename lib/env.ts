@@ -42,18 +42,61 @@ export function getExtraValue(key: string, fallback: string = ''): string {
   return typeof value === 'string' ? value.trim() : String(value || fallback).trim();
 }
 
-/**
- * Get Supabase URL from Expo extra
- */
-export function getSupabaseUrl(): string {
-  return getExtraValue('SUPABASE_URL') || getExtraValue('supabaseUrl');
+function _envVar(key: string): string {
+  if (typeof process === 'undefined' || !process.env) return '';
+  const v = process.env[key];
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+let _supabaseCached: { url: string; key: string } | null = null;
+let _supabaseConfigLogged = false;
+
+function _getSupabaseConfig(): { url: string; key: string } {
+  if (_supabaseCached) return _supabaseCached;
+  const url =
+    _envVar('EXPO_PUBLIC_SUPABASE_URL') ||
+    _envVar('SUPABASE_URL') ||
+    getExtraValue('SUPABASE_URL') ||
+    getExtraValue('supabaseUrl');
+  const key =
+    _envVar('EXPO_PUBLIC_SUPABASE_ANON_KEY') ||
+    _envVar('SUPABASE_ANON_KEY') ||
+    getExtraValue('SUPABASE_ANON_KEY') ||
+    getExtraValue('supabaseAnonKey');
+  _supabaseCached = { url: typeof url === 'string' ? url.trim() : '', key: typeof key === 'string' ? key.trim() : '' };
+  if (__DEV__ && !_supabaseConfigLogged) {
+    _supabaseConfigLogged = true;
+    // eslint-disable-next-line no-console
+    console.log(
+      '[Env] Supabase URL:',
+      _supabaseCached.url ? 'configured' : 'not set',
+      '| Anon key:',
+      _supabaseCached.key ? 'configured' : 'not set'
+    );
+  }
+  return _supabaseCached;
 }
 
 /**
- * Get Supabase Anon Key from Expo extra
+ * Get Supabase URL: EXPO_PUBLIC_SUPABASE_URL ?? SUPABASE_URL ?? extra
+ */
+export function getSupabaseUrl(): string {
+  return _getSupabaseConfig().url;
+}
+
+/**
+ * Get Supabase Anon Key: EXPO_PUBLIC_SUPABASE_ANON_KEY ?? SUPABASE_ANON_KEY ?? extra
  */
 export function getSupabaseAnonKey(): string {
-  return getExtraValue('SUPABASE_ANON_KEY') || getExtraValue('supabaseAnonKey');
+  return _getSupabaseConfig().key;
+}
+
+/**
+ * 判断 key 是否为 JWT 形态（eyJ 开头且含 .），用于区分 Legacy anon key 与 publishable key。
+ * 若用户误填 sb_publishable_... 会导致 Edge Functions 401 Invalid JWT。
+ */
+export function isJwtLike(key: string | undefined): boolean {
+  return typeof key === 'string' && key.startsWith('eyJ') && key.includes('.');
 }
 
 /**

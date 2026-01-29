@@ -40,8 +40,8 @@ export default ({ config }) => {
     },
     extra: {
       ...(config.extra ?? {}),
-      SUPABASE_URL: process.env.SUPABASE_URL,
-      SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+      SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL,
+      SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY,
       // GEMINI_API_KEY 已移除：客户端不再需要，OCR 通过 Supabase Edge Function 处理
       // 仅开发调试时可通过 DEV_DIRECT_GEMINI=true 启用直连 Gemini fallback
       DEV_DIRECT_GEMINI: process.env.DEV_DIRECT_GEMINI || 'false',
