@@ -8,7 +8,7 @@ const HOME_TIME_RANGE_KEY = 'home_time_range';
 
 /**
  * Get home time range preference (7D | 30D | ALL)
- * Defaults to '30D' if not set
+ * Defaults to '7D' if not set
  */
 export async function getHomeTimeRange(): Promise<'7D' | '30D' | 'ALL'> {
   try {
@@ -27,8 +27,7 @@ export async function getHomeTimeRange(): Promise<'7D' | '30D' | 'ALL'> {
     }
   }
 
-  // Default to 30D
-  return '30D';
+  return '7D';
 }
 
 /**

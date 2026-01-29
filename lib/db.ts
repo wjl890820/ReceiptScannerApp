@@ -33,6 +33,9 @@ export type ReceiptRow = {
   user_items_json: string | null; // 用户编辑后的商品列表 JSON
 };
 
+/** 列表用：不含 image_uri，减少内存/IO（历史列表不展示缩略图） */
+export type ReceiptListRow = Omit<ReceiptRow, 'image_uri'>;
+
 export type SaveReceiptParams = {
   imageUri: string;
   analysis: {
@@ -103,6 +106,10 @@ async function initIfNeeded() {
         
         CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at
           ON receipts(transaction_at ASC);
+        
+        -- 复合索引用于 COALESCE(transaction_at, created_at) 排序优化
+        CREATE INDEX IF NOT EXISTS idx_receipts_transaction_created
+          ON receipts(transaction_at ASC, created_at ASC);
 
         CREATE TABLE IF NOT EXISTS item_category_mapping (
           normalized_name TEXT NOT NULL,
@@ -350,24 +357,26 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
 
   const analysisJson = JSON.stringify(params.analysis);
 
-  // Extract transaction_at from analysis.transactionDate
-  // Try to parse transactionDate string to timestamp, fallback to null
+  // Extract transaction_at from analysis.transactionDate (或 transactionAt / purchasedAt / datetime)
+  // 仅日期：dateParser 用当天 00:00；日期+时间：按原字符串解析（ISO 或本地/Asia/Tokyo 格式）；解析失败则 null，排序回退 created_at
   let transactionAt: number | null = null;
-  if (params.analysis.transactionDate) {
+  const txDateStr =
+    params.analysis.transactionDate ||
+    (params.analysis as any).transactionAt ||
+    (params.analysis as any).purchasedAt ||
+    (params.analysis as any).datetime;
+  if (txDateStr && typeof txDateStr === 'string' && txDateStr.trim()) {
     try {
-      // Try parsing as ISO string first
-      const isoDate = new Date(params.analysis.transactionDate);
+      const isoDate = new Date(txDateStr.trim());
       if (!isNaN(isoDate.getTime())) {
         transactionAt = isoDate.getTime();
       } else {
-        // Try using dateParser for custom formats
         const { parseReceiptDateTime } = await import('./dateParser');
-        transactionAt = parseReceiptDateTime(params.analysis.transactionDate, false);
+        transactionAt = parseReceiptDateTime(txDateStr.trim(), false);
       }
     } catch (e) {
-      // If parsing fails, leave as null (will fallback to created_at in queries)
       if (__DEV__) {
-        console.warn('[DB] Failed to parse transactionDate:', params.analysis.transactionDate, e);
+        console.warn('[DB] Failed to parse transactionDate:', txDateStr, e);
       }
     }
   }
@@ -397,6 +406,10 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
     ]
   );
 
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[DB] saved receipt:', { id: id.slice(0, 8), txAt: !!transactionAt, createdAt: true });
+  }
   return id;
 }
 
@@ -424,7 +437,37 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
       note,
       user_items_json
     FROM receipts
-    ORDER BY COALESCE(transaction_at, created_at) ASC
+    ORDER BY COALESCE(transaction_at, created_at) DESC
+    LIMIT ?
+    `,
+    [limit]
+  );
+
+  return rows ?? [];
+}
+
+/**
+ * 列表（历史等）：不查 image_uri，减少内存/IO；列表不展示缩略图
+ */
+export async function listReceiptsForList(limit = 200): Promise<ReceiptListRow[]> {
+  await initIfNeeded();
+  const db = await getDb();
+
+  const rows = await db.getAllAsync<ReceiptListRow>(
+    `
+    SELECT
+      id, created_at,
+      COALESCE(transaction_at, created_at) AS transaction_at,
+      merchant_raw, merchant_normalized,
+      total, tax, currency,
+      analysis_json,
+      COALESCE(user_edited, 0) as user_edited,
+      final_total,
+      final_category,
+      note,
+      user_items_json
+    FROM receipts
+    ORDER BY COALESCE(transaction_at, created_at) DESC
     LIMIT ?
     `,
     [limit]
@@ -466,12 +509,25 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
 }
 
 /**
- * 删除一条
+ * 批量删除（事务内一次性执行）。关联数据：仅 receipts 表；item_category_mapping 为全局学习表不删。
+ * 用于单条删除、批量删除；priceRadar / Analysis 无持久缓存，删后重拉即可。
  */
-export async function deleteReceipt(id: string): Promise<void> {
+export async function deleteReceipts(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
   await initIfNeeded();
   const db = await getDb();
-  await db.runAsync(`DELETE FROM receipts WHERE id = ?`, [id]);
+  const placeholders = ids.map(() => '?').join(',');
+  await db.runAsync(
+    `DELETE FROM receipts WHERE id IN (${placeholders})`,
+    ids
+  );
+}
+
+/**
+ * 删除一条（复用批量删除）
+ */
+export async function deleteReceipt(id: string): Promise<void> {
+  await deleteReceipts([id]);
 }
 
 /**

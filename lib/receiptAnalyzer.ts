@@ -94,11 +94,6 @@ async function analyzeReceiptImageViaEdgeFunction(
   uri: string,
   functionName: 'ocr-receipt' | 'ocr'
 ): Promise<ReceiptAnalysis> {
-  // 临时调试日志：检查环境变量注入
-  console.log('[ENV] extra=', Constants.expoConfig?.extra);
-  console.log('[ENV] SUPABASE_URL(extra)=', Constants.expoConfig?.extra?.SUPABASE_URL);
-  console.log('[ENV] SUPABASE_ANON_KEY(extra)=', Constants.expoConfig?.extra?.SUPABASE_ANON_KEY);
-  
   const supabaseUrl = getSupabaseUrl();
   const supabaseAnonKey = getSupabaseAnonKey();
 
@@ -178,6 +173,26 @@ async function analyzeReceiptImageViaEdgeFunction(
     throw new Error('服务器返回的分析结果格式无效');
   }
 
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[OCR] datetime candidates:', {
+      transactionDate: analysis?.transactionDate,
+      transactionAt: (analysis as any)?.transactionAt,
+      purchasedAt: (analysis as any)?.purchasedAt,
+      datetime: (analysis as any)?.datetime,
+      date: (analysis as any)?.date,
+      time: (analysis as any)?.time,
+    });
+  }
+
+  // 交易时间：OCR 可能返回 transactionDate / transactionAt / purchasedAt / datetime
+  const txDateStr =
+    (typeof analysis.transactionDate === 'string' && analysis.transactionDate.trim()) ||
+    (typeof (analysis as any).transactionAt === 'string' && (analysis as any).transactionAt.trim()) ||
+    (typeof (analysis as any).purchasedAt === 'string' && (analysis as any).purchasedAt.trim()) ||
+    (typeof (analysis as any).datetime === 'string' && (analysis as any).datetime.trim()) ||
+    undefined;
+
   // 转换为 ReceiptAnalysis 格式
   const receiptAnalysis: ReceiptAnalysis = {
     merchant: typeof analysis.merchant === 'string' ? analysis.merchant : undefined,
@@ -188,6 +203,7 @@ async function analyzeReceiptImageViaEdgeFunction(
       typeof analysis.currency === 'string' && analysis.currency.trim()
         ? analysis.currency
         : '¥',
+    transactionDate: txDateStr || undefined,
   };
 
   return receiptAnalysis;
@@ -298,18 +314,39 @@ categoryKey 必须从以下枚举中选择一个：
         throw new Error('无法从 Gemini 返回内容中解析出票据 JSON');
       }
 
-      const analysis: ReceiptAnalysis = {
-        merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
-        items: Array.isArray(parsed.items) ? parsed.items : [],
-        total: typeof parsed.total === 'number' ? parsed.total : 0,
-        tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
-        currency:
-          typeof parsed.currency === 'string' && parsed.currency.trim()
-            ? parsed.currency
-            : '¥',
-      };
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.log('[OCR] datetime candidates (Direct Gemini):', {
+          transactionDate: parsed?.transactionDate,
+          transactionAt: parsed?.transactionAt,
+          purchasedAt: parsed?.purchasedAt,
+          datetime: parsed?.datetime,
+          date: parsed?.date,
+          time: parsed?.time,
+        });
+      }
 
-      return analysis;
+      // 交易时间：直连 Gemini 可能返回 transactionDate / transactionAt / purchasedAt / datetime
+        const txDateStr =
+          (typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()) ||
+          (typeof parsed.transactionAt === 'string' && parsed.transactionAt?.trim()) ||
+          (typeof parsed.purchasedAt === 'string' && parsed.purchasedAt?.trim()) ||
+          (typeof parsed.datetime === 'string' && parsed.datetime?.trim()) ||
+          undefined;
+
+        const analysis: ReceiptAnalysis = {
+          merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
+          items: Array.isArray(parsed.items) ? parsed.items : [],
+          total: typeof parsed.total === 'number' ? parsed.total : 0,
+          tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
+          currency:
+            typeof parsed.currency === 'string' && parsed.currency.trim()
+              ? parsed.currency
+              : '¥',
+          transactionDate: txDateStr || undefined,
+        };
+
+        return analysis;
     }
 
     if ((res.status === 429 || res.status === 503) && i < maxRetry) {
