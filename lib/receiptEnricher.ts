@@ -8,8 +8,10 @@ import {
   classifyItem,
   resetClassificationStats,
   getClassificationStats,
+  startReceiptClassification,
   type ClassifyInput,
 } from './categoryClassifier';
+import { getLastClassifyError, clearLastClassifyError } from './categoryAiClient';
 
 /**
  * Infer grocery category based on product name (rule-based fallback)
@@ -270,20 +272,25 @@ export async function applyCategoriesWithLearning(
   const merchantNormalized = (analysis as any).merchant_normalized || null;
   const isGrocery = isGroceryMerchant(merchantRaw, merchantNormalized);
 
-  // Reset classification stats for this receipt
   resetClassificationStats();
+  startReceiptClassification();
 
   for (const it of items) {
     const name = typeof it?.name === 'string' ? it.name : '';
     const normalized = normalizeProductName(name);
 
-    let category: Category;
+    let category: Category | null;
+    let classificationStatus: 'ok' | 'pending' | 'failed' | 'fallback' = 'ok';
+    let classificationConfidence = 0;
 
     if (!isGrocery) {
       // Non-grocery receipt: mark all items as non_grocery
       category = 'non_grocery';
+      classificationStatus = 'ok';
+      classificationConfidence = 1;
     } else {
       // Grocery receipt: use unified classifier
+      clearLastClassifyError();
       const classifyInput: ClassifyInput = {
         rawName: name,
         normalizedName: normalized.normalizedName,
@@ -292,10 +299,31 @@ export async function applyCategoriesWithLearning(
       };
 
       const classification = await classifyItem(classifyInput);
-      category = classification.categoryId as Category;
+      category = (classification.categoryId || null) as Category | null;
+      classificationConfidence = Number.isFinite(classification.confidence)
+        ? Number(classification.confidence)
+        : 0;
+
+      const lastError = getLastClassifyError();
+
+      if (
+        lastError &&
+        (classification.source === 'ai' || classification.source === 'fallback')
+      ) {
+        // classify-item 超时 / 失败：标记为 failed，不给具体类别
+        classificationStatus = 'failed';
+        category = null;
+        classificationConfidence = 0;
+      } else if (classification.source === 'fallback') {
+        // 本地规则兜底（无 API 错误）
+        classificationStatus = 'fallback';
+      } else {
+        classificationStatus = 'ok';
+      }
 
       // If item already has a valid category from OCR/AI, use it if classifier returned fallback
       if (
+        classificationStatus !== 'failed' &&
         classification.source === 'fallback' &&
         typeof (it as any)?.category === 'string' &&
         (it as any).category.trim() &&
@@ -309,6 +337,9 @@ export async function applyCategoriesWithLearning(
       ...it,
       name,
       category: category as any,
+      // 新字段：分类状态与置信度（兼容旧数据，读取时需做默认值处理）
+      classification_status: classificationStatus,
+      classification_confidence: classificationConfidence,
     } as any);
   }
 

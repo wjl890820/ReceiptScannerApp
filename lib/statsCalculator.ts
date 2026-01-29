@@ -13,6 +13,9 @@ export type WeeklyMonthlyStats = {
   topMerchants: Array<{ merchant: string; count: number; total: number }>;
   highestSingleReceipt: { amount: number; merchant: string; date: number } | null;
   mostFrequentMerchant: { merchant: string; count: number } | null;
+  // 未分类/失败分类（不参与 topCategories）的统计，用于 UI 提示
+  uncategorizedCount: number;
+  uncategorizedTotal: number;
 };
 
 /**
@@ -68,24 +71,40 @@ export function calculateStats(
 
   // Category statistics (grocery receipts only, exclude non_grocery and uncategorized)
   const categoryMap = new Map<string, number>();
+  let uncategorizedCount = 0;
+  let uncategorizedTotal = 0;
   for (const receipt of groceryReceipts) {
     try {
       const analysis = JSON.parse(receipt.analysis_json || '{}');
       const items = analysis.items || [];
       for (const item of items) {
-        const category = item.category || 'uncategorized';
-        
-        // Only count grocery categories, exclude non_grocery and uncategorized from analytics
-        if (isExcludedFromAnalytics(category)) {
-          continue;
-        }
-
-        // Only count valid grocery categories
-        if (!isGroceryCategory(category)) {
-          continue;
-        }
-
         const amount = Number(item.lineTotal) || 0;
+
+        const rawCategory = (item as any).category || '';
+        const category = typeof rawCategory === 'string' ? rawCategory : '';
+        const rawStatus = (item as any).classification_status as
+          | 'ok'
+          | 'pending'
+          | 'failed'
+          | 'fallback'
+          | undefined;
+        const hasCategory = !!category;
+        // 兼容旧数据：没有 classification_status 但有类别 -> 视为 ok
+        const status: 'ok' | 'pending' | 'failed' | 'fallback' =
+          rawStatus || (hasCategory ? 'ok' : 'failed');
+
+        // 未分类 / 失败 / 兜底分类：计入 uncategorized，不进入 topCategories
+        if (
+          status !== 'ok' ||
+          !hasCategory ||
+          isExcludedFromAnalytics(category) ||
+          !isGroceryCategory(category)
+        ) {
+          uncategorizedCount += 1;
+          uncategorizedTotal += amount;
+          continue;
+        }
+
         categoryMap.set(category, (categoryMap.get(category) || 0) + amount);
       }
     } catch (e) {
@@ -149,5 +168,7 @@ export function calculateStats(
     topMerchants,
     highestSingleReceipt,
     mostFrequentMerchant,
+    uncategorizedCount,
+    uncategorizedTotal,
   };
 }

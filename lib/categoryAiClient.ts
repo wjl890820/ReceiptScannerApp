@@ -1,8 +1,8 @@
 // lib/categoryAiClient.ts
 // AI classification client via Supabase Edge Function
-// Handles timeout, error handling, and graceful degradation
+// Handles timeout, retry, error handling, and graceful degradation
 
-import { getSupabaseUrl, getSupabaseAnonKey } from './env';
+import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import Constants from 'expo-constants';
@@ -22,13 +22,80 @@ export type AiClassifyResult = {
   reason?: string;
 };
 
-// Session-level log deduplication
-let _lastLogKey: string | null = null;
+export type ClassifyFailureReason = 'timeout' | 'non_2xx' | 'network';
+
+const TIMEOUT_MS = 6000;
+const RETRY_DELAY_MS = 300;
+const CONCURRENCY = 2;
+
+let _lastFailure: { code: ClassifyFailureReason; message?: string } | null = null;
+
+// Promise queue: global concurrency limit (no new deps)
+let _running = 0;
+const _waitQueue: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  if (_running < CONCURRENCY) {
+    _running++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    _waitQueue.push(() => {
+      _running++;
+      resolve();
+    });
+  });
+}
+
+function releaseSlot(): void {
+  _running--;
+  const next = _waitQueue.shift();
+  if (next) next();
+}
 
 /**
- * Classify item via Supabase Edge Function
- * Returns null on any failure (timeout, network error, invalid response)
- * Enforces 5000ms timeout via AbortController
+ * Return last classify-item API failure reason (timeout / non_2xx / network).
+ * Cleared on next successful call or when caller explicitly resets.
+ */
+export function getLastClassifyError(): { code: ClassifyFailureReason; message?: string } | null {
+  return _lastFailure;
+}
+
+export function clearLastClassifyError(): void {
+  _lastFailure = null;
+}
+
+function setFailure(code: ClassifyFailureReason, message?: string): void {
+  _lastFailure = { code, message };
+  if (__DEV__) {
+    console.warn(`[CategoryAI] classify-item failed: ${code}${message ? ` — ${message}` : ''}`);
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+type LogStatus = 'success' | 'timeout' | 'non_2xx';
+
+function logRequest(
+  host: string,
+  timeoutMs: number,
+  attempt: number,
+  requestId: string,
+  elapsedMs: number,
+  status: LogStatus
+): void {
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[CategoryAI]', { host, timeoutMs, attempt, requestId, elapsedMs, status });
+  }
+}
+
+/**
+ * Classify item via Supabase Edge Function.
+ * Timeout 6s, max 1 retry with 300ms backoff.
+ * Returns null on failure; use getLastClassifyError() for reason (timeout / non_2xx / network).
  */
 export async function classifyViaEdgeFunction(
   input: AiClassifyInput
@@ -37,57 +104,62 @@ export async function classifyViaEdgeFunction(
   const supabaseAnonKey = getSupabaseAnonKey();
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    // No Supabase config - silently return null (graceful degradation)
     return null;
   }
 
+  if (!isJwtLike(supabaseAnonKey)) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
+      );
+    }
+    throw new Error(
+      'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
+    );
+  }
+
   const edgeFunctionUrl = `${supabaseUrl}/functions/v1/classify-item`;
-
+  let host = '';
   try {
-    const deviceId = await getDeviceId();
-    const appVersion = Constants.expoConfig?.version || '1.0.0';
-    const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
-    const locale = getCurrentLocale();
+    host = new URL(supabaseUrl).host;
+  } catch {
+    host = 'unknown';
+  }
+  const requestId = `app-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-    const requestBody = {
-      rawName: input.rawName,
-      normalizedName: input.normalizedName,
-      merchantName: input.merchantName || null,
-      price: input.price || null,
-      locale: input.locale || locale,
-      deviceId,
-      appVersion,
-      platform,
-    };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    apikey: supabaseAnonKey,
+    Authorization: `Bearer ${supabaseAnonKey}`,
+  };
 
-    // Create AbortController for timeout
+  const doFetch = async (attempt: number): Promise<AiClassifyResult | null> => {
+    clearLastClassifyError();
+    const startMs = Date.now();
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, 5000); // 5 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     try {
-      // Generate request ID for observability
-      const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-      // Debug: Print request headers (DEV only, never print keys)
-      if (__DEV__) {
-        console.log(`[CategoryAI] POST ${edgeFunctionUrl}`);
-        console.log(`[CategoryAI] SUPABASE_URL=${supabaseUrl}`);
-        console.log(`[CategoryAI] Headers check:`);
-        console.log(`[CategoryAI]   - apikey: ${supabaseAnonKey ? 'PRESENT' : 'MISSING'} (length: ${supabaseAnonKey?.length || 0})`);
-        console.log(`[CategoryAI]   - Authorization: ${supabaseAnonKey ? 'PRESENT (Bearer ...)' : 'MISSING'}`);
-        console.log(`[CategoryAI]   - x-device-id: ${deviceId ? 'PRESENT' : 'MISSING'}`);
-        console.log(`[CategoryAI]   - x-client: app`);
-        console.log(`[CategoryAI]   - x-request-id: ${requestId}`);
-      }
+      const deviceId = await getDeviceId();
+      const appVersion = Constants.expoConfig?.version || '1.0.0';
+      const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web';
+      const locale = getCurrentLocale();
+      const requestBody = {
+        rawName: input.rawName,
+        normalizedName: input.normalizedName,
+        merchantName: input.merchantName || null,
+        price: input.price || null,
+        locale: input.locale || locale,
+        deviceId,
+        appVersion,
+        platform,
+      };
 
       const response = await fetch(edgeFunctionUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${supabaseAnonKey}`,
-          apikey: supabaseAnonKey,
+          ...headers,
           'x-device-id': deviceId,
           'x-client': 'app',
           'x-request-id': requestId,
@@ -97,41 +169,22 @@ export async function classifyViaEdgeFunction(
       });
 
       clearTimeout(timeoutId);
+      const elapsedMs = Date.now() - startMs;
 
-      // If HTTP status is not 2xx, return null
       if (!response.ok) {
-        const status = response.status;
-        const logKey = `ai-fail-${status}`;
-        
-        // Log once per session per status code
-        if (_lastLogKey !== logKey) {
-          _lastLogKey = logKey;
-          if (__DEV__) {
-            // Enhanced error logging for 401
-            if (status === 401) {
-              console.error(`[CategoryAI] 401 Unauthorized - Edge function authentication failed`);
-              console.error(`[CategoryAI]   URL: ${edgeFunctionUrl}`);
-              console.error(`[CategoryAI]   apikey header: ${supabaseAnonKey ? 'PRESENT' : 'MISSING'}`);
-              console.error(`[CategoryAI]   Authorization header: ${supabaseAnonKey ? 'PRESENT' : 'MISSING'}`);
-              // Try to get response body for more details
-              try {
-                const errorText = await response.text();
-                console.error(`[CategoryAI]   Response body: ${errorText.substring(0, 200)}`);
-              } catch (e) {
-                // Ignore
-              }
-            } else {
-              console.warn(`[CategoryAI] Edge function returned status ${status}`);
-            }
-          }
+        logRequest(host, TIMEOUT_MS, attempt, requestId, elapsedMs, 'non_2xx');
+        let msg: string;
+        try {
+          const t = await response.text();
+          msg = t.length > 100 ? t.slice(0, 100) + '…' : t;
+        } catch {
+          msg = `HTTP ${response.status}`;
         }
-        
+        setFailure('non_2xx', `status ${response.status}${msg ? ` ${msg}` : ''}`);
         return null;
       }
 
       const responseData = await response.json();
-
-      // Validate response has required fields
       if (
         !responseData ||
         typeof responseData !== 'object' ||
@@ -139,17 +192,12 @@ export async function classifyViaEdgeFunction(
         typeof responseData.categoryId !== 'string' ||
         typeof responseData.confidence !== 'number'
       ) {
-        // Invalid response format
-        const logKey = 'ai-invalid-response';
-        if (_lastLogKey !== logKey) {
-          _lastLogKey = logKey;
-          if (__DEV__) {
-            console.warn('[CategoryAI] Invalid response format from edge function');
-          }
-        }
+        logRequest(host, TIMEOUT_MS, attempt, requestId, elapsedMs, 'non_2xx');
+        setFailure('non_2xx', 'invalid response format');
         return null;
       }
 
+      logRequest(host, TIMEOUT_MS, attempt, requestId, elapsedMs, 'success');
       return {
         categoryId: responseData.categoryId,
         confidence: Number(responseData.confidence),
@@ -157,38 +205,25 @@ export async function classifyViaEdgeFunction(
       };
     } catch (fetchError: any) {
       clearTimeout(timeoutId);
-
-      // Handle AbortError (timeout)
-      if (fetchError.name === 'AbortError') {
-        const logKey = 'ai-timeout';
-        if (_lastLogKey !== logKey) {
-          _lastLogKey = logKey;
-          if (__DEV__) {
-            console.warn('[CategoryAI] Request timeout (5s)');
-          }
-        }
+      const elapsedMs = Date.now() - startMs;
+      if (fetchError?.name === 'AbortError') {
+        logRequest(host, TIMEOUT_MS, attempt, requestId, elapsedMs, 'timeout');
+        setFailure('timeout', `timeout after ${TIMEOUT_MS}ms`);
         return null;
       }
-
-      // Other network errors
-      const logKey = 'ai-network-error';
-      if (_lastLogKey !== logKey) {
-        _lastLogKey = logKey;
-        if (__DEV__) {
-          console.warn('[CategoryAI] Network error:', fetchError.message);
-        }
-      }
+      logRequest(host, TIMEOUT_MS, attempt, requestId, elapsedMs, 'non_2xx');
+      setFailure('network', fetchError?.message || 'fetch error');
       return null;
     }
-  } catch (error: any) {
-    // Unexpected errors
-    const logKey = 'ai-unexpected-error';
-    if (_lastLogKey !== logKey) {
-      _lastLogKey = logKey;
-      if (__DEV__) {
-        console.warn('[CategoryAI] Unexpected error:', error.message);
-      }
-    }
-    return null;
+  };
+
+  await acquireSlot();
+  try {
+    const first = await doFetch(1);
+    if (first !== null) return first;
+    await sleep(RETRY_DELAY_MS);
+    return doFetch(2);
+  } finally {
+    releaseSlot();
   }
 }

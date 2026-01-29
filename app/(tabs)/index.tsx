@@ -27,7 +27,7 @@ import { t, getCurrentLocale } from '@/lib/i18n';
 import { applyCategoriesWithLearning } from '@/lib/receiptEnricher';
 import { isGroceryMerchant } from '@/lib/groceryDetector';
 import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
-import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
+import { getCategoryColor, getCategoryLabel, getCategoryShortLabel } from '@/lib/categoryPalette';
 import { formatJPY } from '@/lib/formatJPY';
 import { getHomeTimeRange, setHomeTimeRange } from '@/lib/settingsStore';
 import {
@@ -227,7 +227,21 @@ function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
 
       const category =
         (typeof (item as any).category === 'string' && (item as any).category.trim()) || 'uncategorized';
-      
+      const rawStatus = (item as any).classification_status as
+        | 'ok'
+        | 'pending'
+        | 'failed'
+        | 'fallback'
+        | undefined;
+      const hasCategory = !!(typeof (item as any).category === 'string' && (item as any).category.trim());
+      const status: 'ok' | 'pending' | 'failed' | 'fallback' =
+        rawStatus || (hasCategory ? 'ok' : 'failed');
+
+      // 仅统计分类成功（ok 且有类别）的商品
+      if (status !== 'ok' || !hasCategory) {
+        continue;
+      }
+
       // Only count grocery categories, exclude non_grocery and uncategorized from analytics
       if (isExcludedFromAnalytics(category)) {
         continue;
@@ -253,6 +267,67 @@ function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
     .sort((a, b) => b.amount - a.amount);
 
   return data;
+}
+
+function computeUncategorizedSummary(receipts: ReceiptRow[]): { count: number; total: number } {
+  // 与 aggregateCategoryData 相同的 grocery 收据过滤
+  const groceryReceipts = receipts.filter((r) => {
+    if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
+      return true;
+    }
+    try {
+      const analysis = JSON.parse(r.analysis_json || '{}');
+      return analysis.is_grocery === true;
+    } catch {
+      return false;
+    }
+  });
+
+  let count = 0;
+  let total = 0;
+
+  for (const receipt of groceryReceipts) {
+    let items: ReceiptItem[] | null = null;
+
+    if (receipt.user_items_json) {
+      items = safeParseItems(receipt.user_items_json);
+    } else {
+      const analysis = safeParseAnalysis(receipt.analysis_json);
+      items = analysis?.items ?? null;
+    }
+
+    if (!items || !Array.isArray(items)) continue;
+
+    for (const item of items) {
+      const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
+      if (lineTotal <= 0) continue;
+
+      const rawCategory = (item as any).category || '';
+      const category = typeof rawCategory === 'string' ? rawCategory : '';
+      const rawStatus = (item as any).classification_status as
+        | 'ok'
+        | 'pending'
+        | 'failed'
+        | 'fallback'
+        | undefined;
+      const hasCategory = !!(typeof (item as any).category === 'string' && (item as any).category.trim());
+      const status: 'ok' | 'pending' | 'failed' | 'fallback' =
+        rawStatus || (hasCategory ? 'ok' : 'failed');
+
+      // 与统计逻辑一致：只有 ok 且有效 grocery 类别才参与分类统计，其余计入“未分类”
+      if (
+        status !== 'ok' ||
+        !hasCategory ||
+        isExcludedFromAnalytics(category) ||
+        !isGroceryCategory(category)
+      ) {
+        count += 1;
+        total += lineTotal;
+      }
+    }
+  }
+
+  return { count, total };
 }
 
 // ====== 洞察规则引擎 ======
@@ -853,7 +928,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
-  const [timeRange, setTimeRange] = useState<TimeRange>('30D'); // Default to 30D
+  const [timeRange, setTimeRange] = useState<TimeRange>('7D');
   const [scanning, setScanning] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<{ current: number; total: number } | null>(null);
   const successAlertShownRef = useRef(false); // Guard for duplicate success alerts
@@ -866,7 +941,7 @@ export default function HomeScreen() {
         const savedRange = await getHomeTimeRange();
         setTimeRange(savedRange);
       } catch (e) {
-        // If loading fails, keep default (30D)
+        // If loading fails, keep default (7D)
         if (__DEV__) {
           console.warn('[Home] Failed to load time range preference:', e);
         }
@@ -932,6 +1007,10 @@ export default function HomeScreen() {
   const totalAmount = useMemo(() => {
     return categoryData.reduce((sum, item) => sum + item.amount, 0);
   }, [categoryData]);
+
+  const uncategorizedSummary = useMemo(() => {
+    return computeUncategorizedSummary(filteredReceipts);
+  }, [filteredReceipts]);
 
   // Compute insight context
   const insightContext = useMemo(() => {
@@ -1352,8 +1431,15 @@ export default function HomeScreen() {
             </View>
             <View style={styles.kpiItem}>
               <Text style={styles.kpiLabel}>{t('home.kpi.topCategory')}</Text>
-              <Text style={styles.kpiValue}>
-                {kpiData.topCategory} ({Math.round(kpiData.topCategoryPct)}%)
+              <Text
+                style={styles.kpiValue}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {(() => {
+                  const lab = getCategoryShortLabel(kpiData.topCategory);
+                  return (lab !== kpiData.topCategory ? lab : t('analysisV2.labels.other')) + ` (${Math.round(kpiData.topCategoryPct)}%)`;
+                })()}
               </Text>
             </View>
             <View style={styles.kpiItem}>
@@ -1361,6 +1447,15 @@ export default function HomeScreen() {
               <Text style={styles.kpiValue}>{Math.round(kpiData.nonEssentialPct)}%</Text>
             </View>
           </View>
+          {uncategorizedSummary.count > 0 && (
+            <View style={{ marginTop: 6 }}>
+              <Text style={styles.uncategorizedHint}>
+                {t('home.kpi.uncategorizedHint', {
+                  count: String(uncategorizedSummary.count),
+                })}
+              </Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -1390,44 +1485,6 @@ export default function HomeScreen() {
                 })}
               </View>
 
-              {/* Structured Insight Analysis */}
-              {structuredInsight && (
-                <View style={styles.insightAnalysisContainer}>
-                  <View style={styles.insightHeader}>
-                    {structuredInsight.level === 'alert' && (
-                      <View style={[styles.insightBadge, styles.insightBadgeAlert]}>
-                        <Text style={styles.insightBadgeText}>⚠</Text>
-                      </View>
-                    )}
-                    {structuredInsight.level === 'warn' && (
-                      <View style={[styles.insightBadge, styles.insightBadgeWarn]}>
-                        <Text style={styles.insightBadgeText}>!</Text>
-                      </View>
-                    )}
-                    {structuredInsight.level === 'info' && (
-                      <View style={[styles.insightBadge, styles.insightBadgeInfo]}>
-                        <Text style={styles.insightBadgeText}>i</Text>
-                      </View>
-                    )}
-                    <Text style={styles.insightHeadline}>{structuredInsight.headline}</Text>
-                  </View>
-                  <View style={styles.insightReasons}>
-                    {structuredInsight.reasons.map((reason, idx) => (
-                      <Text key={idx} style={styles.insightReasonText}>
-                        • {reason}
-                      </Text>
-                    ))}
-                  </View>
-                  <View style={styles.insightSuggestion}>
-                    <Text style={styles.insightSuggestionLabel}>
-                      {t('home.insight.suggestion.label')}:
-                    </Text>
-                    <Text style={styles.insightSuggestionText}>
-                      {structuredInsight.suggestion}
-                    </Text>
-                  </View>
-                </View>
-              )}
             </>
           ) : (
             <View style={styles.emptyState}>
@@ -1614,6 +1671,7 @@ const styles = StyleSheet.create({
   },
   kpiItem: {
     flex: 1,
+    minWidth: 0,
     alignItems: 'center',
   },
   kpiLabel: {
@@ -1626,6 +1684,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: '#111',
+  },
+  uncategorizedHint: {
+    fontSize: 12,
+    color: '#666',
   },
   insightAnalysisContainer: {
     marginTop: 20,
