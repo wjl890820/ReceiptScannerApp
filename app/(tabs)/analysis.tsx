@@ -16,7 +16,7 @@ import { listReceipts, type ReceiptRow } from '@/lib/db';
 import { t } from '@/lib/i18n';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { calculateStats, type TimeRange } from '@/lib/statsCalculator';
-import { buildInsights } from '@/lib/insights/buildInsights';
+import { buildInsights } from '@/lib/buildInsights';
 import {
   extractProductPrices,
   computeCheapestMerchants,
