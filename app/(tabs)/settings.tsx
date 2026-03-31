@@ -1,7 +1,8 @@
 // app/(tabs)/settings.tsx
 
 import { useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 // Lazy import Constants to avoid initialization crashes
 let Constants: typeof import('expo-constants') | null = null;
@@ -30,8 +31,13 @@ async function getConstants() {
   return Constants;
 }
 
+const DEV_TOOLS_ENABLED_KEY = 'settings.devToolsEnabled.v1';
+
 export default function SettingsScreen() {
   const router = useRouter();
+  const [devToolsEnabled, setDevToolsEnabled] = useState(false);
+  const tapCountRef = useRef(0);
+  const lastTapAtRef = useRef(0);
   
   // Delay Constants access to avoid initialization crashes
   const appInfo = useMemo(() => {
@@ -61,6 +67,52 @@ export default function SettingsScreen() {
   
   const appVersion = appInfo.version;
   const appName = appInfo.name;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const v = await AsyncStorage.getItem(DEV_TOOLS_ENABLED_KEY);
+        if (!cancelled) setDevToolsEnabled(v === '1');
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onPressVersionArea = useMemo(() => {
+    return async () => {
+      const now = Date.now();
+      const withinWindow = now - lastTapAtRef.current <= 1200;
+      lastTapAtRef.current = now;
+      tapCountRef.current = withinWindow ? tapCountRef.current + 1 : 1;
+
+      if (tapCountRef.current >= 5) {
+        tapCountRef.current = 0;
+        try {
+          await AsyncStorage.setItem(DEV_TOOLS_ENABLED_KEY, '1');
+        } catch {
+          // ignore
+        }
+        setDevToolsEnabled(true);
+        Alert.alert('Dev Tools enabled');
+      }
+    };
+  }, []);
+
+  const disableDevTools = useMemo(() => {
+    return async () => {
+      try {
+        await AsyncStorage.setItem(DEV_TOOLS_ENABLED_KEY, '0');
+      } catch {
+        // ignore
+      }
+      setDevToolsEnabled(false);
+    };
+  }, []);
 
   const runReclassifyExistingReceipts = useMemo(() => {
     return async () => {
@@ -121,7 +173,6 @@ export default function SettingsScreen() {
 
   const runProductDictionaryStats = useMemo(() => {
     return async () => {
-      if (!__DEV__) return;
       try {
         const [dictCount, topDict] = await Promise.all([
           getProductDictionaryCount(),
@@ -190,7 +241,6 @@ export default function SettingsScreen() {
 
   const runNormalizedNameTop100 = useMemo(() => {
     return async () => {
-      if (!__DEV__) return;
       try {
         const receipts = await listReceipts(1200);
         const freq = new Map<string, number>();
@@ -230,7 +280,6 @@ export default function SettingsScreen() {
 
   const runMissingInDictionaryTop100 = useMemo(() => {
     return async () => {
-      if (!__DEV__) return;
       try {
         const [receipts, dictKeys] = await Promise.all([
           listReceipts(1500),
@@ -274,7 +323,6 @@ export default function SettingsScreen() {
 
   const runBackfillProductDictionaryFromReceipts = useMemo(() => {
     return async () => {
-      if (!__DEV__) return;
       try {
         const receipts = await listReceipts(2000);
         let touched = 0;
@@ -359,7 +407,6 @@ export default function SettingsScreen() {
 
   const runHitRateStatsFromReceipts = useMemo(() => {
     return async () => {
-      if (!__DEV__) return;
       try {
         const receipts = await listReceipts(1500);
         let total = 0;
@@ -488,12 +535,14 @@ export default function SettingsScreen() {
         <Text style={styles.aboutText}>
           {appName}
         </Text>
-        <Text style={styles.aboutText}>
-          {t('settings.about.version')} {appVersion}
-        </Text>
+        <Pressable onPress={onPressVersionArea}>
+          <Text style={styles.aboutText}>
+            {t('settings.about.version')} {appVersion}
+          </Text>
+        </Pressable>
       </View>
 
-      {__DEV__ && (
+      {devToolsEnabled && (
         <View style={[styles.aboutSection, { marginTop: 18 }]}>
           <Text style={styles.aboutTitle}>Dev Tools</Text>
           <Pressable
@@ -531,6 +580,13 @@ export default function SettingsScreen() {
             <View style={styles.sectionContent}>
               <Text style={styles.sectionTitle}>Hit rates: dictionary / rules / AI</Text>
               <Text style={styles.sectionSubtitle}>Computed from receipts items</Text>
+            </View>
+            <Text style={styles.arrow}>→</Text>
+          </Pressable>
+          <Pressable style={styles.section} onPress={disableDevTools}>
+            <View style={styles.sectionContent}>
+              <Text style={styles.sectionTitle}>Hide Dev Tools</Text>
+              <Text style={styles.sectionSubtitle}>Disable and clear local flag</Text>
             </View>
             <Text style={styles.arrow}>→</Text>
           </Pressable>

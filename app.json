@@ -2,7 +2,7 @@
   "expo": {
     "name": "Receipt Scanner",
     "slug": "receiptscannerapp",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "receiptscannerapp",
@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.receiptscannerapp.app",
-      "buildNumber": "2",
+      "buildNumber": "12",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
