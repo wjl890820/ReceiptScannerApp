@@ -1,6 +1,7 @@
 // lib/db.ts
 import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
+import { listReceiptsForListParams } from './receiptListQuery';
 
 /**
  * 说明：
@@ -35,6 +36,17 @@ export type ReceiptRow = {
 
 /** 列表用：不含 image_uri，减少内存/IO（历史列表不展示缩略图） */
 export type ReceiptListRow = Omit<ReceiptRow, 'image_uri'>;
+
+/**
+ * 历史列表查询选项。searchQuery 已在 DB 层用于 merchant/note LIKE。
+ */
+export type ListReceiptsOptions = {
+  limit?: number;
+  offset?: number;
+  sortBy?: 'date' | 'total';
+  /** 预留：关键词/商户过滤，当前未实现 */
+  searchQuery?: string;
+};
 
 export type SaveReceiptParams = {
   imageUri: string;
@@ -128,6 +140,25 @@ async function initIfNeeded() {
         
         CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name_hint
           ON item_category_mapping(normalized_name, merchant_hint);
+
+        -- Product dictionary: normalized_name -> canonical/main/sub/tags (asset layer)
+        -- analysis_tags stored as JSON string of string[]
+        CREATE TABLE IF NOT EXISTS product_dictionary (
+          id TEXT PRIMARY KEY NOT NULL,
+          normalized_name TEXT NOT NULL,
+          canonical_name TEXT,
+          brand TEXT,
+          category_main TEXT NOT NULL,
+          category_sub TEXT,
+          analysis_tags TEXT NOT NULL DEFAULT '[]',
+          seen_count INTEGER NOT NULL DEFAULT 0,
+          last_seen_at INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_dictionary_normalized_name
+          ON product_dictionary(normalized_name);
       `);
 
       // 安全迁移：检查并添加新字段（如果不存在）
@@ -335,7 +366,16 @@ export { initIfNeeded };
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
  */
-export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
+export async function saveReceipt(
+  params: SaveReceiptParams,
+  trace?: { id: string; t0: number }
+): Promise<string> {
+  // Timing: write start/end around DB ops
+  const tSave0 = Date.now();
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] db_save_start', { id: trace.id });
+  }
   await initIfNeeded();
   const db = await getDb();
 
@@ -410,6 +450,10 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
     // eslint-disable-next-line no-console
     console.log('[DB] saved receipt:', { id: id.slice(0, 8), txAt: !!transactionAt, createdAt: true });
   }
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] db_save_end_ms', { id: trace.id, ms: Date.now() - tSave0 });
+  }
   return id;
 }
 
@@ -447,11 +491,15 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
 }
 
 /**
- * 列表（历史等）：不查 image_uri，减少内存/IO；列表不展示缩略图
+ * 列表（历史等）：不查 image_uri，减少内存/IO；列表不展示缩略图。
+ * 支持 options：limit、offset、sortBy（date | total）、searchQuery（merchant/note LIKE）。
  */
-export async function listReceiptsForList(limit = 200): Promise<ReceiptListRow[]> {
+export async function listReceiptsForList(
+  options?: ListReceiptsOptions | number
+): Promise<ReceiptListRow[]> {
   await initIfNeeded();
   const db = await getDb();
+  const { orderBy, limit, offset, whereClause, whereParams } = listReceiptsForListParams(options);
 
   const rows = await db.getAllAsync<ReceiptListRow>(
     `
@@ -467,10 +515,11 @@ export async function listReceiptsForList(limit = 200): Promise<ReceiptListRow[]
       note,
       user_items_json
     FROM receipts
-    ORDER BY COALESCE(transaction_at, created_at) DESC
-    LIMIT ?
+    ${whereClause}
+    ORDER BY ${orderBy}
+    LIMIT ? OFFSET ?
     `,
-    [limit]
+    [...whereParams, limit, offset]
   );
 
   return rows ?? [];

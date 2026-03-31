@@ -70,6 +70,9 @@
       "processingMulti": "处理中 {current}/{total}",
       "analyzing": "分析小票中…",
       "doneSummary": "完成：成功 {ok}，失败 {fail}",
+      "doneSummaryWithReasons": "完成：成功 {ok}，失败 {fail}。{reasons}",
+      "failureReasonsPrefix": "失败原因：",
+      "failureReasonCount": "{label} {count} 次",
       "selectSource": "选择图片来源",
       "selectSourceMessage": "选择获取小票图片的方式",
       "camera": "拍照",
@@ -80,11 +83,7 @@
       "success": "成功",
       "successMessage": "小票已保存到历史。",
       "error": "错误",
-      "errorMessage": "请稍后重试。",
-      "rateLimit": "扫描过于频繁，请稍后再试。",
-      "payloadTooLarge": "图片过大，请重新拍摄更清晰的照片。",
-      "networkError": "网络错误，请检查网络连接。",
-      "serverError": "服务器错误，请稍后重试。"
+      "errorMessage": "请稍后重试。"
     },
     "category": {
       "Grocery": "生鲜杂货",
@@ -104,6 +103,12 @@
     "analysis": "分析"
   },
   "history": {
+    "list": {
+      "title": "历史记录",
+      "subtitle": "点击任意一条进入详情页",
+      "empty": "暂无记录。请先在首页识别并保存。",
+      "noCategoryInfo": "未找到分类信息"
+    },
     "errors": {
       "loadTitle": "读取失败",
       "loadMessage": "无法读取历史记录"
@@ -120,6 +125,7 @@
       "deleteFailed": "删除失败，请重试。"
     },
     "detail": {
+      "notFound": "未找到该记录",
       "loadMessage": "无法读取该记录",
       "inputErrorTitle": "输入错误",
       "qtyError": "数量必须大于等于 1",
@@ -132,6 +138,15 @@
       "deletedTitle": "已删除",
       "deleteFailedTitle": "删除失败",
       "loading": "加载中…",
+      "editedHint": "（已手动编辑商品）",
+      "taxLabel": "税",
+      "categorySummaryTitle": "分类汇总：",
+      "noCategoryInfo": "暂无分类信息",
+      "itemsTitle": "商品明细：",
+      "quantityShort": "数量",
+      "subtotalShort": "小计",
+      "noItems": "无商品明细",
+      "deleteRecord": "删除这条记录",
       "edit": {
         "cancel": "取消",
         "title": "编辑商品",
@@ -155,7 +170,7 @@
     },
     "pro": {
       "title": "高级洞察 Pro",
-      "subtitle": "解锁更深入的洞察与更长时间范围"
+      "subtitle": "解锁更深入的洞察与更长时间范围（即将推出）"
     },
     "privacy": {
       "title": "隐私政策",
@@ -184,14 +199,15 @@
       "network": "提交失败（网络错误）",
       "server": "提交失败（服务器错误）",
       "generic": "提交失败，请稍后重试。",
-      "notConfigured": "提交失败（未配置）",
+      "notConfigured": "提交失败（未配置），请稍后重试或使用备用反馈方式。",
       "badResponse": "提交失败（服务器响应异常）"
     },
     "success": {
       "message": "已提交",
       "title": "成功",
       "fallbackTitle": "成功"
-    }
+    },
+    "emailFallbackAction": "改用邮件反馈"
   },
   "pro": {
     "title": "高级洞察 Pro",
@@ -291,6 +307,12 @@
     "libraryDeniedMessage": "请在系统设置中允许相册权限后再选择图片。"
   },
   "ocr": {
+    "rateLimit": "扫描过于频繁，请稍后再试。",
+    "payloadTooLarge": "图片过大，请重新拍摄更清晰的照片。",
+    "networkError": "网络错误，请检查网络连接。",
+    "serverError": "服务器错误，请稍后重试。",
+    "invalidResponse": "识别结果异常，请重试。",
+    "failed": "识别失败，请重试。",
     "privacyNotice": "我们会记录识别次数和 token 用量用于成本分析与防滥用。我们不会保存您的图片或小票全文内容。",
     "privacyNoticeTitle": "隐私说明"
   },

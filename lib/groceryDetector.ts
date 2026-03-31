@@ -156,3 +156,31 @@ export function getGroceryConfidence(
 ): number {
   return isGroceryMerchant(merchantRaw, merchantNormalized) ? 1.0 : 0.0;
 }
+
+/** 仅用于类型，避免 db 与 detector 循环依赖时用 */
+type ReceiptRowLike = {
+  merchant_raw?: string | null;
+  merchant_normalized?: string | null;
+  analysis_json?: string | null;
+};
+
+/**
+ * 从收据列表中筛出「超市小票」，供分析页价格雷达、分类指数等使用。
+ * 规则：isGroceryMerchant 为 true 或 analysis_json.is_grocery === true。
+ */
+export function filterGroceryReceipts<T extends ReceiptRowLike>(receipts: T[]): T[] {
+  return receipts.filter((r) => {
+    try {
+      if (!r) return false;
+      if (isGroceryMerchant(r.merchant_raw ?? null, r.merchant_normalized ?? null)) return true;
+      try {
+        const analysis = JSON.parse(r.analysis_json || '{}');
+        return analysis.is_grocery === true;
+      } catch {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  });
+}

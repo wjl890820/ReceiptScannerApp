@@ -115,3 +115,42 @@ export function getGeminiApiKey(): string {
   if (!isDevDirectGeminiEnabled()) return '';
   return getExtraValue('GEMINI_API_KEY') || getExtraValue('geminiApiKey');
 }
+
+/**
+ * OCR Gemini model (Edge + DEV direct Gemini).
+ * Prefer OCR_GEMINI_MODEL (to avoid conflicting with other modules like classify-item).
+ */
+export function getOcrGeminiModel(): string {
+  return getExtraValue('OCR_GEMINI_MODEL') || getExtraValue('ocrGeminiModel') || 'gemini-3-flash-preview';
+}
+
+export function getCategoryAiItemCap(): number {
+  const v = getExtraValue('CATEGORY_AI_ITEM_CAP', '3');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 3;
+}
+
+export function getCategoryAiTimeoutMs(): number {
+  const v = getExtraValue('CATEGORY_AI_TIMEOUT_MS', '3500');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 500 ? Math.floor(n) : 3500;
+}
+
+export function getCategoryAiRetries(): number {
+  const v = getExtraValue('CATEGORY_AI_RETRIES', '0');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * 获取备用反馈邮箱（用于 send-feedback 不可用时的兜底渠道）。
+ */
+export function getSupportEmail(): string {
+  return (
+    _envVar('EXPO_PUBLIC_SUPPORT_EMAIL') ||
+    _envVar('SUPPORT_EMAIL') ||
+    getExtraValue('SUPPORT_EMAIL') ||
+    getExtraValue('supportEmail') ||
+    ''
+  );
+}

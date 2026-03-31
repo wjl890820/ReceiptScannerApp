@@ -127,11 +127,11 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
   }
 
   // B) 严格成功判定
-  // 1. 如果 !response.ok -> throw
+  // 1. 如果 !response.ok -> throw（错误码约定：4xx 请求/鉴权问题，5xx 服务端问题，其余按网络/未知处理）
   if (!response.ok) {
     const errorPrefix = responseText.length > 300 ? responseText.substring(0, 300) + '...' : responseText;
     let errorMessage = '提交失败';
-    
+
     // 尝试解析错误 JSON
     if (responseText) {
       try {
@@ -146,7 +146,7 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     // 错误信息包含 status 与 text 前 300 字
     const detailedError = new Error(`提交失败（HTTP ${status}）: ${errorPrefix}`);
     if (__DEV__) {
-      console.error(`[Feedback] Submission failed:`, detailedError.message);
+      console.error(`[Feedback] Submission failed:`, detailedError.message, { status, requestId });
     }
 
     // 根据状态码提供用户友好的错误消息

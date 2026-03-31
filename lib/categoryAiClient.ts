@@ -3,6 +3,7 @@
 // Handles timeout, retry, error handling, and graceful degradation
 
 import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
+import { getCategoryAiTimeoutMs, getCategoryAiRetries } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import Constants from 'expo-constants';
@@ -24,8 +25,8 @@ export type AiClassifyResult = {
 
 export type ClassifyFailureReason = 'timeout' | 'non_2xx' | 'network';
 
-const TIMEOUT_MS = 6000;
-const RETRY_DELAY_MS = 300;
+const TIMEOUT_MS = getCategoryAiTimeoutMs();
+const RETRY_DELAY_MS = 250;
 const CONCURRENCY = 2;
 
 let _lastFailure: { code: ClassifyFailureReason; message?: string } | null = null;
@@ -156,6 +157,24 @@ export async function classifyViaEdgeFunction(
         platform,
       };
 
+      if (__DEV__) {
+        console.log('[CategoryAI] classify-item request', {
+          url: edgeFunctionUrl,
+          attempt,
+          requestId,
+          body: {
+            rawName: requestBody.rawName,
+            normalizedName: requestBody.normalizedName,
+            merchantName: requestBody.merchantName,
+            price: requestBody.price,
+            locale: requestBody.locale,
+            deviceIdPrefix: deviceId ? `${deviceId.slice(0, 8)}...` : '',
+            appVersion,
+            platform,
+          },
+        });
+      }
+
       const response = await fetch(edgeFunctionUrl, {
         method: 'POST',
         headers: {
@@ -180,11 +199,24 @@ export async function classifyViaEdgeFunction(
         } catch {
           msg = `HTTP ${response.status}`;
         }
+        if (__DEV__) {
+          console.warn('[CategoryAI] classify-item non-2xx', {
+            status: response.status,
+            bodySnippet: msg,
+          });
+        }
         setFailure('non_2xx', `status ${response.status}${msg ? ` ${msg}` : ''}`);
         return null;
       }
 
       const responseData = await response.json();
+      if (__DEV__) {
+        console.log('[CategoryAI] classify-item response', {
+          categoryId: responseData?.categoryId,
+          confidence: responseData?.confidence,
+          reason: responseData?.reason,
+        });
+      }
       if (
         !responseData ||
         typeof responseData !== 'object' ||
@@ -221,8 +253,12 @@ export async function classifyViaEdgeFunction(
   try {
     const first = await doFetch(1);
     if (first !== null) return first;
-    await sleep(RETRY_DELAY_MS);
-    return doFetch(2);
+    const retries = getCategoryAiRetries();
+    if (retries >= 1) {
+      await sleep(RETRY_DELAY_MS);
+      return doFetch(2);
+    }
+    return null;
   } finally {
     releaseSlot();
   }

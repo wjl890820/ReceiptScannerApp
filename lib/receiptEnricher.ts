@@ -1,7 +1,7 @@
 // lib/receiptEnricher.ts
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
 import { learnCategoryFromEdit } from './categoryLearner';
-import { normalizeProductName, normalizeMerchantName } from './productNormalizer';
+import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
 import {
@@ -12,6 +12,11 @@ import {
   type ClassifyInput,
 } from './categoryClassifier';
 import { getLastClassifyError, clearLastClassifyError } from './categoryAiClient';
+import { buildAnalysisTags, mapLegacyCategoryToV1 } from './categoryTaxonomyV1';
+import { buildReceiptStructuredAnalysis } from './structuredAnalysisEngine';
+import { buildReceiptAnalysisV1 } from './growthAnalysisEngineV1';
+import { buildReceiptTemplateL1 } from './analysisTemplatesV1';
+import { upsertProductDictionary } from './productDictionary';
 
 /**
  * Infer grocery category based on product name (rule-based fallback)
@@ -262,8 +267,13 @@ function inferGroceryCategory(name: string): Category {
  * Uses unified categoryClassifier service
  */
 export async function applyCategoriesWithLearning(
-  analysis: ReceiptAnalysis
+  analysis: ReceiptAnalysis,
+  trace?: { id: string; t0: number }
 ): Promise<ReceiptAnalysis> {
+  const tStart = Date.now();
+  if (__DEV__ && trace) {
+    console.log('[ScanTiming] classify_start', { id: trace.id });
+  }
   const items = Array.isArray(analysis.items) ? analysis.items : [];
   const enrichedItems: ReceiptItem[] = [];
 
@@ -275,13 +285,28 @@ export async function applyCategoriesWithLearning(
   resetClassificationStats();
   startReceiptClassification();
 
+  if (__DEV__) {
+    console.log('[Enricher] OCR items count:', items.length);
+    if (items[0]) {
+      const sample = items[0] as any;
+      console.log('[Enricher] OCR sample item:', {
+        name: sample?.name,
+        lineTotal: sample?.lineTotal,
+        quantity: sample?.quantity,
+        unitPrice: sample?.unitPrice,
+        category: sample?.category,
+      });
+    }
+  }
+
   for (const it of items) {
     const name = typeof it?.name === 'string' ? it.name : '';
-    const normalized = normalizeProductName(name);
+    const norm = normalizeReceiptItemName(name);
 
     let category: Category | null;
     let classificationStatus: 'ok' | 'pending' | 'failed' | 'fallback' = 'ok';
     let classificationConfidence = 0;
+    let classificationOut: any = null;
 
     if (!isGrocery) {
       // Non-grocery receipt: mark all items as non_grocery
@@ -293,28 +318,24 @@ export async function applyCategoriesWithLearning(
       clearLastClassifyError();
       const classifyInput: ClassifyInput = {
         rawName: name,
-        normalizedName: normalized.normalizedName,
+        normalizedName: norm.normalized_name,
         merchantName: merchantRaw || merchantNormalized || undefined,
         price: typeof it?.lineTotal === 'number' ? it.lineTotal : undefined,
       };
 
-      const classification = await classifyItem(classifyInput);
-      category = (classification.categoryId || null) as Category | null;
-      classificationConfidence = Number.isFinite(classification.confidence)
-        ? Number(classification.confidence)
+      classificationOut = await classifyItem(classifyInput);
+      category = (classificationOut?.categoryId || null) as Category | null;
+      classificationConfidence = Number.isFinite(classificationOut?.confidence)
+        ? Number(classificationOut.confidence)
         : 0;
 
       const lastError = getLastClassifyError();
 
-      if (
-        lastError &&
-        (classification.source === 'ai' || classification.source === 'fallback')
-      ) {
-        // classify-item 超时 / 失败：标记为 failed，不给具体类别
-        classificationStatus = 'failed';
-        category = null;
-        classificationConfidence = 0;
-      } else if (classification.source === 'fallback') {
+      if (lastError) {
+        // API 失败时仍保留规则/兜底分类结果，避免“有明细但完全无分类”。
+        // 用 status 区分质量：rules/ai 为 ok；fallback 为 fallback。
+        classificationStatus = classificationOut?.source === 'fallback' ? 'fallback' : 'ok';
+      } else if (classificationOut?.source === 'fallback') {
         // 本地规则兜底（无 API 错误）
         classificationStatus = 'fallback';
       } else {
@@ -324,7 +345,7 @@ export async function applyCategoriesWithLearning(
       // If item already has a valid category from OCR/AI, use it if classifier returned fallback
       if (
         classificationStatus !== 'failed' &&
-        classification.source === 'fallback' &&
+        classificationOut?.source === 'fallback' &&
         typeof (it as any)?.category === 'string' &&
         (it as any).category.trim() &&
         ALL_CATEGORIES.includes((it as any).category.trim() as Category)
@@ -333,14 +354,68 @@ export async function applyCategoriesWithLearning(
       }
     }
 
-    enrichedItems.push({
+    const enrichedItem: any = {
       ...it,
+      // Keep existing fields (compat)
       name,
       category: category as any,
       // 新字段：分类状态与置信度（兼容旧数据，读取时需做默认值处理）
       classification_status: classificationStatus,
       classification_confidence: classificationConfidence,
-    } as any);
+      classification_source: classificationOut?.source ?? null,
+      // Compatibility bridge for older modules that still read item.classification.*
+      classification: {
+        category: category as any,
+        status: classificationStatus,
+        confidence: classificationConfidence,
+      },
+      // V1 extensible schema fields (snake_case for storage stability)
+      raw_name: norm.raw_name,
+      normalized_name: norm.normalized_name,
+      canonical_name: null,
+      brand: null,
+      quantity: (it as any)?.quantity ?? 1,
+      unit_price: (it as any)?.unitPrice ?? (it as any)?.unit_price ?? 0,
+      line_total: (it as any)?.lineTotal ?? (it as any)?.line_total ?? 0,
+      // Prefer rule/ai output main/sub/tags; legacy bridge only as fallback
+      category_main:
+        classificationOut?.category_main ||
+        mapLegacyCategoryToV1(category || '').main,
+      category_sub:
+        classificationOut?.category_sub ??
+        mapLegacyCategoryToV1(category || '').sub,
+      analysis_tags:
+        Array.isArray(classificationOut?.analysis_tags)
+          ? classificationOut.analysis_tags
+          : buildAnalysisTags(mapLegacyCategoryToV1(category || '')),
+    };
+    enrichedItems.push(enrichedItem as any);
+
+    // Write back to product_dictionary (best-effort, never crash pipeline)
+    try {
+      const source = classificationOut?.source;
+      const conf =
+        Number.isFinite(classificationOut?.confidence) ? Number(classificationOut.confidence) : classificationConfidence;
+      const shouldWrite =
+        source === 'dictionary' ||
+        source === 'mapping' ||
+        (source === 'rules' && conf >= 0.9) ||
+        (source === 'ai' && conf >= 0.85);
+      if (shouldWrite) {
+        await upsertProductDictionary({
+          normalized_name: enrichedItem.normalized_name,
+          canonical_name: classificationOut?.canonical_name ?? null,
+          brand: classificationOut?.brand ?? null,
+          category_main: String(enrichedItem.category_main),
+          category_sub: enrichedItem.category_sub ? String(enrichedItem.category_sub) : null,
+          analysis_tags: Array.isArray(enrichedItem.analysis_tags) ? enrichedItem.analysis_tags : [],
+          confidence: conf,
+          minConfidenceToWrite: source === 'dictionary' || source === 'mapping' ? 0 : undefined,
+        });
+      }
+    } catch {
+      // ignore
+    }
   }
 
   // Log classification statistics (once per receipt)
@@ -348,6 +423,7 @@ export async function applyCategoriesWithLearning(
   if (stats) {
     console.log(
       '[CategoryClassifier] Stats:',
+      `dictionary=${(stats as any).dictionary ?? 0}`,
       `mapping=${stats.mapping}`,
       `rules=${stats.rules}`,
       `ai=${stats.ai}`,
@@ -355,10 +431,47 @@ export async function applyCategoriesWithLearning(
     );
   }
 
+  if (__DEV__) {
+    const okCount = enrichedItems.filter((x: any) => x?.classification_status === 'ok' && x?.category).length;
+    const fbCount = enrichedItems.filter((x: any) => x?.classification_status === 'fallback' && x?.category).length;
+    const missingCount = enrichedItems.filter((x: any) => !x?.category).length;
+    console.log('[Enricher] categorized counts:', { ok: okCount, fallback: fbCount, missing: missingCount });
+    if (enrichedItems[0]) {
+      const s = enrichedItems[0] as any;
+      console.log('[Enricher] enriched sample item:', {
+        name: s?.name,
+        category: s?.category,
+        classification_status: s?.classification_status,
+        classification_confidence: s?.classification_confidence,
+      });
+    }
+  }
+
+  if (__DEV__ && trace) {
+    console.log('[ScanTiming] classify_end_ms', { id: trace.id, ms: Date.now() - tStart, items: items.length });
+  }
+  const structured = buildReceiptStructuredAnalysis({
+    merchant: analysis.merchant,
+    items: enrichedItems as any,
+    total: analysis.total,
+    tax: analysis.tax,
+    currency: analysis.currency,
+  });
+
+  const receiptLevel = buildReceiptAnalysisV1({ items: enrichedItems as any, total: analysis.total });
+  const receiptTemplate = buildReceiptTemplateL1(receiptLevel);
+
   return {
     ...analysis,
     items: enrichedItems as any,
     is_grocery: isGrocery, // Add flag to analysis for later filtering
+    analysis_engine_v1: structured,
+    analysis_outputs_v1: {
+      receipt_level: receiptLevel,
+      templates_v1: {
+        receipt_template: receiptTemplate,
+      },
+    },
   } as any;
 }
 

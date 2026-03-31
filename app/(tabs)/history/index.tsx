@@ -14,67 +14,8 @@ import {
 import { deleteReceipts, listReceiptsForList, type ReceiptListRow } from '@/lib/db';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
-import { getCategoryLabel } from '@/lib/categoryPalette';
-import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
-
-function formatDate(ts: number) {
-  const d = new Date(ts);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
-}
-
-function safeNumber(v: any): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/**
- * 从 ReceiptRow.analysis_json 里提取：仅 ok + 有效 grocery 分类的 TopN，用于列表预览
- * 不包含 non_grocery / uncategorized / failed；标签统一走 getCategoryLabel
- */
-function buildTopCategories(
-  analysisJson: string | null | undefined,
-  topN = 2
-): string[] {
-  if (!analysisJson) return [];
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(analysisJson);
-  } catch {
-    return [];
-  }
-
-  const items: any[] = Array.isArray(parsed?.items) ? parsed.items : [];
-  if (items.length === 0) return [];
-
-  const map = new Map<string, number>();
-
-  for (const it of items) {
-    const key = String(it?.category ?? it?.categoryKey ?? '').trim();
-    if (!key || key === 'non_grocery' || isExcludedFromAnalytics(key)) continue;
-    const status = (it as any).classification_status as string | undefined;
-    if (status !== undefined && status !== 'ok') continue;
-    if (!isGroceryCategory(key)) continue;
-
-    const lineTotal = safeNumber(it?.lineTotal);
-    const quantity = safeNumber(it?.quantity);
-    const unitPrice = safeNumber(it?.unitPrice);
-    const amount = lineTotal > 0 ? lineTotal : quantity * unitPrice;
-    map.set(key, (map.get(key) ?? 0) + safeNumber(amount));
-  }
-
-  const arr = Array.from(map.entries())
-    .map(([key, amount]) => ({ key, label: getCategoryLabel(key), amount }))
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, topN);
-
-  return arr.map((x) => `${x.label} ${Math.round(x.amount)}`);
-}
+import { buildTopCategories, buildHistoryMetaLine } from '@/lib/receiptListHelpers';
+import { formatDate } from '@/lib/formatDate';
 
 export default function HistoryScreen() {
   const router = useRouter();
@@ -86,7 +27,7 @@ export default function HistoryScreen() {
 
   const load = useCallback(async () => {
     try {
-      const data = await listReceiptsForList(200);
+      const data = await listReceiptsForList({ limit: 200 });
       setRows(data);
     } catch (e: any) {
       console.error(e);
@@ -180,8 +121,8 @@ export default function HistoryScreen() {
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
-          <Text style={styles.title}>历史记录</Text>
-          <Text style={styles.subtitle}>点击任意一条进入详情页</Text>
+          <Text style={styles.title}>{t('history.list.title')}</Text>
+          <Text style={styles.subtitle}>{t('history.list.subtitle')}</Text>
         </View>
         <Pressable
           onPress={toggleSelectMode}
@@ -209,9 +150,7 @@ export default function HistoryScreen() {
         ItemSeparatorComponent={() => <View style={styles.sep} />}
         ListEmptyComponent={
           <View style={{ paddingTop: 30 }}>
-            <Text style={{ color: '#666' }}>
-              暂无记录。请先在 Home 里识别并保存。
-            </Text>
+            <Text style={{ color: '#666' }}>{t('history.list.empty')}</Text>
           </View>
         }
         renderItem={({ item }) => {
@@ -237,12 +176,18 @@ export default function HistoryScreen() {
                     <Text style={styles.total}>{formatJPY(item.total)}</Text>
                   </View>
                   <Text style={styles.meta}>
-                    {formatDate(item.transaction_at || item.created_at)} · 税 {item.tax}
+                    {buildHistoryMetaLine(
+                      item.transaction_at,
+                      item.created_at,
+                      t('history.detail.taxLabel'),
+                      item.tax,
+                      formatDate
+                    )}
                   </Text>
                   {topCats.length > 0 ? (
                     <Text style={styles.cats}>{topCats.join(' · ')}</Text>
                   ) : (
-                    <Text style={styles.catsMuted}>未找到分类信息</Text>
+                    <Text style={styles.catsMuted}>{t('history.list.noCategoryInfo')}</Text>
                   )}
                 </View>
               </View>

@@ -15,18 +15,15 @@ import {
 import { listReceipts, type ReceiptRow } from '@/lib/db';
 import { t } from '@/lib/i18n';
 import { getCategoryLabel } from '@/lib/categoryPalette';
-import { calculateStats, type TimeRange } from '@/lib/statsCalculator';
+import { type TimeRange } from '@/lib/statsCalculator';
 import { buildInsights } from '@/lib/buildInsights';
-import {
-  extractProductPrices,
-  computeCheapestMerchants,
-  getTopCheapestProducts,
-  computeCategoryPriceIndex,
-  isOverpriced,
-  compareWithMinPrice,
-} from '@/lib/priceRadar';
+import { isOverpriced, compareWithMinPrice } from '@/lib/priceRadar';
 import { normalizeProductName } from '@/lib/productNormalizer';
-import { isGroceryMerchant } from '@/lib/groceryDetector';
+import {
+  buildPriceRadarData,
+  buildCategoryIndexData,
+  buildStatsSafe,
+} from '@/lib/analysisHelpers';
 
 export default function AnalysisScreen() {
   const router = useRouter();
@@ -52,37 +49,11 @@ export default function AnalysisScreen() {
     }, [loadReceipts])
   );
 
-  // 计算统计数据
-  // 全链路容错：任何异常都降级为默认值，不崩溃
-  const stats = useMemo(() => {
-    try {
-      if (!Array.isArray(receipts)) {
-        return {
-          totalSpend: 0,
-          grocerySpend: 0,
-          topCategories: [],
-          topMerchants: [],
-          highestSingleReceipt: null,
-          mostFrequentMerchant: null,
-          uncategorizedCount: 0,
-          uncategorizedTotal: 0,
-        };
-      }
-      return calculateStats(receipts, timeRange);
-    } catch (e) {
-      console.error('[Analysis] stats computation failed:', e);
-      return {
-        totalSpend: 0,
-        grocerySpend: 0,
-        topCategories: [],
-        topMerchants: [],
-        highestSingleReceipt: null,
-        mostFrequentMerchant: null,
-        uncategorizedCount: 0,
-        uncategorizedTotal: 0,
-      };
-    }
-  }, [receipts, timeRange]);
+  // 计算统计数据（统一默认结构与异常 fallback）
+  const stats = useMemo(
+    () => buildStatsSafe(receipts, timeRange),
+    [receipts, timeRange]
+  );
 
   const insights = useMemo(() => {
     try {
@@ -95,88 +66,10 @@ export default function AnalysisScreen() {
   }, [receipts, timeRange]);
 
   // 价格雷达数据（仅grocery收据，需要至少5张grocery收据）
-  // 全链路容错：任何异常都降级为null，显示"无数据"而不是崩溃
-  const priceRadarData = useMemo(() => {
-    try {
-      if (!Array.isArray(receipts) || receipts.length === 0) {
-        return null;
-      }
-
-      // Filter to grocery receipts only
-      const groceryReceipts = receipts.filter((r) => {
-        try {
-          if (!r) return false;
-          if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
-            return true;
-          }
-          try {
-            const analysis = JSON.parse(r.analysis_json || '{}');
-            return analysis.is_grocery === true;
-          } catch {
-            return false;
-          }
-        } catch {
-          return false;
-        }
-      });
-
-      if (groceryReceipts.length < 5) return null;
-
-      const records = extractProductPrices(groceryReceipts);
-      if (!Array.isArray(records) || records.length === 0) return null;
-
-      const cheapestMap = computeCheapestMerchants(records);
-      if (!cheapestMap || cheapestMap.size === 0) return null;
-
-      const topProducts = getTopCheapestProducts(cheapestMap, 10);
-      if (!Array.isArray(topProducts) || topProducts.length === 0) return null;
-
-      return {
-        records,
-        cheapestMap,
-        topProducts,
-      };
-    } catch (e) {
-      console.error('[Analysis] priceRadarData computation failed:', e);
-      return null; // 降级为无数据，不崩溃
-    }
-  }, [receipts]);
+  const priceRadarData = useMemo(() => buildPriceRadarData(receipts), [receipts]);
 
   // 分类价格指数（仅grocery收据）
-  // 全链路容错：任何异常都降级为null，显示"无数据"而不是崩溃
-  const categoryIndex = useMemo(() => {
-    try {
-      if (!Array.isArray(receipts) || receipts.length === 0) {
-        return null;
-      }
-
-      // Filter to grocery receipts only
-      const groceryReceipts = receipts.filter((r) => {
-        try {
-          if (!r) return false;
-          if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
-            return true;
-          }
-          try {
-            const analysis = JSON.parse(r.analysis_json || '{}');
-            return analysis.is_grocery === true;
-          } catch {
-            return false;
-          }
-        } catch {
-          return false;
-        }
-      });
-
-      if (groceryReceipts.length < 10) return null;
-
-      const result = computeCategoryPriceIndex(groceryReceipts, 'produce', 5);
-      return result; // 可能为null，由UI处理
-    } catch (e) {
-      console.error('[Analysis] categoryIndex computation failed:', e);
-      return null; // 降级为无数据，不崩溃
-    }
-  }, [receipts]);
+  const categoryIndex = useMemo(() => buildCategoryIndexData(receipts), [receipts]);
 
   if (loading) {
     return (

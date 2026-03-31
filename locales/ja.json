@@ -70,6 +70,9 @@
       "processingMulti": "処理中 {current}/{total}",
       "analyzing": "レシートを分析中…",
       "doneSummary": "完了：成功 {ok}、失敗 {fail}",
+      "doneSummaryWithReasons": "完了：成功 {ok}、失敗 {fail}。{reasons}",
+      "failureReasonsPrefix": "失敗理由：",
+      "failureReasonCount": "{label} {count} 件",
       "selectSource": "画像ソースを選択",
       "selectSourceMessage": "レシート画像の取得方法を選択",
       "camera": "カメラ",
@@ -80,11 +83,7 @@
       "success": "成功",
       "successMessage": "レシートが履歴に保存されました。",
       "error": "エラー",
-      "errorMessage": "後でもう一度お試しください。",
-      "rateLimit": "スキャンが多すぎます。後でもう一度お試しください。",
-      "payloadTooLarge": "画像が大きすぎます。より近くで写真を撮り直してください。",
-      "networkError": "ネットワークエラー。接続を確認してください。",
-      "serverError": "サーバーエラー。後でもう一度お試しください。"
+      "errorMessage": "後でもう一度お試しください。"
     },
     "category": {
       "Grocery": "生鮮・雑貨",
@@ -104,6 +103,12 @@
     "analysis": "分析"
   },
   "history": {
+    "list": {
+      "title": "履歴",
+      "subtitle": "タップで詳細を表示",
+      "empty": "まだ記録がありません。ホームでスキャンして保存してください。",
+      "noCategoryInfo": "カテゴリ情報なし"
+    },
     "errors": {
       "loadTitle": "読み込みに失敗しました",
       "loadMessage": "履歴を読み込めませんでした"
@@ -120,6 +125,7 @@
       "deleteFailed": "削除に失敗しました。もう一度お試しください。"
     },
     "detail": {
+      "notFound": "この記録は見つかりませんでした",
       "loadMessage": "この記録を読み込めませんでした",
       "inputErrorTitle": "入力エラー",
       "qtyError": "数量は1以上で入力してください",
@@ -132,6 +138,15 @@
       "deletedTitle": "削除しました",
       "deleteFailedTitle": "削除に失敗しました",
       "loading": "読み込み中…",
+      "editedHint": "（手動で編集した商品）",
+      "taxLabel": "税",
+      "categorySummaryTitle": "カテゴリ内訳：",
+      "noCategoryInfo": "カテゴリ情報なし",
+      "itemsTitle": "商品明細：",
+      "quantityShort": "数量",
+      "subtotalShort": "小計",
+      "noItems": "商品明細なし",
+      "deleteRecord": "この記録を削除",
       "edit": {
         "cancel": "キャンセル",
         "title": "商品を編集",
@@ -155,7 +170,7 @@
     },
     "pro": {
       "title": "高度なインサイト Pro",
-      "subtitle": "より深いインサイトとより長い期間を解除"
+      "subtitle": "より深いインサイトとより長い期間（近日公開）"
     },
     "privacy": {
       "title": "プライバシーポリシー",
@@ -183,15 +198,16 @@
       "required": "フィードバックを入力してください。",
       "network": "送信失敗（ネットワークエラー）",
       "server": "送信失敗（サーバーエラー）",
-      "generic": "送信失敗。後でもう一度お試しください。",
-      "notConfigured": "送信失敗（未設定）",
+      "generic": "送信に失敗しました。後でもう一度お試しください。",
+      "notConfigured": "送信失敗（未設定）。後でもう一度お試しください、または別の連絡手段をご利用ください。",
       "badResponse": "送信失敗（サーバー応答エラー）"
     },
     "success": {
       "message": "送信済み",
       "title": "成功",
       "fallbackTitle": "成功"
-    }
+    },
+    "emailFallbackAction": "メールで送信する"
   },
   "pro": {
     "title": "高度なインサイト Pro",
@@ -291,12 +307,14 @@
     "libraryDeniedMessage": "設定で写真へのアクセスを許可してください。"
   },
   "ocr": {
-    "networkError": "ネットワークエラーです。接続を確認して再試行してください。",
     "rateLimit": "リクエストが多すぎます。しばらくしてから再試行してください。",
     "payloadTooLarge": "画像が大きすぎます。もう一度撮影してください。",
+    "networkError": "ネットワークエラーです。接続を確認して再試行してください。",
     "serverError": "サーバーエラーです。しばらくしてから再試行してください。",
     "invalidResponse": "応答が不正です。再試行してください。",
-    "failed": "認識に失敗しました。再試行してください。"
+    "failed": "認識に失敗しました。再試行してください。",
+    "privacyNotice": "コスト分析と不正利用防止のため、OCRリクエスト回数とトークン使用量を記録します。画像やレシートの全文は保存しません。",
+    "privacyNoticeTitle": "プライバシーについて"
   },
   "toast": {
     "saved": "保存しました",
@@ -348,8 +366,4 @@
       "other": "その他"
     }
   },
-  "ocr": {
-    "privacyNotice": "コスト分析と不正利用防止のため、OCRリクエスト回数とトークン使用量を記録します。画像やレシートの全文は保存しません。",
-    "privacyNoticeTitle": "プライバシーについて"
-  }
 }

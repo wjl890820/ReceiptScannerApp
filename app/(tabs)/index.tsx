@@ -15,159 +15,27 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Text as SvgText, TSpan } from 'react-native-svg';
 
-import {
-  analyzeReceiptImage,
-  type ReceiptAnalysis,
-  type ReceiptItem,
-} from '@/lib/receiptAnalyzer';
+import type { ReceiptAnalysis, ReceiptItem } from '@/lib/receiptAnalyzer';
 import { pingOcrEdge, probeSupabaseNetwork } from '@/lib/ocrService';
+import { runScanPipeline, aggregateBatchScanResults } from '@/lib/scanPipeline';
+import { getScanErrorMessage } from '@/lib/scanError';
+import { logger } from '@/lib/logger';
 
-import { listReceipts, saveReceipt, type ReceiptRow } from '@/lib/db';
+import { listReceipts, type ReceiptRow } from '@/lib/db';
 import { t, getCurrentLocale } from '@/lib/i18n';
-import { applyCategoriesWithLearning } from '@/lib/receiptEnricher';
-import { isGroceryMerchant } from '@/lib/groceryDetector';
-import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
+// 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 import { getCategoryColor, getCategoryLabel, getCategoryShortLabel } from '@/lib/categoryPalette';
 import { formatJPY } from '@/lib/formatJPY';
 import { getHomeTimeRange, setHomeTimeRange } from '@/lib/settingsStore';
+import { tryShowNextEasterEgg } from '@/lib/homeEasterEggHelpers';
 import {
-  shouldTriggerMilestone,
-  hasShownMilestone,
-  markMilestoneShown,
-  generateEasterEggContent,
-  type Milestone,
-} from '@/lib/easterEggs';
-
-// ---------- 本地分类（低成本，0 调用 AI）----------
-function inferCategory(name: string): string {
-  const n = (name || '').toLowerCase();
-
-  if (
-    n.includes('お茶') ||
-    n.includes('茶') ||
-    n.includes('コーヒー') ||
-    n.includes('coffee') ||
-    n.includes('コーラ') ||
-    n.includes('ファンタ') ||
-    n.includes('ジュース') ||
-    n.includes('drink') ||
-    n.includes('水')
-  ) {
-    return '饮料';
-  }
-
-  if (
-    n.includes('チョコ') ||
-    n.includes('ビス') ||
-    n.includes('ビスケット') ||
-    n.includes('クッキー') ||
-    n.includes('スナック') ||
-    n.includes('ナッツ') ||
-    n.includes('アイス') ||
-    n.includes('デザート') ||
-    n.includes('菓子')
-  ) {
-    return '零食/甜品';
-  }
-
-  if (
-    n.includes('ロール') ||
-    n.includes('パン') ||
-    n.includes('ご飯') ||
-    n.includes('米') ||
-    n.includes('うどん') ||
-    n.includes('そば') ||
-    n.includes('ラーメン') ||
-    n.includes('パスタ') ||
-    n.includes('弁当') ||
-    n.includes('おにぎり')
-  ) {
-    return '主食';
-  }
-
-  if (
-    n.includes('惣菜') ||
-    n.includes('天') ||
-    n.includes('揚げ') ||
-    n.includes('からあげ') ||
-    n.includes('唐揚') ||
-    n.includes('フライ') ||
-    n.includes('コロッケ') ||
-    n.includes('とり天') ||
-    n.includes('冷凍')
-  ) {
-    return '冷冻/熟食';
-  }
-
-  if (
-    n.includes('牛') ||
-    n.includes('豚') ||
-    n.includes('鶏') ||
-    n.includes('とり') ||
-    n.includes('魚') ||
-    n.includes('刺身') ||
-    n.includes('野菜') ||
-    n.includes('白菜') ||
-    n.includes('ねぎ') ||
-    n.includes('えのき') ||
-    n.includes('茸') ||
-    n.includes('椎茸') ||
-    n.includes('きのこ')
-  ) {
-    return '生鲜';
-  }
-
-  if (
-    n.includes('みそ') ||
-    n.includes('味噌') ||
-    n.includes('しょうゆ') ||
-    n.includes('醤油') ||
-    n.includes('塩') ||
-    n.includes('砂糖') ||
-    n.includes('酢') ||
-    n.includes('だし') ||
-    n.includes('スパイス')
-  ) {
-    return '调味料';
-  }
-
-  return '未分类';
-}
-
-// 保留applyLocalCategories作为fallback（已迁移到receiptEnricher）
-function applyLocalCategories(analysis: ReceiptAnalysis): ReceiptAnalysis {
-  const items = Array.isArray(analysis.items) ? analysis.items : [];
-  const enrichedItems: ReceiptItem[] = items.map((it: any) => {
-    const name = typeof it?.name === 'string' ? it.name : '';
-    const category =
-      typeof it?.category === 'string' && it.category.trim()
-        ? it.category.trim()
-        : inferCategory(name);
-
-    return {
-      name,
-      quantity: typeof it?.quantity === 'number' ? it.quantity : 1,
-      unitPrice: typeof it?.unitPrice === 'number' ? it.unitPrice : 0,
-      lineTotal: typeof it?.lineTotal === 'number' ? it.lineTotal : 0,
-      category,
-    } as any;
-  });
-
-  return {
-    ...analysis,
-    items: enrichedItems as any,
-  };
-}
-// ---------- 本地分类结束 ----------
+  aggregateCategoryData,
+  computeUncategorizedSummary,
+  type CategoryData,
+} from '@/lib/homeMetricsHelpers';
 
 // ====== 饼图相关 ======
-// Note: Category colors and labels are now provided by lib/categoryPalette.ts
-
-type CategoryData = {
-  category: string;
-  amount: number;
-  percentage: number;
-};
+// Note: Category colors and labels from lib/categoryPalette.ts；分类聚合与未分类汇总来自 lib/homeMetricsHelpers
 
 function safeParseItems(json: string | null): ReceiptItem[] | null {
   if (!json) return null;
@@ -191,235 +59,14 @@ function safeParseAnalysis(json: string | null): ReceiptAnalysis | null {
   }
 }
 
-function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
-  // Filter to grocery receipts only
-  const groceryReceipts = receipts.filter((r) => {
-    // Use improved grocery detection
-    if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
-      return true;
-    }
-    // Fallback: check analysis_json for is_grocery flag
-    try {
-      const analysis = JSON.parse(r.analysis_json || '{}');
-      return analysis.is_grocery === true;
-    } catch {
-      return false;
-    }
-  });
-
-  const categoryMap = new Map<string, number>();
-
-  for (const receipt of groceryReceipts) {
-    let items: ReceiptItem[] | null = null;
-
-    if (receipt.user_items_json) {
-      items = safeParseItems(receipt.user_items_json);
-    } else {
-      const analysis = safeParseAnalysis(receipt.analysis_json);
-      items = analysis?.items ?? null;
-    }
-
-    if (!items || !Array.isArray(items)) continue;
-
-    for (const item of items) {
-      const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
-      if (lineTotal <= 0) continue;
-
-      const category =
-        (typeof (item as any).category === 'string' && (item as any).category.trim()) || 'uncategorized';
-      const rawStatus = (item as any).classification_status as
-        | 'ok'
-        | 'pending'
-        | 'failed'
-        | 'fallback'
-        | undefined;
-      const hasCategory = !!(typeof (item as any).category === 'string' && (item as any).category.trim());
-      const status: 'ok' | 'pending' | 'failed' | 'fallback' =
-        rawStatus || (hasCategory ? 'ok' : 'failed');
-
-      // 仅统计分类成功（ok 且有类别）的商品
-      if (status !== 'ok' || !hasCategory) {
-        continue;
-      }
-
-      // Only count grocery categories, exclude non_grocery and uncategorized from analytics
-      if (isExcludedFromAnalytics(category)) {
-        continue;
-      }
-
-      // Only count valid grocery categories
-      if (!isGroceryCategory(category)) {
-        continue;
-      }
-
-      categoryMap.set(category, (categoryMap.get(category) ?? 0) + lineTotal);
-    }
-  }
-
-  const total = Array.from(categoryMap.values()).reduce((sum, val) => sum + val, 0);
-
-  const data: CategoryData[] = Array.from(categoryMap.entries())
-    .map(([category, amount]) => ({
-      category,
-      amount,
-      percentage: total > 0 ? (amount / total) * 100 : 0,
-    }))
-    .sort((a, b) => b.amount - a.amount);
-
-  return data;
-}
-
-function computeUncategorizedSummary(receipts: ReceiptRow[]): { count: number; total: number } {
-  // 与 aggregateCategoryData 相同的 grocery 收据过滤
-  const groceryReceipts = receipts.filter((r) => {
-    if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
-      return true;
-    }
-    try {
-      const analysis = JSON.parse(r.analysis_json || '{}');
-      return analysis.is_grocery === true;
-    } catch {
-      return false;
-    }
-  });
-
-  let count = 0;
-  let total = 0;
-
-  for (const receipt of groceryReceipts) {
-    let items: ReceiptItem[] | null = null;
-
-    if (receipt.user_items_json) {
-      items = safeParseItems(receipt.user_items_json);
-    } else {
-      const analysis = safeParseAnalysis(receipt.analysis_json);
-      items = analysis?.items ?? null;
-    }
-
-    if (!items || !Array.isArray(items)) continue;
-
-    for (const item of items) {
-      const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
-      if (lineTotal <= 0) continue;
-
-      const rawCategory = (item as any).category || '';
-      const category = typeof rawCategory === 'string' ? rawCategory : '';
-      const rawStatus = (item as any).classification_status as
-        | 'ok'
-        | 'pending'
-        | 'failed'
-        | 'fallback'
-        | undefined;
-      const hasCategory = !!(typeof (item as any).category === 'string' && (item as any).category.trim());
-      const status: 'ok' | 'pending' | 'failed' | 'fallback' =
-        rawStatus || (hasCategory ? 'ok' : 'failed');
-
-      // 与统计逻辑一致：只有 ok 且有效 grocery 类别才参与分类统计，其余计入“未分类”
-      if (
-        status !== 'ok' ||
-        !hasCategory ||
-        isExcludedFromAnalytics(category) ||
-        !isGroceryCategory(category)
-      ) {
-        count += 1;
-        total += lineTotal;
-      }
-    }
-  }
-
-  return { count, total };
-}
-
 // ====== 洞察规则引擎 ======
-type InsightLevel = 'info' | 'warn' | 'alert';
-
-type InsightContext = {
-  totalSpending: number;
-  totalsByCategory: Map<string, number>;
-  top1Category: string | null;
-  top1Pct: number;
-  top2Category: string | null;
-  top2Pct: number;
-  uncategorizedPct: number;
-  nonEssentialPct: number;
-  avgReceiptTotal: number;
-  maxReceiptTotal: number;
-};
-
-type InsightRule = {
-  priority: number;
-  level: InsightLevel;
-  condition: (ctx: InsightContext) => boolean;
-  messages: string[];
-};
-
-function computeInsightContext(
-  receipts: ReceiptRow[],
-  categoryData: CategoryData[]
-): InsightContext {
-  const totalSpending = categoryData.reduce((sum, item) => sum + item.amount, 0);
-
-  const totalsByCategory = new Map<string, number>();
-  categoryData.forEach((item) => {
-    totalsByCategory.set(item.category, item.amount);
-  });
-
-  const top1Category = categoryData.length > 0 ? categoryData[0].category : null;
-  const top1Pct = categoryData.length > 0 ? categoryData[0].percentage : 0;
-  const top2Category = categoryData.length > 1 ? categoryData[1].category : null;
-  const top2Pct = categoryData.length > 1 ? categoryData[1].percentage : 0;
-
-  const uncategorizedAmount = totalsByCategory.get('uncategorized') || 0;
-  const uncategorizedPct = totalSpending > 0 ? (uncategorizedAmount / totalSpending) * 100 : 0;
-
-  const nonEssentialCategories = ['snacks', 'non_alcoholic_drinks', 'ready_meals'];
-  const nonEssentialAmount = nonEssentialCategories.reduce(
-    (sum, cat) => sum + (totalsByCategory.get(cat) || 0),
-    0
-  );
-  const nonEssentialPct = totalSpending > 0 ? (nonEssentialAmount / totalSpending) * 100 : 0;
-
-  const receiptTotals: number[] = [];
-  for (const receipt of receipts) {
-    let items: ReceiptItem[] | null = null;
-    if (receipt.user_items_json) {
-      items = safeParseItems(receipt.user_items_json);
-    } else {
-      const analysis = safeParseAnalysis(receipt.analysis_json);
-      items = analysis?.items ?? null;
-    }
-
-    if (!items || !Array.isArray(items)) continue;
-
-    const receiptTotal = items.reduce((sum, item) => {
-      const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
-      return sum + (lineTotal > 0 ? lineTotal : 0);
-    }, 0);
-
-    if (receiptTotal > 0) {
-      receiptTotals.push(receiptTotal);
-    }
-  }
-
-  const avgReceiptTotal =
-    receiptTotals.length > 0
-      ? receiptTotals.reduce((sum, val) => sum + val, 0) / receiptTotals.length
-      : 0;
-  const maxReceiptTotal = receiptTotals.length > 0 ? Math.max(...receiptTotals) : 0;
-
-  return {
-    totalSpending,
-    totalsByCategory,
-    top1Category,
-    top1Pct,
-    top2Category,
-    top2Pct,
-    uncategorizedPct,
-    nonEssentialPct,
-    avgReceiptTotal,
-    maxReceiptTotal,
-  };
-}
+import {
+  computeInsightContext,
+  buildHomeInsight,
+  pickInsightRule,
+  type InsightContext,
+  type InsightLevel,
+} from '@/lib/homeInsightHelpers';
 
 type InsightRuleWithMessages = {
   priority: number;
@@ -707,8 +354,7 @@ function generateStructuredInsight(
     return null;
   }
 
-  const sortedRules = [...INSIGHT_RULES].sort((a, b) => b.priority - a.priority);
-  const matchedRule = sortedRules.find((rule) => rule.condition(context));
+  const matchedRule = pickInsightRule(context);
 
   if (!matchedRule) {
     return null;
@@ -983,6 +629,10 @@ export default function HomeScreen() {
     }, [loadReceipts])
   );
 
+  if (__DEV__) {
+    console.log('[Home][Metrics] receipts_loaded_count', receipts.length);
+  }
+
   // 根据时间范围过滤收据（使用 transaction_at，fallback 到 created_at）
   const filteredReceipts = useMemo(() => {
     if (timeRange === 'ALL') {
@@ -999,10 +649,32 @@ export default function HomeScreen() {
     });
   }, [receipts, timeRange]);
 
+  if (__DEV__) {
+    const missingTx = receipts.filter((r) => !r.transaction_at).length;
+    console.log('[Home][Metrics] timeRange', timeRange, 'filtered_count', filteredReceipts.length, 'missing_transaction_at', missingTx);
+  }
+
   // 聚合类别数据
   const categoryData = useMemo(() => {
     return aggregateCategoryData(filteredReceipts);
   }, [filteredReceipts]);
+
+  if (__DEV__) {
+    let missingCategoryCount = 0;
+    for (const r of filteredReceipts) {
+      try {
+        const obj = JSON.parse(r.user_items_json || r.analysis_json || '{}');
+        const items = Array.isArray(obj?.items) ? obj.items : [];
+        for (const it of items) {
+          const cat = (it as any)?.category;
+          if (!cat || (typeof cat === 'string' && !cat.trim())) missingCategoryCount++;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    console.log('[Home][Metrics] categoryData', categoryData, 'missing_item_category_count', missingCategoryCount);
+  }
 
   const totalAmount = useMemo(() => {
     return categoryData.reduce((sum, item) => sum + item.amount, 0);
@@ -1022,10 +694,34 @@ export default function HomeScreen() {
     return computePeriodComparison(receipts, timeRange);
   }, [receipts, timeRange]);
 
-  // Generate structured insight
-  const structuredInsight = useMemo(() => {
-    return generateStructuredInsight(insightContext, periodComparison);
+  // Build insight structure (no i18n in helper)
+  const homeInsight = useMemo(() => {
+    return buildHomeInsight(insightContext, periodComparison);
   }, [insightContext, periodComparison]);
+
+  // Compose structured insight (i18n in page)
+  const structuredInsight = useMemo(() => {
+    if (!homeInsight) return null;
+
+    const { level, payload } = homeInsight;
+
+    const headline = payload.headline.params
+      ? t(payload.headline.key, payload.headline.params)
+      : t(payload.headline.key);
+
+    const reasons = payload.reasons.map((r) =>
+      r.params ? t(r.key, r.params) : t(r.key)
+    );
+
+    const suggestion = payload.suggestion.key ? t(payload.suggestion.key) : '';
+
+    return {
+      headline,
+      reasons: reasons.length > 0 ? reasons : [t('home.insight.reason.general')],
+      suggestion,
+      level,
+    };
+  }, [homeInsight]);
 
   // KPI data
   const kpiData = useMemo(() => {
@@ -1193,165 +889,174 @@ export default function HomeScreen() {
         }
       }
     } catch (err: any) {
-      console.error('Scan error:', err);
+      logger.error('Home', 'Scan error', err);
       
-      // Handle specific OCR error codes
-      let errorMessage = t('ocr.failed');
-      if (err?.code === 'RATE_LIMIT') {
-        errorMessage = t('ocr.rateLimit');
-      } else if (err?.code === 'PAYLOAD_TOO_LARGE') {
-        errorMessage = t('ocr.payloadTooLarge');
-      } else if (err?.code === 'NETWORK_ERROR') {
-        errorMessage = t('ocr.networkError');
-      } else if (err?.code === 'SERVER_ERROR') {
-        errorMessage = t('ocr.serverError');
-      } else if (err?.message) {
-        errorMessage = err.message;
-      }
-      
+      const errorMessage = err?.message || getScanErrorMessage(err?.code || 'FAILED');
       Alert.alert(t('home.scan.error'), errorMessage);
       setScanning(false);
     }
   };
 
-  // 处理多张收据图片（顺序处理）
+  // 处理多张收据：逐张调用 runScanPipeline，聚合失败原因后展示摘要
   const processMultipleReceiptImages = async (uris: string[]) => {
     const total = uris.length;
-    let successCount = 0;
-    let failCount = 0;
-    const errors: string[] = [];
+    const results: Array<{ ok: true } | { ok: false; code: string; message?: string }> = [];
 
     try {
       for (let i = 0; i < uris.length; i++) {
-        const uri = uris[i];
         setProcessingProgress({ current: i + 1, total });
-
-        try {
-          // 分析小票
-          const raw = await analyzeReceiptImage(uri);
-          const enriched = await applyCategoriesWithLearning(raw);
-
-          // 保存到历史
-          await saveReceipt({
-            imageUri: uri,
-            analysis: enriched,
-          });
-
-          successCount++;
-        } catch (err: any) {
-          console.error(`[MultiScan] Failed to process image ${i + 1}/${total}:`, err);
-          failCount++;
-          
-          // 记录错误信息（简化）
-          let errorMsg = t('ocr.failed');
-          if (err?.code === 'RATE_LIMIT') {
-            errorMsg = t('ocr.rateLimit');
-          } else if (err?.code === 'PAYLOAD_TOO_LARGE') {
-            errorMsg = t('ocr.payloadTooLarge');
-          } else if (err?.code === 'NETWORK_ERROR') {
-            errorMsg = t('ocr.networkError');
-          } else if (err?.code === 'SERVER_ERROR') {
-            errorMsg = t('ocr.serverError');
-          } else if (err?.message) {
-            errorMsg = err.message;
-          }
-          errors.push(errorMsg);
+        const result = await runScanPipeline(uris[i]);
+        results.push(result);
+        if (!result.ok) {
+          logger.error('MultiScan', `image ${i + 1}/${total} failed`, { code: result.code, message: result.message });
         }
       }
 
-      // 刷新数据（只刷新一次，在所有处理完成后）
       await loadReceipts();
-
-      // 清除进度
       setProcessingProgress(null);
 
-      // 显示摘要
-      const summaryMessage = t('home.scan.doneSummary', { ok: successCount, fail: failCount });
-      Alert.alert(
-        t('home.scan.success'),
-        summaryMessage,
-        [{ text: t('easterEgg.ok') || 'OK', onPress: () => {} }]
-      );
+      const { successCount, failCount, failureReasonsByCode } = aggregateBatchScanResults(results);
+      const reasonParts = Object.entries(failureReasonsByCode)
+        .map(([code, count]) => t('home.scan.failureReasonCount', { label: getScanErrorMessage(code), count }))
+        .join('、');
+      const reasonsLine = Object.keys(failureReasonsByCode).length > 0
+        ? t('home.scan.failureReasonsPrefix') + reasonParts
+        : '';
+      const summaryMessage = reasonsLine
+        ? t('home.scan.doneSummaryWithReasons', { ok: successCount, fail: failCount, reasons: reasonsLine })
+        : t('home.scan.doneSummary', { ok: successCount, fail: failCount });
 
+      Alert.alert(t('home.scan.success'), summaryMessage, [{ text: t('easterEgg.ok') || 'OK', onPress: () => {} }]);
       setScanning(false);
     } catch (err: any) {
-      console.error('[MultiScan] Unexpected error:', err);
+      logger.error('MultiScan', 'Unexpected error', err);
       setProcessingProgress(null);
-      Alert.alert(t('home.scan.error'), t('ocr.failed'));
+      Alert.alert(t('home.scan.error'), getScanErrorMessage('FAILED'));
       setScanning(false);
     }
   };
 
-  // 处理收据图片（提取为独立函数，避免重复代码）
+  // 处理单张收据：扫描管道（OCR → 分类 → 保存）由 lib/scanPipeline 执行；本处只做刷新、彩蛋与提示
   const processReceiptImage = async (uri: string) => {
-    // Reset guard at start of new scan
     successAlertShownRef.current = false;
+    const t0 = Date.now();
+    if (__DEV__) {
+      console.log('[ScanTiming] ui_start_ms', { t0 });
+    }
 
+    const result = await runScanPipeline(uri);
+    if (!result.ok) {
+      Alert.alert(t('home.scan.error'), getScanErrorMessage(result.code));
+      setScanning(false);
+      return;
+    }
+
+    // Growth analysis trigger (count-based, stored into latest receipt analysis_json)
     try {
-      // 分析小票
-      const raw = await analyzeReceiptImage(uri);
-      const enriched = await applyCategoriesWithLearning(raw);
+      const { getReceipt, updateReceipt } = await import('@/lib/db');
+      const { listReceipts } = await import('@/lib/db');
+      const { shouldTriggerByCount, shouldTriggerByPeriod, getAnalysisLevel } = await import('@/lib/analysisTriggers');
+      const { buildAggregateAnalysisV1, buildWeeklyReportV1, buildMonthlyReportV1 } = await import('@/lib/growthAnalysisEngineV1');
 
-      // 保存到历史
-      await saveReceipt({
-        imageUri: uri,
-        analysis: enriched,
-      });
+      const all = await listReceipts();
+      const receiptCount = all.length;
+      const level = getAnalysisLevel(receiptCount);
 
-      // 刷新数据
-      await loadReceipts();
+      const shouldCount = shouldTriggerByCount(receiptCount) && (receiptCount === 3 || receiptCount === 5);
+      const shouldWeekly = shouldTriggerByPeriod('weekly');
+      const shouldMonthly = shouldTriggerByPeriod('monthly');
 
-      // 检查复活节彩蛋
-      const allReceipts = await listReceipts();
-      const receiptCount = allReceipts.length;
-      const locale = getCurrentLocale();
-
-      const milestones: Milestone[] = [3, 5, 7, 10];
-      for (const milestone of milestones) {
-        if (shouldTriggerMilestone(receiptCount, milestone)) {
-          const hasShown = await hasShownMilestone(milestone);
-          if (!hasShown) {
-            const content = generateEasterEggContent(milestone, allReceipts, locale);
-            await markMilestoneShown(milestone);
-
-            // 显示复活节彩蛋（这会显示一个 Alert）
-            // 使用 Promise 等待用户关闭彩蛋
-            await new Promise<void>((resolve) => {
-              Alert.alert(
-                content.title,
-                content.bullets.join('\n\n') + (content.cta ? `\n\n${content.cta}` : ''),
-                [
-                  {
-                    text: t('easterEgg.ok'),
-                    style: 'default',
-                    onPress: () => resolve(),
-                  },
-                ]
-              );
-            });
-            // 复活节彩蛋关闭后，显示成功提示
-            if (!successAlertShownRef.current) {
-              successAlertShownRef.current = true;
-              Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
-            }
-            setScanning(false);
-            return;
+      if (shouldCount || shouldWeekly || shouldMonthly) {
+        const row = await getReceipt(result.id);
+        if (row) {
+          let analysisObj: any;
+          try {
+            analysisObj = JSON.parse(row.analysis_json || '{}');
+          } catch {
+            analysisObj = {};
           }
+          const nextOutputs = { ...(analysisObj.analysis_outputs_v1 || {}) } as any;
+          if (shouldCount) {
+            nextOutputs.aggregate_level = buildAggregateAnalysisV1(all);
+            if (__DEV__) console.log('[GrowthAnalysis] aggregate_level', nextOutputs.aggregate_level);
+          }
+          if (shouldWeekly) {
+            nextOutputs.weekly = buildWeeklyReportV1(all);
+            if (__DEV__) console.log('[GrowthAnalysis] weekly', { total_spend: nextOutputs.weekly.total_spend });
+          }
+          if (shouldMonthly) {
+            nextOutputs.monthly = buildMonthlyReportV1(all);
+            if (__DEV__) console.log('[GrowthAnalysis] monthly', { total_spend: nextOutputs.monthly.total_spend });
+          }
+
+          // Fixed templates for L2/L3 milestones (keys only)
+          try {
+            const { buildGrowthTemplateL2, buildGrowthTemplateL3 } = await import('@/lib/analysisTemplatesV1');
+            const templates = { ...(nextOutputs.templates_v1 || {}) } as any;
+            if (shouldCount && receiptCount === 3 && nextOutputs.aggregate_level) {
+              templates.growth_template = buildGrowthTemplateL2({
+                aggregate: nextOutputs.aggregate_level,
+                weekly: nextOutputs.weekly,
+              });
+            }
+            if (shouldCount && receiptCount === 5 && nextOutputs.aggregate_level) {
+              templates.growth_template = buildGrowthTemplateL3({
+                aggregate: nextOutputs.aggregate_level,
+                weekly: nextOutputs.weekly,
+                monthly: nextOutputs.monthly,
+              });
+            }
+            nextOutputs.templates_v1 = templates;
+            if (__DEV__ && templates.growth_template) {
+              console.log('[GrowthAnalysis] template', templates.growth_template);
+            }
+          } catch (e) {
+            if (__DEV__) console.warn('[GrowthAnalysis] template build failed:', e);
+          }
+
+          analysisObj.analysis_outputs_v1 = nextOutputs;
+          analysisObj.analysis_level = level;
+          await updateReceipt({ id: row.id, analysis: analysisObj });
         }
       }
+    } catch (e) {
+      if (__DEV__) console.warn('[GrowthAnalysis] update failed:', e);
+    }
 
-      // 如果没有显示复活节彩蛋，直接显示成功提示
+    await loadReceipts();
+    if (__DEV__) {
+      console.log('[ScanTiming] refresh_done_ms', { ms: Date.now() - t0 });
+    }
+
+    const allReceipts = await listReceipts();
+    const receiptCount = allReceipts.length;
+    const locale = getCurrentLocale();
+    const easterEggResult = await tryShowNextEasterEgg(receiptCount, allReceipts, locale);
+
+    if (easterEggResult.shown && easterEggResult.content) {
+      await new Promise<void>((resolve) => {
+        Alert.alert(
+          easterEggResult.content.title,
+          easterEggResult.content.bullets.join('\n\n') + (easterEggResult.content.cta ? `\n\n${easterEggResult.content.cta}` : ''),
+          [{ text: t('easterEgg.ok'), style: 'default', onPress: () => resolve() }]
+        );
+      });
       if (!successAlertShownRef.current) {
         successAlertShownRef.current = true;
         Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
       }
-      
       setScanning(false);
-    } catch (err: any) {
-      console.error('Process receipt image error:', err);
-      setScanning(false);
-      // 错误已在主流程中处理，这里不需要重复显示
+      return;
     }
+
+    if (!successAlertShownRef.current) {
+      successAlertShownRef.current = true;
+      Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
+    }
+    if (__DEV__) {
+      console.log('[ScanTiming] ui_total_ms', { ms: Date.now() - t0 });
+    }
+    setScanning(false);
   };
 
   // 只显示前5个类别

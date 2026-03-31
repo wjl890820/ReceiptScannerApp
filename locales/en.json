@@ -70,6 +70,9 @@
       "processingMulti": "Processing {current}/{total}",
       "analyzing": "Analyzing receipt…",
       "doneSummary": "Done: {ok} succeeded, {fail} failed",
+      "doneSummaryWithReasons": "Done: {ok} succeeded, {fail} failed. {reasons}",
+      "failureReasonsPrefix": "Failure reasons: ",
+      "failureReasonCount": "{label} ({count})",
       "selectSource": "Select Image Source",
       "selectSourceMessage": "Choose how to get the receipt image",
       "camera": "Camera",
@@ -80,11 +83,7 @@
       "success": "Success",
       "successMessage": "Receipt saved to history.",
       "error": "Error",
-      "errorMessage": "Please try again later.",
-      "rateLimit": "Too many scans. Please try again later.",
-      "payloadTooLarge": "Image too large. Please take a closer photo.",
-      "networkError": "Network error. Please check your connection.",
-      "serverError": "Server error. Please try again later."
+      "errorMessage": "Please try again later."
     },
     "category": {
       "Grocery": "Grocery",
@@ -104,6 +103,12 @@
     "analysis": "Analysis"
   },
   "history": {
+    "list": {
+      "title": "History",
+      "subtitle": "Tap any item for details",
+      "empty": "No records yet. Scan and save from Home first.",
+      "noCategoryInfo": "No category info"
+    },
     "errors": {
       "loadTitle": "Load failed",
       "loadMessage": "Could not load history"
@@ -120,6 +125,7 @@
       "deleteFailed": "Delete failed. Please try again."
     },
     "detail": {
+      "notFound": "Record not found",
       "loadMessage": "Could not load this record",
       "inputErrorTitle": "Input error",
       "qtyError": "Quantity must be at least 1",
@@ -132,6 +138,15 @@
       "deletedTitle": "Deleted",
       "deleteFailedTitle": "Delete failed",
       "loading": "Loading…",
+      "editedHint": "(Manually edited items)",
+      "taxLabel": "Tax",
+      "categorySummaryTitle": "Category summary:",
+      "noCategoryInfo": "No category info",
+      "itemsTitle": "Items:",
+      "quantityShort": "Qty",
+      "subtotalShort": "Subtotal",
+      "noItems": "No items",
+      "deleteRecord": "Delete this record",
       "edit": {
         "cancel": "Cancel",
         "title": "Edit item",
@@ -155,7 +170,7 @@
     },
     "pro": {
       "title": "Advanced Insights Pro",
-      "subtitle": "Unlock deeper insights and longer time ranges"
+      "subtitle": "Unlock deeper insights and longer time ranges (coming soon)"
     },
     "privacy": {
       "title": "Privacy Policy",
@@ -184,14 +199,15 @@
       "network": "Submission failed (network error)",
       "server": "Submission failed (server error)",
       "generic": "Submission failed. Please try again later.",
-      "notConfigured": "Submission failed (not configured)",
+      "notConfigured": "Submission failed (not configured). You can try again later or use the fallback channel.",
       "badResponse": "Submission failed (server response error)"
     },
     "success": {
       "message": "Submitted",
       "title": "Success",
       "fallbackTitle": "Success"
-    }
+    },
+    "emailFallbackAction": "Use email instead"
   },
   "pro": {
     "title": "Advanced Insights Pro",
@@ -291,12 +307,14 @@
     "libraryDeniedMessage": "Please allow photo access in Settings to choose an image."
   },
   "ocr": {
-    "networkError": "Network error. Please check your connection and try again.",
     "rateLimit": "Too many requests. Please try again later.",
     "payloadTooLarge": "Image is too large. Please retake a clearer photo.",
+    "networkError": "Network error. Please check your connection and try again.",
     "serverError": "Server error. Please try again later.",
     "invalidResponse": "Unexpected response. Please try again.",
-    "failed": "OCR failed. Please try again."
+    "failed": "Recognition failed. Please try again.",
+    "privacyNotice": "We record OCR request counts and token usage for cost analysis and abuse prevention. We do NOT store your images or receipt content.",
+    "privacyNoticeTitle": "Privacy Notice"
   },
   "toast": {
     "saved": "Saved",
@@ -348,8 +366,4 @@
       "other": "Other"
     }
   },
-  "ocr": {
-    "privacyNotice": "We record OCR request counts and token usage for cost analysis and abuse prevention. We do NOT store your images or receipt content.",
-    "privacyNoticeTitle": "Privacy Notice"
-  }
 }

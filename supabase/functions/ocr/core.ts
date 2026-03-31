@@ -7,10 +7,13 @@ import * as response from './_shared/response.ts';
 import * as idempotency from './_shared/idempotency.ts';
 import * as ratelimit from './_shared/ratelimit.ts';
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3-flash-preview';
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const PARSER_VERSION = '2026-01-18';
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
+
+// Log OCR model at cold start (no secrets)
+console.log(`[ocr] boot model=${GEMINI_MODEL}`);
 
 export interface OCRRequest {
   imageBase64: string;
@@ -221,10 +224,13 @@ categoryKey 必须从以下枚举中选择一个：
       clearTimeout(timeoutId);
 
       if (!fetchResponse.ok) {
+        const errorText = await fetchResponse.text();
+        console.error(
+          `[Gemini] Upstream non-OK status=${fetchResponse.status} model=${GEMINI_MODEL} body=${errorText.substring(0, 500)}`
+        );
         if (fetchResponse.status === 429 || fetchResponse.status === 503) {
           throw new Error('UPSTREAM_ERROR: Rate limited or unavailable');
         }
-        const errorText = await fetchResponse.text();
         throw new Error(`UPSTREAM_ERROR: ${fetchResponse.status} - ${errorText.substring(0, 200)}`);
       }
 

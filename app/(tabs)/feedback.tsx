@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   Alert,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,12 +15,37 @@ import {
 
 import { t } from '@/lib/i18n';
 import { submitFeedback } from '@/lib/feedbackService';
+import { getSupportEmail } from '@/lib/env';
 
 export default function FeedbackScreen() {
   const router = useRouter();
   const [feedback, setFeedback] = useState('');
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const supportEmail = getSupportEmail();
+
+  const openSupportEmail = async (bodyFromState?: string) => {
+    if (!supportEmail) {
+      Alert.alert(t('feedback.error.title'), t('feedback.error.notConfigured'));
+      return;
+    }
+    const subject = 'ReceiptScanner feedback';
+    const body = bodyFromState && bodyFromState.trim().length > 0 ? bodyFromState : feedback;
+    const url = `mailto:${encodeURIComponent(supportEmail)}?subject=${encodeURIComponent(
+      subject
+    )}&body=${encodeURIComponent(body || '')}`;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert(t('feedback.error.title'), t('feedback.error.generic'));
+      }
+    } catch {
+      Alert.alert(t('feedback.error.title'), t('feedback.error.generic'));
+    }
+  };
 
   const handleSubmit = async () => {
     if (!feedback.trim()) {
@@ -67,7 +93,19 @@ export default function FeedbackScreen() {
       }
       
       // 显示错误 Alert，不清空输入（用户可以重试）
-      Alert.alert(t('feedback.error.title'), errorMessage);
+      if (errorMessage === t('feedback.error.notConfigured') && supportEmail) {
+        Alert.alert(t('feedback.error.title'), errorMessage, [
+          { text: t('easterEgg.ok'), style: 'cancel' },
+          {
+            text: t('feedback.emailFallbackAction'),
+            onPress: () => {
+              openSupportEmail();
+            },
+          },
+        ]);
+      } else {
+        Alert.alert(t('feedback.error.title'), errorMessage);
+      }
     } finally {
       setSubmitting(false);
     }
