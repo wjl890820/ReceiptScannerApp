@@ -15,6 +15,7 @@ export type ProductDictionaryRow = {
   category_main: string;
   category_sub: string | null;
   analysis_tags: string; // JSON string
+  source_type?: string;
   seen_count: number;
   last_seen_at: number | null;
   created_at: number;
@@ -50,6 +51,7 @@ async function ensureTableExists(db: SQLite.SQLiteDatabase): Promise<void> {
       category_main TEXT NOT NULL,
       category_sub TEXT,
       analysis_tags TEXT NOT NULL DEFAULT '[]',
+      source_type TEXT NOT NULL DEFAULT 'unknown',
       seen_count INTEGER NOT NULL DEFAULT 0,
       last_seen_at INTEGER,
       created_at INTEGER NOT NULL,
@@ -104,6 +106,7 @@ export async function upsertProductDictionary(params: {
   category_main: string;
   category_sub?: string | null;
   analysis_tags?: string[];
+  source_type?: 'manual' | 'dictionary' | 'rules' | 'ai' | 'mapping' | 'backfill' | 'unknown';
   minConfidenceToWrite?: number;
   confidence?: number;
 }): Promise<void> {
@@ -118,6 +121,7 @@ export async function upsertProductDictionary(params: {
     await ensureTableExists(db);
     const now = Date.now();
     const tagsJson = JSON.stringify(Array.isArray(params.analysis_tags) ? params.analysis_tags : []);
+    const sourceType = params.source_type || 'unknown';
 
     // Check existing row
     const existing = await db.getFirstAsync<{ id: string; seen_count: number }>(
@@ -131,8 +135,9 @@ export async function upsertProductDictionary(params: {
         INSERT INTO product_dictionary (
           id, normalized_name, canonical_name, brand,
           category_main, category_sub, analysis_tags,
+          source_type,
           seen_count, last_seen_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           nanoid(),
@@ -142,6 +147,7 @@ export async function upsertProductDictionary(params: {
           params.category_main,
           params.category_sub ?? null,
           tagsJson,
+          sourceType,
           1,
           now,
           now,
@@ -161,6 +167,7 @@ export async function upsertProductDictionary(params: {
         category_main = ?,
         category_sub = ?,
         analysis_tags = ?,
+        source_type = COALESCE(?, source_type),
         seen_count = COALESCE(seen_count, 0) + 1,
         last_seen_at = ?,
         updated_at = ?
@@ -172,6 +179,7 @@ export async function upsertProductDictionary(params: {
         params.category_main,
         params.category_sub ?? null,
         tagsJson,
+        sourceType,
         now,
         now,
         key,

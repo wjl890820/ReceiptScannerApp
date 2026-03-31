@@ -402,6 +402,16 @@ export async function applyCategoriesWithLearning(
         (source === 'rules' && conf >= 0.9) ||
         (source === 'ai' && conf >= 0.85);
       if (shouldWrite) {
+        const sourceType =
+          source === 'rules'
+            ? 'rules'
+            : source === 'ai'
+              ? 'ai'
+              : source === 'mapping'
+                ? 'mapping'
+                : source === 'dictionary'
+                  ? 'dictionary'
+                  : 'unknown';
         await upsertProductDictionary({
           normalized_name: enrichedItem.normalized_name,
           canonical_name: classificationOut?.canonical_name ?? null,
@@ -409,6 +419,7 @@ export async function applyCategoriesWithLearning(
           category_main: String(enrichedItem.category_main),
           category_sub: enrichedItem.category_sub ? String(enrichedItem.category_sub) : null,
           analysis_tags: Array.isArray(enrichedItem.analysis_tags) ? enrichedItem.analysis_tags : [],
+          source_type: sourceType as any,
           confidence: conf,
           minConfidenceToWrite: source === 'dictionary' || source === 'mapping' ? 0 : undefined,
         });

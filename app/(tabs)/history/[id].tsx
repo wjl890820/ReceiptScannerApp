@@ -271,6 +271,7 @@ export default function ReceiptDetailScreen() {
             category_main: v1.main,
             category_sub: v1.sub,
             analysis_tags: buildAnalysisTags(v1),
+            source_type: 'manual',
             confidence: 1.0,
             minConfidenceToWrite: 0,
           });

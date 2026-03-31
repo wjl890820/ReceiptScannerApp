@@ -14,11 +14,15 @@ export type ReceiptRow = {
   id: string;
   created_at: number;
   transaction_at: number | null; // Receipt transaction date (from receipt itself), fallback to created_at if null
+  scanned_at?: number | null;
 
   image_uri: string;
 
   merchant_raw: string | null;
   merchant_normalized: string | null;
+  store_raw?: string | null;
+  store_normalized?: string | null;
+  source?: string | null;
 
   total: number;
   tax: number;
@@ -50,6 +54,7 @@ export type ListReceiptsOptions = {
 
 export type SaveReceiptParams = {
   imageUri: string;
+  source?: 'self' | 'family' | 'friend' | 'found' | 'test' | 'unknown';
   analysis: {
     merchant?: string;
     total: number;
@@ -151,6 +156,7 @@ async function initIfNeeded() {
           category_main TEXT NOT NULL,
           category_sub TEXT,
           analysis_tags TEXT NOT NULL DEFAULT '[]',
+          source_type TEXT NOT NULL DEFAULT 'unknown',
           seen_count INTEGER NOT NULL DEFAULT 0,
           last_seen_at INTEGER,
           created_at INTEGER NOT NULL,
@@ -169,6 +175,34 @@ async function initIfNeeded() {
       const columnNames = new Set(tableInfo.map((col) => col.name));
 
       // 只添加不存在的列，使用 try-catch 防止并发情况下的重复添加
+      if (!columnNames.has('source')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN source TEXT NOT NULL DEFAULT 'self'`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('store_raw')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN store_raw TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('store_normalized')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN store_normalized TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('scanned_at')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN scanned_at INTEGER`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
       if (!columnNames.has('user_edited')) {
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN user_edited INTEGER DEFAULT 0`);
@@ -291,6 +325,21 @@ async function initIfNeeded() {
         }
       }
 
+      // Migrate product_dictionary: add source_type if missing
+      try {
+        const pdInfo = await db.getAllAsync<{ name: string; type: string }>(
+          `PRAGMA table_info(product_dictionary)`
+        );
+        const pdCols = new Set(pdInfo.map((c) => c.name));
+        if (pdCols.size > 0 && !pdCols.has('source_type')) {
+          await db.runAsync(`ALTER TABLE product_dictionary ADD COLUMN source_type TEXT NOT NULL DEFAULT 'unknown'`);
+        }
+      } catch (e: any) {
+        if (!e?.message?.includes('no such table')) {
+          console.warn('[DB] Failed to migrate product_dictionary:', e);
+        }
+      }
+
       // 所有迁移完成后才设置 _inited 标志
       _inited = true;
 
@@ -385,8 +434,15 @@ export async function saveReceipt(
   const merchantRaw =
     typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
 
-  // normalized 目前先等同 raw（你后面要做统一化再改这里）
-  const merchantNormalized = merchantRaw;
+  const merchantRawTrimmed = merchantRaw && merchantRaw.trim() ? merchantRaw.trim() : null;
+  const merchantNormalized =
+    merchantRawTrimmed ? merchantRawTrimmed.replace(/\s+/g, ' ').trim().toLowerCase() : null;
+
+  // New stable fields
+  const source = params.source || 'self';
+  const storeRaw = merchantRawTrimmed;
+  const storeNormalized = merchantNormalized;
+  const scannedAt = now;
 
   const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
   const tax = Number.isFinite(params.analysis.tax) ? params.analysis.tax : 0;
@@ -426,19 +482,26 @@ export async function saveReceipt(
     `
     INSERT INTO receipts (
       id, created_at, transaction_at,
+      scanned_at,
       image_uri,
+      source,
       merchant_raw, merchant_normalized,
+      store_raw, store_normalized,
       total, tax, currency,
       analysis_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       id,
       now,
       transactionAt,
+      scannedAt,
       params.imageUri,
-      merchantRaw,
+      source,
+      merchantRawTrimmed,
       merchantNormalized,
+      storeRaw,
+      storeNormalized,
       total,
       tax,
       currency,

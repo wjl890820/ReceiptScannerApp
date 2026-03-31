@@ -18,6 +18,8 @@ import {
   upsertProductDictionary,
 } from '@/lib/productDictionary';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
+import { getDefaultReceiptSource, setDefaultReceiptSource, type ReceiptSource } from '@/lib/receiptSourceSettings';
+import { getCanonicalNamePriceStats } from '@/lib/priceStats';
 
 async function getConstants() {
   if (!Constants) {
@@ -39,6 +41,7 @@ export default function SettingsScreen() {
   const [currentVersion, setCurrentVersion] = useState<string>('unknown');
   const [currentBuild, setCurrentBuild] = useState<string>('unknown');
   const [currentName, setCurrentName] = useState<string>('Receipt Scanner');
+  const [defaultReceiptSource, setDefaultReceiptSourceState] = useState<ReceiptSource>('self');
   const tapCountRef = useRef(0);
   const lastTapAtRef = useRef(0);
   
@@ -95,6 +98,44 @@ export default function SettingsScreen() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const v = await getDefaultReceiptSource();
+      if (!cancelled) setDefaultReceiptSourceState(v);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onPressDefaultReceiptSource = useMemo(() => {
+    return async () => {
+      const options: Array<{ id: ReceiptSource; label: string }> = [
+        { id: 'self', label: 'self' },
+        { id: 'family', label: 'family' },
+        { id: 'friend', label: 'friend' },
+        { id: 'found', label: 'found' },
+        { id: 'test', label: 'test' },
+      ];
+      Alert.alert(
+        'Default receipt source',
+        `current: ${defaultReceiptSource}`,
+        [
+          ...options.map((o) => ({
+            text: o.label,
+            onPress: async () => {
+              await setDefaultReceiptSource(o.id);
+              setDefaultReceiptSourceState(o.id);
+            },
+          })),
+          { text: 'Cancel', style: 'cancel' as const },
+        ],
+        { cancelable: true }
+      );
+    };
+  }, [defaultReceiptSource]);
 
   useEffect(() => {
     let cancelled = false;
@@ -416,6 +457,7 @@ export default function SettingsScreen() {
                 category_main: String((v1 as any).main),
                 category_sub: (v1 as any).sub ? String((v1 as any).sub) : null,
                 analysis_tags: tags,
+                source_type: 'backfill',
                 confidence: trustedByUser ? 1.0 : conf,
                 minConfidenceToWrite: 0, // already gated above
               });
@@ -501,6 +543,24 @@ export default function SettingsScreen() {
     };
   }, []);
 
+  const runPriceStatsByCanonicalName = useMemo(() => {
+    return async () => {
+      try {
+        const rows = await getCanonicalNamePriceStats(50);
+        const lines = rows.map(
+          (r) =>
+            `${r.canonical_name} | avg=${r.avg_price.toFixed(1)} min=${r.min_price.toFixed(1)} max=${r.max_price.toFixed(
+              1
+            )} last=${r.last_price.toFixed(1)} count=${r.count}`
+        );
+        Alert.alert('Price stats by canonical_name (Top 50)', lines.length ? lines.join('\n') : '(no canonical_name yet)');
+      } catch (e: any) {
+        console.error('[DEV][PriceStats] failed', e);
+        Alert.alert('Price stats failed', e?.message || String(e));
+      }
+    };
+  }, []);
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>{t('settings.title')}</Text>
@@ -561,6 +621,15 @@ export default function SettingsScreen() {
         <Text style={styles.arrow}>→</Text>
       </Pressable>
 
+      {/* Default receipt source */}
+      <Pressable style={styles.section} onPress={onPressDefaultReceiptSource}>
+        <View style={styles.sectionContent}>
+          <Text style={styles.sectionTitle}>Default receipt source</Text>
+          <Text style={styles.sectionSubtitle}>{defaultReceiptSource}</Text>
+        </View>
+        <Text style={styles.arrow}>→</Text>
+      </Pressable>
+
       {/* About */}
       <Pressable style={styles.aboutSection} onPress={onPressVersionArea} hitSlop={12}>
         <Text style={styles.aboutTitle}>{t('settings.about.title')}</Text>
@@ -608,6 +677,13 @@ export default function SettingsScreen() {
             <View style={styles.sectionContent}>
               <Text style={styles.sectionTitle}>Hit rates: dictionary / rules / AI</Text>
               <Text style={styles.sectionSubtitle}>Computed from receipts items</Text>
+            </View>
+            <Text style={styles.arrow}>→</Text>
+          </Pressable>
+          <Pressable style={styles.section} onPress={runPriceStatsByCanonicalName}>
+            <View style={styles.sectionContent}>
+              <Text style={styles.sectionTitle}>Price stats by canonical_name</Text>
+              <Text style={styles.sectionSubtitle}>avg/min/max/last/count (Top 50)</Text>
             </View>
             <Text style={styles.arrow}>→</Text>
           </Pressable>

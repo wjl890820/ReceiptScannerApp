@@ -9,6 +9,7 @@ import { applyCategoriesWithLearning } from './receiptEnricher';
 import { saveReceipt } from './db';
 import { toScanAppError, toScanResult } from './appError';
 import { logger } from './logger';
+import { getDefaultReceiptSource } from './receiptSourceSettings';
 
 export type ScanOneResult =
   | { ok: true; id: string }
@@ -67,7 +68,8 @@ export async function runScanPipeline(uri: string): Promise<ScanOneResult> {
     try {
       const enriched = await applyCategoriesWithLearning(raw, trace);
       try {
-        const id = await saveReceipt({ imageUri: uri, analysis: enriched }, trace);
+        const source = await getDefaultReceiptSource();
+        const id = await saveReceipt({ imageUri: uri, analysis: enriched, source }, trace);
         if (__DEV__) {
           // eslint-disable-next-line no-console
           console.log('[ScanTiming] total_ms', { id: trace.id, ms: msSince(trace.t0) });
