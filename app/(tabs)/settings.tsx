@@ -36,37 +36,65 @@ const DEV_TOOLS_ENABLED_KEY = 'settings.devToolsEnabled.v1';
 export default function SettingsScreen() {
   const router = useRouter();
   const [devToolsEnabled, setDevToolsEnabled] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState<string>('unknown');
+  const [currentBuild, setCurrentBuild] = useState<string>('unknown');
+  const [currentName, setCurrentName] = useState<string>('Receipt Scanner');
   const tapCountRef = useRef(0);
   const lastTapAtRef = useRef(0);
   
-  // Delay Constants access to avoid initialization crashes
-  const appInfo = useMemo(() => {
+  // Read real installed version/build (Release/TestFlight compatible)
+  useEffect(() => {
+    let cancelled = false;
+
+    const applyFromConstants = (C: any) => {
+      // 1) Prefer native app version/build from the installed package
+      const v = String(C?.nativeAppVersion || '').trim();
+      const b = String(C?.nativeBuildVersion || '').trim();
+
+      // 2) Fallback to Expo config (may still be correct but is not guaranteed to be "installed package")
+      const cfgV = String(C?.expoConfig?.version || '').trim();
+      const cfgB = String(C?.expoConfig?.ios?.buildNumber || '').trim();
+
+      const finalV = v || cfgV || 'unknown';
+      const finalB = b || cfgB || 'unknown';
+      const finalName = String(C?.expoConfig?.name || C?.manifest2?.extra?.expoClient?.name || 'Receipt Scanner');
+
+      if (!cancelled) {
+        setCurrentVersion(finalV);
+        setCurrentBuild(finalB);
+        setCurrentName(finalName);
+      }
+    };
+
+    // Try sync require first
     try {
-      // Try synchronous access first (may work if already loaded)
       if (typeof require !== 'undefined') {
         try {
           const ConstantsSync = require('expo-constants');
-          return {
-            version: ConstantsSync?.expoConfig?.version || '1.0.1',
-            name: ConstantsSync?.expoConfig?.name || 'Receipt Scanner',
-          };
+          applyFromConstants(ConstantsSync);
         } catch {
-          // Fallback to async if require fails
+          // ignore, will try async import
         }
       }
-    } catch (e) {
-      console.warn('[Settings] Failed to access Constants synchronously:', e);
+    } catch {
+      // ignore
     }
-    
-    // Fallback values
-    return {
-      version: '1.0.1',
-      name: 'Receipt Scanner',
+
+    // Async import as backup
+    (async () => {
+      try {
+        const mod = await getConstants();
+        if (!mod) return;
+        applyFromConstants(mod.default ?? mod);
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      cancelled = true;
     };
   }, []);
-  
-  const appVersion = appInfo.version;
-  const appName = appInfo.name;
 
   useEffect(() => {
     let cancelled = false;
@@ -86,9 +114,13 @@ export default function SettingsScreen() {
   const onPressVersionArea = useMemo(() => {
     return async () => {
       const now = Date.now();
-      const withinWindow = now - lastTapAtRef.current <= 1200;
+      const withinWindow = now - lastTapAtRef.current <= 2000;
       lastTapAtRef.current = now;
       tapCountRef.current = withinWindow ? tapCountRef.current + 1 : 1;
+
+      if (__DEV__) {
+        console.log('[Settings][DevToolsTap]', { count: tapCountRef.current, withinWindow });
+      }
 
       if (tapCountRef.current >= 5) {
         tapCountRef.current = 0;
@@ -530,17 +562,13 @@ export default function SettingsScreen() {
       </Pressable>
 
       {/* About */}
-      <View style={styles.aboutSection}>
+      <Pressable style={styles.aboutSection} onPress={onPressVersionArea} hitSlop={12}>
         <Text style={styles.aboutTitle}>{t('settings.about.title')}</Text>
+        <Text style={styles.aboutText}>{currentName}</Text>
         <Text style={styles.aboutText}>
-          {appName}
+          {t('settings.about.version')} {currentVersion} ({currentBuild})
         </Text>
-        <Pressable onPress={onPressVersionArea}>
-          <Text style={styles.aboutText}>
-            {t('settings.about.version')} {appVersion}
-          </Text>
-        </Pressable>
-      </View>
+      </Pressable>
 
       {devToolsEnabled && (
         <View style={[styles.aboutSection, { marginTop: 18 }]}>
@@ -602,6 +630,19 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
       )}
+
+      {/* Temporary visual debug footer (for this investigation build) */}
+      <View style={{ marginTop: 18 }}>
+        <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
+          currentVersion: {currentVersion}
+        </Text>
+        <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
+          currentBuild: {currentBuild}
+        </Text>
+        <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
+          devToolsEnabled: {String(devToolsEnabled)}
+        </Text>
+      </View>
     </ScrollView>
   );
 }
