@@ -165,6 +165,24 @@ async function initIfNeeded() {
 
         CREATE UNIQUE INDEX IF NOT EXISTS ux_product_dictionary_normalized_name
           ON product_dictionary(normalized_name);
+
+        -- Exact aliases: normalized OCR/abbrev -> canonical_name + category (optional merchant_hint)
+        CREATE TABLE IF NOT EXISTS product_name_alias (
+          alias_normalized TEXT NOT NULL,
+          merchant_hint TEXT NOT NULL DEFAULT '',
+          canonical_name TEXT NOT NULL,
+          category_main TEXT NOT NULL,
+          category_sub TEXT,
+          analysis_tags TEXT NOT NULL DEFAULT '[]',
+          confidence REAL NOT NULL DEFAULT 1.0,
+          source TEXT NOT NULL DEFAULT 'rule',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (alias_normalized, merchant_hint)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_product_name_alias_lookup
+          ON product_name_alias(alias_normalized, merchant_hint);
       `);
 
       // 安全迁移：检查并添加新字段（如果不存在）
@@ -340,6 +358,13 @@ async function initIfNeeded() {
         }
       }
 
+      try {
+        const { seedBuiltinProductAliases } = await import('./productAlias');
+        await seedBuiltinProductAliases(db);
+      } catch (e: any) {
+        console.warn('[DB] Failed to seed product_name_alias:', e);
+      }
+
       // 所有迁移完成后才设置 _inited 标志
       _inited = true;
 
@@ -478,8 +503,7 @@ export async function saveReceipt(
   }
 
   // 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
-  await db.runAsync(
-    `
+  const insertSql = `
     INSERT INTO receipts (
       id, created_at, transaction_at,
       scanned_at,
@@ -489,25 +513,39 @@ export async function saveReceipt(
       store_raw, store_normalized,
       total, tax, currency,
       analysis_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
-      id,
-      now,
-      transactionAt,
-      scannedAt,
-      params.imageUri,
-      source,
-      merchantRawTrimmed,
-      merchantNormalized,
-      storeRaw,
-      storeNormalized,
-      total,
-      tax,
-      currency,
-      analysisJson,
-    ]
-  );
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  const insertParams = [
+    id,
+    now,
+    transactionAt,
+    scannedAt,
+    params.imageUri,
+    source,
+    merchantRawTrimmed,
+    merchantNormalized,
+    storeRaw,
+    storeNormalized,
+    total,
+    tax,
+    currency,
+    analysisJson,
+  ];
+  const placeholderCount = (insertSql.match(/\?/g) ?? []).length;
+  if (__DEV__ && trace) {
+    const preview = insertParams.map((v, i) => {
+      if (typeof v === 'string' && v.length > 120) return { i, kind: 'string', len: v.length, head: v.slice(0, 120) + '…' };
+      return { i, v };
+    });
+    // eslint-disable-next-line no-console
+    console.log('[DB][saveReceipt] insert shape', {
+      insertColumnsCount: 14,
+      placeholderCount,
+      paramsCount: insertParams.length,
+      preview,
+    });
+  }
+  await db.runAsync(insertSql, insertParams);
 
   if (__DEV__) {
     // eslint-disable-next-line no-console

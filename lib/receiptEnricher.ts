@@ -9,14 +9,16 @@ import {
   resetClassificationStats,
   getClassificationStats,
   startReceiptClassification,
+  noteAliasClassificationHit,
   type ClassifyInput,
 } from './categoryClassifier';
 import { getLastClassifyError, clearLastClassifyError } from './categoryAiClient';
-import { buildAnalysisTags, mapLegacyCategoryToV1 } from './categoryTaxonomyV1';
+import { buildAnalysisTags, mapLegacyCategoryToV1, mapV1ToLegacyCategory } from './categoryTaxonomyV1';
 import { buildReceiptStructuredAnalysis } from './structuredAnalysisEngine';
 import { buildReceiptAnalysisV1 } from './growthAnalysisEngineV1';
 import { buildReceiptTemplateL1 } from './analysisTemplatesV1';
 import { upsertProductDictionary } from './productDictionary';
+import { lookupProductNameAlias } from './productAlias';
 
 /**
  * Infer grocery category based on product name (rule-based fallback)
@@ -314,43 +316,64 @@ export async function applyCategoriesWithLearning(
       classificationStatus = 'ok';
       classificationConfidence = 1;
     } else {
-      // Grocery receipt: use unified classifier
+      // Grocery receipt: alias / canonical layer then unified classifier
       clearLastClassifyError();
-      const classifyInput: ClassifyInput = {
-        rawName: name,
-        normalizedName: norm.normalized_name,
-        merchantName: merchantRaw || merchantNormalized || undefined,
-        price: typeof it?.lineTotal === 'number' ? it.lineTotal : undefined,
-      };
+      const merchantForPipeline = merchantRaw || merchantNormalized || undefined;
+      const aliasHit = await lookupProductNameAlias(norm.normalized_name, merchantForPipeline ?? null);
 
-      classificationOut = await classifyItem(classifyInput);
-      category = (classificationOut?.categoryId || null) as Category | null;
-      classificationConfidence = Number.isFinite(classificationOut?.confidence)
-        ? Number(classificationOut.confidence)
-        : 0;
-
-      const lastError = getLastClassifyError();
-
-      if (lastError) {
-        // API 失败时仍保留规则/兜底分类结果，避免“有明细但完全无分类”。
-        // 用 status 区分质量：rules/ai 为 ok；fallback 为 fallback。
-        classificationStatus = classificationOut?.source === 'fallback' ? 'fallback' : 'ok';
-      } else if (classificationOut?.source === 'fallback') {
-        // 本地规则兜底（无 API 错误）
-        classificationStatus = 'fallback';
-      } else {
+      if (aliasHit) {
+        noteAliasClassificationHit();
+        const legacy = mapV1ToLegacyCategory({
+          main: aliasHit.category_main as any,
+          sub: (aliasHit.category_sub as any) ?? null,
+        }) as Category;
+        classificationOut = {
+          categoryId: legacy,
+          confidence: Math.min(1, Math.max(0, aliasHit.confidence)),
+          source: 'alias',
+          reason: 'product_name_alias match',
+          category_main: aliasHit.category_main as any,
+          category_sub: aliasHit.category_sub as any,
+          analysis_tags: aliasHit.analysis_tags_parsed as any,
+          canonical_name: aliasHit.canonical_name,
+        };
+        category = legacy;
+        classificationConfidence = classificationOut.confidence;
         classificationStatus = 'ok';
-      }
+      } else {
+        const classifyInput: ClassifyInput = {
+          rawName: name,
+          normalizedName: norm.normalized_name,
+          canonicalName: norm.normalized_name,
+          merchantName: merchantForPipeline,
+          price: typeof it?.lineTotal === 'number' ? it.lineTotal : undefined,
+        };
 
-      // If item already has a valid category from OCR/AI, use it if classifier returned fallback
-      if (
-        classificationStatus !== 'failed' &&
-        classificationOut?.source === 'fallback' &&
-        typeof (it as any)?.category === 'string' &&
-        (it as any).category.trim() &&
-        ALL_CATEGORIES.includes((it as any).category.trim() as Category)
-      ) {
-        category = (it as any).category.trim() as Category;
+        classificationOut = await classifyItem(classifyInput);
+        category = (classificationOut?.categoryId || null) as Category | null;
+        classificationConfidence = Number.isFinite(classificationOut?.confidence)
+          ? Number(classificationOut.confidence)
+          : 0;
+
+        const lastError = getLastClassifyError();
+
+        if (lastError) {
+          classificationStatus = classificationOut?.source === 'fallback' ? 'fallback' : 'ok';
+        } else if (classificationOut?.source === 'fallback') {
+          classificationStatus = 'fallback';
+        } else {
+          classificationStatus = 'ok';
+        }
+
+        if (
+          classificationStatus !== 'failed' &&
+          classificationOut?.source === 'fallback' &&
+          typeof (it as any)?.category === 'string' &&
+          (it as any).category.trim() &&
+          ALL_CATEGORIES.includes((it as any).category.trim() as Category)
+        ) {
+          category = (it as any).category.trim() as Category;
+        }
       }
     }
 
@@ -372,7 +395,11 @@ export async function applyCategoriesWithLearning(
       // V1 extensible schema fields (snake_case for storage stability)
       raw_name: norm.raw_name,
       normalized_name: norm.normalized_name,
-      canonical_name: null,
+      canonical_name: (() => {
+        const cn = classificationOut ? (classificationOut as any).canonical_name : null;
+        if (typeof cn === 'string' && cn.trim()) return cn.trim();
+        return norm.normalized_name;
+      })(),
       brand: null,
       quantity: (it as any)?.quantity ?? 1,
       unit_price: (it as any)?.unitPrice ?? (it as any)?.unit_price ?? 0,
@@ -397,31 +424,35 @@ export async function applyCategoriesWithLearning(
       const conf =
         Number.isFinite(classificationOut?.confidence) ? Number(classificationOut.confidence) : classificationConfidence;
       const shouldWrite =
+        source === 'alias' ||
         source === 'dictionary' ||
         source === 'mapping' ||
         (source === 'rules' && conf >= 0.9) ||
         (source === 'ai' && conf >= 0.85);
       if (shouldWrite) {
         const sourceType =
-          source === 'rules'
-            ? 'rules'
-            : source === 'ai'
-              ? 'ai'
-              : source === 'mapping'
-                ? 'mapping'
-                : source === 'dictionary'
-                  ? 'dictionary'
-                  : 'unknown';
+          source === 'alias'
+            ? 'alias'
+            : source === 'rules'
+              ? 'rules'
+              : source === 'ai'
+                ? 'ai'
+                : source === 'mapping'
+                  ? 'mapping'
+                  : source === 'dictionary'
+                    ? 'dictionary'
+                    : 'unknown';
         await upsertProductDictionary({
           normalized_name: enrichedItem.normalized_name,
-          canonical_name: classificationOut?.canonical_name ?? null,
+          canonical_name: enrichedItem.canonical_name ?? classificationOut?.canonical_name ?? null,
           brand: classificationOut?.brand ?? null,
           category_main: String(enrichedItem.category_main),
           category_sub: enrichedItem.category_sub ? String(enrichedItem.category_sub) : null,
           analysis_tags: Array.isArray(enrichedItem.analysis_tags) ? enrichedItem.analysis_tags : [],
           source_type: sourceType as any,
           confidence: conf,
-          minConfidenceToWrite: source === 'dictionary' || source === 'mapping' ? 0 : undefined,
+          minConfidenceToWrite:
+            source === 'dictionary' || source === 'mapping' || source === 'alias' ? 0 : undefined,
         });
       }
     } catch {
@@ -434,6 +465,7 @@ export async function applyCategoriesWithLearning(
   if (stats) {
     console.log(
       '[CategoryClassifier] Stats:',
+      `alias=${stats.alias ?? 0}`,
       `dictionary=${(stats as any).dictionary ?? 0}`,
       `mapping=${stats.mapping}`,
       `rules=${stats.rules}`,

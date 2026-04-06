@@ -20,6 +20,8 @@ import {
 export type ClassifyInput = {
   rawName: string;
   normalizedName: string;
+  /** Expanded / canonical string for rules + dictionary + AI input (same as normalized when no alias) */
+  canonicalName: string;
   merchantName?: string;
   price?: number;
   locale?: string;
@@ -29,7 +31,7 @@ export type ClassifyOutput = {
   // Legacy single-level category id (kept for compatibility with existing UI/analytics)
   categoryId: string;
   confidence: number;
-  source: 'dictionary' | 'mapping' | 'rules' | 'ai' | 'fallback';
+  source: 'alias' | 'dictionary' | 'mapping' | 'rules' | 'ai' | 'fallback';
   reason?: string;
   // V1 main/sub/tags (preferred for new pipeline)
   category_main?: MainCategory;
@@ -41,6 +43,7 @@ export type ClassifyOutput = {
 
 // Classification statistics (per receipt)
 let classificationStats: {
+  alias: number;
   dictionary: number;
   mapping: number;
   rules: number;
@@ -52,13 +55,14 @@ let classificationStats: {
  * Reset classification statistics (call at start of each receipt)
  */
 export function resetClassificationStats(): void {
-  classificationStats = { dictionary: 0, mapping: 0, rules: 0, ai: 0, fallback: 0 };
+  classificationStats = { alias: 0, dictionary: 0, mapping: 0, rules: 0, ai: 0, fallback: 0 };
 }
 
 /**
  * Get classification statistics (call after processing all items)
  */
 export function getClassificationStats(): {
+  alias: number;
   dictionary: number;
   mapping: number;
   rules: number;
@@ -66,6 +70,11 @@ export function getClassificationStats(): {
   fallback: number;
 } | null {
   return classificationStats;
+}
+
+/** Call when product_name_alias hits (outside classifyItem) */
+export function noteAliasClassificationHit(): void {
+  if (classificationStats) classificationStats.alias++;
 }
 
 /** Per-receipt API failure count; skip API for rest of receipt when >= threshold */
@@ -158,7 +167,7 @@ function classifyByRulesV1(
  * Strategy: mapping (priority) -> rules -> fallback
  */
 export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput> {
-  const { rawName, normalizedName, merchantName } = input;
+  const { rawName, normalizedName, merchantName, canonicalName } = input;
 
   if (!normalizedName || !rawName) {
     if (classificationStats) classificationStats.fallback++;
@@ -171,11 +180,13 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
   }
 
   const normalized = normalizedName.toLowerCase();
+  const canonical =
+    (canonicalName && canonicalName.trim() ? canonicalName : normalizedName).trim().toLowerCase();
   const merchantHint = merchantName ? normalizeMerchantName(merchantName) : null;
 
   // 0. Product dictionary (highest priority)
   try {
-    const hit = await lookupProductDictionary(normalized);
+    const hit = await lookupProductDictionary(canonical);
     if (hit?.category_main) {
       if (classificationStats) classificationStats.dictionary++;
       const legacy = mapV1ToLegacyCategory({ main: hit.category_main as any, sub: hit.category_sub as any }) as Category;
@@ -212,7 +223,7 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
   }
 
   // 2. Rule-based matching (rules-first). Only call API when rules miss.
-  const ruleResult = classifyByRulesV1(rawName, normalized, merchantName);
+  const ruleResult = classifyByRulesV1(rawName, canonical, merchantName);
   const cachedRule = ruleResult && ruleResult.confidence >= 0.7 ? ruleResult : null;
 
   if (ruleResult && ruleResult.confidence >= 0.8) {
@@ -247,7 +258,7 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
   };
 
   const doFallback = () => {
-    const fr = classifyByRulesV1(rawName, normalized, merchantName);
+    const fr = classifyByRulesV1(rawName, canonical, merchantName);
     const out = useRuleFallback(fr);
     if (out) return out;
     if (classificationStats) classificationStats.fallback++;
@@ -276,7 +287,13 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
 
   receiptAiCallCount++;
   try {
-    const aiInput: AiClassifyInput = { rawName, normalizedName: normalized, merchantName: merchantName || undefined, price: input.price, locale: input.locale };
+    const aiInput: AiClassifyInput = {
+      rawName,
+      normalizedName: canonical,
+      merchantName: merchantName || undefined,
+      price: input.price,
+      locale: input.locale,
+    };
     const aiResult = await classifyViaEdgeFunction(aiInput);
 
     if (aiResult) {

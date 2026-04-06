@@ -1,6 +1,6 @@
 // app/(tabs)/settings.tsx
 
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -9,14 +9,14 @@ let Constants: typeof import('expo-constants') | null = null;
 
 import { PRIVACY_POLICY_URL } from '@/constants/privacy';
 import { t } from '@/lib/i18n';
-import { listReceipts, updateReceipt } from '@/lib/db';
-import { applyCategoriesWithLearning } from '@/lib/receiptEnricher';
+import { listReceipts } from '@/lib/db';
+import { getMissingInProductDictionaryTop100 } from '@/lib/missingDictionaryCandidates';
 import {
-  getAllProductDictionaryKeys,
   getProductDictionaryCount,
   getTopProductDictionary,
   upsertProductDictionary,
 } from '@/lib/productDictionary';
+import { reclassifyReceiptsMissingCategories } from '@/lib/reclassifyReceipts';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { getDefaultReceiptSource, setDefaultReceiptSource, type ReceiptSource } from '@/lib/receiptSourceSettings';
 import { getCanonicalNamePriceStats } from '@/lib/priceStats';
@@ -191,51 +191,10 @@ export default function SettingsScreen() {
     return async () => {
       if (!__DEV__) return;
       try {
-        const receipts = await listReceipts(500);
-        let touched = 0;
-        let skippedNoItems = 0;
-        let skippedAlreadyCategorized = 0;
-        let skippedUserEdited = 0;
-        let failed = 0;
-
-        for (const r of receipts) {
-          if (r.user_edited === 1 && r.user_items_json) {
-            skippedUserEdited++;
-            continue;
-          }
-          let analysis: any;
-          try {
-            analysis = JSON.parse(r.analysis_json || '{}');
-          } catch {
-            continue;
-          }
-          const items: any[] = Array.isArray(analysis?.items) ? analysis.items : [];
-          if (items.length === 0) {
-            skippedNoItems++;
-            continue;
-          }
-          const missingBefore = items.filter((it) => !it?.category || String(it.category).trim() === '').length;
-          if (missingBefore === 0) {
-            skippedAlreadyCategorized++;
-            continue;
-          }
-
-          try {
-            const enriched = await applyCategoriesWithLearning(analysis);
-            const afterItems: any[] = Array.isArray(enriched?.items) ? enriched.items : [];
-            const missingAfter = afterItems.filter((it) => !it?.category || String(it.category).trim() === '').length;
-            await updateReceipt({ id: r.id, analysis: enriched });
-            touched++;
-            console.log('[DEV][Reclassify] updated', r.id.slice(0, 8), { items: items.length, missingBefore, missingAfter });
-          } catch (e: any) {
-            failed++;
-            console.warn('[DEV][Reclassify] failed', r.id.slice(0, 8), e?.message || e);
-          }
-        }
-
+        const s = await reclassifyReceiptsMissingCategories(500);
         Alert.alert(
           'Reclassify done',
-          `updated=${touched}\nuserEditedSkipped=${skippedUserEdited}\nnoItemsSkipped=${skippedNoItems}\nalreadyOkSkipped=${skippedAlreadyCategorized}\nfailed=${failed}`
+          `updated=${s.touched}\nuserEditedSkipped=${s.skippedUserEdited}\nnoItemsSkipped=${s.skippedNoItems}\nalreadyOkSkipped=${s.skippedAlreadyCategorized}\nfailed=${s.failed}`
         );
       } catch (e: any) {
         console.error('[DEV][Reclassify] fatal', e);
@@ -354,35 +313,8 @@ export default function SettingsScreen() {
   const runMissingInDictionaryTop100 = useMemo(() => {
     return async () => {
       try {
-        const [receipts, dictKeys] = await Promise.all([
-          listReceipts(1500),
-          getAllProductDictionaryKeys(),
-        ]);
-        const dictSet = new Set(dictKeys);
-        const freq = new Map<string, number>();
-        for (const r of receipts) {
-          let items: any[] = [];
-          try {
-            if (r.user_edited === 1 && r.user_items_json) {
-              items = JSON.parse(r.user_items_json || '[]');
-            } else {
-              const analysis = JSON.parse(r.analysis_json || '{}');
-              items = Array.isArray(analysis?.items) ? analysis.items : [];
-            }
-          } catch {
-            continue;
-          }
-          for (const it of items) {
-            const nn = String((it as any)?.normalized_name || '').trim().toLowerCase();
-            if (!nn) continue;
-            if (dictSet.has(nn)) continue;
-            freq.set(nn, (freq.get(nn) ?? 0) + 1);
-          }
-        }
-        const top = Array.from(freq.entries())
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 100)
-          .map(([name, c]) => `${name} (${c})`);
+        const rows = await getMissingInProductDictionaryTop100(1500, 100);
+        const top = rows.map((r) => `${r.normalized_name} (${r.count})`);
         Alert.alert(
           'Missing in product_dictionary (Top 100)',
           top.length ? top.join('\n') : '(none)'
@@ -514,6 +446,7 @@ export default function SettingsScreen() {
         }
 
         const get = (k: string) => bySource.get(k) ?? 0;
+        const alias = get('alias');
         const dict = get('dictionary');
         const rules = get('rules');
         const ai = get('ai');
@@ -526,6 +459,7 @@ export default function SettingsScreen() {
           'Hit rates (from receipts items)',
           [
             `items_total=${total}`,
+            `alias=${alias} (${pct(alias)}%)`,
             `dictionary=${dict} (${pct(dict)}%)`,
             `mapping=${mapping} (${pct(mapping)}%)`,
             `rules=${rules} (${pct(rules)}%)`,
@@ -663,6 +597,16 @@ export default function SettingsScreen() {
             <View style={styles.sectionContent}>
               <Text style={styles.sectionTitle}>Missing in product_dictionary (Top 100)</Text>
               <Text style={styles.sectionSubtitle}>High priority fill candidates</Text>
+            </View>
+            <Text style={styles.arrow}>→</Text>
+          </Pressable>
+          <Pressable
+            style={styles.section}
+            onPress={() => router.push('/(tabs)/uncategorized-items' as Href)}
+          >
+            <View style={styles.sectionContent}>
+              <Text style={styles.sectionTitle}>Uncategorized Items（快捷补全）</Text>
+              <Text style={styles.sectionSubtitle}>列表选择分类 → 写入 product_dictionary</Text>
             </View>
             <Text style={styles.arrow}>→</Text>
           </Pressable>

@@ -95,6 +95,11 @@ export default function TabLayout() {
         name="feedback"
         options={{ href: null }}
       />
+
+      <Tabs.Screen
+        name="uncategorized-items"
+        options={{ href: null }}
+      />
     </Tabs>
   );
 }

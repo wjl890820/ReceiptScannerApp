@@ -24,11 +24,12 @@ import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { upsertProductDictionary } from '@/lib/productDictionary';
+import { upsertProductNameAlias } from '@/lib/productAlias';
 import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
 import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
 import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
-import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
+import { mapLegacyCategoryToV1, mapV1ToLegacyCategory, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -80,25 +81,113 @@ function round0(n: number) {
   return Math.round(n);
 }
 
-function buildCategorySummary(analysis: ReceiptAnalysis | { items: ReceiptItem[] } | null) {
+/** Amount for summary: line_total / lineTotal first, else unit * qty */
+function itemLineAmountForSummary(it: any): number {
+  const lt = toNum(it.lineTotal ?? it.line_total, 0);
+  if (lt > 0) return round0(lt);
+  const qRaw = toNum(it.quantity, 0);
+  const q = qRaw > 0 ? qRaw : 1;
+  const up = toNum(it.unitPrice ?? it.unit_price, 0);
+  return up > 0 ? round0(up * q) : 0;
+}
+
+/** OCR prompt categoryKey -> legacy grocery key (see lib/receiptAnalyzer CategoryKey). */
+function mapOcrCategoryKeyToLegacy(ck: string): string {
+  switch (ck) {
+    case 'fresh':
+      return 'produce';
+    case 'staple':
+      return 'staples';
+    case 'dairy_egg':
+      return 'dairy_eggs';
+    case 'snack':
+      return 'snacks_sweets';
+    case 'drink':
+      return 'non_alcoholic_drinks';
+    case 'frozen_deli':
+      return 'frozen_foods';
+    case 'seasoning':
+      return 'condiments';
+    case 'household':
+      return 'household';
+    case 'alcohol':
+      return 'alcohol';
+    case 'other':
+    default:
+      return 'other_grocery';
+  }
+}
+
+const trimStr = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** Legacy key + debug label (never use V1 sub/main alone as final key). */
+function resolveSummaryCategoryWithRaw(it: any): { legacy: string; raw: string } | null {
+  const tryLegacy = (c: string): string => {
+    if (!c) return '';
+    if (isExcludedFromAnalytics(c)) return '';
+    if (isGroceryCategory(c)) return c;
+    return '';
+  };
+
+  const cat = trimStr(it.category);
+  if (cat) {
+    const leg = tryLegacy(cat);
+    if (leg) return { legacy: leg, raw: cat };
+  }
+
+  const fromCls = trimStr((it as any).classification?.category);
+  if (fromCls) {
+    const leg = tryLegacy(fromCls);
+    if (leg) return { legacy: leg, raw: fromCls };
+  }
+
+  const main = trimStr(it.category_main);
+  const subRaw = it.category_sub;
+  const sub =
+    subRaw != null && String(subRaw).trim() !== '' ? trimStr(subRaw) : null;
+  if (main) {
+    try {
+      const legacy = mapV1ToLegacyCategory({ main: main as any, sub: sub as any }) as string;
+      if (legacy && isGroceryCategory(legacy) && !isExcludedFromAnalytics(legacy)) {
+        const raw = sub ? `${main}/${sub}` : main;
+        return { legacy, raw };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const ck = trimStr((it as any).categoryKey);
+  if (ck) {
+    const mapped = mapOcrCategoryKeyToLegacy(ck);
+    if (mapped && isGroceryCategory(mapped) && !isExcludedFromAnalytics(mapped)) {
+      return { legacy: mapped, raw: ck };
+    }
+  }
+
+  return null;
+}
+
+function buildCategorySummary(
+  analysis: ReceiptAnalysis | { items: ReceiptItem[] } | null,
+  debug?: { source: string }
+): { category: string; amount: number }[] {
   const map = new Map<string, number>();
   if (!analysis?.items?.length) return [];
 
   for (const it of analysis.items) {
     const status = (it as any).classification_status as string | undefined;
-    // Prefer new main/sub if present; fallback to legacy item.category
-    const cat =
-      (it as any).category_sub ||
-      (it as any).category_main ||
-      ((it.category && String(it.category).trim()) || '');
-    const key = cat ? String(cat).trim() : '';
-    if (!key || key === 'non_grocery' || isExcludedFromAnalytics(key)) continue;
     if (status !== undefined && status !== 'ok' && status !== 'fallback') continue;
-    // For now, keep summary limited to legacy grocery categories to avoid UI changes.
-    // New main/sub are stored and can be displayed later.
-    if (!isGroceryCategory(key)) continue;
-    const amt = toNum(it.lineTotal, 0);
-    map.set(key, (map.get(key) ?? 0) + amt);
+    const resolved = resolveSummaryCategoryWithRaw(it);
+    if (!resolved) continue;
+    const amt = itemLineAmountForSummary(it);
+    if (__DEV__ && debug) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[Detail][CategorySummary] item raw=${resolved.raw} mapped=${resolved.legacy} amount=${amt}`
+      );
+    }
+    map.set(resolved.legacy, (map.get(resolved.legacy) ?? 0) + amt);
   }
 
   const arr = Array.from(map.entries()).map(([category, amount]) => ({
@@ -106,6 +195,10 @@ function buildCategorySummary(analysis: ReceiptAnalysis | { items: ReceiptItem[]
     amount,
   }));
   arr.sort((a, b) => b.amount - a.amount);
+  if (__DEV__ && debug) {
+    // eslint-disable-next-line no-console
+    console.log('[Detail][CategorySummary] summary', arr);
+  }
   return arr;
 }
 
@@ -163,14 +256,16 @@ export default function ReceiptDetailScreen() {
     };
   }, [displayItems]);
 
-  const categorySummary = useMemo(
-    () => buildCategorySummary(displayAnalysis),
-    [displayAnalysis]
-  );
-
-  if (__DEV__) {
-    console.log('[Detail][CategorySummary] raw', categorySummary);
-  }
+  const categorySummary = useMemo(() => {
+    const userItems = receipt ? safeParseItems(receipt.user_items_json) : null;
+    const source =
+      userItems && userItems.length > 0 ? 'user_items_json' : 'analysis_json.items';
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.log('[Detail][CategorySummary] source', source, 'items', displayAnalysis.items.length);
+    }
+    return buildCategorySummary(displayAnalysis, __DEV__ ? { source } : undefined);
+  }, [displayAnalysis, receipt]);
 
   const merchant =
     receipt?.merchant_normalized ||
@@ -268,12 +363,23 @@ export default function ReceiptDetailScreen() {
           const v1 = mapLegacyCategoryToV1(editedItem.category);
           await upsertProductDictionary({
             normalized_name: norm.normalized_name,
+            canonical_name: editedItem.name.trim(),
             category_main: v1.main,
             category_sub: v1.sub,
             analysis_tags: buildAnalysisTags(v1),
             source_type: 'manual',
             confidence: 1.0,
             minConfidenceToWrite: 0,
+          });
+          await upsertProductNameAlias({
+            alias_normalized: norm.normalized_name,
+            merchant_hint: receipt?.merchant_raw ?? null,
+            canonical_name: editedItem.name.trim(),
+            category_main: v1.main,
+            category_sub: v1.sub,
+            analysis_tags: buildAnalysisTags(v1),
+            confidence: 1.0,
+            source: 'manual',
           });
         } catch {
           // ignore

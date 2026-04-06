@@ -106,7 +106,7 @@ export async function upsertProductDictionary(params: {
   category_main: string;
   category_sub?: string | null;
   analysis_tags?: string[];
-  source_type?: 'manual' | 'dictionary' | 'rules' | 'ai' | 'mapping' | 'backfill' | 'unknown';
+  source_type?: 'manual' | 'dictionary' | 'rules' | 'ai' | 'mapping' | 'backfill' | 'alias' | 'unknown';
   minConfidenceToWrite?: number;
   confidence?: number;
 }): Promise<void> {
