@@ -2,6 +2,7 @@
 import * as SQLite from 'expo-sqlite';
 import { ALL_CATEGORIES, type Category } from './categories';
 import { initIfNeeded } from './db';
+import { normalizeMerchantName } from './productNormalizer';
 
 // Re-export for backward compatibility (deprecated, use categories.ts)
 /** @deprecated Use GROCERY_CATEGORIES from './categories' instead */
@@ -62,9 +63,9 @@ export async function learnCategoryMapping(
   await ensureMappingTableExists(db);
   const now = Date.now();
 
-  // Normalize merchant hint: null or empty string becomes ''
-  const normalizedMerchantHint = merchantHint 
-    ? merchantHint.trim().toLowerCase() 
+  // 与 getLearnedCategory / classifyItem 一致：商户 hint 使用 normalizeMerchantName
+  const normalizedMerchantHint = merchantHint
+    ? normalizeMerchantName(merchantHint)
     : '';
 
   await db.runAsync(
@@ -111,7 +112,9 @@ export async function getLearnedCategory(
   
   // Try with merchant hint first (more specific)
   if (merchantHint) {
-    const normalizedMerchantHint = merchantHint.trim().toLowerCase();
+    const normalizedMerchantHint = merchantHint
+      ? normalizeMerchantName(merchantHint)
+      : '';
     try {
       const rowWithHint = await db.getFirstAsync<{ category_id: string }>(
         `

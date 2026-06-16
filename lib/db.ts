@@ -29,6 +29,8 @@ export type ReceiptRow = {
   currency: string;
 
   analysis_json: string; // 保存完整 JSON（items、merchant、你后面加的 categories 等）
+  /** 审核闭环：识别完成时点的快照 JSON（人工修正写入 analysis_json） */
+  recognition_snapshot_json?: string | null;
 
   // 用户手动编辑字段
   user_edited: number; // 0 或 1
@@ -64,6 +66,11 @@ export type SaveReceiptParams = {
     // 你后面加什么字段都可以继续塞进 analysis_json
     [k: string]: any;
   };
+  /** 与 analysis 分离存储的识别快照（审核保存时写入；直扫旧路径可省略） */
+  recognitionSnapshot?: unknown;
+  /** 审核页保存：标记 user_edited=1 */
+  reviewedSave?: boolean;
+  note?: string | null;
 };
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -115,7 +122,8 @@ async function initIfNeeded() {
           tax REAL NOT NULL,
           currency TEXT NOT NULL,
 
-          analysis_json TEXT NOT NULL
+          analysis_json TEXT NOT NULL,
+          recognition_snapshot_json TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_receipts_created_at
@@ -183,6 +191,26 @@ async function initIfNeeded() {
 
         CREATE INDEX IF NOT EXISTS idx_product_name_alias_lookup
           ON product_name_alias(alias_normalized, merchant_hint);
+
+        -- 审核草稿持久化（冷启动可恢复）
+        CREATE TABLE IF NOT EXISTS scan_review_draft (
+          id TEXT PRIMARY KEY NOT NULL,
+          image_uri TEXT NOT NULL,
+          recognition_snapshot_json TEXT NOT NULL,
+          trace_id TEXT NOT NULL,
+          editor_state_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scan_review_draft_updated
+          ON scan_review_draft(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS scan_review_queue (
+          slot INTEGER PRIMARY KEY NOT NULL CHECK (slot = 1),
+          queue_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
       `);
 
       // 安全迁移：检查并添加新字段（如果不存在）
@@ -261,6 +289,15 @@ async function initIfNeeded() {
       if (!columnNames.has('user_items_json')) {
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN user_items_json TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) {
+            throw e;
+          }
+        }
+      }
+      if (!columnNames.has('recognition_snapshot_json')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN recognition_snapshot_json TEXT`);
         } catch (e: any) {
           if (!e?.message?.includes('duplicate column')) {
             throw e;
@@ -363,6 +400,17 @@ async function initIfNeeded() {
         await seedBuiltinProductAliases(db);
       } catch (e: any) {
         console.warn('[DB] Failed to seed product_name_alias:', e);
+      }
+
+      try {
+        await db.runAsync(
+          `INSERT OR IGNORE INTO scan_review_queue (slot, queue_json, updated_at) VALUES (1, '[]', ?)`,
+          [Date.now()]
+        );
+      } catch (e: any) {
+        if (!e?.message?.includes('no such table')) {
+          console.warn('[DB] Failed to seed scan_review_queue:', e);
+        }
       }
 
       // 所有迁移完成后才设置 _inited 标志
@@ -477,6 +525,10 @@ export async function saveReceipt(
       : 'JPY';
 
   const analysisJson = JSON.stringify(params.analysis);
+  const recognitionSnapshotJson =
+    params.recognitionSnapshot !== undefined && params.recognitionSnapshot !== null
+      ? JSON.stringify(params.recognitionSnapshot)
+      : null;
 
   // Extract transaction_at from analysis.transactionDate (或 transactionAt / purchasedAt / datetime)
   // 仅日期：dateParser 用当天 00:00；日期+时间：按原字符串解析（ISO 或本地/Asia/Tokyo 格式）；解析失败则 null，排序回退 created_at
@@ -512,8 +564,9 @@ export async function saveReceipt(
       merchant_raw, merchant_normalized,
       store_raw, store_normalized,
       total, tax, currency,
-      analysis_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      analysis_json,
+      recognition_snapshot_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
@@ -530,6 +583,7 @@ export async function saveReceipt(
     tax,
     currency,
     analysisJson,
+    recognitionSnapshotJson,
   ];
   const placeholderCount = (insertSql.match(/\?/g) ?? []).length;
   if (__DEV__ && trace) {
@@ -539,13 +593,29 @@ export async function saveReceipt(
     });
     // eslint-disable-next-line no-console
     console.log('[DB][saveReceipt] insert shape', {
-      insertColumnsCount: 14,
+      insertColumnsCount: 15,
       placeholderCount,
       paramsCount: insertParams.length,
       preview,
     });
   }
   await db.runAsync(insertSql, insertParams);
+
+  if (params.reviewedSave || params.note !== undefined) {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    if (params.reviewedSave) {
+      sets.push('user_edited = 1');
+    }
+    if (params.note !== undefined) {
+      sets.push('note = ?');
+      vals.push(params.note !== null && typeof params.note === 'string' ? params.note.trim() || null : null);
+    }
+    if (sets.length > 0) {
+      vals.push(id);
+      await db.runAsync(`UPDATE receipts SET ${sets.join(', ')} WHERE id = ?`, vals);
+    }
+  }
 
   if (__DEV__) {
     // eslint-disable-next-line no-console
@@ -630,6 +700,66 @@ export async function listReceiptsForList(
  * 详情：按 id 获取一条
  * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
+/** 复盘统计：仅拉取带识别快照的行（审核闭环落库） */
+export type ReceiptReviewStatsRow = {
+  id: string;
+  created_at: number;
+  analysis_json: string;
+  recognition_snapshot_json: string;
+};
+
+export async function listReceiptsForReviewStats(limit = 2000): Promise<ReceiptReviewStatsRow[]> {
+  await initIfNeeded();
+  const db = await getDb();
+  const lim = Math.max(1, Math.min(10000, limit));
+  const rows = await db.getAllAsync<ReceiptReviewStatsRow>(
+    `
+    SELECT id, created_at, analysis_json, recognition_snapshot_json
+    FROM receipts
+    WHERE recognition_snapshot_json IS NOT NULL
+      AND TRIM(recognition_snapshot_json) != ''
+    ORDER BY created_at DESC
+    LIMIT ?
+    `,
+    [lim]
+  );
+  return rows ?? [];
+}
+
+export async function listManualProductNameAliases(): Promise<
+  { alias_normalized: string; canonical_name: string; merchant_hint: string }[]
+> {
+  await initIfNeeded();
+  const db = await getDb();
+  try {
+    const rows = await db.getAllAsync<{
+      alias_normalized: string;
+      canonical_name: string;
+      merchant_hint: string;
+    }>(
+      `SELECT alias_normalized, canonical_name, merchant_hint
+       FROM product_name_alias
+       WHERE source = 'manual'`
+    );
+    return rows ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function countManualProductDictionaryEntries(): Promise<number> {
+  await initIfNeeded();
+  const db = await getDb();
+  try {
+    const row = await db.getFirstAsync<{ c: number }>(
+      `SELECT COUNT(1) as c FROM product_dictionary WHERE source_type = 'manual'`
+    );
+    return row?.c ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   await initIfNeeded();
   const db = await getDb();
@@ -643,6 +773,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       merchant_raw, merchant_normalized,
       total, tax, currency,
       analysis_json,
+      recognition_snapshot_json,
       COALESCE(user_edited, 0) as user_edited,
       final_total,
       final_category,

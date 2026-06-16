@@ -356,7 +356,11 @@ export default function ReceiptDetailScreen() {
       // 学习用户编辑的分类
       const editedItem = updatedItems[editingItemIndex];
       if (editedItem && editedItem.name && editedItem.category) {
-        await learnFromUserEdit(editedItem.name, editedItem.category);
+        await learnFromUserEdit(
+          editedItem.name,
+          editedItem.category,
+          receipt?.merchant_raw ?? null
+        );
         // Also write into product_dictionary (highest trust: user edit)
         try {
           const norm = normalizeReceiptItemName(editedItem.name);

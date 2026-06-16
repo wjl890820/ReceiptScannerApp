@@ -10,10 +10,13 @@ import { saveReceipt } from './db';
 import { toScanAppError, toScanResult } from './appError';
 import { logger } from './logger';
 import { getDefaultReceiptSource } from './receiptSourceSettings';
+import { putScanReviewDraft } from './scanReviewDraftStore';
 
-export type ScanOneResult =
-  | { ok: true; id: string }
-  | { ok: false; code: string; message?: string };
+/** 直扫落库成功（测试/兼容保留） */
+export type ScanSaveSuccess = { ok: true; kind: 'saved'; id: string };
+/** 识别完成，进入审核草稿 */
+export type ScanReviewSuccess = { ok: true; kind: 'review'; draftId: string; traceId: string };
+export type ScanOneResult = ScanSaveSuccess | ScanReviewSuccess | { ok: false; code: string; message?: string };
 
 type ScanTrace = {
   id: string;
@@ -74,7 +77,7 @@ export async function runScanPipeline(uri: string): Promise<ScanOneResult> {
           // eslint-disable-next-line no-console
           console.log('[ScanTiming] total_ms', { id: trace.id, ms: msSince(trace.t0) });
         }
-        return { ok: true, id };
+        return { ok: true, kind: 'saved', id };
       } catch (err: unknown) {
         const appErr = toScanAppError(err, 'save');
         logger.error('ScanPipeline', 'Pipeline failed (save)', { code: appErr.code, message: appErr.message });
@@ -100,6 +103,42 @@ export async function runScanPipeline(uri: string): Promise<ScanOneResult> {
       // eslint-disable-next-line no-console
       console.log('[ScanTiming] failed_total_ms', { id: trace.id, ms: msSince(trace.t0) });
     }
+    return toScanResult(appErr);
+  }
+}
+
+/**
+ * OCR → 分类增强 → 内存草稿；不直接落库。首页应导航至 /scan-review/[draftId]。
+ */
+export async function runScanPipelineToReview(uri: string): Promise<ScanOneResult> {
+  const trace: ScanTrace = { id: `scan-${nowMs()}-${Math.random().toString(16).slice(2, 8)}`, t0: nowMs() };
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] review_draft_start', { id: trace.id });
+  }
+  try {
+    const raw = await analyzeReceiptImage(uri, trace);
+    try {
+      const enriched = await applyCategoriesWithLearning(raw, trace);
+      const snapshot = JSON.parse(JSON.stringify(enriched)) as unknown;
+      const draftId = await putScanReviewDraft({
+        imageUri: uri,
+        recognitionSnapshot: snapshot,
+        traceId: trace.id,
+      });
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.log('[ScanTiming] review_draft_ready_ms', { id: trace.id, ms: msSince(trace.t0) });
+      }
+      return { ok: true, kind: 'review', draftId, traceId: trace.id };
+    } catch (err: unknown) {
+      const appErr = toScanAppError(err, 'enrich');
+      logger.error('ScanPipeline', 'Review draft failed (enrich)', { code: appErr.code, message: appErr.message });
+      return toScanResult(appErr);
+    }
+  } catch (err: unknown) {
+    const appErr = toScanAppError(err, 'ocr');
+    logger.error('ScanPipeline', 'Review draft failed (ocr)', { code: appErr.code, message: appErr.message });
     return toScanResult(appErr);
   }
 }

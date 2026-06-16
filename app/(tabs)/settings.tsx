@@ -20,6 +20,7 @@ import { reclassifyReceiptsMissingCategories } from '@/lib/reclassifyReceipts';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { getDefaultReceiptSource, setDefaultReceiptSource, type ReceiptSource } from '@/lib/receiptSourceSettings';
 import { getCanonicalNamePriceStats } from '@/lib/priceStats';
+import { DEV_TOOLS_ENABLED_KEY } from '@/lib/devToolsAccess';
 
 async function getConstants() {
   if (!Constants) {
@@ -32,8 +33,6 @@ async function getConstants() {
   }
   return Constants;
 }
-
-const DEV_TOOLS_ENABLED_KEY = 'settings.devToolsEnabled.v1';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -163,7 +162,7 @@ export default function SettingsScreen() {
         console.log('[Settings][DevToolsTap]', { count: tapCountRef.current, withinWindow });
       }
 
-      if (tapCountRef.current >= 5) {
+      if (tapCountRef.current >= 7) {
         tapCountRef.current = 0;
         try {
           await AsyncStorage.setItem(DEV_TOOLS_ENABLED_KEY, '1');
@@ -624,6 +623,16 @@ export default function SettingsScreen() {
             </View>
             <Text style={styles.arrow}>→</Text>
           </Pressable>
+          <Pressable
+            style={styles.section}
+            onPress={() => router.push('/review-retrospective' as Href)}
+          >
+            <View style={styles.sectionContent}>
+              <Text style={styles.sectionTitle}>{t('reviewRetro.settingsTitle')}</Text>
+              <Text style={styles.sectionSubtitle}>{t('reviewRetro.settingsSubtitle')}</Text>
+            </View>
+            <Text style={styles.arrow}>→</Text>
+          </Pressable>
           <Pressable style={styles.section} onPress={runPriceStatsByCanonicalName}>
             <View style={styles.sectionContent}>
               <Text style={styles.sectionTitle}>Price stats by canonical_name</Text>
@@ -651,18 +660,19 @@ export default function SettingsScreen() {
         </View>
       )}
 
-      {/* Temporary visual debug footer (for this investigation build) */}
-      <View style={{ marginTop: 18 }}>
-        <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
-          currentVersion: {currentVersion}
-        </Text>
-        <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
-          currentBuild: {currentBuild}
-        </Text>
-        <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
-          devToolsEnabled: {String(devToolsEnabled)}
-        </Text>
-      </View>
+      {(__DEV__ || devToolsEnabled) && (
+        <View style={{ marginTop: 18 }}>
+          <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
+            currentVersion: {currentVersion}
+          </Text>
+          <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
+            currentBuild: {currentBuild}
+          </Text>
+          <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
+            devToolsEnabled: {String(devToolsEnabled)}
+          </Text>
+        </View>
+      )}
     </ScrollView>
   );
 }

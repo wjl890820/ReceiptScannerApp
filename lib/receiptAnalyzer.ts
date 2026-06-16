@@ -43,6 +43,8 @@ export type ReceiptAnalysis = {
   tax: number;
   currency: string;
   transactionDate?: string; // ISO string or date string from receipt
+  /** 可选：模型/OCR 侧原始文本，供审核页展示（有则填，无则省略） */
+  ocr_raw_text?: string;
 };
 
 type ScanTrace = { id: string; t0: number };
@@ -414,6 +416,8 @@ categoryKey 必须从以下枚举中选择一个：
           (typeof parsed.datetime === 'string' && parsed.datetime?.trim()) ||
           undefined;
 
+        const rawSnippet =
+          modelReplyText.length > 80000 ? modelReplyText.slice(0, 80000) + '\n…(truncated)' : modelReplyText;
         const analysis: ReceiptAnalysis = {
           merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
           items: Array.isArray(parsed.items) ? parsed.items : [],
@@ -424,6 +428,7 @@ categoryKey 必须从以下枚举中选择一个：
               ? parsed.currency
               : '¥',
           transactionDate: txDateStr || undefined,
+          ocr_raw_text: rawSnippet,
         };
 
         return analysis;

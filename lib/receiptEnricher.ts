@@ -1,6 +1,6 @@
 // lib/receiptEnricher.ts
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
-import { learnCategoryFromEdit } from './categoryLearner';
+import { learnCategoryMapping } from './categoryLearner';
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
@@ -519,12 +519,20 @@ export async function applyCategoriesWithLearning(
 }
 
 /**
- * 学习用户编辑的分类
+ * 学习用户编辑的分类。
+ * 必须使用 normalizeReceiptItemName 与 classifyItem / getLearnedCategory 的键一致。
+ * merchantHintRaw 可选：同时写入通用行（merchant_hint=''）与商户行，与 getLearnedCategory 查询顺序一致。
  */
 export async function learnFromUserEdit(
   itemName: string,
-  category: string
+  category: string,
+  merchantHintRaw?: string | null
 ): Promise<void> {
-  const normalized = normalizeProductName(itemName);
-  await learnCategoryFromEdit(normalized.normalizedName, category);
+  const key = normalizeReceiptItemName(itemName).normalized_name.trim().toLowerCase();
+  if (!key) return;
+  await learnCategoryMapping(key, '', category, 1.0);
+  const mh = merchantHintRaw ? normalizeMerchantName(merchantHintRaw) : '';
+  if (mh) {
+    await learnCategoryMapping(key, mh, category, 1.0);
+  }
 }

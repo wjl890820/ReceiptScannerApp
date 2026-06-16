@@ -3,13 +3,15 @@
  * Prevents regressions on main flow and batch summary logic.
  */
 
+(global as unknown as { __DEV__: boolean }).__DEV__ = false;
+
 import {
   runScanPipeline,
+  runScanPipelineToReview,
   aggregateBatchScanResults,
   type ScanOneResult,
 } from './scanPipeline';
 
-// Mock dependencies so we only test pipeline orchestration
 jest.mock('./receiptAnalyzer', () => ({
   analyzeReceiptImage: jest.fn(),
 }));
@@ -19,21 +21,26 @@ jest.mock('./receiptEnricher', () => ({
 jest.mock('./db', () => ({
   saveReceipt: jest.fn(),
 }));
+jest.mock('./scanReviewDraftStore', () => ({
+  putScanReviewDraft: jest.fn(async () => 'draft-mock-1'),
+}));
 
 const mockAnalyze = jest.requireMock('./receiptAnalyzer').analyzeReceiptImage as jest.Mock;
 const mockEnrich = jest.requireMock('./receiptEnricher').applyCategoriesWithLearning as jest.Mock;
 const mockSave = jest.requireMock('./db').saveReceipt as jest.Mock;
+const mockPutDraft = jest.requireMock('./scanReviewDraftStore').putScanReviewDraft as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPutDraft.mockResolvedValue('draft-mock-1');
 });
 
 describe('aggregateBatchScanResults', () => {
   it('counts all success', () => {
     const results: ScanOneResult[] = [
-      { ok: true },
-      { ok: true },
-      { ok: true },
+      { ok: true, kind: 'saved', id: 'a' },
+      { ok: true, kind: 'review', draftId: 'd1', traceId: 't1' },
+      { ok: true, kind: 'saved', id: 'b' },
     ];
     const out = aggregateBatchScanResults(results);
     expect(out.successCount).toBe(3);
@@ -55,9 +62,9 @@ describe('aggregateBatchScanResults', () => {
 
   it('mixed success and failure: partial success stats', () => {
     const results: ScanOneResult[] = [
-      { ok: true },
+      { ok: true, kind: 'review', draftId: 'd', traceId: 't' },
       { ok: false, code: 'SERVER_ERROR' },
-      { ok: true },
+      { ok: true, kind: 'saved', id: 'x' },
       { ok: false, code: 'SERVER_ERROR' },
       { ok: false, code: 'FAILED' },
     ];
@@ -81,19 +88,22 @@ describe('aggregateBatchScanResults', () => {
 describe('runScanPipeline', () => {
   const uri = 'file:///test.jpg';
 
-  it('success path: analyze -> enrich -> save, returns ok: true', async () => {
+  it('success path: analyze -> enrich -> save, returns ok saved', async () => {
     const raw = { items: [], total: 0, currency: 'JPY' };
     const enriched = { ...raw, items: [] };
     mockAnalyze.mockResolvedValue(raw);
     mockEnrich.mockResolvedValue(enriched);
-    mockSave.mockResolvedValue(undefined);
+    mockSave.mockResolvedValue('rid-1');
 
     const result = await runScanPipeline(uri);
 
-    expect(result).toEqual({ ok: true });
-    expect(mockAnalyze).toHaveBeenCalledWith(uri);
-    expect(mockEnrich).toHaveBeenCalledWith(raw);
-    expect(mockSave).toHaveBeenCalledWith({ imageUri: uri, analysis: enriched });
+    expect(result).toEqual({ ok: true, kind: 'saved', id: 'rid-1' });
+    expect(mockAnalyze).toHaveBeenCalledWith(uri, expect.any(Object));
+    expect(mockEnrich).toHaveBeenCalledWith(raw, expect.any(Object));
+    expect(mockSave).toHaveBeenCalledWith(
+      expect.objectContaining({ imageUri: uri, analysis: enriched }),
+      expect.any(Object)
+    );
   });
 
   it('OCR failure: analyze throws with code, returns ok: false and does not call enrich/save', async () => {
@@ -137,5 +147,35 @@ describe('runScanPipeline', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe('FAILED');
+  });
+});
+
+describe('runScanPipelineToReview', () => {
+  const uri = 'file:///review.jpg';
+
+  it('returns draftId on success without saving', async () => {
+    const raw = { items: [], total: 0, currency: 'JPY' };
+    const enriched = { ...raw, items: [{ name: 'a' }] };
+    mockAnalyze.mockResolvedValue(raw);
+    mockEnrich.mockResolvedValue(enriched);
+
+    const result = await runScanPipelineToReview(uri);
+
+    expect(result).toEqual({ ok: true, kind: 'review', draftId: 'draft-mock-1', traceId: expect.any(String) });
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(mockPutDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageUri: uri,
+        traceId: expect.any(String),
+        recognitionSnapshot: enriched,
+      })
+    );
+  });
+
+  it('OCR failure does not create draft', async () => {
+    mockAnalyze.mockRejectedValue(new Error('bad'));
+    const result = await runScanPipelineToReview(uri);
+    expect(result.ok).toBe(false);
+    expect(mockPutDraft).not.toHaveBeenCalled();
   });
 });

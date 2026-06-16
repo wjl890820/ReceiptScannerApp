@@ -3,7 +3,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -17,17 +17,21 @@ import Svg, { Path, Text as SvgText, TSpan } from 'react-native-svg';
 
 import type { ReceiptAnalysis, ReceiptItem } from '@/lib/receiptAnalyzer';
 import { pingOcrEdge, probeSupabaseNetwork } from '@/lib/ocrService';
-import { runScanPipeline, aggregateBatchScanResults } from '@/lib/scanPipeline';
+import {
+  runScanPipelineToReview,
+  aggregateBatchScanResults,
+  type ScanOneResult,
+} from '@/lib/scanPipeline';
+import { setScanReviewQueue, clearScanReviewQueue } from '@/lib/scanReviewQueue';
 import { getScanErrorMessage } from '@/lib/scanError';
 import { logger } from '@/lib/logger';
 
 import { listReceipts, type ReceiptRow } from '@/lib/db';
-import { t, getCurrentLocale } from '@/lib/i18n';
+import { t } from '@/lib/i18n';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 import { getCategoryColor, getCategoryLabel, getCategoryShortLabel } from '@/lib/categoryPalette';
 import { formatJPY } from '@/lib/formatJPY';
 import { getHomeTimeRange, setHomeTimeRange } from '@/lib/settingsStore';
-import { tryShowNextEasterEgg } from '@/lib/homeEasterEggHelpers';
 import {
   aggregateCategoryData,
   computeUncategorizedSummary,
@@ -577,7 +581,6 @@ export default function HomeScreen() {
   const [timeRange, setTimeRange] = useState<TimeRange>('7D');
   const [scanning, setScanning] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<{ current: number; total: number } | null>(null);
-  const successAlertShownRef = useRef(false); // Guard for duplicate success alerts
   const [stickyHeight, setStickyHeight] = useState(0);
 
   // Load time range preference on mount
@@ -854,6 +857,7 @@ export default function HomeScreen() {
         const assets = result.assets || [];
         if (assets.length === 0) {
           setScanning(false);
+          Alert.alert(t('home.scan.error'), t('home.scan.noImages'));
           return;
         }
 
@@ -897,22 +901,26 @@ export default function HomeScreen() {
     }
   };
 
-  // 处理多张收据：逐张调用 runScanPipeline，聚合失败原因后展示摘要
+  // 处理多张收据：逐张识别进审核草稿队列，再进入第一张审核页
   const processMultipleReceiptImages = async (uris: string[]) => {
     const total = uris.length;
-    const results: Array<{ ok: true } | { ok: false; code: string; message?: string }> = [];
+    const results: ScanOneResult[] = [];
+    const draftIds: string[] = [];
 
     try {
+      await clearScanReviewQueue();
       for (let i = 0; i < uris.length; i++) {
         setProcessingProgress({ current: i + 1, total });
-        const result = await runScanPipeline(uris[i]);
+        const result = await runScanPipelineToReview(uris[i]);
         results.push(result);
+        if (result.ok && result.kind === 'review') {
+          draftIds.push(result.draftId);
+        }
         if (!result.ok) {
           logger.error('MultiScan', `image ${i + 1}/${total} failed`, { code: result.code, message: result.message });
         }
       }
 
-      await loadReceipts();
       setProcessingProgress(null);
 
       const { successCount, failCount, failureReasonsByCode } = aggregateBatchScanResults(results);
@@ -926,7 +934,19 @@ export default function HomeScreen() {
         ? t('home.scan.doneSummaryWithReasons', { ok: successCount, fail: failCount, reasons: reasonsLine })
         : t('home.scan.doneSummary', { ok: successCount, fail: failCount });
 
-      Alert.alert(t('home.scan.success'), summaryMessage, [{ text: t('easterEgg.ok') || 'OK', onPress: () => {} }]);
+      if (draftIds.length > 0) {
+        await setScanReviewQueue(draftIds);
+        setScanning(false);
+        router.push(`/scan-review/${draftIds[0]}` as any);
+        if (failCount > 0) {
+          Alert.alert(t('home.scan.partialTitle'), summaryMessage, [{ text: t('easterEgg.ok') || 'OK' }]);
+        }
+        return;
+      }
+
+      await clearScanReviewQueue();
+      await loadReceipts();
+      Alert.alert(t('home.scan.error'), summaryMessage || getScanErrorMessage('FAILED'));
       setScanning(false);
     } catch (err: any) {
       logger.error('MultiScan', 'Unexpected error', err);
@@ -936,127 +956,32 @@ export default function HomeScreen() {
     }
   };
 
-  // 处理单张收据：扫描管道（OCR → 分类 → 保存）由 lib/scanPipeline 执行；本处只做刷新、彩蛋与提示
+  // 处理单张收据：OCR → 分类 → 审核页（保存、彩蛋、增长分析在审核页完成）
   const processReceiptImage = async (uri: string) => {
-    successAlertShownRef.current = false;
     const t0 = Date.now();
     if (__DEV__) {
       console.log('[ScanTiming] ui_start_ms', { t0 });
     }
 
-    const result = await runScanPipeline(uri);
+    const result = await runScanPipelineToReview(uri);
     if (!result.ok) {
       Alert.alert(t('home.scan.error'), getScanErrorMessage(result.code));
       setScanning(false);
       return;
     }
 
-    // Growth analysis trigger (count-based, stored into latest receipt analysis_json)
-    try {
-      const { getReceipt, updateReceipt } = await import('@/lib/db');
-      const { listReceipts } = await import('@/lib/db');
-      const { shouldTriggerByCount, shouldTriggerByPeriod, getAnalysisLevel } = await import('@/lib/analysisTriggers');
-      const { buildAggregateAnalysisV1, buildWeeklyReportV1, buildMonthlyReportV1 } = await import('@/lib/growthAnalysisEngineV1');
-
-      const all = await listReceipts();
-      const receiptCount = all.length;
-      const level = getAnalysisLevel(receiptCount);
-
-      const shouldCount = shouldTriggerByCount(receiptCount) && (receiptCount === 3 || receiptCount === 5);
-      const shouldWeekly = shouldTriggerByPeriod('weekly');
-      const shouldMonthly = shouldTriggerByPeriod('monthly');
-
-      if (shouldCount || shouldWeekly || shouldMonthly) {
-        const row = await getReceipt(result.id);
-        if (row) {
-          let analysisObj: any;
-          try {
-            analysisObj = JSON.parse(row.analysis_json || '{}');
-          } catch {
-            analysisObj = {};
-          }
-          const nextOutputs = { ...(analysisObj.analysis_outputs_v1 || {}) } as any;
-          if (shouldCount) {
-            nextOutputs.aggregate_level = buildAggregateAnalysisV1(all);
-            if (__DEV__) console.log('[GrowthAnalysis] aggregate_level', nextOutputs.aggregate_level);
-          }
-          if (shouldWeekly) {
-            nextOutputs.weekly = buildWeeklyReportV1(all);
-            if (__DEV__) console.log('[GrowthAnalysis] weekly', { total_spend: nextOutputs.weekly.total_spend });
-          }
-          if (shouldMonthly) {
-            nextOutputs.monthly = buildMonthlyReportV1(all);
-            if (__DEV__) console.log('[GrowthAnalysis] monthly', { total_spend: nextOutputs.monthly.total_spend });
-          }
-
-          // Fixed templates for L2/L3 milestones (keys only)
-          try {
-            const { buildGrowthTemplateL2, buildGrowthTemplateL3 } = await import('@/lib/analysisTemplatesV1');
-            const templates = { ...(nextOutputs.templates_v1 || {}) } as any;
-            if (shouldCount && receiptCount === 3 && nextOutputs.aggregate_level) {
-              templates.growth_template = buildGrowthTemplateL2({
-                aggregate: nextOutputs.aggregate_level,
-                weekly: nextOutputs.weekly,
-              });
-            }
-            if (shouldCount && receiptCount === 5 && nextOutputs.aggregate_level) {
-              templates.growth_template = buildGrowthTemplateL3({
-                aggregate: nextOutputs.aggregate_level,
-                weekly: nextOutputs.weekly,
-                monthly: nextOutputs.monthly,
-              });
-            }
-            nextOutputs.templates_v1 = templates;
-            if (__DEV__ && templates.growth_template) {
-              console.log('[GrowthAnalysis] template', templates.growth_template);
-            }
-          } catch (e) {
-            if (__DEV__) console.warn('[GrowthAnalysis] template build failed:', e);
-          }
-
-          analysisObj.analysis_outputs_v1 = nextOutputs;
-          analysisObj.analysis_level = level;
-          await updateReceipt({ id: row.id, analysis: analysisObj });
-        }
-      }
-    } catch (e) {
-      if (__DEV__) console.warn('[GrowthAnalysis] update failed:', e);
-    }
-
-    await loadReceipts();
-    if (__DEV__) {
-      console.log('[ScanTiming] refresh_done_ms', { ms: Date.now() - t0 });
-    }
-
-    const allReceipts = await listReceipts();
-    const receiptCount = allReceipts.length;
-    const locale = getCurrentLocale();
-    const easterEggResult = await tryShowNextEasterEgg(receiptCount, allReceipts, locale);
-
-    if (easterEggResult.shown && easterEggResult.content) {
-      await new Promise<void>((resolve) => {
-        Alert.alert(
-          easterEggResult.content.title,
-          easterEggResult.content.bullets.join('\n\n') + (easterEggResult.content.cta ? `\n\n${easterEggResult.content.cta}` : ''),
-          [{ text: t('easterEgg.ok'), style: 'default', onPress: () => resolve() }]
-        );
-      });
-      if (!successAlertShownRef.current) {
-        successAlertShownRef.current = true;
-        Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
-      }
+    if (result.kind !== 'review') {
       setScanning(false);
       return;
     }
 
-    if (!successAlertShownRef.current) {
-      successAlertShownRef.current = true;
-      Alert.alert(t('home.scan.success'), t('home.scan.successMessage'));
-    }
-    if (__DEV__) {
-      console.log('[ScanTiming] ui_total_ms', { ms: Date.now() - t0 });
-    }
+    await clearScanReviewQueue();
+    await setScanReviewQueue([result.draftId]);
     setScanning(false);
+    if (__DEV__) {
+      console.log('[ScanTiming] navigate_review_ms', { ms: Date.now() - t0 });
+    }
+    router.push(`/scan-review/${result.draftId}` as any);
   };
 
   // 只显示前5个类别
