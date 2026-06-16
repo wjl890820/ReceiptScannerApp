@@ -40,7 +40,17 @@ function toNum(v: string, fallback = 0): number {
 
 const categoryOptions = [...GROCERY_CATEGORIES, ...SPECIAL_CATEGORIES] as Category[];
 
+let lineIdSeq = 0;
+/** 生成稳定的本地行 id，作为 React key，避免使用数组 index */
+function makeLineId(): string {
+  lineIdSeq += 1;
+  return `li_${Date.now().toString(36)}_${lineIdSeq.toString(36)}`;
+}
+
 type LineItem = {
+  id: string;
+  /** 对应 OCR snapshot.items 的索引；人工新增行为 null */
+  sourceIndex: number | null;
   name: string;
   category: Category;
   quantity: number;
@@ -92,7 +102,9 @@ export default function ScanReviewScreen() {
     setOcrText(typeof snap?.ocr_raw_text === 'string' ? snap.ocr_raw_text : '');
     const items = Array.isArray(snap?.items) ? snap.items : [];
     setLineItems(
-      items.map((it: any) => ({
+      items.map((it: any, idx: number) => ({
+        id: makeLineId(),
+        sourceIndex: idx,
         name: typeof it?.name === 'string' ? it.name : '',
         category: (typeof it?.category === 'string' && categoryOptions.includes(it.category as Category)
           ? it.category
@@ -134,13 +146,9 @@ export default function ScanReviewScreen() {
       setTraceId(draft.traceId);
 
       const es = draft.editorState;
-      const nSnapItems = Array.isArray(snap?.items) ? snap.items.length : 0;
-      if (
-        es?.version === 1 &&
-        Array.isArray(es.lineItems) &&
-        es.lineItems.length > 0 &&
-        es.lineItems.length === nSnapItems
-      ) {
+      // 兼容删除/新增行：不再要求 lineItems 长度与 snapshot 行数一致；
+      // 仅要求 version 与数组结构正确即可恢复（含全部删空的空数组）。
+      if (es?.version === 1 && Array.isArray(es.lineItems)) {
         setMerchant(typeof es.merchant === 'string' ? es.merchant : '');
         setDateStr(typeof es.dateStr === 'string' ? es.dateStr : '');
         setTotalStr(typeof es.totalStr === 'string' ? es.totalStr : String(snap?.total ?? ''));
@@ -149,14 +157,27 @@ export default function ScanReviewScreen() {
         setNote(typeof es.note === 'string' ? es.note : '');
         setOcrText(typeof snap?.ocr_raw_text === 'string' ? snap.ocr_raw_text : '');
         setLineItems(
-          es.lineItems.map((li) => ({
-            name: typeof li.name === 'string' ? li.name : '',
-            category: (typeof li.category === 'string' && categoryOptions.includes(li.category as Category)
-              ? li.category
-              : 'uncategorized') as Category,
-            quantity: Number.isFinite(Number(li.quantity)) ? Number(li.quantity) : 1,
-            lineTotal: Number.isFinite(Number(li.lineTotal)) ? Number(li.lineTotal) : 0,
-          }))
+          es.lineItems.map((li, idx) => {
+            // 旧草稿缺 sourceIndex：按数组下标补；显式 null 视为人工新增行。
+            const rawSrc = (li as { sourceIndex?: number | null }).sourceIndex;
+            const sourceIndex =
+              typeof rawSrc === 'number' && Number.isInteger(rawSrc)
+                ? rawSrc
+                : rawSrc === null
+                ? null
+                : idx;
+            const rawId = (li as { id?: string }).id;
+            return {
+              id: typeof rawId === 'string' && rawId ? rawId : makeLineId(),
+              sourceIndex,
+              name: typeof li.name === 'string' ? li.name : '',
+              category: (typeof li.category === 'string' && categoryOptions.includes(li.category as Category)
+                ? li.category
+                : 'uncategorized') as Category,
+              quantity: Number.isFinite(Number(li.quantity)) ? Number(li.quantity) : 1,
+              lineTotal: Number.isFinite(Number(li.lineTotal)) ? Number(li.lineTotal) : 0,
+            };
+          })
         );
         setErrorTags(new Set((es.errorTags || []).filter(isReceiptReviewErrorTag)));
       } else {
@@ -184,6 +205,8 @@ export default function ScanReviewScreen() {
       currency,
       note,
       lineItems: lineItems.map((li) => ({
+        id: li.id,
+        sourceIndex: li.sourceIndex,
         name: li.name,
         category: li.category,
         quantity: li.quantity,
@@ -237,12 +260,36 @@ export default function ScanReviewScreen() {
     });
   };
 
+  const addLineItem = () => {
+    if (saving) return;
+    setLineItems((rows) => [
+      ...rows,
+      { id: makeLineId(), sourceIndex: null, name: '', category: 'uncategorized' as Category, quantity: 1, lineTotal: 0 },
+    ]);
+  };
+
+  const removeLineItem = (index: number) => {
+    if (saving) return;
+    Alert.alert(t('scanReview.deleteItemTitle'), t('scanReview.deleteItemMessage'), [
+      { text: t('home.scan.cancel'), style: 'cancel' },
+      {
+        text: t('scanReview.deleteItemConfirm'),
+        style: 'destructive',
+        onPress: () => {
+          setLineItems((rows) => rows.filter((_, i) => i !== index));
+        },
+      },
+    ]);
+  };
+
   const finalItemsForSave = useMemo(() => {
     if (!snapshot) return [];
     const snapItems = Array.isArray(snapshot.items) ? snapshot.items : [];
-    return lineItems.map((line, i) => {
-      const s = snapItems[i] || {};
-      const ocrName = typeof s.name === 'string' ? s.name.trim() : '';
+    // 按 line.sourceIndex 对齐原始 OCR 行，避免删除行后用数组下标错位。
+    return lineItems.map((line) => {
+      const isUserAdded = line.sourceIndex === null;
+      const s = !isUserAdded ? snapItems[line.sourceIndex as number] || {} : {};
+      const ocrName = !isUserAdded && typeof s.name === 'string' ? s.name.trim() : '';
       const unitPrice = Number.isFinite(Number(s.unitPrice ?? s.unit_price))
         ? Number(s.unitPrice ?? s.unit_price)
         : 0;
@@ -254,6 +301,8 @@ export default function ScanReviewScreen() {
         quantity: line.quantity,
         lineTotal: line.lineTotal,
         unitPrice,
+        review_source_index: isUserAdded ? null : line.sourceIndex,
+        user_added: isUserAdded,
       };
     });
   }, [lineItems, snapshot]);
@@ -524,12 +573,23 @@ export default function ScanReviewScreen() {
         {lineItems.length === 0 ? (
           <Text style={styles.muted}>{t('scanReview.emptyLineItems')}</Text>
         ) : null}
-        {lineItems.map((line, idx) => (
-          <View key={`line-${idx}`} style={styles.itemCard}>
-            <Text style={styles.ocrHint}>
-              {t('scanReview.recognizedName')}:{' '}
-              {typeof snapItemsArr[idx]?.name === 'string' ? snapItemsArr[idx].name : '—'}
-            </Text>
+        {lineItems.map((line, idx) => {
+          const srcName =
+            line.sourceIndex !== null && typeof snapItemsArr[line.sourceIndex]?.name === 'string'
+              ? snapItemsArr[line.sourceIndex].name
+              : '—';
+          return (
+          <View key={line.id} style={styles.itemCard}>
+            <View style={styles.itemCardHead}>
+              <Text style={[styles.ocrHint, { flex: 1, marginBottom: 0 }]} numberOfLines={1}>
+                {t('scanReview.recognizedName')}: {srcName}
+              </Text>
+              <Pressable onPress={() => removeLineItem(idx)} disabled={saving} hitSlop={8}>
+                <Text style={[styles.deleteItemBtn, saving && { opacity: 0.4 }]}>
+                  {t('scanReview.deleteItem')}
+                </Text>
+              </Pressable>
+            </View>
             <Text style={styles.label}>{t('scanReview.itemName')}</Text>
             <TextInput
               value={line.name}
@@ -568,7 +628,16 @@ export default function ScanReviewScreen() {
               </View>
             </View>
           </View>
-        ))}
+          );
+        })}
+
+        <Pressable
+          style={[styles.addItemBtn, saving && { opacity: 0.5 }]}
+          onPress={addLineItem}
+          disabled={saving}
+        >
+          <Text style={styles.addItemBtnText}>＋ {t('scanReview.addItem')}</Text>
+        </Pressable>
 
         <Text style={styles.h2}>{t('scanReview.sectionPipelineRef')}</Text>
         <Text style={styles.sectionSub}>{t('scanReview.sectionPipelineRefSub')}</Text>
@@ -690,6 +759,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#fafafa',
   },
   ocrHint: { fontSize: 12, color: '#888', marginBottom: 8 },
+  itemCardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  deleteItemBtn: { fontSize: 13, fontWeight: '700', color: '#c33', marginLeft: 12 },
+  addItemBtn: {
+    marginTop: 4,
+    marginBottom: 8,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#06c',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    backgroundColor: '#f5f9ff',
+  },
+  addItemBtnText: { fontSize: 15, fontWeight: '800', color: '#06c' },
   catBtn: { marginTop: 10, alignSelf: 'flex-start' },
   catBtnText: { fontSize: 15, fontWeight: '800', color: '#06c' },
   ocrBlock: { fontSize: 11, color: '#333', backgroundColor: '#f6f6f6', padding: 10, borderRadius: 8 },

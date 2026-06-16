@@ -14,7 +14,16 @@ export type ScanReviewEditorStateV1 = {
   taxStr: string;
   currency: string;
   note: string;
-  lineItems: { name: string; category: string; quantity: number; lineTotal: number }[];
+  lineItems: {
+    /** 稳定行身份；旧草稿缺失时恢复阶段补生成 */
+    id?: string;
+    /** 对应 OCR snapshot.items 的原始索引；人工新增行为 null；旧草稿缺失时按数组下标补 */
+    sourceIndex?: number | null;
+    name: string;
+    category: string;
+    quantity: number;
+    lineTotal: number;
+  }[];
   errorTags: string[];
 };
 

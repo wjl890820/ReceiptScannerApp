@@ -20,10 +20,17 @@ export async function applyReviewCorrectionsToLearning(params: {
   merchantRaw: string | null;
 }): Promise<void> {
   const { snapshotItems, finalItems, merchantRaw } = params;
-  const n = Math.min(snapshotItems.length, finalItems.length);
-  for (let i = 0; i < n; i++) {
-    const snap = snapshotItems[i];
+  // 不再依赖 snapshotItems / finalItems 的数组下标一致：删除/新增行后会错位。
+  // 改为遍历 finalItems，并按 final item 自带的来源索引回查 snapshot 原始行。
+  for (let i = 0; i < finalItems.length; i++) {
     const fin = finalItems[i];
+    const rawSourceIndex = fin?.review_source_index ?? fin?.ocr_source_index;
+    const sourceIndex =
+      typeof rawSourceIndex === 'number' && Number.isInteger(rawSourceIndex) ? rawSourceIndex : null;
+    // 人工新增行：无来源索引或显式标记 user_added。没有 OCR 原名，不写 product_name_alias，
+    // 但仍参与分类学习与 product_dictionary 写入。
+    const isUserAdded = sourceIndex === null || fin?.user_added === true;
+    const snap = !isUserAdded ? snapshotItems[sourceIndex as number] ?? {} : {};
     const origName = typeof snap?.name === 'string' ? snap.name.trim() : '';
     const finalName = typeof fin?.name === 'string' ? fin.name.trim() : '';
     const catRaw = typeof fin?.category === 'string' ? fin.category.trim() : '';
@@ -31,7 +38,8 @@ export async function applyReviewCorrectionsToLearning(params: {
 
     const snapCatRaw = typeof snap?.category === 'string' ? snap.category.trim() : '';
     const nameChanged = origName.length > 0 && finalName.length > 0 && origName !== finalName;
-    // 快照分类为空时用户只改分类也必须视为变更（旧逻辑会永远不触发学习）
+    // 快照分类为空时用户只改分类也必须视为变更（旧逻辑会永远不触发学习）。
+    // 人工新增行 snapCatRaw 为空，categoryChanged 为 true，因此也能进入分类学习。
     const categoryChanged = catRaw !== snapCatRaw;
 
     const v1 = mapLegacyCategoryToV1(catRaw);
@@ -77,16 +85,19 @@ export async function applyReviewCorrectionsToLearning(params: {
           confidence: 1.0,
           minConfidenceToWrite: 0,
         });
-        await upsertProductNameAlias({
-          alias_normalized: finalNorm,
-          merchant_hint: merchantRaw,
-          canonical_name: finalName,
-          category_main: v1.main,
-          category_sub: v1.sub,
-          analysis_tags: tags,
-          confidence: 1.0,
-          source: 'manual',
-        });
+        // 人工新增行没有 OCR 原名，不写自指 alias，仅做分类学习与 dictionary 写入。
+        if (!isUserAdded) {
+          await upsertProductNameAlias({
+            alias_normalized: finalNorm,
+            merchant_hint: merchantRaw,
+            canonical_name: finalName,
+            category_main: v1.main,
+            category_sub: v1.sub,
+            analysis_tags: tags,
+            confidence: 1.0,
+            source: 'manual',
+          });
+        }
       }
     } catch (e) {
       logger.warn('ReviewLearning', 'applyReviewCorrectionsToLearning row failed', {

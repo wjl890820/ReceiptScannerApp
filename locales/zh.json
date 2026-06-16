@@ -150,6 +150,11 @@
     "sectionPipelineRef": "识别参考（只读）",
     "sectionPipelineRefSub": "下方为原始 OCR 与各行的识别原名，仅供对照。",
     "emptyLineItems": "未识别到商品行，仍可修改合计等信息后保存。",
+    "addItem": "新增商品行",
+    "deleteItem": "删除此行",
+    "deleteItemTitle": "删除商品行",
+    "deleteItemMessage": "确定要删除这一行吗？",
+    "deleteItemConfirm": "删除",
     "saveFooterHint": "保存后写入本地历史；若一次扫了多张，点确定后会继续审核下一张。"
   },
   "reviewRetro": {

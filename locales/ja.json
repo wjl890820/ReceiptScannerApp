@@ -150,6 +150,11 @@
     "sectionPipelineRef": "認識結果の参考",
     "sectionPipelineRefSub": "OCR テキストと認識名は参照用です。",
     "emptyLineItems": "商品行が見つかりませんでした。合計などを編集して保存できます。",
+    "addItem": "商品行を追加",
+    "deleteItem": "この行を削除",
+    "deleteItemTitle": "商品行を削除",
+    "deleteItemMessage": "この行を削除しますか？",
+    "deleteItemConfirm": "削除",
     "saveFooterHint": "履歴に保存します。複数枚スキャンした場合は、確定後に次のレシートへ進みます。"
   },
   "reviewRetro": {

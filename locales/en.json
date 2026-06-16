@@ -150,6 +150,11 @@
     "sectionPipelineRef": "Recognition reference",
     "sectionPipelineRefSub": "OCR text and recognized names are read-only hints.",
     "emptyLineItems": "No product lines were detected. You can still edit totals and save.",
+    "addItem": "Add item",
+    "deleteItem": "Delete this item",
+    "deleteItemTitle": "Delete item",
+    "deleteItemMessage": "Delete this item row?",
+    "deleteItemConfirm": "Delete",
     "saveFooterHint": "Saves to history. If you scanned multiple receipts, the next one opens after you tap OK."
   },
   "reviewRetro": {
