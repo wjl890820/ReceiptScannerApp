@@ -227,7 +227,7 @@ function generateMilestone5(receipts: ReceiptRow[], locale: 'en' | 'zh' | 'ja'):
       const analysis = JSON.parse(receipt.analysis_json || '{}');
       const items = analysis.items || [];
       for (const item of items) {
-        const name = (item.name || '').toLowerCase();
+        const name = String(item?.name || '').toLowerCase();
         const words = name.split(/[\s・、,，]/).filter((w) => w.length > 1 && w.length < 10);
         words.slice(0, 2).forEach((w) => keywords.add(w));
       }

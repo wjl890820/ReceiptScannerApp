@@ -366,7 +366,6 @@ export async function applyCategoriesWithLearning(
         }
 
         if (
-          classificationStatus !== 'failed' &&
           classificationOut?.source === 'fallback' &&
           typeof (it as any)?.category === 'string' &&
           (it as any).category.trim() &&

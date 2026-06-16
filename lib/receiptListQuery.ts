@@ -12,7 +12,7 @@ export type ListReceiptsQueryOptions = {
 
 export function listReceiptsForListParams(
   options?: ListReceiptsQueryOptions | number
-): { orderBy: string; limit: number; offset: number; whereClause: string; whereParams: unknown[] } {
+): { orderBy: string; limit: number; offset: number; whereClause: string; whereParams: string[] } {
   const opts: ListReceiptsQueryOptions =
     typeof options === 'number' ? { limit: options } : options ?? {};
   const limit = Math.max(1, Math.min(500, opts.limit ?? 200));

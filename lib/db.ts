@@ -603,7 +603,7 @@ export async function saveReceipt(
 
   if (params.reviewedSave || params.note !== undefined) {
     const sets: string[] = [];
-    const vals: unknown[] = [];
+    const vals: SQLite.SQLiteBindValue[] = [];
     if (params.reviewedSave) {
       sets.push('user_edited = 1');
     }
