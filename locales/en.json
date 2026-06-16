@@ -91,6 +91,11 @@
       "partialTitle": "Some images failed",
       "noImages": "No image was selected. Please try again."
     },
+    "continueReviewTitle": "Continue unfinished reviews",
+    "continueReviewSubtitle": "{count} receipt(s) waiting for confirmation",
+    "continueReviewButton": "Continue review",
+    "continueReviewMissingTitle": "No unfinished reviews",
+    "continueReviewMissingMessage": "No receipt review could be resumed. It may have already been saved or removed.",
     "category": {
       "Grocery": "Grocery",
       "Convenience": "Convenience",

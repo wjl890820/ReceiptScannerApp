@@ -91,6 +91,11 @@
       "partialTitle": "部分图片未识别",
       "noImages": "未选择图片，请重试。"
     },
+    "continueReviewTitle": "继续审核未完成的小票",
+    "continueReviewSubtitle": "还有 {count} 张小票等待确认",
+    "continueReviewButton": "继续审核",
+    "continueReviewMissingTitle": "没有未完成审核",
+    "continueReviewMissingMessage": "未找到可继续审核的小票，可能已经保存或删除。",
     "category": {
       "Grocery": "生鲜杂货",
       "Convenience": "便利店",

@@ -22,7 +22,12 @@ import {
   aggregateBatchScanResults,
   type ScanOneResult,
 } from '@/lib/scanPipeline';
-import { setScanReviewQueue, clearScanReviewQueue } from '@/lib/scanReviewQueue';
+import {
+  setScanReviewQueue,
+  clearScanReviewQueue,
+  getPendingScanReviewState,
+  type PendingScanReviewState,
+} from '@/lib/scanReviewQueue';
 import { getScanErrorMessage } from '@/lib/scanError';
 import { logger } from '@/lib/logger';
 
@@ -582,6 +587,10 @@ export default function HomeScreen() {
   const [scanning, setScanning] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<{ current: number; total: number } | null>(null);
   const [stickyHeight, setStickyHeight] = useState(0);
+  const [pendingReview, setPendingReview] = useState<PendingScanReviewState>({
+    nextDraftId: null,
+    pendingCount: 0,
+  });
 
   // Load time range preference on mount
   useEffect(() => {
@@ -625,12 +634,36 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // 当屏幕获得焦点时刷新数据
+  // 检测本地是否存在未完成的审核草稿/队列（脏数据会被自动修复）
+  const refreshPendingReview = useCallback(async () => {
+    try {
+      const state = await getPendingScanReviewState();
+      setPendingReview(state);
+    } catch (e) {
+      logger.warn('Home', 'refreshPendingReview failed', { error: e });
+      setPendingReview({ nextDraftId: null, pendingCount: 0 });
+    }
+  }, []);
+
+  // 当屏幕获得焦点时刷新数据（首次打开 + 从审核页返回都会触发）
   useFocusEffect(
     useCallback(() => {
       loadReceipts();
-    }, [loadReceipts])
+      void refreshPendingReview();
+    }, [loadReceipts, refreshPendingReview])
   );
+
+  // 点击“继续审核”：始终先刷新最新 pending 状态，再据此决定导航（点击时二次校验）
+  const handleContinueReview = useCallback(async () => {
+    if (scanning) return;
+    const fresh = await getPendingScanReviewState();
+    setPendingReview(fresh);
+    if (fresh.nextDraftId) {
+      router.push(`/scan-review/${fresh.nextDraftId}` as any);
+    } else {
+      Alert.alert(t('home.continueReviewMissingTitle'), t('home.continueReviewMissingMessage'));
+    }
+  }, [scanning, router]);
 
   if (__DEV__) {
     console.log('[Home][Metrics] receipts_loaded_count', receipts.length);
@@ -1130,6 +1163,25 @@ export default function HomeScreen() {
         style={[styles.stickyButtonContainer, { paddingBottom: insets.bottom + 16 }]}
         onLayout={(e) => setStickyHeight(e.nativeEvent.layout.height)}
       >
+        {pendingReview.pendingCount > 0 && pendingReview.nextDraftId && (
+          <Pressable
+            style={[styles.continueReviewCard, scanning && styles.scanButtonDisabled]}
+            onPress={handleContinueReview}
+            disabled={scanning}
+          >
+            <View style={styles.continueReviewTextWrap}>
+              <Text style={styles.continueReviewTitle} numberOfLines={1}>
+                {t('home.continueReviewTitle')}
+              </Text>
+              <Text style={styles.continueReviewSubtitle} numberOfLines={1}>
+                {t('home.continueReviewSubtitle', { count: pendingReview.pendingCount })}
+              </Text>
+            </View>
+            <View style={styles.continueReviewBtn}>
+              <Text style={styles.continueReviewBtnText}>{t('home.continueReviewButton')}</Text>
+            </View>
+          </Pressable>
+        )}
         <Pressable
           style={[styles.scanButton, scanning && styles.scanButtonDisabled]}
           onPress={handleScanReceipt}
@@ -1382,6 +1434,42 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
+  },
+  continueReviewCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff7e6',
+    borderWidth: 1,
+    borderColor: '#f0c36d',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  continueReviewTextWrap: {
+    flex: 1,
+    marginRight: 12,
+  },
+  continueReviewTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#7a5200',
+  },
+  continueReviewSubtitle: {
+    fontSize: 13,
+    color: '#9a7320',
+    marginTop: 2,
+  },
+  continueReviewBtn: {
+    backgroundColor: '#f5a623',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+  },
+  continueReviewBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#fff',
   },
   scanButton: {
     backgroundColor: '#111',

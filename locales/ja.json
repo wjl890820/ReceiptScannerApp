@@ -91,6 +91,11 @@
       "partialTitle": "一部の画像は失敗しました",
       "noImages": "画像が選ばれていません。もう一度お試しください。"
     },
+    "continueReviewTitle": "未完了のレシート確認を再開",
+    "continueReviewSubtitle": "確認待ちのレシートが {count} 件あります",
+    "continueReviewButton": "確認を再開",
+    "continueReviewMissingTitle": "未完了の確認はありません",
+    "continueReviewMissingMessage": "再開できるレシートが見つかりません。保存済みまたは削除済みの可能性があります。",
     "category": {
       "Grocery": "生鮮・雑貨",
       "Convenience": "コンビニ",
