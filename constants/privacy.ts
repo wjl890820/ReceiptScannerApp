@@ -1,9 +1,9 @@
 /**
  * Privacy Policy URL
- * This URL should point to the hosted privacy policy page in Supabase Storage
- * Format: https://<project-ref>.supabase.co/storage/v1/object/public/legal/privacy-policy.html
- * 
- * After uploading privacy-policy.html to Supabase Storage, update this constant.
+ * Points to Supabase Edge Function privacy-policy, which reads HTML from
+ * Storage bucket=legal, path=privacy-policy.html and returns it with
+ * Content-Type: text/html; charset=utf-8 (fixes iOS garbled text).
+ * Override with EXPO_PUBLIC_PRIVACY_POLICY_URL if needed.
  */
 export const PRIVACY_POLICY_URL =
   process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL ||

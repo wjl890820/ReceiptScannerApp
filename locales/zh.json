@@ -1,4 +1,15 @@
 {
+  "errors": {
+    "invalidAnonKey": "Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)"
+  },
+  "devTools": {
+    "gateTitle": "仅限开发者",
+    "gateBody": "请在设置中连续快速点击「版本号」区域约 7 次（每次间隔约 2 秒内）以开启开发者工具。"
+  },
+  "common": {
+    "uncategorizedTag": "待分类",
+    "unknownMerchant": "未知商店"
+  },
   "home": {
     "title": "消费结构概览",
     "subtitle": "基于小票自动生成",
@@ -15,7 +26,8 @@
       "totalSpending": "总支出",
       "topCategory": "主要类别",
       "nonEssential": "非必需品",
-      "currency": "日元"
+      "currency": "日元",
+      "uncategorizedHint": "有 {count} 个商品待分类，未计入分类统计"
     },
     "insight": {
       "noData": "暂无数据",
@@ -62,6 +74,9 @@
       "processingMulti": "处理中 {current}/{total}",
       "analyzing": "分析小票中…",
       "doneSummary": "完成：成功 {ok}，失败 {fail}",
+      "doneSummaryWithReasons": "完成：成功 {ok}，失败 {fail}。{reasons}",
+      "failureReasonsPrefix": "失败原因：",
+      "failureReasonCount": "{label} {count} 次",
       "selectSource": "选择图片来源",
       "selectSourceMessage": "选择获取小票图片的方式",
       "camera": "拍照",
@@ -73,10 +88,8 @@
       "successMessage": "小票已保存到历史。",
       "error": "错误",
       "errorMessage": "请稍后重试。",
-      "rateLimit": "扫描过于频繁，请稍后再试。",
-      "payloadTooLarge": "图片过大，请重新拍摄更清晰的照片。",
-      "networkError": "网络错误，请检查网络连接。",
-      "serverError": "服务器错误，请稍后重试。"
+      "partialTitle": "部分图片未识别",
+      "noImages": "未选择图片，请重试。"
     },
     "category": {
       "Grocery": "生鲜杂货",
@@ -89,11 +102,165 @@
       "Other": "其他"
     }
   },
+  "scanReview": {
+    "title": "审核小票",
+    "back": "返回",
+    "discard": "放弃",
+    "discardTitle": "放弃本张？",
+    "discardMessage": "不会保存到历史，草稿将删除。",
+    "discardConfirm": "放弃",
+    "loading": "加载草稿…",
+    "missingTitle": "草稿失效",
+    "missingMessage": "草稿已失效或应用已重启，请重新扫描。",
+    "traceId": "本次识别 trace_id",
+    "merchant": "店铺名",
+    "date": "日期 / transactionDate",
+    "total": "合计 total",
+    "tax": "税 tax",
+    "currency": "货币",
+    "note": "备注（可选）",
+    "notePlaceholder": "可选备注",
+    "errorTagsTitle": "主要错误类型（可多选）",
+    "errorTags": {
+      "OCR_ERROR": "OCR 识别错误",
+      "PARSE_ERROR": "解析/结构化错误",
+      "ITEM_NAME_ERROR": "商品名错误",
+      "CATEGORY_ERROR": "分类错误",
+      "TOTAL_ERROR": "合计金额错误",
+      "DATE_ERROR": "日期错误",
+      "OTHER": "其他"
+    },
+    "itemsTitle": "商品行",
+    "recognizedName": "识别原名",
+    "itemName": "商品名（可改）",
+    "category": "分类",
+    "categoryModalTitle": "选择分类",
+    "qty": "数量",
+    "lineTotal": "行小计",
+    "ocrRawTitle": "OCR 原始文本",
+    "ocrRawEmpty": "（当前链路未提供原始文本）",
+    "save": "保存到历史",
+    "saving": "保存中…",
+    "savedTitle": "已保存",
+    "savedMessage": "已写入本地数据库，可继续审核下一张。",
+    "saveFailedTitle": "保存失败",
+    "flowHint": "左上角返回会保留草稿；放弃会删除草稿且不保存。",
+    "sectionYourEdits": "当前编辑",
+    "sectionYourEditsSub": "此处修改会写入历史记录。",
+    "sectionPipelineRef": "识别参考（只读）",
+    "sectionPipelineRefSub": "下方为原始 OCR 与各行的识别原名，仅供对照。",
+    "emptyLineItems": "未识别到商品行，仍可修改合计等信息后保存。",
+    "saveFooterHint": "保存后写入本地历史；若一次扫了多张，点确定后会继续审核下一张。"
+  },
+  "reviewRetro": {
+    "settingsTitle": "审核复盘",
+    "settingsSubtitle": "错误分布、改名次数、alias→canonical、分类迁移；可查看/分享/导出 JSON",
+    "title": "审核复盘",
+    "back": "返回",
+    "refresh": "刷新",
+    "loading": "统计中…",
+    "empty": "暂无数据",
+    "sectionSummary": "总览",
+    "totalReviewed": "总审核张数",
+    "totalCorrected": "已修正张数",
+    "totalClean": "完全无误张数",
+    "sectionBuckets": "错误形态（张数，可重叠）",
+    "bucketsNote": "与 error_tags 及快照对比一致；同一小票可落入多个桶。",
+    "bucketName": "含商品名与快照不一致",
+    "bucketCategoryOnly": "仅分类变化（其它与快照一致）",
+    "bucketHeaderOnly": "仅合计/税/日期变化（无改名、无分类变化）",
+    "bucketTaggedOcr": "勾选过 OCR_ERROR 或 PARSE_ERROR",
+    "sectionTags": "error_tags 次数",
+    "noTags": "（无勾选记录）",
+    "sectionTopNames": "被改名最多的识别商品名",
+    "sectionTopAlias": "小票中 alias→canonical 修正 Top",
+    "inAlias": "已在 manual alias 表",
+    "notInAlias": "未命中 manual alias",
+    "sectionCatTrans": "分类迁移 Top",
+    "sectionCatByItem": "分类被改最多的商品名（修正后名）",
+    "sectionLearning": "与学习表对照",
+    "nameEvents": "商品改名事件数",
+    "nameMatchedAlias": "其中已命中 manual alias",
+    "aliasRatio": "命中占比",
+    "manualAliasRows": "manual alias 行数",
+    "manualDictRows": "manual product_dictionary 行数",
+    "sectionLegend": "口径说明",
+    "viewJson": "查看完整 JSON",
+    "shareJson": "系统分享 JSON（大文本可能截断）",
+    "exportFile": "导出 JSON 到缓存目录",
+    "close": "关闭",
+    "errorTitle": "统计失败",
+    "shareFailed": "分享失败",
+    "exportDoneTitle": "已写入文件",
+    "exportFailTitle": "导出失败",
+    "noCacheDir": "当前环境无 cache 目录",
+    "none": "（无）"
+  },
   "tabs": {
     "home": "首页",
     "history": "历史",
     "settings": "设置",
     "analysis": "分析"
+  },
+  "history": {
+    "list": {
+      "title": "历史记录",
+      "subtitle": "点击任意一条进入详情页",
+      "empty": "暂无记录。请先在首页识别并保存。",
+      "noCategoryInfo": "未找到分类信息"
+    },
+    "errors": {
+      "loadTitle": "读取失败",
+      "loadMessage": "无法读取历史记录"
+    },
+    "batchDelete": {
+      "select": "选择",
+      "cancel": "取消",
+      "selectAll": "全选",
+      "deleteSelected": "删除(已选{n})",
+      "confirmTitle": "删除小票？",
+      "confirmMessage": "将删除已选 {n} 张小票，此操作不可撤销。",
+      "confirmCancel": "取消",
+      "confirmDelete": "删除",
+      "deleteFailed": "删除失败，请重试。"
+    },
+    "detail": {
+      "notFound": "未找到该记录",
+      "loadMessage": "无法读取该记录",
+      "inputErrorTitle": "输入错误",
+      "qtyError": "数量必须大于等于 1",
+      "totalError": "小计必须大于 0",
+      "savedTitle": "已保存",
+      "saveFailedTitle": "保存失败",
+      "retry": "请重试",
+      "deleteConfirmTitle": "确认删除",
+      "deleteConfirmMessage": "删除后无法恢复，确定要删除吗？",
+      "deletedTitle": "已删除",
+      "deleteFailedTitle": "删除失败",
+      "loading": "加载中…",
+      "editedHint": "（已手动编辑商品）",
+      "taxLabel": "税",
+      "categorySummaryTitle": "分类汇总：",
+      "noCategoryInfo": "暂无分类信息",
+      "itemsTitle": "商品明细：",
+      "quantityShort": "数量",
+      "subtotalShort": "小计",
+      "noItems": "无商品明细",
+      "deleteRecord": "删除这条记录",
+      "edit": {
+        "cancel": "取消",
+        "title": "编辑商品",
+        "saving": "保存中…",
+        "save": "保存",
+        "name": "商品名称",
+        "category": "分类",
+        "quantity": "数量",
+        "quantityPlaceholder": "请输入数量",
+        "subtotal": "小计",
+        "subtotalPlaceholder": "请输入小计",
+        "unitNote": "单位：日元"
+      }
+    }
   },
   "settings": {
     "title": "设置",
@@ -103,7 +270,7 @@
     },
     "pro": {
       "title": "高级洞察 Pro",
-      "subtitle": "解锁更深入的洞察与更长时间范围"
+      "subtitle": "解锁更深入的洞察与更长时间范围（即将推出）"
     },
     "privacy": {
       "title": "隐私政策",
@@ -131,12 +298,16 @@
       "required": "请输入您的反馈。",
       "network": "提交失败（网络错误）",
       "server": "提交失败（服务器错误）",
-      "generic": "提交失败，请稍后重试。"
+      "generic": "提交失败，请稍后重试。",
+      "notConfigured": "提交失败（未配置），请稍后重试或使用备用反馈方式。",
+      "badResponse": "提交失败（服务器响应异常）"
     },
     "success": {
       "message": "已提交",
-      "title": "成功"
-    }
+      "title": "成功",
+      "fallbackTitle": "成功"
+    },
+    "emailFallbackAction": "改用邮件反馈"
   },
   "pro": {
     "title": "高级洞察 Pro",
@@ -184,7 +355,9 @@
       "title": "价格雷达",
       "subtitle": "常购商品的最便宜商家",
       "noData": "暂无价格数据",
-      "needMore": "再扫描 {count} 张收据即可解锁价格雷达"
+      "needMore": "再扫描 {count} 张收据即可解锁价格雷达",
+      "lockedHint": "还需扫描 {count} 张收据即可解锁",
+      "unlockedHint": "已解锁"
     },
     "categoryIndex": {
       "title": "分类价格指数",
@@ -215,6 +388,18 @@
     "uncategorized": "未分类",
     "non_grocery": "非超市"
   },
+  "categoriesShort": {
+    "snacks_sweets": "零食",
+    "non_alcoholic_drinks": "饮料",
+    "quick_meals": "速食",
+    "household": "日用品",
+    "meat_seafood": "肉海鲜",
+    "beverages_other": "他饮",
+    "health_supplements": "补品",
+    "canned_preserved": "罐头",
+    "dairy_eggs": "乳蛋",
+    "condiments": "调味料"
+  },
   "permissions": {
     "cameraDeniedTitle": "需要相机权限",
     "cameraDeniedMessage": "请在系统设置中允许相机权限后再拍照。",
@@ -222,12 +407,14 @@
     "libraryDeniedMessage": "请在系统设置中允许相册权限后再选择图片。"
   },
   "ocr": {
-    "networkError": "网络错误，请检查网络后重试。",
-    "rateLimit": "请求过于频繁，请稍后再试。",
+    "rateLimit": "扫描过于频繁，请稍后再试。",
     "payloadTooLarge": "图片过大，请重新拍摄更清晰的照片。",
+    "networkError": "网络错误，请检查网络连接。",
     "serverError": "服务器错误，请稍后重试。",
-    "invalidResponse": "返回结果异常，请重试。",
-    "failed": "识别失败，请重试。"
+    "invalidResponse": "识别结果异常，请重试。",
+    "failed": "识别失败，请重试。",
+    "privacyNotice": "我们会记录识别次数和 token 用量用于成本分析与防滥用。我们不会保存您的图片或小票全文内容。",
+    "privacyNoticeTitle": "隐私说明"
   },
   "toast": {
     "saved": "已保存",
@@ -237,8 +424,46 @@
   "grocery": {
     "onlyNote": "分类统计仅对“超市小票”显示。"
   },
-  "ocr": {
-    "privacyNotice": "我们会记录识别次数和 token 用量用于成本分析与防滥用。我们不会保存您的图片或小票全文内容。",
-    "privacyNoticeTitle": "隐私说明"
+  "analysisV2": {
+    "sections": {
+      "story": "本期洞察",
+      "changes": "对比上期",
+      "tips": "可行动建议"
+    },
+    "story": {
+      "conclusion": "最近你的消费主要花在「{catLabel}」（约 {pct}% / ¥{amt}）。",
+      "explainQuickMeals": "可能最近比较忙。",
+      "explainSnacks": "可能最近想解压或嘴馋。",
+      "explainDrinks": "可能最近饮料买得比较多。",
+      "explainDefault": "可以留意一下这个类别的支出。",
+      "fallback": "数据还不够，我先展示概览。"
+    },
+    "changes": {
+      "spendUp": "这段{periodDays}天总支出比上期多了 ¥{delta}。",
+      "spendDown": "这段{periodDays}天总支出比上期少了 ¥{delta}。",
+      "categoryShareUp": "「{catLabel}」占比上升了 {change}%（{from}% → {to}%）。",
+      "categoryShareDown": "「{catLabel}」占比下降了 {change}%（{from}% → {to}%）。",
+      "merchantMore": "这段时间你在 {merchant} 花得更多了。"
+    },
+    "tips": {
+      "saveQuick": "如果你想省一点，把其中一部分熟食/零食换成主食或生鲜，通常更省。",
+      "healthSnacksDrinks": "如果你想吃得健康一点，可以把部分零食/饮料换成水果、酸奶或无糖饮料。",
+      "timeQuick": "如果你想省时间又不想总吃外食，可以准备 2 个固定快捷组合（例如：酸奶+水果 / 鸡胸+沙拉）。"
+    },
+    "confidence": {
+      "low": "最近记录较少，结论仅供参考。",
+      "med": "记录渐多，洞察会更稳。",
+      "high": "数据较充分，结论可信度较高。"
+    },
+    "pro": {
+      "title": "深度洞察（Pro）",
+      "teaser1": "最常买的 5 个商品涨价了吗？",
+      "teaser2": "你在哪些商家更容易超预算？",
+      "teaser3": "本月消费结构的 3 个变化",
+      "alert": "订阅后可解锁；每月20张包含，超出可买补充包。"
+    },
+    "labels": {
+      "other": "其他"
+    }
   }
 }

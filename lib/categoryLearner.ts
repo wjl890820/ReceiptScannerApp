@@ -2,6 +2,7 @@
 import * as SQLite from 'expo-sqlite';
 import { ALL_CATEGORIES, type Category } from './categories';
 import { initIfNeeded } from './db';
+import { normalizeMerchantName } from './productNormalizer';
 
 // Re-export for backward compatibility (deprecated, use categories.ts)
 /** @deprecated Use GROCERY_CATEGORIES from './categories' instead */
@@ -14,9 +15,36 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
   await initIfNeeded();
   
   if (!_db) {
-    _db = await SQLite.openDatabaseAsync('receipts.db');
+    // IMPORTANT: must match lib/db.ts DB_NAME (receipts_v2.db)
+    _db = await SQLite.openDatabaseAsync('receipts_v2.db');
   }
   return _db;
+}
+
+async function ensureMappingTableExists(db: SQLite.SQLiteDatabase): Promise<void> {
+  try {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS item_category_mapping (
+        normalized_name TEXT NOT NULL,
+        merchant_hint TEXT NOT NULL DEFAULT '',
+        category_id TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 1.0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (normalized_name, merchant_hint)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_item_category_mapping_updated_at
+        ON item_category_mapping(updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name
+        ON item_category_mapping(normalized_name);
+
+      CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name_hint
+        ON item_category_mapping(normalized_name, merchant_hint);
+    `);
+  } catch {
+    // Non-fatal: callers will fall back to rules/fallback when mapping isn't available.
+  }
 }
 
 /**
@@ -32,11 +60,12 @@ export async function learnCategoryMapping(
   if (!normalizedName || !categoryId) return;
 
   const db = await getDb();
+  await ensureMappingTableExists(db);
   const now = Date.now();
 
-  // Normalize merchant hint: null or empty string becomes ''
-  const normalizedMerchantHint = merchantHint 
-    ? merchantHint.trim().toLowerCase() 
+  // 与 getLearnedCategory / classifyItem 一致：商户 hint 使用 normalizeMerchantName
+  const normalizedMerchantHint = merchantHint
+    ? normalizeMerchantName(merchantHint)
     : '';
 
   await db.runAsync(
@@ -78,35 +107,47 @@ export async function getLearnedCategory(
   if (!normalizedName) return null;
 
   const db = await getDb();
+  await ensureMappingTableExists(db);
   const normalized = normalizedName.trim().toLowerCase();
   
   // Try with merchant hint first (more specific)
   if (merchantHint) {
-    const normalizedMerchantHint = merchantHint.trim().toLowerCase();
-    const rowWithHint = await db.getFirstAsync<{ category_id: string }>(
-      `
-      SELECT category_id FROM item_category_mapping
-      WHERE normalized_name = ? AND merchant_hint = ?
-      ORDER BY confidence DESC, updated_at DESC
-      LIMIT 1
-      `,
-      [normalized, normalizedMerchantHint]
-    );
-    if (rowWithHint?.category_id) {
-      return rowWithHint.category_id;
+    const normalizedMerchantHint = merchantHint
+      ? normalizeMerchantName(merchantHint)
+      : '';
+    try {
+      const rowWithHint = await db.getFirstAsync<{ category_id: string }>(
+        `
+        SELECT category_id FROM item_category_mapping
+        WHERE normalized_name = ? AND merchant_hint = ?
+        ORDER BY confidence DESC, updated_at DESC
+        LIMIT 1
+        `,
+        [normalized, normalizedMerchantHint]
+      );
+      if (rowWithHint?.category_id) {
+        return rowWithHint.category_id;
+      }
+    } catch {
+      return null;
     }
   }
   
   // Fallback to without merchant hint (general mapping: merchant_hint = '')
-  const row = await db.getFirstAsync<{ category_id: string }>(
-    `
-    SELECT category_id FROM item_category_mapping
-    WHERE normalized_name = ? AND merchant_hint = ''
-    ORDER BY confidence DESC, updated_at DESC
-    LIMIT 1
-    `,
-    [normalized]
-  );
+  let row: { category_id: string } | null = null;
+  try {
+    row = await db.getFirstAsync<{ category_id: string }>(
+      `
+      SELECT category_id FROM item_category_mapping
+      WHERE normalized_name = ? AND merchant_hint = ''
+      ORDER BY confidence DESC, updated_at DESC
+      LIMIT 1
+      `,
+      [normalized]
+    );
+  } catch {
+    return null;
+  }
 
   return row?.category_id ?? null;
 }
@@ -118,6 +159,7 @@ export async function getAllLearnedMappings(): Promise<
   Array<{ name: string; merchantHint: string | null; category: string; confidence: number }>
 > {
   const db = await getDb();
+  await ensureMappingTableExists(db);
   const rows = await db.getAllAsync<{
     normalized_name: string;
     merchant_hint: string | null;

@@ -6,25 +6,45 @@ import type { Category } from './categories';
 import { ALL_CATEGORIES } from './categories';
 import { getLearnedCategory, learnCategoryMapping } from './categoryLearner';
 import { normalizeMerchantName } from './productNormalizer';
-import { classifyViaEdgeFunction, type AiClassifyInput } from './categoryAiClient';
+import { getCategoryAiItemCap } from './env';
+import type { AnalysisTag, MainCategory, SubCategory } from './categoryTaxonomyV1';
+import { mapLegacyCategoryToV1, mapV1ToLegacyCategory } from './categoryTaxonomyV1';
+import { matchItemRule } from './itemRulesV1';
+import { lookupProductDictionary } from './productDictionary';
+import {
+  classifyViaEdgeFunction,
+  getLastClassifyError,
+  type AiClassifyInput,
+} from './categoryAiClient';
 
 export type ClassifyInput = {
   rawName: string;
   normalizedName: string;
+  /** Expanded / canonical string for rules + dictionary + AI input (same as normalized when no alias) */
+  canonicalName: string;
   merchantName?: string;
   price?: number;
   locale?: string;
 };
 
 export type ClassifyOutput = {
+  // Legacy single-level category id (kept for compatibility with existing UI/analytics)
   categoryId: string;
   confidence: number;
-  source: 'mapping' | 'rules' | 'ai' | 'fallback';
+  source: 'alias' | 'dictionary' | 'mapping' | 'rules' | 'ai' | 'fallback';
   reason?: string;
+  // V1 main/sub/tags (preferred for new pipeline)
+  category_main?: MainCategory;
+  category_sub?: SubCategory | null;
+  analysis_tags?: AnalysisTag[];
+  canonical_name?: string | null;
+  brand?: string | null;
 };
 
 // Classification statistics (per receipt)
 let classificationStats: {
+  alias: number;
+  dictionary: number;
   mapping: number;
   rules: number;
   ai: number;
@@ -35,19 +55,43 @@ let classificationStats: {
  * Reset classification statistics (call at start of each receipt)
  */
 export function resetClassificationStats(): void {
-  classificationStats = { mapping: 0, rules: 0, ai: 0, fallback: 0 };
+  classificationStats = { alias: 0, dictionary: 0, mapping: 0, rules: 0, ai: 0, fallback: 0 };
 }
 
 /**
  * Get classification statistics (call after processing all items)
  */
 export function getClassificationStats(): {
+  alias: number;
+  dictionary: number;
   mapping: number;
   rules: number;
   ai: number;
   fallback: number;
 } | null {
   return classificationStats;
+}
+
+/** Call when product_name_alias hits (outside classifyItem) */
+export function noteAliasClassificationHit(): void {
+  if (classificationStats) classificationStats.alias++;
+}
+
+/** Per-receipt API failure count; skip API for rest of receipt when >= threshold */
+const RECEIPT_API_FAILURE_THRESHOLD = 5;
+let receiptConsecutiveApiFailures = 0;
+
+/** Per-receipt AI call cap; rest use rules/cache/fallback to avoid burst concurrency */
+const RECEIPT_AI_CALL_CAP = getCategoryAiItemCap();
+let receiptAiCallCount = 0;
+
+/**
+ * Call at start of each receipt (before processing items).
+ * Resets per-receipt consecutive API failure count and AI call count.
+ */
+export function startReceiptClassification(): void {
+  receiptConsecutiveApiFailures = 0;
+  receiptAiCallCount = 0;
 }
 
 // Circuit breaker state (in-memory singleton)
@@ -103,142 +147,19 @@ function recordAiSuccess(): void {
 }
 
 /**
- * Rule-based category inference for Japanese grocery receipts
+ * Rule-based category inference with merchant hints
  * Returns category with confidence 0.8~0.95 and a short reason
  */
-function classifyByRules(name: string): { category: Category; confidence: number; reason: string } | null {
-  const n = (name || '').toLowerCase();
-
-  // Dairy & Eggs - confidence 0.9 (check before meat to avoid "牛乳" matching "牛")
-  if (
-    n.includes('牛乳') || n.includes('ミルク') || n.includes('チーズ') || n.includes('ヨーグルト') ||
-    n.includes('バター') || n.includes('卵') || n.includes('たまご') || n.includes('milk') ||
-    n.includes('cheese') || n.includes('yogurt') || n.includes('butter') || n.includes('egg')
-  ) {
-    return { category: 'dairy_eggs', confidence: 0.9, reason: 'Dairy/eggs keywords' };
-  }
-
-  // Produce (vegetables/fruits) - confidence 0.9
-  if (
-    n.includes('野菜') || n.includes('白菜') || n.includes('ねぎ') || n.includes('えのき') ||
-    n.includes('茸') || n.includes('椎茸') || n.includes('果物') || n.includes('りんご') ||
-    n.includes('みかん') || n.includes('バナナ') || n.includes('vegetable') || n.includes('fruit')
-  ) {
-    return { category: 'produce', confidence: 0.9, reason: 'Produce keywords' };
-  }
-
-  // Meat & Seafood - confidence 0.9 (check after dairy to avoid "牛乳" matching "牛")
-  if (
-    n.includes('牛') || n.includes('豚') || n.includes('鶏') || n.includes('とり') ||
-    n.includes('魚') || n.includes('刺身') || n.includes('meat') || n.includes('fish') ||
-    n.includes('chicken') || n.includes('beef') || n.includes('pork') || n.includes('seafood')
-  ) {
-    return { category: 'meat_seafood', confidence: 0.9, reason: 'Meat/seafood keywords' };
-  }
-
-  // Bakery - confidence 0.85
-  if (
-    n.includes('パン') || n.includes('ロール') || n.includes('クロワッサン') || n.includes('ケーキ') ||
-    n.includes('bread') || n.includes('pastry') || n.includes('croissant') || n.includes('cake')
-  ) {
-    return { category: 'bakery', confidence: 0.85, reason: 'Bakery keywords' };
-  }
-
-  // Staples - confidence 0.85
-  if (
-    n.includes('米') || n.includes('ご飯') || n.includes('うどん') || n.includes('そば') ||
-    n.includes('ラーメン') || n.includes('パスタ') || n.includes('rice') || n.includes('noodle') ||
-    n.includes('bean') || n.includes('豆')
-  ) {
-    return { category: 'staples', confidence: 0.85, reason: 'Staples keywords' };
-  }
-
-  // Quick meals - confidence 0.8
-  if (
-    n.includes('弁当') || n.includes('おにぎり') || n.includes('惣菜') || n.includes('天') ||
-    n.includes('揚げ') || n.includes('からあげ') || n.includes('唐揚') || n.includes('フライ') ||
-    n.includes('コロッケ') || n.includes('とり天') || n.includes('bento') || n.includes('ready') ||
-    n.includes('instant')
-  ) {
-    return { category: 'quick_meals', confidence: 0.8, reason: 'Quick meals keywords' };
-  }
-
-  // Frozen foods - confidence 0.9
-  if (n.includes('冷凍') || n.includes('冷凍食品') || n.includes('frozen') || n.includes('freezer')) {
-    return { category: 'frozen_foods', confidence: 0.9, reason: 'Frozen keywords' };
-  }
-
-  // Canned and preserved - confidence 0.85
-  if (
-    n.includes('缶詰') || n.includes('瓶詰') || n.includes('保存食') || n.includes('canned') ||
-    n.includes('preserved') || n.includes('jar')
-  ) {
-    return { category: 'canned_preserved', confidence: 0.85, reason: 'Canned/preserved keywords' };
-  }
-
-  // Other beverages - confidence 0.8
-  if (
-    n.includes('スポーツ') || n.includes('エナジー') || n.includes('栄養') || n.includes('sports') ||
-    n.includes('energy') || n.includes('isotonic')
-  ) {
-    return { category: 'beverages_other', confidence: 0.8, reason: 'Other beverages keywords' };
-  }
-
-  // Health supplements - confidence 0.85
-  if (
-    n.includes('サプリ') || n.includes('ビタミン') || n.includes('栄養補助') || n.includes('supplement') ||
-    n.includes('vitamin') || n.includes('health')
-  ) {
-    return { category: 'health_supplements', confidence: 0.85, reason: 'Health supplements keywords' };
-  }
-
-  // Snacks & Sweets - confidence 0.85
-  if (
-    n.includes('チョコ') || n.includes('ビス') || n.includes('ビスケット') || n.includes('クッキー') ||
-    n.includes('スナック') || n.includes('ナッツ') || n.includes('アイス') || n.includes('デザート') ||
-    n.includes('菓子') || n.includes('chocolate') || n.includes('snack') || n.includes('cookie') ||
-    n.includes('sweet') || n.includes('candy')
-  ) {
-    return { category: 'snacks_sweets', confidence: 0.85, reason: 'Snacks/sweets keywords' };
-  }
-
-  // Non-alcoholic drinks - confidence 0.85
-  if (
-    n.includes('お茶') || n.includes('茶') || n.includes('コーヒー') || n.includes('coffee') ||
-    n.includes('コーラ') || n.includes('ファンタ') || n.includes('ジュース') || n.includes('drink') ||
-    n.includes('水') || n.includes('tea') || n.includes('juice')
-  ) {
-    return { category: 'non_alcoholic_drinks', confidence: 0.85, reason: 'Non-alcoholic drinks keywords' };
-  }
-
-  // Alcohol - confidence 0.9
-  if (
-    n.includes('ビール') || n.includes('酒') || n.includes('ワイン') || n.includes('日本酒') ||
-    n.includes('焼酎') || n.includes('beer') || n.includes('wine') || n.includes('sake') ||
-    n.includes('alcohol')
-  ) {
-    return { category: 'alcohol', confidence: 0.9, reason: 'Alcohol keywords' };
-  }
-
-  // Condiments - confidence 0.85
-  if (
-    n.includes('醤油') || n.includes('味噌') || n.includes('塩') || n.includes('砂糖') ||
-    n.includes('油') || n.includes('ソース') || n.includes('sauce') || n.includes('soy') ||
-    n.includes('salt') || n.includes('sugar')
-  ) {
-    return { category: 'condiments', confidence: 0.85, reason: 'Condiments keywords' };
-  }
-
-  // Household - confidence 0.85
-  if (
-    n.includes('紙') || n.includes('ティッシュ') || n.includes('洗剤') || n.includes('シャンプー') ||
-    n.includes('歯磨き') || n.includes('タオル') || n.includes('household') || n.includes('tissue') ||
-    n.includes('shampoo')
-  ) {
-    return { category: 'household', confidence: 0.85, reason: 'Household keywords' };
-  }
-
-  return null;
+function classifyByRulesV1(
+  rawName: string,
+  normalizedName: string,
+  merchantName?: string
+): { v1: { category_main: MainCategory; category_sub: SubCategory | null; analysis_tags: AnalysisTag[] }; legacy: Category; confidence: number; reason: string } | null {
+  const m = matchItemRule({ raw_name: rawName, normalized_name: normalizedName, merchantName });
+  if (!m) return null;
+  const v1 = { category_main: m.main, category_sub: m.sub, analysis_tags: m.tags };
+  const legacy = mapV1ToLegacyCategory({ main: m.main, sub: m.sub }) as Category;
+  return { v1, legacy, confidence: m.confidence, reason: m.reason };
 }
 
 /**
@@ -246,7 +167,7 @@ function classifyByRules(name: string): { category: Category; confidence: number
  * Strategy: mapping (priority) -> rules -> fallback
  */
 export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput> {
-  const { rawName, normalizedName, merchantName } = input;
+  const { rawName, normalizedName, merchantName, canonicalName } = input;
 
   if (!normalizedName || !rawName) {
     if (classificationStats) classificationStats.fallback++;
@@ -259,112 +180,170 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
   }
 
   const normalized = normalizedName.toLowerCase();
+  const canonical =
+    (canonicalName && canonicalName.trim() ? canonicalName : normalizedName).trim().toLowerCase();
   const merchantHint = merchantName ? normalizeMerchantName(merchantName) : null;
+
+  // 0. Product dictionary (highest priority)
+  try {
+    const hit = await lookupProductDictionary(canonical);
+    if (hit?.category_main) {
+      if (classificationStats) classificationStats.dictionary++;
+      const legacy = mapV1ToLegacyCategory({ main: hit.category_main as any, sub: hit.category_sub as any }) as Category;
+      return {
+        categoryId: legacy,
+        confidence: 1.0,
+        source: 'dictionary',
+        reason: 'Product dictionary match',
+        category_main: hit.category_main as any,
+        category_sub: hit.category_sub as any,
+        analysis_tags: hit.analysis_tags as any,
+        canonical_name: hit.canonical_name ?? null,
+        brand: hit.brand ?? null,
+      };
+    }
+  } catch {
+    // degrade gracefully
+  }
 
   // 1. Local mapping (highest priority)
   const learnedCategory = await getLearnedCategory(normalized, merchantHint);
   if (learnedCategory && ALL_CATEGORIES.includes(learnedCategory as Category)) {
     if (classificationStats) classificationStats.mapping++;
+    const v1 = mapLegacyCategoryToV1(learnedCategory);
     return {
       categoryId: learnedCategory,
       confidence: 1.0,
       source: 'mapping',
       reason: 'Local mapping match',
+      category_main: v1.main,
+      category_sub: v1.sub,
+      analysis_tags: undefined,
     };
   }
 
-  // 2. Rule-based matching
-  const ruleResult = classifyByRules(rawName);
+  // 2. Rule-based matching (rules-first). Only call API when rules miss.
+  const ruleResult = classifyByRulesV1(rawName, canonical, merchantName);
+  const cachedRule = ruleResult && ruleResult.confidence >= 0.7 ? ruleResult : null;
+
   if (ruleResult && ruleResult.confidence >= 0.8) {
     if (classificationStats) classificationStats.rules++;
-    
-    // Auto-learn high-confidence rule matches (>= 0.85)
     if (ruleResult.confidence >= 0.85) {
-      const merchantHint = merchantName ? normalizeMerchantName(merchantName) : '';
-      await learnCategoryMapping(
-        normalized,
-        merchantHint || null,
-        ruleResult.category,
-        ruleResult.confidence
-      );
+      const mh = merchantName ? normalizeMerchantName(merchantName) : '';
+      await learnCategoryMapping(normalized, mh || null, ruleResult.legacy, ruleResult.confidence);
     }
-    
     return {
-      categoryId: ruleResult.category,
+      categoryId: ruleResult.legacy,
       confidence: ruleResult.confidence,
       source: 'rules',
       reason: ruleResult.reason,
+      category_main: ruleResult.v1.category_main,
+      category_sub: ruleResult.v1.category_sub,
+      analysis_tags: ruleResult.v1.analysis_tags,
     };
   }
 
-  // 3. AI fallback (only when rules confidence < 0.8 and mapping miss)
-  if (!isCircuitBreakerOpen()) {
-    try {
-      const aiInput: AiClassifyInput = {
-        rawName,
-        normalizedName: normalized,
-        merchantName: merchantName || undefined,
-        price: input.price,
-        locale: input.locale,
+  const useRuleFallback = (r: typeof ruleResult) => {
+    if (!r || r.confidence < 0.75) return null;
+    if (classificationStats) classificationStats.rules++;
+    return {
+      categoryId: r.legacy,
+      confidence: r.confidence,
+      source: 'rules' as const,
+      reason: `Fallback: ${r.reason}`,
+      category_main: r.v1.category_main,
+      category_sub: r.v1.category_sub,
+      analysis_tags: r.v1.analysis_tags,
+    };
+  };
+
+  const doFallback = () => {
+    const fr = classifyByRulesV1(rawName, canonical, merchantName);
+    const out = useRuleFallback(fr);
+    if (out) return out;
+    if (classificationStats) classificationStats.fallback++;
+    return { categoryId: 'other_grocery' as Category, confidence: 0.0, source: 'fallback' as const, reason: 'No match found' };
+  };
+
+  const skipApi =
+    receiptConsecutiveApiFailures >= RECEIPT_API_FAILURE_THRESHOLD ||
+    isCircuitBreakerOpen() ||
+    receiptAiCallCount >= RECEIPT_AI_CALL_CAP;
+  if (skipApi) {
+    if (cachedRule) {
+      if (classificationStats) classificationStats.rules++;
+      return {
+        categoryId: cachedRule.legacy,
+        confidence: cachedRule.confidence,
+        source: 'rules',
+        reason: `Skip API (avalanche/cap): ${cachedRule.reason}`,
+        category_main: cachedRule.v1.category_main,
+        category_sub: cachedRule.v1.category_sub,
+        analysis_tags: cachedRule.v1.analysis_tags,
       };
-
-      const aiResult = await classifyViaEdgeFunction(aiInput);
-
-      if (aiResult && aiResult.confidence >= 0.6) {
-        // Validate categoryId is in our list
-        if (ALL_CATEGORIES.includes(aiResult.categoryId as Category)) {
-          // Record success
-          recordAiSuccess();
-          
-          if (classificationStats) classificationStats.ai++;
-          
-          // Auto-learn AI result to local mapping
-          const merchantHint = merchantName ? normalizeMerchantName(merchantName) : '';
-          await learnCategoryMapping(
-            normalized,
-            merchantHint || null,
-            aiResult.categoryId,
-            aiResult.confidence
-          );
-          
-          return {
-            categoryId: aiResult.categoryId,
-            confidence: aiResult.confidence,
-            source: 'ai',
-            reason: aiResult.reason || 'AI classification',
-          };
-        }
-      }
-      
-      // AI returned low confidence or invalid category - record as failure
-      if (aiResult) {
-        recordAiFailure();
-      } else {
-        // AI call failed (null result) - record as failure
-        recordAiFailure();
-      }
-    } catch (error: any) {
-      // Unexpected error during AI call - record as failure
-      recordAiFailure();
-      if (__DEV__) {
-        console.warn('[CategoryClassifier] AI call error:', error.message);
-      }
     }
-  } else {
-    // Circuit breaker is open - skip AI call
-    const logKey = 'circuit-breaker-skip';
-    if (circuitBreaker.lastLogKey !== logKey) {
-      circuitBreaker.lastLogKey = logKey;
-      // Don't log every skip to avoid spam - only log once per session
-    }
+    return doFallback();
   }
 
-  // 4. Fallback
-  if (classificationStats) classificationStats.fallback++;
-  return {
-    categoryId: 'other_grocery',
-    confidence: 0.0,
-    source: 'fallback',
-    reason: 'No match found',
-  };
+  receiptAiCallCount++;
+  try {
+    const aiInput: AiClassifyInput = {
+      rawName,
+      normalizedName: canonical,
+      merchantName: merchantName || undefined,
+      price: input.price,
+      locale: input.locale,
+    };
+    const aiResult = await classifyViaEdgeFunction(aiInput);
+
+    if (aiResult) {
+      const valid =
+        aiResult.categoryId && typeof aiResult.categoryId === 'string' && aiResult.categoryId.trim() !== '' &&
+        ALL_CATEGORIES.includes(aiResult.categoryId as Category) &&
+        typeof aiResult.confidence === 'number' && Number.isFinite(aiResult.confidence) &&
+        aiResult.confidence >= 0.6 && aiResult.confidence <= 1.0;
+      if (valid) {
+        recordAiSuccess();
+        receiptConsecutiveApiFailures = 0;
+        if (classificationStats) classificationStats.ai++;
+        const mh = merchantName ? normalizeMerchantName(merchantName) : '';
+        await learnCategoryMapping(normalized, mh || null, aiResult.categoryId, aiResult.confidence);
+        const v1 = mapLegacyCategoryToV1(aiResult.categoryId);
+        return {
+          categoryId: aiResult.categoryId,
+          confidence: aiResult.confidence,
+          source: 'ai',
+          reason: aiResult.reason || 'AI classification',
+          category_main: v1.main,
+          category_sub: v1.sub,
+          analysis_tags: undefined,
+        };
+      }
+      recordAiFailure();
+      receiptConsecutiveApiFailures++;
+    } else {
+      recordAiFailure();
+      receiptConsecutiveApiFailures++;
+      const err = getLastClassifyError();
+      if (__DEV__ && err) console.warn('[CategoryClassifier] API failed, using rule fallback:', { rawName, code: err.code, message: err.message });
+    }
+  } catch (e: any) {
+    recordAiFailure();
+    receiptConsecutiveApiFailures++;
+    if (__DEV__) console.warn('[CategoryClassifier] API error:', e?.message);
+  }
+
+  if (cachedRule) {
+    if (classificationStats) classificationStats.rules++;
+    return {
+      categoryId: cachedRule.legacy,
+      confidence: cachedRule.confidence,
+      source: 'rules',
+      reason: `API fail, kept rule: ${cachedRule.reason}`,
+      category_main: cachedRule.v1.category_main,
+      category_sub: cachedRule.v1.category_sub,
+      analysis_tags: cachedRule.v1.analysis_tags,
+    };
+  }
+  return doFallback();
 }

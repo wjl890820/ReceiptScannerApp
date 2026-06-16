@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -20,10 +19,17 @@ import {
   updateReceipt,
   type ReceiptRow,
 } from '@/lib/db';
-import { learnFromUserEdit } from '@/lib/receiptEnricher';
-import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
-import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
+import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
+import { t } from '@/lib/i18n';
+import { learnFromUserEdit } from '@/lib/receiptEnricher';
+import { upsertProductDictionary } from '@/lib/productDictionary';
+import { upsertProductNameAlias } from '@/lib/productAlias';
+import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
+import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
+import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
+import { normalizeReceiptItemName } from '@/lib/productNormalizer';
+import { mapLegacyCategoryToV1, mapV1ToLegacyCategory, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -42,16 +48,6 @@ type ReceiptAnalysis = {
   currency: string;
   [k: string]: any;
 };
-
-function formatDate(ts: number) {
-  const d = new Date(ts);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
-}
 
 function safeParseAnalysis(json: string | null): ReceiptAnalysis | null {
   if (!json) return null;
@@ -85,22 +81,124 @@ function round0(n: number) {
   return Math.round(n);
 }
 
-function buildCategorySummary(analysis: ReceiptAnalysis | { items: ReceiptItem[] } | null) {
+/** Amount for summary: line_total / lineTotal first, else unit * qty */
+function itemLineAmountForSummary(it: any): number {
+  const lt = toNum(it.lineTotal ?? it.line_total, 0);
+  if (lt > 0) return round0(lt);
+  const qRaw = toNum(it.quantity, 0);
+  const q = qRaw > 0 ? qRaw : 1;
+  const up = toNum(it.unitPrice ?? it.unit_price, 0);
+  return up > 0 ? round0(up * q) : 0;
+}
+
+/** OCR prompt categoryKey -> legacy grocery key (see lib/receiptAnalyzer CategoryKey). */
+function mapOcrCategoryKeyToLegacy(ck: string): string {
+  switch (ck) {
+    case 'fresh':
+      return 'produce';
+    case 'staple':
+      return 'staples';
+    case 'dairy_egg':
+      return 'dairy_eggs';
+    case 'snack':
+      return 'snacks_sweets';
+    case 'drink':
+      return 'non_alcoholic_drinks';
+    case 'frozen_deli':
+      return 'frozen_foods';
+    case 'seasoning':
+      return 'condiments';
+    case 'household':
+      return 'household';
+    case 'alcohol':
+      return 'alcohol';
+    case 'other':
+    default:
+      return 'other_grocery';
+  }
+}
+
+const trimStr = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** Legacy key + debug label (never use V1 sub/main alone as final key). */
+function resolveSummaryCategoryWithRaw(it: any): { legacy: string; raw: string } | null {
+  const tryLegacy = (c: string): string => {
+    if (!c) return '';
+    if (isExcludedFromAnalytics(c)) return '';
+    if (isGroceryCategory(c)) return c;
+    return '';
+  };
+
+  const cat = trimStr(it.category);
+  if (cat) {
+    const leg = tryLegacy(cat);
+    if (leg) return { legacy: leg, raw: cat };
+  }
+
+  const fromCls = trimStr((it as any).classification?.category);
+  if (fromCls) {
+    const leg = tryLegacy(fromCls);
+    if (leg) return { legacy: leg, raw: fromCls };
+  }
+
+  const main = trimStr(it.category_main);
+  const subRaw = it.category_sub;
+  const sub =
+    subRaw != null && String(subRaw).trim() !== '' ? trimStr(subRaw) : null;
+  if (main) {
+    try {
+      const legacy = mapV1ToLegacyCategory({ main: main as any, sub: sub as any }) as string;
+      if (legacy && isGroceryCategory(legacy) && !isExcludedFromAnalytics(legacy)) {
+        const raw = sub ? `${main}/${sub}` : main;
+        return { legacy, raw };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const ck = trimStr((it as any).categoryKey);
+  if (ck) {
+    const mapped = mapOcrCategoryKeyToLegacy(ck);
+    if (mapped && isGroceryCategory(mapped) && !isExcludedFromAnalytics(mapped)) {
+      return { legacy: mapped, raw: ck };
+    }
+  }
+
+  return null;
+}
+
+function buildCategorySummary(
+  analysis: ReceiptAnalysis | { items: ReceiptItem[] } | null,
+  debug?: { source: string }
+): { category: string; amount: number }[] {
   const map = new Map<string, number>();
   if (!analysis?.items?.length) return [];
 
   for (const it of analysis.items) {
-    const cat = (it.category && String(it.category).trim()) || 'Other';
-    const amt = toNum(it.lineTotal, 0);
-    map.set(cat, (map.get(cat) ?? 0) + amt);
+    const status = (it as any).classification_status as string | undefined;
+    if (status !== undefined && status !== 'ok' && status !== 'fallback') continue;
+    const resolved = resolveSummaryCategoryWithRaw(it);
+    if (!resolved) continue;
+    const amt = itemLineAmountForSummary(it);
+    if (__DEV__ && debug) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[Detail][CategorySummary] item raw=${resolved.raw} mapped=${resolved.legacy} amount=${amt}`
+      );
+    }
+    map.set(resolved.legacy, (map.get(resolved.legacy) ?? 0) + amt);
   }
 
   const arr = Array.from(map.entries()).map(([category, amount]) => ({
     category,
     amount,
   }));
-
   arr.sort((a, b) => b.amount - a.amount);
+  if (__DEV__ && debug) {
+    // eslint-disable-next-line no-console
+    console.log('[Detail][CategorySummary] summary', arr);
+  }
   return arr;
 }
 
@@ -127,6 +225,19 @@ export default function ReceiptDetailScreen() {
     return safeParseAnalysis(receipt.analysis_json);
   }, [receipt]);
 
+  const analysisOutputs = useMemo(() => {
+    if (!receipt) return null;
+    try {
+      const obj = JSON.parse(receipt.analysis_json || '{}');
+      return {
+        analysis_level: obj?.analysis_level,
+        analysis_outputs_v1: obj?.analysis_outputs_v1,
+      };
+    } catch {
+      return null;
+    }
+  }, [receipt]);
+
   // 优先使用 user_items_json，否则使用 analysis.items
   const displayItems = useMemo(() => {
     if (!receipt) return [];
@@ -145,16 +256,22 @@ export default function ReceiptDetailScreen() {
     };
   }, [displayItems]);
 
-  const categorySummary = useMemo(
-    () => buildCategorySummary(displayAnalysis),
-    [displayAnalysis]
-  );
+  const categorySummary = useMemo(() => {
+    const userItems = receipt ? safeParseItems(receipt.user_items_json) : null;
+    const source =
+      userItems && userItems.length > 0 ? 'user_items_json' : 'analysis_json.items';
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.log('[Detail][CategorySummary] source', source, 'items', displayAnalysis.items.length);
+    }
+    return buildCategorySummary(displayAnalysis, __DEV__ ? { source } : undefined);
+  }, [displayAnalysis, receipt]);
 
   const merchant =
     receipt?.merchant_normalized ||
     receipt?.merchant_raw ||
     analysis?.merchant ||
-    '未知商店';
+    t('common.unknownMerchant');
 
   const currency = receipt?.currency || analysis?.currency || 'JPY';
 
@@ -178,7 +295,7 @@ export default function ReceiptDetailScreen() {
       setReceipt(row ?? null);
     } catch (e: any) {
       console.error(e);
-      Alert.alert('读取失败', e?.message ?? '无法读取该记录');
+      Alert.alert(t('history.errors.loadTitle'), e?.message ?? t('history.detail.loadMessage'));
       setReceipt(null);
     } finally {
       setLoading(false);
@@ -214,13 +331,13 @@ export default function ReceiptDetailScreen() {
     // 验证输入
     const quantity = toNum(draftQuantity.trim(), 0);
     if (quantity < 1) {
-      Alert.alert('输入错误', '数量必须大于等于 1');
+      Alert.alert(t('history.detail.inputErrorTitle'), t('history.detail.qtyError'));
       return;
     }
 
     const lineTotal = toNum(draftLineTotal.trim(), 0);
     if (lineTotal <= 0) {
-      Alert.alert('输入错误', '小计必须大于 0');
+      Alert.alert(t('history.detail.inputErrorTitle'), t('history.detail.totalError'));
       return;
     }
 
@@ -239,7 +356,38 @@ export default function ReceiptDetailScreen() {
       // 学习用户编辑的分类
       const editedItem = updatedItems[editingItemIndex];
       if (editedItem && editedItem.name && editedItem.category) {
-        await learnFromUserEdit(editedItem.name, editedItem.category);
+        await learnFromUserEdit(
+          editedItem.name,
+          editedItem.category,
+          receipt?.merchant_raw ?? null
+        );
+        // Also write into product_dictionary (highest trust: user edit)
+        try {
+          const norm = normalizeReceiptItemName(editedItem.name);
+          const v1 = mapLegacyCategoryToV1(editedItem.category);
+          await upsertProductDictionary({
+            normalized_name: norm.normalized_name,
+            canonical_name: editedItem.name.trim(),
+            category_main: v1.main,
+            category_sub: v1.sub,
+            analysis_tags: buildAnalysisTags(v1),
+            source_type: 'manual',
+            confidence: 1.0,
+            minConfidenceToWrite: 0,
+          });
+          await upsertProductNameAlias({
+            alias_normalized: norm.normalized_name,
+            merchant_hint: receipt?.merchant_raw ?? null,
+            canonical_name: editedItem.name.trim(),
+            category_main: v1.main,
+            category_sub: v1.sub,
+            analysis_tags: buildAnalysisTags(v1),
+            confidence: 1.0,
+            source: 'manual',
+          });
+        } catch {
+          // ignore
+        }
       }
 
       await updateReceipt({
@@ -250,10 +398,10 @@ export default function ReceiptDetailScreen() {
 
       setItemEditOpen(false);
       await load();
-      Alert.alert('已保存');
+      Alert.alert(t('history.detail.savedTitle'));
     } catch (e: any) {
       console.error(e);
-      Alert.alert('保存失败', e?.message ?? '请重试');
+      Alert.alert(t('history.detail.saveFailedTitle'), e?.message ?? t('history.detail.retry'));
     } finally {
       setSavingItem(false);
     }
@@ -262,30 +410,34 @@ export default function ReceiptDetailScreen() {
   const onDelete = async () => {
     if (!receipt) return;
 
-    Alert.alert('确认删除', '删除后无法恢复，确定要删除吗？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteReceipt(receipt.id);
-            Alert.alert('已删除');
-            router.back();
-          } catch (e: any) {
-            console.error(e);
-            Alert.alert('删除失败', e?.message ?? '请重试');
-          }
+    Alert.alert(
+      t('history.detail.deleteConfirmTitle'),
+      t('history.detail.deleteConfirmMessage'),
+      [
+        { text: t('history.detail.edit.cancel'), style: 'cancel' },
+        {
+          text: t('history.batchDelete.confirmDelete'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteReceipt(receipt.id);
+              Alert.alert(t('history.detail.deletedTitle'));
+              router.back();
+            } catch (e: any) {
+              console.error(e);
+              Alert.alert(t('history.detail.deleteFailedTitle'), e?.message ?? t('history.detail.retry'));
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
   if (loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator />
-        <Text style={{ marginTop: 10 }}>加载中…</Text>
+        <Text style={{ marginTop: 10 }}>{t('history.detail.loading')}</Text>
       </View>
     );
   }
@@ -293,7 +445,7 @@ export default function ReceiptDetailScreen() {
   if (!receipt) {
     return (
       <View style={styles.center}>
-        <Text>未找到该记录</Text>
+        <Text>{t('history.detail.notFound')}</Text>
       </View>
     );
   }
@@ -315,23 +467,17 @@ export default function ReceiptDetailScreen() {
         </Text>
         {receipt.user_edited === 1 && receipt.user_items_json && (
           <Text style={styles.overrideHint}>
-            （已手动编辑商品）
+            {t('history.detail.editedHint')}
           </Text>
         )}
-        <Text style={styles.tax}>税 {receipt.tax}</Text>
-
-        {receipt.image_uri ? (
-          <View style={styles.imageWrap}>
-            <Image source={{ uri: receipt.image_uri }} style={styles.image} />
-          </View>
-        ) : null}
+        <Text style={styles.tax}>{t('history.detail.taxLabel')} {receipt.tax}</Text>
 
         {/* 分类汇总 */}
-        <Text style={styles.h2}>分类汇总：</Text>
+        <Text style={styles.h2}>{t('history.detail.categorySummaryTitle')}</Text>
         <View style={styles.summaryCard}>
           {categorySummary.length === 0 ? (
             <View style={{ paddingVertical: 10 }}>
-              <Text style={{ color: '#666' }}>暂无分类信息</Text>
+              <Text style={{ color: '#666' }}>{t('history.detail.noCategoryInfo')}</Text>
             </View>
           ) : (
             categorySummary.map((x) => {
@@ -352,7 +498,7 @@ export default function ReceiptDetailScreen() {
         </View>
 
         {/* 商品明细 */}
-        <Text style={styles.h2}>商品明细：</Text>
+        <Text style={styles.h2}>{t('history.detail.itemsTitle')}</Text>
 
         {displayItems.length > 0 ? (
           <View style={styles.itemsWrap}>
@@ -368,28 +514,47 @@ export default function ReceiptDetailScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemName}>{it.name}</Text>
                   <Text style={styles.itemMeta}>
-                    数量 {it.quantity} · 小计 {formatJPY(it.lineTotal)}
+                    {t('history.detail.quantityShort')} {it.quantity} · {t('history.detail.subtotalShort')} {formatJPY(it.lineTotal)}
                   </Text>
                 </View>
-                <View style={styles.tag}>
-                  <Text style={styles.tagText}>
-                    {getCategoryLabel(it.category || 'uncategorized')}
-                  </Text>
-                </View>
+                {(() => {
+                  const tag = getItemTagDisplay(it as any);
+                  if (!tag.visible) return null;
+                  return (
+                    <View style={styles.tag}>
+                      <Text style={styles.tagText}>{tag.label}</Text>
+                    </View>
+                  );
+                })()}
               </Pressable>
             ))}
           </View>
         ) : (
-          <Text style={{ color: '#666' }}>无商品明细</Text>
+          <Text style={{ color: '#666' }}>{t('history.detail.noItems')}</Text>
         )}
 
         <View style={{ height: 22 }} />
+
+        {/* Dev-only: structured analysis outputs viewer */}
+        {__DEV__ && (
+          <>
+            <Text style={styles.h2}>Dev: analysis outputs</Text>
+            <View style={styles.summaryCard}>
+              <Text style={{ color: '#666', fontSize: 12, marginBottom: 8 }}>
+                analysis_level: {String(analysisOutputs?.analysis_level ?? 'n/a')}
+              </Text>
+              <Text selectable style={{ fontSize: 12, color: '#333' }}>
+                {JSON.stringify(analysisOutputs?.analysis_outputs_v1 ?? null, null, 2)}
+              </Text>
+            </View>
+          </>
+        )}
 
         <Pressable
           style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}
           onPress={onDelete}
         >
-          <Text style={styles.deleteText}>删除这条记录</Text>
+          <Text style={styles.deleteText}>{t('history.detail.deleteRecord')}</Text>
         </Pressable>
       </ScrollView>
 
@@ -404,15 +569,15 @@ export default function ReceiptDetailScreen() {
           <View style={styles.modalHeader}>
             <Pressable onPress={closeItemEditor} disabled={savingItem}>
               <Text style={[styles.modalHeaderBtn, savingItem && { opacity: 0.5 }]}>
-                取消
+                {t('history.detail.edit.cancel')}
               </Text>
             </Pressable>
 
-            <Text style={styles.modalTitle}>编辑商品</Text>
+            <Text style={styles.modalTitle}>{t('history.detail.edit.title')}</Text>
 
             <Pressable onPress={onSaveItemEdit} disabled={savingItem}>
               <Text style={[styles.modalHeaderBtn, savingItem && { opacity: 0.5 }]}>
-                {savingItem ? '保存中…' : '保存'}
+                {savingItem ? t('history.detail.edit.saving') : t('history.detail.edit.save')}
               </Text>
             </Pressable>
           </View>
@@ -420,14 +585,14 @@ export default function ReceiptDetailScreen() {
           <ScrollView contentContainerStyle={styles.modalBody}>
             {editingItemIndex >= 0 && editingItemIndex < displayItems.length && (
               <>
-                <Text style={styles.label}>商品名称</Text>
+                <Text style={styles.label}>{t('history.detail.edit.name')}</Text>
                 <Text style={[styles.input, { color: '#666' }]}>
                   {displayItems[editingItemIndex].name}
                 </Text>
 
                 <View style={{ height: 14 }} />
 
-                <Text style={styles.label}>分类</Text>
+                <Text style={styles.label}>{t('history.detail.edit.category')}</Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
                   {categoryOptions.map((cat) => (
                     <Pressable
@@ -456,11 +621,11 @@ export default function ReceiptDetailScreen() {
 
                 <View style={{ height: 14 }} />
 
-                <Text style={styles.label}>数量</Text>
+                <Text style={styles.label}>{t('history.detail.edit.quantity')}</Text>
                 <TextInput
                   value={draftQuantity}
                   onChangeText={setDraftQuantity}
-                  placeholder="请输入数量"
+                  placeholder={t('history.detail.edit.quantityPlaceholder')}
                   keyboardType="numeric"
                   style={styles.input}
                   editable={!savingItem}
@@ -468,17 +633,17 @@ export default function ReceiptDetailScreen() {
 
                 <View style={{ height: 14 }} />
 
-                <Text style={styles.label}>小计</Text>
+                <Text style={styles.label}>{t('history.detail.edit.subtotal')}</Text>
                 <TextInput
                   value={draftLineTotal}
                   onChangeText={setDraftLineTotal}
-                  placeholder="请输入小计"
+                  placeholder={t('history.detail.edit.subtotalPlaceholder')}
                   keyboardType="numeric"
                   style={styles.input}
                   editable={!savingItem}
                 />
                 <Text style={styles.hint}>
-                  单位：日元
+                  {t('history.detail.edit.unitNote')}
                 </Text>
               </>
             )}
@@ -521,19 +686,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: '#666',
     marginBottom: 18,
-  },
-  imageWrap: {
-    backgroundColor: '#f3f3f3',
-    borderRadius: 16,
-    padding: 10,
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  image: {
-    width: '100%',
-    height: 280,
-    resizeMode: 'contain',
-    borderRadius: 12,
   },
   h2: {
     fontSize: 22,

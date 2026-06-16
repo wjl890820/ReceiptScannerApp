@@ -2,7 +2,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3-flash-preview';
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 // Configuration from secrets (set in Supabase dashboard)
@@ -16,6 +16,9 @@ const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 const GEMINI_PRICE_INPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_INPUT_PER_1K') || '0.0'); // USD per 1K input tokens
 const GEMINI_PRICE_OUTPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_OUTPUT_PER_1K') || '0.0'); // USD per 1K output tokens
 const SERVER_SALT = Deno.env.get('SERVER_SALT') || ''; // Salt for hashing actor IDs (privacy)
+
+// Log OCR model at cold start (no secrets)
+console.log(`[ocr-receipt] boot model=${GEMINI_MODEL}`);
 
 interface OCRRequest {
   imageBase64?: string;
@@ -322,11 +325,14 @@ categoryKey 必须从以下枚举中选择一个：
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `[Gemini] Upstream non-OK status=${response.status} model=${GEMINI_MODEL} body=${errorText.substring(0, 500)}`
+        );
         if ((response.status === 429 || response.status === 503) && attempt < maxRetry) {
           await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
           continue;
         }
-        const errorText = await response.text();
         throw new Error(`Gemini API error (${response.status}): ${errorText.substring(0, 200)}`);
       }
 
@@ -516,6 +522,18 @@ serve(async (req) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         }
       );
+    }
+
+    // Minimal request receipt log (no image content)
+    try {
+      const payloadBytes = requestData?.imageBase64
+        ? Math.round((requestData.imageBase64.length * 3) / 4)
+        : 0;
+      console.log(
+        `[${requestId}] Received OCR request: method=${req.method} actorType=${actorType} payloadBytes=${payloadBytes} model=${GEMINI_MODEL}`
+      );
+    } catch {
+      // ignore logging failures
     }
 
     // Handle ping request (fast path for deployment validation)
@@ -723,6 +741,7 @@ serve(async (req) => {
     let geminiError: Error | null = null;
 
     try {
+      console.log(`[${requestId}] Calling Gemini model=${GEMINI_MODEL}`);
       const geminiResult = await callGemini(requestData.imageBase64);
       analysis = {
         merchant: geminiResult.merchant,

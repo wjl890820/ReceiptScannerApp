@@ -6,7 +6,7 @@ import Constants from 'expo-constants';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
-import { getSupabaseUrl, getSupabaseAnonKey } from './env';
+import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
 
 /**
  * Compress and encode image to base64
@@ -48,19 +48,16 @@ export async function probeSupabaseNetwork(): Promise<{ success: boolean; status
   const supabaseUrl = getSupabaseUrl();
   
   if (!supabaseUrl) {
-    // Only log once per session to avoid spam
     if (!_probeFailureLogged) {
-      console.warn('[Network Probe] SUPABASE_URL not configured in extra');
+      console.warn('[Network Probe] Supabase URL not configured');
       _probeFailureLogged = true;
     }
     return { success: false, error: 'SUPABASE_URL not configured' };
   }
-  
-  // Test basic connectivity with a simple GET request
+
   const probeUrl = `${supabaseUrl}/rest/v1/`;
-  
   if (__DEV__) {
-    console.log('[Network Probe] Testing connectivity to:', probeUrl);
+    console.log('[Network Probe] Testing connectivity to Supabase REST');
   }
   
   try {
@@ -100,7 +97,7 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
   // Only return error if config is actually missing, not if network fails
   if (!supabaseUrl) {
     if (!_pingFailureLogged) {
-      console.warn('[OCR] SUPABASE_URL not configured in extra');
+      console.warn('[OCR] Supabase URL not configured');
       _pingFailureLogged = true;
     }
     return {
@@ -111,12 +108,26 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
 
   if (!supabaseAnonKey) {
     if (!_pingFailureLogged) {
-      console.warn('[OCR] SUPABASE_ANON_KEY not configured in extra');
+      console.warn('[OCR] Supabase anon key not configured');
       _pingFailureLogged = true;
     }
     return {
       status: 0,
       body: { error: 'SUPABASE_ANON_KEY not configured' },
+    };
+  }
+
+  if (!isJwtLike(supabaseAnonKey)) {
+    if (__DEV__) {
+      console.warn(
+        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
+      );
+    }
+    return {
+      status: 401,
+      body: {
+        error: 'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)',
+      },
     };
   }
 
@@ -180,6 +191,17 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
     throw new Error('Supabase Anon Key 未配置（请检查 .env / app.config.js / expo start -c）');
   }
 
+  if (!isJwtLike(supabaseAnonKey)) {
+    if (__DEV__) {
+      console.warn(
+        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
+      );
+    }
+    throw new Error(
+      'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
+    );
+  }
+
   // Compress and encode image
   const { base64, mimeType } = await compressToJpegBase64(uri);
 
@@ -235,6 +257,11 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
 
     if (!response.ok) {
       // Handle specific error codes
+      if (response.status === 401) {
+        throw new Error(
+          'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
+        );
+      }
       if (response.status === 429) {
         const error: OCRServiceError = {
           code: 'RATE_LIMIT',

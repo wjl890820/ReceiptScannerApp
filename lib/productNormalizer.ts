@@ -29,6 +29,29 @@ export type NormalizedProduct = {
   keywords: string[];
 };
 
+export type NormalizedReceiptItem = {
+  raw_name: string;
+  normalized_name: string;
+  // Optional: extracted size/count hints (stored for future canonicalization, not used for logic yet)
+  spec?: {
+    size_value?: number;
+    size_unit?: string;
+    count_value?: number;
+    count_unit?: string;
+  };
+};
+
+const PREFIX_CLEAN_PATTERNS: RegExp[] = [
+  /^\s*(?:7|TV|BP|FA)\s+/i,
+  /^\s*(?:K午後|K午前)\s+/,
+  /^\s*(?:\*+|#+|@+)\s+/,
+];
+
+const SPEC_PATTERNS = {
+  size: /(\d+(?:\.\d+)?)\s*(ml|mL|l|L|g|kg)\b/i,
+  count: /(\d+)\s*(本|袋|個|枚|パック|pack)\b/i,
+};
+
 /**
  * 标准化产品名称
  */
@@ -70,6 +93,37 @@ export function normalizeProductName(rawName: string): NormalizedProduct {
   return {
     normalizedName: normalized.toLowerCase(),
     keywords,
+  };
+}
+
+/**
+ * Receipt item normalization (stable + explainable).
+ * Keeps raw_name, produces normalized_name for classification.
+ */
+export function normalizeReceiptItemName(rawName: string): NormalizedReceiptItem {
+  const raw = typeof rawName === 'string' ? rawName : '';
+  const base = normalizeProductName(raw);
+
+  let normalized = base.normalizedName;
+  for (const p of PREFIX_CLEAN_PATTERNS) normalized = normalized.replace(p, '');
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  const spec: NormalizedReceiptItem['spec'] = {};
+  const mSize = normalized.match(SPEC_PATTERNS.size);
+  if (mSize?.[1] && mSize?.[2]) {
+    spec.size_value = Number(mSize[1]);
+    spec.size_unit = String(mSize[2]).toLowerCase();
+  }
+  const mCount = normalized.match(SPEC_PATTERNS.count);
+  if (mCount?.[1] && mCount?.[2]) {
+    spec.count_value = Number(mCount[1]);
+    spec.count_unit = String(mCount[2]).toLowerCase();
+  }
+
+  return {
+    raw_name: raw,
+    normalized_name: normalized,
+    spec: Object.keys(spec).length ? spec : undefined,
   };
 }
 

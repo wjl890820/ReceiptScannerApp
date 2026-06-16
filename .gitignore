@@ -1,3 +1,8 @@
+
+
+
+
+
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
 # dependencies
@@ -56,3 +61,9 @@ deno.lock
 NETWORK_TROUBLESHOOTING.md
 VERIFICATION.md
 VERIFY_URL_FIX.md
+
+# Test output
+tools/out/
+
+# Test fixtures (local)
+tools/fixtures/

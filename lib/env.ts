@@ -42,18 +42,61 @@ export function getExtraValue(key: string, fallback: string = ''): string {
   return typeof value === 'string' ? value.trim() : String(value || fallback).trim();
 }
 
-/**
- * Get Supabase URL from Expo extra
- */
-export function getSupabaseUrl(): string {
-  return getExtraValue('SUPABASE_URL') || getExtraValue('supabaseUrl');
+function _envVar(key: string): string {
+  if (typeof process === 'undefined' || !process.env) return '';
+  const v = process.env[key];
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+let _supabaseCached: { url: string; key: string } | null = null;
+let _supabaseConfigLogged = false;
+
+function _getSupabaseConfig(): { url: string; key: string } {
+  if (_supabaseCached) return _supabaseCached;
+  const url =
+    _envVar('EXPO_PUBLIC_SUPABASE_URL') ||
+    _envVar('SUPABASE_URL') ||
+    getExtraValue('SUPABASE_URL') ||
+    getExtraValue('supabaseUrl');
+  const key =
+    _envVar('EXPO_PUBLIC_SUPABASE_ANON_KEY') ||
+    _envVar('SUPABASE_ANON_KEY') ||
+    getExtraValue('SUPABASE_ANON_KEY') ||
+    getExtraValue('supabaseAnonKey');
+  _supabaseCached = { url: typeof url === 'string' ? url.trim() : '', key: typeof key === 'string' ? key.trim() : '' };
+  if (__DEV__ && !_supabaseConfigLogged) {
+    _supabaseConfigLogged = true;
+    // eslint-disable-next-line no-console
+    console.log(
+      '[Env] Supabase URL:',
+      _supabaseCached.url ? 'configured' : 'not set',
+      '| Anon key:',
+      _supabaseCached.key ? 'configured' : 'not set'
+    );
+  }
+  return _supabaseCached;
 }
 
 /**
- * Get Supabase Anon Key from Expo extra
+ * Get Supabase URL: EXPO_PUBLIC_SUPABASE_URL ?? SUPABASE_URL ?? extra
+ */
+export function getSupabaseUrl(): string {
+  return _getSupabaseConfig().url;
+}
+
+/**
+ * Get Supabase Anon Key: EXPO_PUBLIC_SUPABASE_ANON_KEY ?? SUPABASE_ANON_KEY ?? extra
  */
 export function getSupabaseAnonKey(): string {
-  return getExtraValue('SUPABASE_ANON_KEY') || getExtraValue('supabaseAnonKey');
+  return _getSupabaseConfig().key;
+}
+
+/**
+ * 判断 key 是否为 JWT 形态（eyJ 开头且含 .），用于区分 Legacy anon key 与 publishable key。
+ * 若用户误填 sb_publishable_... 会导致 Edge Functions 401 Invalid JWT。
+ */
+export function isJwtLike(key: string | undefined): boolean {
+  return typeof key === 'string' && key.startsWith('eyJ') && key.includes('.');
 }
 
 /**
@@ -71,4 +114,43 @@ export function isDevDirectGeminiEnabled(): boolean {
 export function getGeminiApiKey(): string {
   if (!isDevDirectGeminiEnabled()) return '';
   return getExtraValue('GEMINI_API_KEY') || getExtraValue('geminiApiKey');
+}
+
+/**
+ * OCR Gemini model (Edge + DEV direct Gemini).
+ * Prefer OCR_GEMINI_MODEL (to avoid conflicting with other modules like classify-item).
+ */
+export function getOcrGeminiModel(): string {
+  return getExtraValue('OCR_GEMINI_MODEL') || getExtraValue('ocrGeminiModel') || 'gemini-3-flash-preview';
+}
+
+export function getCategoryAiItemCap(): number {
+  const v = getExtraValue('CATEGORY_AI_ITEM_CAP', '3');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 3;
+}
+
+export function getCategoryAiTimeoutMs(): number {
+  const v = getExtraValue('CATEGORY_AI_TIMEOUT_MS', '3500');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 500 ? Math.floor(n) : 3500;
+}
+
+export function getCategoryAiRetries(): number {
+  const v = getExtraValue('CATEGORY_AI_RETRIES', '0');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * 获取备用反馈邮箱（用于 send-feedback 不可用时的兜底渠道）。
+ */
+export function getSupportEmail(): string {
+  return (
+    _envVar('EXPO_PUBLIC_SUPPORT_EMAIL') ||
+    _envVar('SUPPORT_EMAIL') ||
+    getExtraValue('SUPPORT_EMAIL') ||
+    getExtraValue('supportEmail') ||
+    ''
+  );
 }

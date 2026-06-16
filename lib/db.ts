@@ -1,6 +1,7 @@
 // lib/db.ts
 import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
+import { listReceiptsForListParams } from './receiptListQuery';
 
 /**
  * 说明：
@@ -13,17 +14,23 @@ export type ReceiptRow = {
   id: string;
   created_at: number;
   transaction_at: number | null; // Receipt transaction date (from receipt itself), fallback to created_at if null
+  scanned_at?: number | null;
 
   image_uri: string;
 
   merchant_raw: string | null;
   merchant_normalized: string | null;
+  store_raw?: string | null;
+  store_normalized?: string | null;
+  source?: string | null;
 
   total: number;
   tax: number;
   currency: string;
 
   analysis_json: string; // 保存完整 JSON（items、merchant、你后面加的 categories 等）
+  /** 审核闭环：识别完成时点的快照 JSON（人工修正写入 analysis_json） */
+  recognition_snapshot_json?: string | null;
 
   // 用户手动编辑字段
   user_edited: number; // 0 或 1
@@ -33,8 +40,23 @@ export type ReceiptRow = {
   user_items_json: string | null; // 用户编辑后的商品列表 JSON
 };
 
+/** 列表用：不含 image_uri，减少内存/IO（历史列表不展示缩略图） */
+export type ReceiptListRow = Omit<ReceiptRow, 'image_uri'>;
+
+/**
+ * 历史列表查询选项。searchQuery 已在 DB 层用于 merchant/note LIKE。
+ */
+export type ListReceiptsOptions = {
+  limit?: number;
+  offset?: number;
+  sortBy?: 'date' | 'total';
+  /** 预留：关键词/商户过滤，当前未实现 */
+  searchQuery?: string;
+};
+
 export type SaveReceiptParams = {
   imageUri: string;
+  source?: 'self' | 'family' | 'friend' | 'found' | 'test' | 'unknown';
   analysis: {
     merchant?: string;
     total: number;
@@ -44,6 +66,11 @@ export type SaveReceiptParams = {
     // 你后面加什么字段都可以继续塞进 analysis_json
     [k: string]: any;
   };
+  /** 与 analysis 分离存储的识别快照（审核保存时写入；直扫旧路径可省略） */
+  recognitionSnapshot?: unknown;
+  /** 审核页保存：标记 user_edited=1 */
+  reviewedSave?: boolean;
+  note?: string | null;
 };
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -95,7 +122,8 @@ async function initIfNeeded() {
           tax REAL NOT NULL,
           currency TEXT NOT NULL,
 
-          analysis_json TEXT NOT NULL
+          analysis_json TEXT NOT NULL,
+          recognition_snapshot_json TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_receipts_created_at
@@ -103,6 +131,10 @@ async function initIfNeeded() {
         
         CREATE INDEX IF NOT EXISTS idx_receipts_transaction_at
           ON receipts(transaction_at ASC);
+        
+        -- 复合索引用于 COALESCE(transaction_at, created_at) 排序优化
+        CREATE INDEX IF NOT EXISTS idx_receipts_transaction_created
+          ON receipts(transaction_at ASC, created_at ASC);
 
         CREATE TABLE IF NOT EXISTS item_category_mapping (
           normalized_name TEXT NOT NULL,
@@ -121,6 +153,64 @@ async function initIfNeeded() {
         
         CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name_hint
           ON item_category_mapping(normalized_name, merchant_hint);
+
+        -- Product dictionary: normalized_name -> canonical/main/sub/tags (asset layer)
+        -- analysis_tags stored as JSON string of string[]
+        CREATE TABLE IF NOT EXISTS product_dictionary (
+          id TEXT PRIMARY KEY NOT NULL,
+          normalized_name TEXT NOT NULL,
+          canonical_name TEXT,
+          brand TEXT,
+          category_main TEXT NOT NULL,
+          category_sub TEXT,
+          analysis_tags TEXT NOT NULL DEFAULT '[]',
+          source_type TEXT NOT NULL DEFAULT 'unknown',
+          seen_count INTEGER NOT NULL DEFAULT 0,
+          last_seen_at INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_dictionary_normalized_name
+          ON product_dictionary(normalized_name);
+
+        -- Exact aliases: normalized OCR/abbrev -> canonical_name + category (optional merchant_hint)
+        CREATE TABLE IF NOT EXISTS product_name_alias (
+          alias_normalized TEXT NOT NULL,
+          merchant_hint TEXT NOT NULL DEFAULT '',
+          canonical_name TEXT NOT NULL,
+          category_main TEXT NOT NULL,
+          category_sub TEXT,
+          analysis_tags TEXT NOT NULL DEFAULT '[]',
+          confidence REAL NOT NULL DEFAULT 1.0,
+          source TEXT NOT NULL DEFAULT 'rule',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (alias_normalized, merchant_hint)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_product_name_alias_lookup
+          ON product_name_alias(alias_normalized, merchant_hint);
+
+        -- 审核草稿持久化（冷启动可恢复）
+        CREATE TABLE IF NOT EXISTS scan_review_draft (
+          id TEXT PRIMARY KEY NOT NULL,
+          image_uri TEXT NOT NULL,
+          recognition_snapshot_json TEXT NOT NULL,
+          trace_id TEXT NOT NULL,
+          editor_state_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scan_review_draft_updated
+          ON scan_review_draft(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS scan_review_queue (
+          slot INTEGER PRIMARY KEY NOT NULL CHECK (slot = 1),
+          queue_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
       `);
 
       // 安全迁移：检查并添加新字段（如果不存在）
@@ -131,6 +221,34 @@ async function initIfNeeded() {
       const columnNames = new Set(tableInfo.map((col) => col.name));
 
       // 只添加不存在的列，使用 try-catch 防止并发情况下的重复添加
+      if (!columnNames.has('source')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN source TEXT NOT NULL DEFAULT 'self'`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('store_raw')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN store_raw TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('store_normalized')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN store_normalized TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('scanned_at')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN scanned_at INTEGER`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
       if (!columnNames.has('user_edited')) {
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN user_edited INTEGER DEFAULT 0`);
@@ -171,6 +289,15 @@ async function initIfNeeded() {
       if (!columnNames.has('user_items_json')) {
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN user_items_json TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) {
+            throw e;
+          }
+        }
+      }
+      if (!columnNames.has('recognition_snapshot_json')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN recognition_snapshot_json TEXT`);
         } catch (e: any) {
           if (!e?.message?.includes('duplicate column')) {
             throw e;
@@ -253,6 +380,39 @@ async function initIfNeeded() {
         }
       }
 
+      // Migrate product_dictionary: add source_type if missing
+      try {
+        const pdInfo = await db.getAllAsync<{ name: string; type: string }>(
+          `PRAGMA table_info(product_dictionary)`
+        );
+        const pdCols = new Set(pdInfo.map((c) => c.name));
+        if (pdCols.size > 0 && !pdCols.has('source_type')) {
+          await db.runAsync(`ALTER TABLE product_dictionary ADD COLUMN source_type TEXT NOT NULL DEFAULT 'unknown'`);
+        }
+      } catch (e: any) {
+        if (!e?.message?.includes('no such table')) {
+          console.warn('[DB] Failed to migrate product_dictionary:', e);
+        }
+      }
+
+      try {
+        const { seedBuiltinProductAliases } = await import('./productAlias');
+        await seedBuiltinProductAliases(db);
+      } catch (e: any) {
+        console.warn('[DB] Failed to seed product_name_alias:', e);
+      }
+
+      try {
+        await db.runAsync(
+          `INSERT OR IGNORE INTO scan_review_queue (slot, queue_json, updated_at) VALUES (1, '[]', ?)`,
+          [Date.now()]
+        );
+      } catch (e: any) {
+        if (!e?.message?.includes('no such table')) {
+          console.warn('[DB] Failed to seed scan_review_queue:', e);
+        }
+      }
+
       // 所有迁移完成后才设置 _inited 标志
       _inited = true;
 
@@ -328,7 +488,16 @@ export { initIfNeeded };
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
  */
-export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
+export async function saveReceipt(
+  params: SaveReceiptParams,
+  trace?: { id: string; t0: number }
+): Promise<string> {
+  // Timing: write start/end around DB ops
+  const tSave0 = Date.now();
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] db_save_start', { id: trace.id });
+  }
   await initIfNeeded();
   const db = await getDb();
 
@@ -338,8 +507,15 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
   const merchantRaw =
     typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
 
-  // normalized 目前先等同 raw（你后面要做统一化再改这里）
-  const merchantNormalized = merchantRaw;
+  const merchantRawTrimmed = merchantRaw && merchantRaw.trim() ? merchantRaw.trim() : null;
+  const merchantNormalized =
+    merchantRawTrimmed ? merchantRawTrimmed.replace(/\s+/g, ' ').trim().toLowerCase() : null;
+
+  // New stable fields
+  const source = params.source || 'self';
+  const storeRaw = merchantRawTrimmed;
+  const storeNormalized = merchantNormalized;
+  const scannedAt = now;
 
   const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
   const tax = Number.isFinite(params.analysis.tax) ? params.analysis.tax : 0;
@@ -349,54 +525,106 @@ export async function saveReceipt(params: SaveReceiptParams): Promise<string> {
       : 'JPY';
 
   const analysisJson = JSON.stringify(params.analysis);
+  const recognitionSnapshotJson =
+    params.recognitionSnapshot !== undefined && params.recognitionSnapshot !== null
+      ? JSON.stringify(params.recognitionSnapshot)
+      : null;
 
-  // Extract transaction_at from analysis.transactionDate
-  // Try to parse transactionDate string to timestamp, fallback to null
+  // Extract transaction_at from analysis.transactionDate (或 transactionAt / purchasedAt / datetime)
+  // 仅日期：dateParser 用当天 00:00；日期+时间：按原字符串解析（ISO 或本地/Asia/Tokyo 格式）；解析失败则 null，排序回退 created_at
   let transactionAt: number | null = null;
-  if (params.analysis.transactionDate) {
+  const txDateStr =
+    params.analysis.transactionDate ||
+    (params.analysis as any).transactionAt ||
+    (params.analysis as any).purchasedAt ||
+    (params.analysis as any).datetime;
+  if (txDateStr && typeof txDateStr === 'string' && txDateStr.trim()) {
     try {
-      // Try parsing as ISO string first
-      const isoDate = new Date(params.analysis.transactionDate);
+      const isoDate = new Date(txDateStr.trim());
       if (!isNaN(isoDate.getTime())) {
         transactionAt = isoDate.getTime();
       } else {
-        // Try using dateParser for custom formats
         const { parseReceiptDateTime } = await import('./dateParser');
-        transactionAt = parseReceiptDateTime(params.analysis.transactionDate, false);
+        transactionAt = parseReceiptDateTime(txDateStr.trim(), false);
       }
     } catch (e) {
-      // If parsing fails, leave as null (will fallback to created_at in queries)
       if (__DEV__) {
-        console.warn('[DB] Failed to parse transactionDate:', params.analysis.transactionDate, e);
+        console.warn('[DB] Failed to parse transactionDate:', txDateStr, e);
       }
     }
   }
 
   // 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
-  await db.runAsync(
-    `
+  const insertSql = `
     INSERT INTO receipts (
       id, created_at, transaction_at,
+      scanned_at,
       image_uri,
+      source,
       merchant_raw, merchant_normalized,
+      store_raw, store_normalized,
       total, tax, currency,
-      analysis_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
-      id,
-      now,
-      transactionAt,
-      params.imageUri,
-      merchantRaw,
-      merchantNormalized,
-      total,
-      tax,
-      currency,
-      analysisJson,
-    ]
-  );
+      analysis_json,
+      recognition_snapshot_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  const insertParams = [
+    id,
+    now,
+    transactionAt,
+    scannedAt,
+    params.imageUri,
+    source,
+    merchantRawTrimmed,
+    merchantNormalized,
+    storeRaw,
+    storeNormalized,
+    total,
+    tax,
+    currency,
+    analysisJson,
+    recognitionSnapshotJson,
+  ];
+  const placeholderCount = (insertSql.match(/\?/g) ?? []).length;
+  if (__DEV__ && trace) {
+    const preview = insertParams.map((v, i) => {
+      if (typeof v === 'string' && v.length > 120) return { i, kind: 'string', len: v.length, head: v.slice(0, 120) + '…' };
+      return { i, v };
+    });
+    // eslint-disable-next-line no-console
+    console.log('[DB][saveReceipt] insert shape', {
+      insertColumnsCount: 15,
+      placeholderCount,
+      paramsCount: insertParams.length,
+      preview,
+    });
+  }
+  await db.runAsync(insertSql, insertParams);
 
+  if (params.reviewedSave || params.note !== undefined) {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    if (params.reviewedSave) {
+      sets.push('user_edited = 1');
+    }
+    if (params.note !== undefined) {
+      sets.push('note = ?');
+      vals.push(params.note !== null && typeof params.note === 'string' ? params.note.trim() || null : null);
+    }
+    if (sets.length > 0) {
+      vals.push(id);
+      await db.runAsync(`UPDATE receipts SET ${sets.join(', ')} WHERE id = ?`, vals);
+    }
+  }
+
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[DB] saved receipt:', { id: id.slice(0, 8), txAt: !!transactionAt, createdAt: true });
+  }
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] db_save_end_ms', { id: trace.id, ms: Date.now() - tSave0 });
+  }
   return id;
 }
 
@@ -424,7 +652,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
       note,
       user_items_json
     FROM receipts
-    ORDER BY COALESCE(transaction_at, created_at) ASC
+    ORDER BY COALESCE(transaction_at, created_at) DESC
     LIMIT ?
     `,
     [limit]
@@ -434,9 +662,104 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
 }
 
 /**
+ * 列表（历史等）：不查 image_uri，减少内存/IO；列表不展示缩略图。
+ * 支持 options：limit、offset、sortBy（date | total）、searchQuery（merchant/note LIKE）。
+ */
+export async function listReceiptsForList(
+  options?: ListReceiptsOptions | number
+): Promise<ReceiptListRow[]> {
+  await initIfNeeded();
+  const db = await getDb();
+  const { orderBy, limit, offset, whereClause, whereParams } = listReceiptsForListParams(options);
+
+  const rows = await db.getAllAsync<ReceiptListRow>(
+    `
+    SELECT
+      id, created_at,
+      COALESCE(transaction_at, created_at) AS transaction_at,
+      merchant_raw, merchant_normalized,
+      total, tax, currency,
+      analysis_json,
+      COALESCE(user_edited, 0) as user_edited,
+      final_total,
+      final_category,
+      note,
+      user_items_json
+    FROM receipts
+    ${whereClause}
+    ORDER BY ${orderBy}
+    LIMIT ? OFFSET ?
+    `,
+    [...whereParams, limit, offset]
+  );
+
+  return rows ?? [];
+}
+
+/**
  * 详情：按 id 获取一条
  * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
+/** 复盘统计：仅拉取带识别快照的行（审核闭环落库） */
+export type ReceiptReviewStatsRow = {
+  id: string;
+  created_at: number;
+  analysis_json: string;
+  recognition_snapshot_json: string;
+};
+
+export async function listReceiptsForReviewStats(limit = 2000): Promise<ReceiptReviewStatsRow[]> {
+  await initIfNeeded();
+  const db = await getDb();
+  const lim = Math.max(1, Math.min(10000, limit));
+  const rows = await db.getAllAsync<ReceiptReviewStatsRow>(
+    `
+    SELECT id, created_at, analysis_json, recognition_snapshot_json
+    FROM receipts
+    WHERE recognition_snapshot_json IS NOT NULL
+      AND TRIM(recognition_snapshot_json) != ''
+    ORDER BY created_at DESC
+    LIMIT ?
+    `,
+    [lim]
+  );
+  return rows ?? [];
+}
+
+export async function listManualProductNameAliases(): Promise<
+  { alias_normalized: string; canonical_name: string; merchant_hint: string }[]
+> {
+  await initIfNeeded();
+  const db = await getDb();
+  try {
+    const rows = await db.getAllAsync<{
+      alias_normalized: string;
+      canonical_name: string;
+      merchant_hint: string;
+    }>(
+      `SELECT alias_normalized, canonical_name, merchant_hint
+       FROM product_name_alias
+       WHERE source = 'manual'`
+    );
+    return rows ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function countManualProductDictionaryEntries(): Promise<number> {
+  await initIfNeeded();
+  const db = await getDb();
+  try {
+    const row = await db.getFirstAsync<{ c: number }>(
+      `SELECT COUNT(1) as c FROM product_dictionary WHERE source_type = 'manual'`
+    );
+    return row?.c ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   await initIfNeeded();
   const db = await getDb();
@@ -450,6 +773,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       merchant_raw, merchant_normalized,
       total, tax, currency,
       analysis_json,
+      recognition_snapshot_json,
       COALESCE(user_edited, 0) as user_edited,
       final_total,
       final_category,
@@ -466,12 +790,25 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
 }
 
 /**
- * 删除一条
+ * 批量删除（事务内一次性执行）。关联数据：仅 receipts 表；item_category_mapping 为全局学习表不删。
+ * 用于单条删除、批量删除；priceRadar / Analysis 无持久缓存，删后重拉即可。
  */
-export async function deleteReceipt(id: string): Promise<void> {
+export async function deleteReceipts(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
   await initIfNeeded();
   const db = await getDb();
-  await db.runAsync(`DELETE FROM receipts WHERE id = ?`, [id]);
+  const placeholders = ids.map(() => '?').join(',');
+  await db.runAsync(
+    `DELETE FROM receipts WHERE id IN (${placeholders})`,
+    ids
+  );
+}
+
+/**
+ * 删除一条（复用批量删除）
+ */
+export async function deleteReceipt(id: string): Promise<void> {
+  await deleteReceipts([id]);
 }
 
 /**

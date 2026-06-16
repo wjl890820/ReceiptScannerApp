@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   Alert,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,12 +15,37 @@ import {
 
 import { t } from '@/lib/i18n';
 import { submitFeedback } from '@/lib/feedbackService';
+import { getSupportEmail } from '@/lib/env';
 
 export default function FeedbackScreen() {
   const router = useRouter();
   const [feedback, setFeedback] = useState('');
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const supportEmail = getSupportEmail();
+
+  const openSupportEmail = async (bodyFromState?: string) => {
+    if (!supportEmail) {
+      Alert.alert(t('feedback.error.title'), t('feedback.error.notConfigured'));
+      return;
+    }
+    const subject = 'ReceiptScanner feedback';
+    const body = bodyFromState && bodyFromState.trim().length > 0 ? bodyFromState : feedback;
+    const url = `mailto:${encodeURIComponent(supportEmail)}?subject=${encodeURIComponent(
+      subject
+    )}&body=${encodeURIComponent(body || '')}`;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert(t('feedback.error.title'), t('feedback.error.generic'));
+      }
+    } catch {
+      Alert.alert(t('feedback.error.title'), t('feedback.error.generic'));
+    }
+  };
 
   const handleSubmit = async () => {
     if (!feedback.trim()) {
@@ -41,9 +67,9 @@ export default function FeedbackScreen() {
 
       // Success: show alert and clear form
       Alert.alert(
-        t('feedback.success.title') || '成功',
+        t('feedback.success.title') || t('feedback.success.fallbackTitle'),
         t('feedback.success.message'),
-        [{ text: 'OK', onPress: () => {} }]
+        [{ text: t('easterEgg.ok'), onPress: () => {} }]
       );
       
       setFeedback('');
@@ -61,13 +87,25 @@ export default function FeedbackScreen() {
       } else if (errorText.includes('服务器') || errorText.includes('server') || errorText.includes('HTTP 5')) {
         errorMessage = t('feedback.error.server');
       } else if (errorText.includes('未配置') || errorText.includes('Supabase')) {
-        errorMessage = '提交失败（未配置）';
+        errorMessage = t('feedback.error.notConfigured');
       } else if (errorText.includes('格式错误') || errorText.includes('空响应') || errorText.includes('未确认成功')) {
-        errorMessage = '提交失败（服务器响应异常）';
+        errorMessage = t('feedback.error.badResponse');
       }
       
       // 显示错误 Alert，不清空输入（用户可以重试）
-      Alert.alert(t('feedback.error.title'), errorMessage);
+      if (errorMessage === t('feedback.error.notConfigured') && supportEmail) {
+        Alert.alert(t('feedback.error.title'), errorMessage, [
+          { text: t('easterEgg.ok'), style: 'cancel' },
+          {
+            text: t('feedback.emailFallbackAction'),
+            onPress: () => {
+              openSupportEmail();
+            },
+          },
+        ]);
+      } else {
+        Alert.alert(t('feedback.error.title'), errorMessage);
+      }
     } finally {
       setSubmitting(false);
     }

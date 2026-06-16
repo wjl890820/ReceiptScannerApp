@@ -12,36 +12,117 @@ export type EasterEggContent = {
 };
 
 let _db: SQLite.SQLiteDatabase | null = null;
+let _tableInited = false;
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!_db) {
-    _db = await SQLite.openDatabaseAsync('receipts.db');
+    _db = await SQLite.openDatabaseAsync('receipts_v2.db');
   }
   return _db;
+}
+
+/**
+ * 初始化 easter_eggs_shown 表（幂等）
+ */
+async function initTableIfNeeded(): Promise<void> {
+  if (_tableInited) return;
+  
+  const db = await getDb();
+  try {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS easter_eggs_shown (
+        milestone INTEGER PRIMARY KEY NOT NULL,
+        shown_at INTEGER NOT NULL
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_easter_eggs_shown_shown_at
+        ON easter_eggs_shown(shown_at DESC);
+    `);
+    _tableInited = true;
+  } catch (e) {
+    if (__DEV__) {
+      console.warn('[EasterEggs] Failed to init table:', e);
+    }
+    // 即使失败也标记为已尝试，避免无限重试
+    _tableInited = true;
+  }
 }
 
 /**
  * 检查里程碑是否已显示
  */
 export async function hasShownMilestone(milestone: Milestone): Promise<boolean> {
-  const db = await getDb();
-  const row = await db.getFirstAsync<{ milestone: number }>(
-    `SELECT milestone FROM easter_eggs_shown WHERE milestone = ?`,
-    [milestone]
-  );
-  return !!row;
+  try {
+    await initTableIfNeeded();
+    const db = await getDb();
+    const row = await db.getFirstAsync<{ milestone: number }>(
+      `SELECT milestone FROM easter_eggs_shown WHERE milestone = ?`,
+      [milestone]
+    );
+    return !!row;
+  } catch (e: any) {
+    // 如果表不存在，尝试创建后重试
+    if (e?.message?.includes('no such table')) {
+      _tableInited = false; // 重置标志，允许重试
+      try {
+        await initTableIfNeeded();
+        const db = await getDb();
+        const row = await db.getFirstAsync<{ milestone: number }>(
+          `SELECT milestone FROM easter_eggs_shown WHERE milestone = ?`,
+          [milestone]
+        );
+        return !!row;
+      } catch (retryError) {
+        if (__DEV__) {
+          console.warn('[EasterEggs] Failed to query after retry:', retryError);
+        }
+        return false; // 失败时返回 false，允许显示彩蛋
+      }
+    }
+    if (__DEV__) {
+      console.warn('[EasterEggs] Failed to check milestone:', e);
+    }
+    return false; // 失败时返回 false，允许显示彩蛋
+  }
 }
 
 /**
  * 标记里程碑已显示
  */
 export async function markMilestoneShown(milestone: Milestone): Promise<void> {
-  const db = await getDb();
-  const now = Date.now();
-  await db.runAsync(
-    `INSERT OR REPLACE INTO easter_eggs_shown (milestone, shown_at) VALUES (?, ?)`,
-    [milestone, now]
-  );
+  try {
+    await initTableIfNeeded();
+    const db = await getDb();
+    const now = Date.now();
+    await db.runAsync(
+      `INSERT OR REPLACE INTO easter_eggs_shown (milestone, shown_at) VALUES (?, ?)`,
+      [milestone, now]
+    );
+  } catch (e: any) {
+    // 如果表不存在，尝试创建后重试
+    if (e?.message?.includes('no such table')) {
+      _tableInited = false; // 重置标志，允许重试
+      try {
+        await initTableIfNeeded();
+        const db = await getDb();
+        const now = Date.now();
+        await db.runAsync(
+          `INSERT OR REPLACE INTO easter_eggs_shown (milestone, shown_at) VALUES (?, ?)`,
+          [milestone, now]
+        );
+      } catch (retryError) {
+        if (__DEV__) {
+          console.warn('[EasterEggs] Failed to mark milestone after retry:', retryError);
+        }
+        // 静默失败，不影响主流程
+      }
+    } else {
+      if (__DEV__) {
+        console.warn('[EasterEggs] Failed to mark milestone:', e);
+      }
+      // 静默失败，不影响主流程
+    }
+  }
 }
 
 /**

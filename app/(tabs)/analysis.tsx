@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,17 +15,15 @@ import {
 import { listReceipts, type ReceiptRow } from '@/lib/db';
 import { t } from '@/lib/i18n';
 import { getCategoryLabel } from '@/lib/categoryPalette';
-import { calculateStats, type TimeRange } from '@/lib/statsCalculator';
-import {
-  extractProductPrices,
-  computeCheapestMerchants,
-  getTopCheapestProducts,
-  computeCategoryPriceIndex,
-  isOverpriced,
-  compareWithMinPrice,
-} from '@/lib/priceRadar';
+import { type TimeRange } from '@/lib/statsCalculator';
+import { buildInsights } from '@/lib/buildInsights';
+import { isOverpriced, compareWithMinPrice } from '@/lib/priceRadar';
 import { normalizeProductName } from '@/lib/productNormalizer';
-import { isGroceryMerchant } from '@/lib/groceryDetector';
+import {
+  buildPriceRadarData,
+  buildCategoryIndexData,
+  buildStatsSafe,
+} from '@/lib/analysisHelpers';
 
 export default function AnalysisScreen() {
   const router = useRouter();
@@ -50,117 +49,27 @@ export default function AnalysisScreen() {
     }, [loadReceipts])
   );
 
-  // 计算统计数据
-  // 全链路容错：任何异常都降级为默认值，不崩溃
-  const stats = useMemo(() => {
+  // 计算统计数据（统一默认结构与异常 fallback）
+  const stats = useMemo(
+    () => buildStatsSafe(receipts, timeRange),
+    [receipts, timeRange]
+  );
+
+  const insights = useMemo(() => {
     try {
-      if (!Array.isArray(receipts)) {
-        return {
-          totalSpend: 0,
-          grocerySpend: 0,
-          topCategories: [],
-          topMerchants: [],
-          highestSingleReceipt: null,
-          mostFrequentMerchant: null,
-        };
-      }
-      return calculateStats(receipts, timeRange);
+      if (!Array.isArray(receipts)) return null;
+      return buildInsights(receipts, timeRange);
     } catch (e) {
-      console.error('[Analysis] stats computation failed:', e);
-      return {
-        totalSpend: 0,
-        grocerySpend: 0,
-        topCategories: [],
-        topMerchants: [],
-        highestSingleReceipt: null,
-        mostFrequentMerchant: null,
-      };
+      console.error('[Analysis] buildInsights failed:', e);
+      return null;
     }
   }, [receipts, timeRange]);
 
   // 价格雷达数据（仅grocery收据，需要至少5张grocery收据）
-  // 全链路容错：任何异常都降级为null，显示"无数据"而不是崩溃
-  const priceRadarData = useMemo(() => {
-    try {
-      if (!Array.isArray(receipts) || receipts.length === 0) {
-        return null;
-      }
-
-      // Filter to grocery receipts only
-      const groceryReceipts = receipts.filter((r) => {
-        try {
-          if (!r) return false;
-          if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
-            return true;
-          }
-          try {
-            const analysis = JSON.parse(r.analysis_json || '{}');
-            return analysis.is_grocery === true;
-          } catch {
-            return false;
-          }
-        } catch {
-          return false;
-        }
-      });
-
-      if (groceryReceipts.length < 5) return null;
-
-      const records = extractProductPrices(groceryReceipts);
-      if (!Array.isArray(records) || records.length === 0) return null;
-
-      const cheapestMap = computeCheapestMerchants(records);
-      if (!cheapestMap || cheapestMap.size === 0) return null;
-
-      const topProducts = getTopCheapestProducts(cheapestMap, 10);
-      if (!Array.isArray(topProducts) || topProducts.length === 0) return null;
-
-      return {
-        records,
-        cheapestMap,
-        topProducts,
-      };
-    } catch (e) {
-      console.error('[Analysis] priceRadarData computation failed:', e);
-      return null; // 降级为无数据，不崩溃
-    }
-  }, [receipts]);
+  const priceRadarData = useMemo(() => buildPriceRadarData(receipts), [receipts]);
 
   // 分类价格指数（仅grocery收据）
-  // 全链路容错：任何异常都降级为null，显示"无数据"而不是崩溃
-  const categoryIndex = useMemo(() => {
-    try {
-      if (!Array.isArray(receipts) || receipts.length === 0) {
-        return null;
-      }
-
-      // Filter to grocery receipts only
-      const groceryReceipts = receipts.filter((r) => {
-        try {
-          if (!r) return false;
-          if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) {
-            return true;
-          }
-          try {
-            const analysis = JSON.parse(r.analysis_json || '{}');
-            return analysis.is_grocery === true;
-          } catch {
-            return false;
-          }
-        } catch {
-          return false;
-        }
-      });
-
-      if (groceryReceipts.length < 10) return null;
-
-      const result = computeCategoryPriceIndex(groceryReceipts, 'produce', 5);
-      return result; // 可能为null，由UI处理
-    } catch (e) {
-      console.error('[Analysis] categoryIndex computation failed:', e);
-      return null; // 降级为无数据，不崩溃
-    }
-  }, [receipts]);
+  const categoryIndex = useMemo(() => buildCategoryIndexData(receipts), [receipts]);
 
   if (loading) {
     return (
@@ -218,6 +127,84 @@ export default function AnalysisScreen() {
         </Pressable>
       </View>
 
+      {/* V2: One-liner story */}
+      {insights && (
+        <>
+          <View style={styles.card}>
+            <Text style={styles.storyCardTitle}>{t('analysisV2.sections.story')}</Text>
+            {insights.story.type === 'full' ? (
+              <>
+                <Text style={styles.storyConclusion}>
+                  {t(insights.story.conclusionKey, (() => {
+                    const p = { ...insights.story.conclusionParams } as Record<string, string | number>;
+                    const cat = String(p.cat ?? '');
+                    const label = getCategoryLabel(cat);
+                    p.catLabel = label && label !== cat ? label : t('analysisV2.labels.other');
+                    return p;
+                  })())}
+                </Text>
+                <Text style={styles.storyExplanation}>
+                  {t(insights.story.explanationKey)}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.storyFallback}>
+                {t(insights.story.fallbackKey)}
+              </Text>
+            )}
+          </View>
+
+          {/* Changes vs previous period */}
+          {insights.changes.length > 0 && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{t('analysisV2.sections.changes')}</Text>
+              {insights.changes.map((c, i) => {
+                const params = { ...(c.changeParams ?? {}) } as Record<string, string | number>;
+                if (params.cat != null) {
+                  const lab = getCategoryLabel(String(params.cat));
+                  params.catLabel = lab && lab !== String(params.cat) ? lab : t('analysisV2.labels.other');
+                }
+                return (
+                  <Text key={i} style={styles.changeItem}>
+                    {t(c.changeKey, params)}
+                  </Text>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Actionable tips */}
+          {insights.tips.length > 0 && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{t('analysisV2.sections.tips')}</Text>
+              {insights.tips.map((tip, i) => (
+                <Text key={i} style={styles.tipItem}>
+                  {t(tip.tipKey, (tip.tipParams ?? {}) as Record<string, string | number>)}
+                </Text>
+              ))}
+            </View>
+          )}
+
+          {/* Confidence */}
+          <Text style={styles.confidence}>{t(insights.confidenceKey)}</Text>
+
+          {/* Pro teaser card */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{t('analysisV2.pro.title')}</Text>
+            {insights.proTeaser.map((item, i) => (
+              <Pressable
+                key={i}
+                style={styles.proTeaserRow}
+                onPress={() => Alert.alert(t('analysisV2.pro.title'), t('analysisV2.pro.alert'))}
+              >
+                <Text style={styles.proTeaserText}>{t(item.proTeaserKey)}</Text>
+                <Text style={styles.proTeaserLock}>🔒</Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      )}
+
       {/* 统计卡片 */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>{t('analysis.stats.totalSpend')}</Text>
@@ -236,24 +223,22 @@ export default function AnalysisScreen() {
         )}
       </View>
 
-      {/* Top Categories */}
-      {stats.topCategories.length > 0 && (
+      {/* Top Categories：仅 ok + 有效 grocery，不出现非超市/未分类扇区 */}
+      {(stats.topCategories.length > 0 || stats.uncategorizedCount > 0) && (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{t('analysis.stats.topCategories')}</Text>
           <Text style={styles.cardSubtitle}>{t('grocery.onlyNote')}</Text>
-          {stats.topCategories.map((item, idx) => {
-            // Category key is always English stable key (produce, staples, etc.)
-            // Display uses i18n translation
-            const categoryKey = item.category;
-            return (
-              <View key={idx} style={styles.statRow}>
-                <Text style={styles.statLabel}>
-                  {getCategoryLabel(categoryKey)}
-                </Text>
-                <Text style={styles.statValue}>¥{Math.round(item.amount).toLocaleString()}</Text>
-              </View>
-            );
-          })}
+          {stats.topCategories.map((item, idx) => (
+            <View key={idx} style={styles.statRow}>
+              <Text style={styles.statLabel}>{getCategoryLabel(item.category)}</Text>
+              <Text style={styles.statValue}>¥{Math.round(item.amount).toLocaleString()}</Text>
+            </View>
+          ))}
+          {stats.uncategorizedCount > 0 && (
+            <Text style={styles.uncategorizedHint}>
+              {t('home.kpi.uncategorizedHint', { count: String(stats.uncategorizedCount) })}
+            </Text>
+          )}
         </View>
       )}
 
@@ -312,7 +297,12 @@ export default function AnalysisScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{t('analysis.priceRadar.title')}</Text>
             <Text style={styles.emptyText}>
-              {t('analysis.priceRadar.needMore', { count: 5 - receipts.length })}
+              {(() => {
+                const remaining = Math.max(0, 5 - receipts.length);
+                return remaining <= 0
+                  ? t('analysis.priceRadar.unlockedHint')
+                  : t('analysis.priceRadar.lockedHint', { count: remaining });
+              })()}
             </Text>
           </View>
         )
@@ -420,6 +410,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111',
   },
+  uncategorizedHint: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 12,
+  },
   priceRadarItem: {
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -448,5 +443,63 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#888',
     fontStyle: 'italic',
+  },
+  storyCardTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#111',
+    marginBottom: 12,
+  },
+  storyConclusion: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#111',
+    marginBottom: 8,
+    lineHeight: 26,
+  },
+  storyExplanation: {
+    fontSize: 15,
+    color: '#555',
+    lineHeight: 22,
+  },
+  storyFallback: {
+    fontSize: 15,
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  changeItem: {
+    fontSize: 15,
+    color: '#333',
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  tipItem: {
+    fontSize: 15,
+    color: '#333',
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  confidence: {
+    fontSize: 13,
+    color: '#888',
+    marginBottom: 16,
+    fontStyle: 'italic',
+  },
+  proTeaserRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e8e8e8',
+  },
+  proTeaserText: {
+    fontSize: 15,
+    color: '#999',
+    flex: 1,
+  },
+  proTeaserLock: {
+    fontSize: 14,
+    marginLeft: 8,
   },
 });

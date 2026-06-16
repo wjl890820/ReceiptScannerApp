@@ -9,10 +9,11 @@ import {
   getSupabaseUrl,
   getSupabaseAnonKey,
   getGeminiApiKey,
+  getOcrGeminiModel,
   isDevDirectGeminiEnabled,
 } from './env';
 
-const MODEL = 'gemini-2.0-flash';
+const DEFAULT_OCR_MODEL = 'gemini-3-flash-preview';
 
 // 商品分类 key（用于统计）
 export type CategoryKey =
@@ -42,7 +43,14 @@ export type ReceiptAnalysis = {
   tax: number;
   currency: string;
   transactionDate?: string; // ISO string or date string from receipt
+  /** 可选：模型/OCR 侧原始文本，供审核页展示（有则填，无则省略） */
+  ocr_raw_text?: string;
 };
+
+type ScanTrace = { id: string; t0: number };
+function nowMs(): number {
+  return Date.now();
+}
 
 function extractJsonFromText(text: string): any {
   try {
@@ -92,13 +100,9 @@ async function compressToJpegBase64(uri: string): Promise<string> {
  */
 async function analyzeReceiptImageViaEdgeFunction(
   uri: string,
-  functionName: 'ocr-receipt' | 'ocr'
+  functionName: 'ocr-receipt' | 'ocr',
+  trace?: ScanTrace
 ): Promise<ReceiptAnalysis> {
-  // 临时调试日志：检查环境变量注入
-  console.log('[ENV] extra=', Constants.expoConfig?.extra);
-  console.log('[ENV] SUPABASE_URL(extra)=', Constants.expoConfig?.extra?.SUPABASE_URL);
-  console.log('[ENV] SUPABASE_ANON_KEY(extra)=', Constants.expoConfig?.extra?.SUPABASE_ANON_KEY);
-  
   const supabaseUrl = getSupabaseUrl();
   const supabaseAnonKey = getSupabaseAnonKey();
 
@@ -110,8 +114,14 @@ async function analyzeReceiptImageViaEdgeFunction(
     throw new Error('Supabase Anon Key 未配置（请检查 .env / app.config.js / expo start -c）');
   }
 
-  // 压缩并编码图片
+  // 1) 图片读取/预处理
+  const tPre0 = nowMs();
   const base64 = await compressToJpegBase64(uri);
+  const tPre1 = nowMs();
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] image_preprocess_ms', { id: trace.id, ms: tPre1 - tPre0 });
+  }
 
   // 获取设备 ID
   const deviceId = await getDeviceId();
@@ -137,24 +147,90 @@ async function analyzeReceiptImageViaEdgeFunction(
     language,
   };
 
-  const response = await fetch(edgeFunctionUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${supabaseAnonKey}`,
-      apikey: supabaseAnonKey,
-      'x-device-id': deviceId,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${supabaseAnonKey}`,
+    apikey: supabaseAnonKey,
+    'x-device-id': deviceId,
+  } as const;
+
+  // 2) OCR 请求发出前
+  const tOcr0 = nowMs();
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] ocr_request_prepare', { id: trace.id });
+  }
+
+  if (__DEV__) {
+    const payloadBytes = Math.round((requestBody.imageBase64.length * 3) / 4);
+    console.log('[ReceiptAnalyzer][OCR] Request -> Edge', {
+      url: edgeFunctionUrl,
+      method: 'POST',
+      headers: {
+        'Content-Type': headers['Content-Type'],
+        Authorization: headers.Authorization ? `Bearer <redacted:${headers.Authorization.length}>` : '',
+        apikey: headers.apikey ? `<redacted:${headers.apikey.length}>` : '',
+        'x-device-id': headers['x-device-id'] ? `${headers['x-device-id'].slice(0, 8)}...` : '',
+      },
+      body: {
+        mimeType: requestBody.mimeType,
+        deviceIdPrefix: requestBody.deviceId ? `${requestBody.deviceId.slice(0, 8)}...` : '',
+        appVersion: requestBody.appVersion,
+        platform: requestBody.platform,
+        language: requestBody.language,
+        imageBytesApprox: payloadBytes,
+      },
+    });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(edgeFunctionUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+    });
+  } catch (e: any) {
+    if (__DEV__) {
+      console.error('[ReceiptAnalyzer][OCR] Network error calling Edge', {
+        url: edgeFunctionUrl,
+        method: 'POST',
+        message: e?.message || String(e),
+      });
+    }
+    throw e;
+  }
+
+  // 3) OCR Edge Function 返回后
+  const tOcr1 = nowMs();
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] ocr_edge_roundtrip_ms', { id: trace.id, ms: tOcr1 - tOcr0, status: response.status });
+  }
 
   const responseText = await response.text();
   let responseData: any;
 
+  // 4) OCR 结果解析完成
+  const tParse0 = nowMs();
   try {
     responseData = JSON.parse(responseText);
   } catch (e) {
     throw new Error(`服务器返回无效 JSON (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+  }
+  const tParse1 = nowMs();
+  if (__DEV__ && trace) {
+    // eslint-disable-next-line no-console
+    console.log('[ScanTiming] ocr_parse_ms', { id: trace.id, ms: tParse1 - tParse0 });
+  }
+
+  if (__DEV__) {
+    console.log('[ReceiptAnalyzer][OCR] Response <- Edge', {
+      url: edgeFunctionUrl,
+      status: response.status,
+      ok: response.ok,
+      bodySnippet: responseText.substring(0, 200),
+    });
   }
 
   if (!response.ok) {
@@ -178,6 +254,26 @@ async function analyzeReceiptImageViaEdgeFunction(
     throw new Error('服务器返回的分析结果格式无效');
   }
 
+  if (__DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[OCR] datetime candidates:', {
+      transactionDate: analysis?.transactionDate,
+      transactionAt: (analysis as any)?.transactionAt,
+      purchasedAt: (analysis as any)?.purchasedAt,
+      datetime: (analysis as any)?.datetime,
+      date: (analysis as any)?.date,
+      time: (analysis as any)?.time,
+    });
+  }
+
+  // 交易时间：OCR 可能返回 transactionDate / transactionAt / purchasedAt / datetime
+  const txDateStr =
+    (typeof analysis.transactionDate === 'string' && analysis.transactionDate.trim()) ||
+    (typeof (analysis as any).transactionAt === 'string' && (analysis as any).transactionAt.trim()) ||
+    (typeof (analysis as any).purchasedAt === 'string' && (analysis as any).purchasedAt.trim()) ||
+    (typeof (analysis as any).datetime === 'string' && (analysis as any).datetime.trim()) ||
+    undefined;
+
   // 转换为 ReceiptAnalysis 格式
   const receiptAnalysis: ReceiptAnalysis = {
     merchant: typeof analysis.merchant === 'string' ? analysis.merchant : undefined,
@@ -188,6 +284,7 @@ async function analyzeReceiptImageViaEdgeFunction(
       typeof analysis.currency === 'string' && analysis.currency.trim()
         ? analysis.currency
         : '¥',
+    transactionDate: txDateStr || undefined,
   };
 
   return receiptAnalysis;
@@ -212,7 +309,8 @@ async function analyzeReceiptImageDirectGemini(uri: string): Promise<ReceiptAnal
 
   const base64 = await compressToJpegBase64(uri);
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+  const model = getOcrGeminiModel() || DEFAULT_OCR_MODEL;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   console.log('[ReceiptAnalyzer] [DEV] 发送到 Gemini 的 URL:', url);
 
   const categorySpec = `
@@ -298,18 +396,42 @@ categoryKey 必须从以下枚举中选择一个：
         throw new Error('无法从 Gemini 返回内容中解析出票据 JSON');
       }
 
-      const analysis: ReceiptAnalysis = {
-        merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
-        items: Array.isArray(parsed.items) ? parsed.items : [],
-        total: typeof parsed.total === 'number' ? parsed.total : 0,
-        tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
-        currency:
-          typeof parsed.currency === 'string' && parsed.currency.trim()
-            ? parsed.currency
-            : '¥',
-      };
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.log('[OCR] datetime candidates (Direct Gemini):', {
+          transactionDate: parsed?.transactionDate,
+          transactionAt: parsed?.transactionAt,
+          purchasedAt: parsed?.purchasedAt,
+          datetime: parsed?.datetime,
+          date: parsed?.date,
+          time: parsed?.time,
+        });
+      }
 
-      return analysis;
+      // 交易时间：直连 Gemini 可能返回 transactionDate / transactionAt / purchasedAt / datetime
+        const txDateStr =
+          (typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()) ||
+          (typeof parsed.transactionAt === 'string' && parsed.transactionAt?.trim()) ||
+          (typeof parsed.purchasedAt === 'string' && parsed.purchasedAt?.trim()) ||
+          (typeof parsed.datetime === 'string' && parsed.datetime?.trim()) ||
+          undefined;
+
+        const rawSnippet =
+          modelReplyText.length > 80000 ? modelReplyText.slice(0, 80000) + '\n…(truncated)' : modelReplyText;
+        const analysis: ReceiptAnalysis = {
+          merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
+          items: Array.isArray(parsed.items) ? parsed.items : [],
+          total: typeof parsed.total === 'number' ? parsed.total : 0,
+          tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
+          currency:
+            typeof parsed.currency === 'string' && parsed.currency.trim()
+              ? parsed.currency
+              : '¥',
+          transactionDate: txDateStr || undefined,
+          ocr_raw_text: rawSnippet,
+        };
+
+        return analysis;
     }
 
     if ((res.status === 429 || res.status === 503) && i < maxRetry) {
@@ -323,7 +445,7 @@ categoryKey 必须从以下枚举中选择一个：
   throw new Error(`识别失败（HTTP ${lastStatus}）：${lastText}`);
 }
 
-export async function analyzeReceiptImage(uri: string): Promise<ReceiptAnalysis> {
+export async function analyzeReceiptImage(uri: string, trace?: ScanTrace): Promise<ReceiptAnalysis> {
   // 检查是否启用开发模式直连 Gemini fallback
   const useDirectGemini = isDevDirectGeminiEnabled();
   
@@ -340,13 +462,13 @@ export async function analyzeReceiptImage(uri: string): Promise<ReceiptAnalysis>
   // 主路径：调用 Supabase Edge Function
   // 优先尝试 ocr-receipt，如果 404 则回退到 ocr
   try {
-    return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr-receipt');
+    return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr-receipt', trace);
   } catch (error: any) {
     // 如果是 404（function 不存在），尝试回退到 ocr
     if (error.message === 'FUNCTION_NOT_FOUND') {
       console.log('[ReceiptAnalyzer] ocr-receipt not found, falling back to ocr');
       try {
-        return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr');
+        return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr', trace);
       } catch (fallbackError: any) {
         throw new Error(`Edge Function 调用失败（ocr-receipt 404，ocr 也失败）: ${fallbackError.message}`);
       }

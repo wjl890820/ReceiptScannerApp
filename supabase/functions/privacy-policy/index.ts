@@ -1,13 +1,39 @@
-// Auto-generated. Do not edit by hand.
-const PRIVACY_HTML = "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <title>Privacy Policy / プライバシーポリシー / 隐私政策</title>\n  <style>\n    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;line-height:1.6;max-width:820px;margin:0 auto;padding:20px;color:#222;background:#fff}\n    h1{border-bottom:2px solid #007AFF;padding-bottom:8px}\n    h2{margin-top:26px}\n    .meta{color:#666;font-size:12px;margin:0 0 18px}\n    .section{margin:26px 0;padding:18px;background:#f7f7f7;border-radius:10px}\n    .contact{margin-top:16px;padding:12px;background:#e8f4f8;border-radius:8px}\n    ul{padding-left:20px}\n    li{margin:6px 0}\n  </style>\n</head>\n<body>\n  <div class=\"meta\">Last updated: 2026-01-18</div>\n\n  <div class=\"section\" lang=\"ja\">\n    <h1>プライバシーポリシー</h1>\n    <h2>1. 収集する情報</h2>\n    <ul>\n      <li><strong>レシート画像</strong>：OCR（文字認識）処理のために一時的にサーバーへ送信します。処理後すぐに削除し、恒久的には保存しません。</li>\n      <li><strong>認識結果</strong>：商品名・価格・日付などの認識結果は、お使いの端末内（ローカル）にのみ保存されます。</li>\n      <li><strong>利用統計</strong>：不正利用防止・コスト管理のため、匿名化した利用統計（リクエスト数、トークン量等）を記録する場合があります。</li>\n    </ul>\n    <h2>2. 利用目的</h2>\n    <ul>\n      <li>レシート画像からテキスト／構造化データを抽出（OCR）</li>\n      <li>支出分析（端末内での集計）</li>\n      <li>API 利用状況の監視と不正利用の防止</li>\n    </ul>\n    <h2>3. 第三者サービス</h2>\n    <ul>\n      <li><strong>Google Gemini API</strong>：OCR 処理を実行します。画像は文字抽出の目的で送信され、処理後に破棄されます。</li>\n      <li><strong>Supabase</strong>：OCR サービスのホスティング等に利用します。画像は処理後に破棄されます。</li>\n    </ul>\n    <h2>4. ログとプライバシー保護</h2>\n    <ul>\n      <li>端末 ID やリクエストキーは、必要最小限の短いプレフィックスのみを記録します。</li>\n      <li>画像の base64 全文やレシート全文、商品明細などの機微情報はログに記録しません。</li>\n    </ul>\n    <h2>5. 保存と削除</h2>\n    <ul>\n      <li>認識結果は端末内の SQLite に保存されます。サーバー側からは参照できません。</li>\n      <li>アプリを削除すると端末内データは削除されます。設定画面から手動削除も可能です。</li>\n    </ul>\n    <h2>6. お問い合わせ</h2>\n    <div class=\"contact\"><strong>Email:</strong> wjl890820@gmail.com</div>\n  </div>\n\n  <div class=\"section\" lang=\"zh\">\n    <h1>隐私政策</h1>\n    <h2>1. 数据收集</h2>\n    <ul>\n      <li><strong>收据图片</strong>：用于 OCR（文字识别）处理，会临时发送到服务器；处理完成后立即删除，不会永久保存。</li>\n      <li><strong>识别结果</strong>：商品名、价格、日期等识别结果仅保存在你的设备本地（SQLite）。</li>\n      <li><strong>使用统计</strong>：为成本分析与防滥用，可能记录匿名化统计（请求次数、token 用量等）。</li>\n    </ul>\n    <h2>2. 数据用途</h2>\n    <ul>\n      <li>从收据图片中提取文本与结构化数据（OCR）</li>\n      <li>支出分析与汇总（本地计算）</li>\n      <li>监控 API 使用并防止滥用</li>\n    </ul>\n    <h2>3. 第三方服务</h2>\n    <ul>\n      <li><strong>Google Gemini API</strong>：执行 OCR 处理；图片仅用于文字提取，处理后即丢弃。</li>\n      <li><strong>Supabase</strong>：用于托管 OCR 服务等；图片处理后即丢弃。</li>\n    </ul>\n    <h2>4. 日志与隐私保护</h2>\n    <ul>\n      <li>设备标识与请求键仅记录必要的短前缀。</li>\n      <li>不会记录 base64 图片全文、收据全文、商品明细等敏感信息。</li>\n    </ul>\n    <h2>5. 存储与删除</h2>\n    <ul>\n      <li>识别结果仅在本地 SQLite 保存，我们无法访问。</li>\n      <li>卸载应用会删除本地数据，亦可在设置中手动删除。</li>\n    </ul>\n    <h2>6. 联系方式</h2>\n    <div class=\"contact\"><strong>Email:</strong> wjl890820@gmail.com</div>\n  </div>\n\n  <div class=\"section\" lang=\"en\">\n    <h1>Privacy Policy</h1>\n    <h2>1. Data Collection</h2>\n    <ul>\n      <li><strong>Receipt Images</strong>: Images are temporarily sent for OCR processing and deleted immediately after processing. We do not permanently store images.</li>\n      <li><strong>Recognition Results</strong>: Extracted items (names, prices, dates) are stored locally on your device (SQLite) only.</li>\n      <li><strong>Usage Statistics</strong>: We may record anonymized usage metrics (request counts, token usage) for cost control and abuse prevention.</li>\n    </ul>\n    <h2>2. Data Usage</h2>\n    <ul>\n      <li>Extract text and structured data from receipt images (OCR)</li>\n      <li>Spending summaries and analytics (computed locally)</li>\n      <li>Monitor API usage and prevent abuse</li>\n    </ul>\n    <h2>3. Third-Party Services</h2>\n    <ul>\n      <li><strong>Google Gemini API</strong>: Performs OCR processing. Images are sent only for text extraction and discarded after processing.</li>\n      <li><strong>Supabase</strong>: Hosts OCR services. Images are discarded after processing.</li>\n    </ul>\n    <h2>4. Logging & Privacy</h2>\n    <ul>\n      <li>We log only minimal short prefixes for identifiers when necessary.</li>\n      <li>We do not log full receipt text, base64 images, or item-level sensitive details.</li>\n    </ul>\n    <h2>5. Storage & Deletion</h2>\n    <ul>\n      <li>Recognition results are stored locally only. We cannot access your local database.</li>\n      <li>Uninstalling the app deletes local data. You can also delete data in the app settings.</li>\n    </ul>\n    <h2>6. Contact</h2>\n    <div class=\"contact\"><strong>Email:</strong> wjl890820@gmail.com</div>\n  </div>\n</body>\n</html>\n";
+// Supabase Edge Function: serve privacy policy HTML from Storage (bucket=legal, path=privacy-policy.html)
+// Returns UTF-8 HTML with correct Content-Type to fix iOS garbled text when opening the URL.
 
-Deno.serve((_req) => {
-  return new Response(PRIVACY_HTML, {
-    status: 200,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "public, max-age=600",
-      "access-control-allow-origin": "*",
-    },
-  });
+// deno-lint-ignore no-import-prefix -- Supabase Edge Functions require URL imports for Deno runtime
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const BUCKET = 'legal';
+const PATH = 'privacy-policy.html';
+
+const FALLBACK_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Privacy</title></head><body><p>页面暂不可用</p></body></html>`;
+
+const HEADERS = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Cache-Control': 'public, max-age=600',
+  'Access-Control-Allow-Origin': '*',
+};
+
+Deno.serve(async (_req: Request) => {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return new Response(FALLBACK_HTML, { status: 200, headers: HEADERS });
+  }
+
+  try {
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const { data, error } = await supabase.storage.from(BUCKET).download(PATH);
+
+    if (error || !data) {
+      return new Response(FALLBACK_HTML, { status: 200, headers: HEADERS });
+    }
+
+    const html = await data.text();
+    return new Response(html, { status: 200, headers: HEADERS });
+  } catch (_e) {
+    return new Response(FALLBACK_HTML, { status: 200, headers: HEADERS });
+  }
 });
