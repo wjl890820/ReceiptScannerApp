@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -59,6 +59,7 @@ type LineItem = {
 
 export default function ScanReviewScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { draftId } = useLocalSearchParams<{ draftId?: string }>();
 
@@ -81,6 +82,10 @@ export default function ScanReviewScreen() {
   const [showDevTrace, setShowDevTrace] = useState(false);
   const persistPayloadRef = useRef<{ id: string; state: ScanReviewEditorStateV1 } | null>(null);
   const saveInFlightRef = useRef(false);
+  // 离开保护：程序导航（保存成功/放弃/缺失返回）前置 true 以放行，避免被未保存确认拦截。
+  const allowLeaveRef = useRef(false);
+  // 离开确认 Alert 是否正在显示，避免同一次返回弹出多个确认框。
+  const leavePromptVisibleRef = useRef(false);
 
   useEffect(() => {
     let c = false;
@@ -241,6 +246,59 @@ export default function ScanReviewScreen() {
     };
   }, []);
 
+  // 离开前尽量 flush 一次最新 editor state；失败也不阻止离开（debounce + 卸载 flush 兜底）。
+  const flushPendingEditorState = useCallback(async () => {
+    const p = persistPayloadRef.current;
+    if (!p) return;
+    try {
+      await persistScanReviewDraftEditorState(p.id, p.state);
+    } catch (e) {
+      logger.warn('ScanReview', 'flushPendingEditorState failed', { error: e });
+    }
+  }, []);
+
+  // 每次渲染同步“是否为有效未保存草稿”的基础条件（基于 state/props，事件时再叠加 refs）。
+  const leaveGuardBaseRef = useRef(false);
+  leaveGuardBaseRef.current = !loading && !missing && !!draftId && !!snapshot && !saving;
+
+  // 离开保护：拦截系统返回 / 硬件返回 / 手势返回 / 顶部返回 / 程序外部 remove。
+  // 仅用 beforeRemove 单一监听，避免与 BackHandler 形成双重弹窗。
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', (e: any) => {
+      const shouldBlock =
+        leaveGuardBaseRef.current && !saveInFlightRef.current && !allowLeaveRef.current;
+      if (!shouldBlock) {
+        // 放行：保存成功/放弃/缺失返回等程序导航，或非未保存场景。
+        return;
+      }
+      e.preventDefault();
+      if (leavePromptVisibleRef.current) return;
+      leavePromptVisibleRef.current = true;
+      Alert.alert(t('scanReview.leaveGuardTitle'), t('scanReview.leaveGuardMessage'), [
+        {
+          text: t('scanReview.leaveGuardStay'),
+          style: 'cancel',
+          onPress: () => {
+            leavePromptVisibleRef.current = false;
+          },
+        },
+        {
+          text: t('scanReview.leaveGuardLeave'),
+          style: 'destructive',
+          onPress: () => {
+            leavePromptVisibleRef.current = false;
+            // 保留 draft：不清理、不保存到历史，仅放行离开；离开前 flush 最新编辑态。
+            allowLeaveRef.current = true;
+            void flushPendingEditorState().finally(() => {
+              navigation.dispatch(e.data.action);
+            });
+          },
+        },
+      ]);
+    });
+    return unsub;
+  }, [navigation, flushPendingEditorState]);
+
   const toggleErrorTag = (tag: string) => {
     if (!isReceiptReviewErrorTag(tag)) return;
     setErrorTags((prev) => {
@@ -353,6 +411,8 @@ export default function ScanReviewScreen() {
         onPress: () => {
           void (async () => {
             const next = await completeSavedDraftAndGetNext(id);
+            // 放弃是用户明确意图，导航前放行离开保护，避免再弹未保存确认。
+            allowLeaveRef.current = true;
             if (next) {
               router.replace(`/scan-review/${next}` as any);
             } else {
@@ -451,6 +511,8 @@ export default function ScanReviewScreen() {
           text: t('easterEgg.ok'),
           onPress: () => {
             // draft 与队列已在保存成功后处理完毕，这里只负责导航。
+            // 保存成功导航必须放行离开保护，避免被未保存确认拦截。
+            allowLeaveRef.current = true;
             if (nextDraftId) {
               router.replace(`/scan-review/${nextDraftId}` as any);
             } else {
