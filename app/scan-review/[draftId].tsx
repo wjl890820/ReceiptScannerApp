@@ -70,6 +70,7 @@ export default function ScanReviewScreen() {
   const [categoryModalIndex, setCategoryModalIndex] = useState(-1);
   const [showDevTrace, setShowDevTrace] = useState(false);
   const persistPayloadRef = useRef<{ id: string; state: ScanReviewEditorStateV1 } | null>(null);
+  const saveInFlightRef = useRef(false);
 
   useEffect(() => {
     let c = false;
@@ -259,27 +260,41 @@ export default function ScanReviewScreen() {
 
   const snapItemsArr = Array.isArray(snapshot?.items) ? snapshot.items : [];
 
-  const goNextOrBack = async (currentDraftId: string) => {
-    try {
-      await removeScanReviewDraft(currentDraftId);
-    } catch (e) {
-      logger.warn('ScanReview', 'removeScanReviewDraft failed', { draftId: currentDraftId, error: e });
-    }
-    persistPayloadRef.current = null;
-    try {
-      const next = await peekNextDraftId(currentDraftId);
-      if (next) {
-        router.replace(`/scan-review/${next}` as any);
-      } else {
-        router.back();
+  /**
+   * 小票保存成功后立即清理对应 draft，并取得队列中的下一张 draft id。
+   * 清理失败不会回滚已保存的 receipt（当前无事务机制），但必须保证：
+   *  - persistPayloadRef 被清空，避免卸载时再次 flush 已保存的 draft；
+   *  - 无论删除成功与否都尝试推进队列，避免用户停留在当前 draft 重复点保存。
+   */
+  const completeSavedDraftAndGetNext = useCallback(
+    async (currentDraftId: string): Promise<string | null> => {
+      let removed = false;
+      for (let attempt = 1; attempt <= 3 && !removed; attempt++) {
+        try {
+          await removeScanReviewDraft(currentDraftId);
+          removed = true;
+        } catch (e) {
+          logger.warn('ScanReview', 'removeScanReviewDraft failed', {
+            draftId: currentDraftId,
+            attempt,
+            error: e,
+          });
+        }
       }
-    } catch (e) {
-      logger.warn('ScanReview', 'peekNextDraftId failed', { error: e });
-      router.back();
-    }
-  };
+      // 即使删除失败也清空，确保卸载时不再回写已保存 draft。
+      persistPayloadRef.current = null;
+      try {
+        return await peekNextDraftId(currentDraftId);
+      } catch (e) {
+        logger.warn('ScanReview', 'peekNextDraftId failed', { error: e });
+        return null;
+      }
+    },
+    []
+  );
 
   const onDiscard = () => {
+    if (saving || saveInFlightRef.current) return;
     const id = String(draftId || '');
     Alert.alert(t('scanReview.discardTitle'), t('scanReview.discardMessage'), [
       { text: t('home.scan.cancel'), style: 'cancel' },
@@ -287,22 +302,32 @@ export default function ScanReviewScreen() {
         text: t('scanReview.discardConfirm'),
         style: 'destructive',
         onPress: () => {
-          void goNextOrBack(id);
+          void (async () => {
+            const next = await completeSavedDraftAndGetNext(id);
+            if (next) {
+              router.replace(`/scan-review/${next}` as any);
+            } else {
+              router.back();
+            }
+          })();
         },
       },
     ]);
   };
 
   const onSave = async () => {
+    if (saving || saveInFlightRef.current) return;
     const id = String(draftId || '');
     if (!snapshot || !id) return;
-    const draft = await getScanReviewDraft(id);
-    if (!draft) {
-      Alert.alert(t('scanReview.missingTitle'), t('scanReview.missingMessage'));
-      return;
-    }
 
+    saveInFlightRef.current = true;
     try {
+      const draft = await getScanReviewDraft(id);
+      if (!draft) {
+        Alert.alert(t('scanReview.missingTitle'), t('scanReview.missingMessage'));
+        return;
+      }
+
       setSaving(true);
       const flush = persistPayloadRef.current;
       if (flush && flush.id === id) {
@@ -339,6 +364,10 @@ export default function ScanReviewScreen() {
         note: note.trim() || null,
       });
 
+      // 保存成功即视为不可重复：立刻清理 draft 并推进队列，
+      // 避免崩溃/退出/被系统杀进程导致下次重复保存同一张小票。
+      const nextDraftId = await completeSavedDraftAndGetNext(id);
+
       try {
         await applyReviewCorrectionsToLearning({
           snapshotItems: Array.isArray(snapshot.items) ? snapshot.items : [],
@@ -372,7 +401,12 @@ export default function ScanReviewScreen() {
         {
           text: t('easterEgg.ok'),
           onPress: () => {
-            void goNextOrBack(id);
+            // draft 与队列已在保存成功后处理完毕，这里只负责导航。
+            if (nextDraftId) {
+              router.replace(`/scan-review/${nextDraftId}` as any);
+            } else {
+              router.back();
+            }
           },
         },
       ]);
@@ -380,6 +414,7 @@ export default function ScanReviewScreen() {
       Alert.alert(t('scanReview.saveFailedTitle'), e?.message ?? String(e));
     } finally {
       setSaving(false);
+      saveInFlightRef.current = false;
     }
   };
 
