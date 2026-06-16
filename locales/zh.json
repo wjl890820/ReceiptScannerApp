@@ -89,7 +89,14 @@
       "error": "错误",
       "errorMessage": "请稍后重试。",
       "partialTitle": "部分图片未识别",
-      "noImages": "未选择图片，请重试。"
+      "noImages": "未选择图片，请重试。",
+      "retry": "重试",
+      "retryFailed": "重试失败图片",
+      "retryAll": "全部重试",
+      "continueSuccessful": "继续审核成功的小票",
+      "allFailedTitle": "全部识别失败",
+      "singleFailedMessage": "识别失败。你可以重试同一张图片。",
+      "partialRetryStillFailed": "部分图片重试后仍未识别成功。"
     },
     "continueReviewTitle": "继续审核未完成的小票",
     "continueReviewSubtitle": "还有 {count} 张小票等待确认",
@@ -153,6 +160,7 @@
     "savedTitle": "已保存",
     "savedMessage": "已写入本地数据库，可继续审核下一张。",
     "saveFailedTitle": "保存失败",
+    "saveFailedMessage": "保存失败，但当前审核草稿已保留。请稍后重试。",
     "flowHint": "左上角返回会保留草稿；放弃会删除草稿且不保存。",
     "sectionYourEdits": "当前编辑",
     "sectionYourEditsSub": "此处修改会写入历史记录。",

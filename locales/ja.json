@@ -89,7 +89,14 @@
       "error": "エラー",
       "errorMessage": "後でもう一度お試しください。",
       "partialTitle": "一部の画像は失敗しました",
-      "noImages": "画像が選ばれていません。もう一度お試しください。"
+      "noImages": "画像が選ばれていません。もう一度お試しください。",
+      "retry": "再試行",
+      "retryFailed": "失敗した画像を再試行",
+      "retryAll": "すべて再試行",
+      "continueSuccessful": "成功したレシートの確認へ進む",
+      "allFailedTitle": "すべての認識に失敗しました",
+      "singleFailedMessage": "認識に失敗しました。同じ画像を再試行できます。",
+      "partialRetryStillFailed": "一部の画像は再試行後も認識できませんでした。"
     },
     "continueReviewTitle": "未完了のレシート確認を再開",
     "continueReviewSubtitle": "確認待ちのレシートが {count} 件あります",
@@ -153,6 +160,7 @@
     "savedTitle": "保存しました",
     "savedMessage": "ローカルに保存しました。次があれば続けて確認できます。",
     "saveFailedTitle": "保存に失敗",
+    "saveFailedMessage": "保存に失敗しましたが、この確認下書きは保持されています。もう一度お試しください。",
     "flowHint": "戻ると下書きを保持します。破棄すると保存せず削除します。",
     "sectionYourEdits": "編集内容",
     "sectionYourEditsSub": "ここでの変更が履歴に保存されます。",

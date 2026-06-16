@@ -89,7 +89,14 @@
       "error": "Error",
       "errorMessage": "Please try again later.",
       "partialTitle": "Some images failed",
-      "noImages": "No image was selected. Please try again."
+      "noImages": "No image was selected. Please try again.",
+      "retry": "Retry",
+      "retryFailed": "Retry failed images",
+      "retryAll": "Retry all",
+      "continueSuccessful": "Continue successful reviews",
+      "allFailedTitle": "All scans failed",
+      "singleFailedMessage": "Recognition failed. You can retry the same image.",
+      "partialRetryStillFailed": "Some images still failed after retry."
     },
     "continueReviewTitle": "Continue unfinished reviews",
     "continueReviewSubtitle": "{count} receipt(s) waiting for confirmation",
@@ -153,6 +160,7 @@
     "savedTitle": "Saved",
     "savedMessage": "Stored locally. Continue with the next receipt if any.",
     "saveFailedTitle": "Save failed",
+    "saveFailedMessage": "Save failed, but this review draft has been kept. Please try again.",
     "flowHint": "Back keeps this draft. Discard deletes it without saving.",
     "sectionYourEdits": "Your edits",
     "sectionYourEditsSub": "Changes here are saved to your history.",
