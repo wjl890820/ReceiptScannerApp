@@ -35,6 +35,13 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "小票画像を選択して認識するため、写真ライブラリへのアクセスを使用します。",
+          "cameraPermission": "小票を撮影して認識するため、カメラを使用します。"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
