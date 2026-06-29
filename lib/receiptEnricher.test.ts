@@ -86,8 +86,14 @@ describe('resolveProductCategoryRuntime: 运行时优先级', () => {
   });
 });
 
-describe('applyCategoriesWithLearning: 端到端运行时分类', () => {
-  async function enrichOne(name: string, categoryKey: string, lineTotal = 100): Promise<string> {
+describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () => {
+  // 真实路径：runScanPipelineToReview → applyCategoriesWithLearning（内部走真实 classifyItem）。
+  // 仅 mock 宽泛 dictionary（バター→食材），不 mock classifyItem，确保覆盖运行时分类链路。
+  async function enrichOne(
+    name: string,
+    categoryKey: string,
+    lineTotal = 100
+  ): Promise<{ category: string; source: string | null }> {
     const analysis: any = {
       merchant: 'セブン-イレブン',
       items: [{ name, quantity: 1, unitPrice: lineTotal, lineTotal, categoryKey }],
@@ -96,19 +102,34 @@ describe('applyCategoriesWithLearning: 端到端运行时分类', () => {
       currency: 'JPY',
     };
     const out = await applyCategoriesWithLearning(analysis);
-    return (out.items as any[])[0].category;
+    const item = (out.items as any[])[0];
+    return { category: item.category, source: item.classification_source ?? null };
   }
 
-  it('シュガーバター + categoryKey=snacks_drinks → snacks_drinks（不被 dictionary バター 覆盖）', async () => {
-    expect(await enrichOne('シュガーバター', 'snacks_drinks', 578)).toBe('snacks_drinks');
+  it('シュガーバター + categoryKey=snacks_drinks → snacks_drinks，且 source 不是 dictionary', async () => {
+    const { category, source } = await enrichOne('シュガーバター', 'snacks_drinks', 578);
+    expect(category).toBe('snacks_drinks');
+    // 关键修复点：不得被 broad dictionary(バター→food_ingredients) 抢分类。
+    expect(source).not.toBe('dictionary');
+    expect(source).toBe('name_rule');
+  });
+
+  it('バターサンド → snacks_drinks（具体名规则早于 dictionary バター）', async () => {
+    const { category, source } = await enrichOne('バターサンド', 'ready_to_eat', 200);
+    expect(category).toBe('snacks_drinks');
+    expect(source).not.toBe('dictionary');
   });
 
   it('有塩バター → food_ingredients', async () => {
-    expect(await enrichOne('有塩バター', 'dairy_egg', 300)).toBe('food_ingredients');
+    expect((await enrichOne('有塩バター', 'dairy_egg', 300)).category).toBe('food_ingredients');
   });
 
   it('とりきも + categoryKey=ready_to_eat → food_ingredients（不盲从 OCR）', async () => {
-    expect(await enrichOne('とりきも', 'ready_to_eat', 150)).toBe('food_ingredients');
+    expect((await enrichOne('とりきも', 'ready_to_eat', 150)).category).toBe('food_ingredients');
+  });
+
+  it('K午後MT500 + categoryKey=snacks_drinks → snacks_drinks（名规则不确定时用 OCR key 辅助）', async () => {
+    expect((await enrichOne('K午後MT500', 'snacks_drinks', 130)).category).toBe('snacks_drinks');
   });
 
   it('一票多项：各自按运行时优先级得到正确分类', async () => {

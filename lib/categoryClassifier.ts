@@ -11,6 +11,7 @@ import type { AnalysisTag, MainCategory, SubCategory } from './categoryTaxonomyV
 import { mapLegacyCategoryToV1, mapV1ToLegacyCategory } from './categoryTaxonomyV1';
 import { matchItemRule } from './itemRulesV1';
 import { lookupProductDictionary } from './productDictionary';
+import { classifyItemByName } from './productCategory';
 import {
   classifyViaEdgeFunction,
   getLastClassifyError,
@@ -37,7 +38,7 @@ export type ClassifyOutput = {
   // Legacy single-level category id (kept for compatibility with existing UI/analytics)
   categoryId: string;
   confidence: number;
-  source: 'alias' | 'dictionary' | 'mapping' | 'rules' | 'ai' | 'fallback';
+  source: 'alias' | 'dictionary' | 'mapping' | 'rules' | 'name_rule' | 'ai' | 'fallback';
   reason?: string;
   // V1 main/sub/tags (preferred for new pipeline)
   category_main?: MainCategory;
@@ -190,7 +191,72 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
     (canonicalName && canonicalName.trim() ? canonicalName : normalizedName).trim().toLowerCase();
   const merchantHint = merchantName ? normalizeMerchantName(merchantName) : null;
 
-  // 0. Product dictionary (highest priority)
+  // 优先级（修复 シュガーバター 等具体商品名被宽泛 dictionary 抢分类）：
+  //   1. 用户学习 (local mapping)
+  //   2. 具体商品名规则 (productCategory.classifyItemByName) —— 必须早于宽泛 dictionary
+  //   3. 本地规则 itemRulesV1
+  //   4. 宽泛 dictionary
+  //   5. (AI 慢路径，默认跳过)
+  //   6. uncategorized 兜底
+  // alias 在 receiptEnricher 中先于 classifyItem 处理，仍为最高优先。
+
+  // 1. Local mapping (用户学习) —— classifyItem 内最高优先
+  const learnedCategory = await getLearnedCategory(normalized, merchantHint);
+  if (learnedCategory && ALL_CATEGORIES.includes(learnedCategory as Category)) {
+    if (classificationStats) classificationStats.mapping++;
+    const v1 = mapLegacyCategoryToV1(learnedCategory);
+    return {
+      categoryId: learnedCategory,
+      confidence: 1.0,
+      source: 'mapping',
+      reason: 'Local mapping match',
+      category_main: v1.main,
+      category_sub: v1.sub,
+      analysis_tags: undefined,
+    };
+  }
+
+  // 2. 具体商品名规则（productCategory.ts 关键词）—— 早于宽泛 dictionary。
+  //    例：シュガーバター/バターサンド → snacks_drinks，不会被 dictionary 的 バター→食材 抢走。
+  //    不确定时返回 uncategorized，继续往下走 itemRulesV1 / dictionary。
+  const nameCat = classifyItemByName(rawName || normalizedName);
+  if (nameCat !== 'uncategorized') {
+    if (classificationStats) classificationStats.rules++;
+    const v1 = mapLegacyCategoryToV1(nameCat);
+    const legacy = mapV1ToLegacyCategory({ main: v1.main, sub: v1.sub }) as Category;
+    return {
+      categoryId: legacy,
+      confidence: 0.9,
+      source: 'name_rule',
+      reason: `Specific name rule: ${nameCat}`,
+      category_main: v1.main,
+      category_sub: v1.sub,
+      analysis_tags: undefined,
+    };
+  }
+
+  // 3. Rule-based matching (itemRulesV1, rules-first). Only call API when rules miss.
+  const ruleResult = classifyByRulesV1(rawName, canonical, merchantName);
+  const cachedRule = ruleResult && ruleResult.confidence >= 0.7 ? ruleResult : null;
+
+  if (ruleResult && ruleResult.confidence >= 0.8) {
+    if (classificationStats) classificationStats.rules++;
+    if (ruleResult.confidence >= 0.85) {
+      const mh = merchantName ? normalizeMerchantName(merchantName) : '';
+      await learnCategoryMapping(normalized, mh || null, ruleResult.legacy, ruleResult.confidence);
+    }
+    return {
+      categoryId: ruleResult.legacy,
+      confidence: ruleResult.confidence,
+      source: 'rules',
+      reason: ruleResult.reason,
+      category_main: ruleResult.v1.category_main,
+      category_sub: ruleResult.v1.category_sub,
+      analysis_tags: ruleResult.v1.analysis_tags,
+    };
+  }
+
+  // 4. 宽泛 product dictionary（仅在具体商品名规则 / itemRulesV1 都未命中时使用）。
   try {
     const hit = await lookupProductDictionary(canonical);
     if (hit?.category_main) {
@@ -210,43 +276,6 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
     }
   } catch {
     // degrade gracefully
-  }
-
-  // 1. Local mapping (highest priority)
-  const learnedCategory = await getLearnedCategory(normalized, merchantHint);
-  if (learnedCategory && ALL_CATEGORIES.includes(learnedCategory as Category)) {
-    if (classificationStats) classificationStats.mapping++;
-    const v1 = mapLegacyCategoryToV1(learnedCategory);
-    return {
-      categoryId: learnedCategory,
-      confidence: 1.0,
-      source: 'mapping',
-      reason: 'Local mapping match',
-      category_main: v1.main,
-      category_sub: v1.sub,
-      analysis_tags: undefined,
-    };
-  }
-
-  // 2. Rule-based matching (rules-first). Only call API when rules miss.
-  const ruleResult = classifyByRulesV1(rawName, canonical, merchantName);
-  const cachedRule = ruleResult && ruleResult.confidence >= 0.7 ? ruleResult : null;
-
-  if (ruleResult && ruleResult.confidence >= 0.8) {
-    if (classificationStats) classificationStats.rules++;
-    if (ruleResult.confidence >= 0.85) {
-      const mh = merchantName ? normalizeMerchantName(merchantName) : '';
-      await learnCategoryMapping(normalized, mh || null, ruleResult.legacy, ruleResult.confidence);
-    }
-    return {
-      categoryId: ruleResult.legacy,
-      confidence: ruleResult.confidence,
-      source: 'rules',
-      reason: ruleResult.reason,
-      category_main: ruleResult.v1.category_main,
-      category_sub: ruleResult.v1.category_sub,
-      analysis_tags: ruleResult.v1.analysis_tags,
-    };
   }
 
   const useRuleFallback = (r: typeof ruleResult) => {

@@ -1,7 +1,7 @@
 // lib/receiptEnricher.ts
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
 import { learnCategoryMapping, getLearnedCategory } from './categoryLearner';
-import { resolveProductCategoryRuntime } from './productCategory';
+import { resolveProductCategoryRuntime, mapKnownProductCategory, classifyItemByName } from './productCategory';
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
@@ -399,7 +399,8 @@ export async function applyCategoriesWithLearning(
     const clsSource = classificationOut?.source as string | undefined;
     const aliasOrLearned =
       clsSource === 'alias' || clsSource === 'mapping' ? category : null;
-    const ruleCandidate = clsSource === 'rules' ? category : null;
+    // 'name_rule' = classifyItem 内部命中 productCategory 具体商品名规则，按规则候选处理。
+    const ruleCandidate = clsSource === 'rules' || clsSource === 'name_rule' ? category : null;
     // dictionary 与 fallback（OCR 兜底覆盖到的 legacy）都视为“宽泛”候选。
     const dictionaryCandidate =
       clsSource === 'dictionary' || clsSource === 'fallback' ? category : null;
@@ -411,6 +412,24 @@ export async function applyCategoriesWithLearning(
       dictionary: dictionaryCandidate,
       ocrKey: ocrCategoryKey,
     });
+
+    // 临时开发日志：仅当分类器结果与最终结果不一致（发生纠偏）时打印，避免噪声。
+    // 用于确认 シュガーバター 等不再被 broad dictionary 抢成 food_ingredients。
+    if (__DEV__) {
+      const classifierCategory = mapKnownProductCategory(category) ?? null;
+      const nameRuleCategory = classifyItemByName(name);
+      if (classifierCategory !== productCategory) {
+        // eslint-disable-next-line no-console
+        console.log('[CategoryResolve]', {
+          name,
+          classifierSource: clsSource ?? null,
+          classifierCategory,
+          nameRuleCategory,
+          ocrCategoryKey,
+          finalCategory: productCategory,
+        });
+      }
+    }
 
     const enrichedItem: any = {
       ...it,
