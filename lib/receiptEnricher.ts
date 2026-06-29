@@ -1,6 +1,7 @@
 // lib/receiptEnricher.ts
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
-import { learnCategoryMapping } from './categoryLearner';
+import { learnCategoryMapping, getLearnedCategory } from './categoryLearner';
+import { resolveProductCategory } from './productCategory';
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
@@ -379,18 +380,31 @@ export async function applyCategoriesWithLearning(
       }
     }
 
+    // 解析最终展示/存储用的"新一级分类"（item.category）：
+    //   优先级：本地学习记忆 → 既有分类器结果(legacy) → OCR categoryKey → 商品名关键词 → uncategorized
+    // 本地学习对便利店(非 grocery)商品也生效（分类器分支可能被跳过）。
+    const ocrCategoryKey = typeof (it as any)?.categoryKey === 'string' ? (it as any).categoryKey : null;
+    let learnedRaw: string | null = null;
+    try {
+      learnedRaw = await getLearnedCategory(norm.normalized_name, merchantRaw || merchantNormalized || null);
+    } catch {
+      learnedRaw = null;
+    }
+    const productCategory = resolveProductCategory(name, [learnedRaw, category, ocrCategoryKey]);
+
     const enrichedItem: any = {
       ...it,
       // Keep existing fields (compat)
       name,
-      category: category as any,
+      // item.category 统一为新一级分类 enum（绝不写入店铺类型词）
+      category: productCategory as any,
       // 新字段：分类状态与置信度（兼容旧数据，读取时需做默认值处理）
       classification_status: classificationStatus,
       classification_confidence: classificationConfidence,
       classification_source: classificationOut?.source ?? null,
       // Compatibility bridge for older modules that still read item.classification.*
       classification: {
-        category: category as any,
+        category: productCategory as any,
         status: classificationStatus,
         confidence: classificationConfidence,
       },

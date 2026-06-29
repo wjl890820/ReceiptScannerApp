@@ -44,13 +44,14 @@ describe('aggregateCategoryData', () => {
     const receipts: ReceiptRow[] = [
       minimalReceipt({
         user_items_json: JSON.stringify([
-          { name: 'A', lineTotal: 100, category: 'vegetables', classification_status: 'ok' },
+          // 旧 enum 'produce' 经 normalizeProductCategory 归一为 'food_ingredients'
+          { name: 'A', lineTotal: 100, category: 'produce', classification_status: 'ok' },
         ]),
       }),
     ];
     const got = aggregateCategoryData(receipts);
     expect(got).toHaveLength(1);
-    expect(got[0].category).toBe('vegetables');
+    expect(got[0].category).toBe('food_ingredients');
     expect(got[0].amount).toBe(100);
     expect(got[0].percentage).toBe(100);
   });

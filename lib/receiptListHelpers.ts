@@ -4,6 +4,7 @@
 
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { getCategoryLabel } from './categoryPalette';
+import { normalizeProductCategory } from './productCategory';
 
 function safeNumber(v: unknown): number {
   const n = Number(v);
@@ -33,11 +34,13 @@ export function buildTopCategories(
   const map = new Map<string, number>();
 
   for (const it of items) {
-    const key = String(it?.category ?? it?.categoryKey ?? '').trim();
-    if (!key || key === 'non_grocery' || isExcludedFromAnalytics(key)) continue;
     const status = (it as any).classification_status as string | undefined;
     if (status !== undefined && status !== 'ok' && status !== 'fallback') continue;
-    if (!isGroceryCategory(key)) continue;
+    const key = normalizeProductCategory(
+      it?.category ?? it?.categoryKey,
+      typeof it?.name === 'string' ? it.name : undefined
+    );
+    if (isExcludedFromAnalytics(key) || !isGroceryCategory(key)) continue;
 
     const lineTotal = safeNumber(it?.lineTotal);
     const quantity = safeNumber(it?.quantity);

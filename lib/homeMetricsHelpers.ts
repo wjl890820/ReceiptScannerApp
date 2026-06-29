@@ -6,6 +6,7 @@ import type { ReceiptRow } from './db';
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
 import { isGroceryMerchant } from './groceryDetector';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
+import { normalizeProductCategory } from './productCategory';
 
 export type CategoryData = {
   category: string;
@@ -66,17 +67,19 @@ export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
       if (lineTotal <= 0) continue;
       hadAnyLineTotal = true;
 
-      // Prefer legacy category for current home analytics labels.
-      // New V1 main/sub is stored and can be used later without breaking UI.
-      const rawCategory = (item as any).category;
-      const category = (typeof rawCategory === 'string' && rawCategory.trim()) || 'uncategorized';
+      // 统一归一到新一级分类，避免新旧 enum 在饼图里产生同义重复分片。
+      const rawCategory = (item as any).category ?? (item as any).categoryKey;
+      const category = normalizeProductCategory(
+        rawCategory,
+        typeof (item as any).name === 'string' ? (item as any).name : undefined
+      );
       const rawStatus = (item as any).classification_status as
         | 'ok'
         | 'pending'
         | 'failed'
         | 'fallback'
         | undefined;
-      const hasCategory = !!(typeof (item as any).category === 'string' && (item as any).category.trim());
+      const hasCategory = category !== 'uncategorized';
       const status: 'ok' | 'pending' | 'failed' | 'fallback' =
         rawStatus || (hasCategory ? 'ok' : 'failed');
 
@@ -129,15 +132,18 @@ export function computeUncategorizedSummary(
       const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
       if (lineTotal <= 0) continue;
 
-      const rawCategory = (item as any).category || '';
-      const category = typeof rawCategory === 'string' ? rawCategory : '';
+      const rawCategory = (item as any).category ?? (item as any).categoryKey;
+      const category = normalizeProductCategory(
+        rawCategory,
+        typeof (item as any).name === 'string' ? (item as any).name : undefined
+      );
       const rawStatus = (item as any).classification_status as
         | 'ok'
         | 'pending'
         | 'failed'
         | 'fallback'
         | undefined;
-      const hasCategory = !!(typeof (item as any).category === 'string' && (item as any).category.trim());
+      const hasCategory = category !== 'uncategorized';
       const status: 'ok' | 'pending' | 'failed' | 'fallback' =
         rawStatus || (hasCategory ? 'ok' : 'failed');
 

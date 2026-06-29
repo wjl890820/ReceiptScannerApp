@@ -392,6 +392,14 @@
     "ok": "OK"
   },
   "category": {
+    "food_ingredients": "Ingredients",
+    "ready_to_eat": "Ready-to-eat",
+    "snacks_drinks": "Snacks & drinks",
+    "household": "Household",
+    "personal_care": "Personal care",
+    "pet_care": "Pet care",
+    "uncategorized": "Uncategorized",
+    "other": "Other",
     "produce": "Produce",
     "meat_seafood": "Meat & Seafood",
     "dairy_eggs": "Dairy & Eggs",
@@ -402,13 +410,11 @@
     "condiments": "Condiments & Seasonings",
     "non_alcoholic_drinks": "Non-Alcoholic Drinks",
     "alcohol": "Alcohol",
-    "household": "Household & Hygiene",
     "frozen_foods": "Frozen Foods",
     "canned_preserved": "Canned & Preserved",
     "beverages_other": "Other Beverages",
     "health_supplements": "Health Supplements",
     "other_grocery": "Other Grocery",
-    "uncategorized": "Uncategorized",
     "non_grocery": "Not Grocery"
   },
   "categoriesShort": {

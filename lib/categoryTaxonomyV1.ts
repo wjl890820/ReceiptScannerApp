@@ -129,6 +129,18 @@ export function mapLegacyCategoryToV1(category: string | null | undefined): Main
   if (!c) return { main: 'uncategorized', sub: null };
 
   switch (c) {
+    // ---- 新一级分类（ProductCategory）→ V1 ----
+    case 'food_ingredients':
+      return { main: 'ingredients', sub: null };
+    case 'ready_to_eat':
+      return { main: 'prepared_food', sub: null };
+    case 'snacks_drinks':
+      return { main: 'snacks', sub: null };
+    case 'personal_care':
+      return { main: 'health', sub: null };
+    case 'pet_care':
+      return { main: 'other', sub: null };
+    // ---- 旧 16 类 → V1 ----
     case 'produce':
       return { main: 'ingredients', sub: 'vegetables' };
     case 'meat_seafood':

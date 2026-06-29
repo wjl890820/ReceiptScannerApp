@@ -770,7 +770,7 @@ export default function HomeScreen() {
       return null;
     }
     const topCategory = categoryData[0];
-    const nonEssentialCategories = ['snacks', 'non_alcoholic_drinks', 'ready_meals'];
+    const nonEssentialCategories = ['snacks_drinks', 'ready_to_eat'];
     const nonEssentialAmount = categoryData
       .filter((item) => nonEssentialCategories.includes(item.category))
       .reduce((sum, item) => sum + item.amount, 0);

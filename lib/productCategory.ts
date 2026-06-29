@@ -1,0 +1,257 @@
+/**
+ * 统一的商品一级分类（面向"超市/便利店小票 + 生活建议"，刻意保持少而稳定）。
+ *
+ * 这是 item.category 的唯一真源：OCR/旧分类/店铺类型词都必须经过本模块归一，
+ * 绝不允许"非超市/便利店/超市/コンビニ/スーパー"等店铺类型作为商品分类。
+ *
+ * 纯函数、无副作用、可单测；不依赖 categories.ts（避免循环依赖）。
+ */
+
+export type ProductCategory =
+  | 'food_ingredients' // 食材
+  | 'ready_to_eat' // 即食餐
+  | 'snacks_drinks' // 饮料零食
+  | 'household' // 日用消耗
+  | 'personal_care' // 个人护理
+  | 'pet_care' // 宠物用品
+  | 'uncategorized' // 待分类
+  | 'other'; // 其他
+
+/** 全部可选分类（用于审核页/详情页选择列表） */
+export const PRODUCT_CATEGORIES: readonly ProductCategory[] = [
+  'food_ingredients',
+  'ready_to_eat',
+  'snacks_drinks',
+  'household',
+  'personal_care',
+  'pet_care',
+  'uncategorized',
+  'other',
+];
+
+/** 核心生活分类（参与分类统计；不含 uncategorized / other） */
+export const CORE_PRODUCT_CATEGORIES: readonly ProductCategory[] = [
+  'food_ingredients',
+  'ready_to_eat',
+  'snacks_drinks',
+  'household',
+  'personal_care',
+  'pet_care',
+];
+
+function isProductCategory(v: string): v is ProductCategory {
+  return (PRODUCT_CATEGORIES as readonly string[]).includes(v);
+}
+
+/**
+ * 店铺类型词绝不允许作为商品分类。它们不在 OLD_TO_NEW / 新 enum 中，
+ * 因此会被自动当作"未知 rawCategory"忽略，转而用 itemName 分类。
+ * （此处仅作文档说明：非超市 / 超市 / 便利店 / コンビニ / スーパー / grocery /
+ *   non_grocery / store / merchant / drugstore / restaurant 等。）
+ */
+
+/**
+ * 旧分类 / OCR categoryKey / V1 main → 新分类映射。
+ * 不包含 uncategorized（保持原样）与店铺类型词（在 STORE_TYPE_WORDS 处理）。
+ */
+const OLD_TO_NEW: Record<string, ProductCategory> = {
+  // ---- 旧 16 类 grocery ----
+  produce: 'food_ingredients',
+  meat_seafood: 'food_ingredients',
+  dairy_eggs: 'food_ingredients',
+  bakery: 'food_ingredients',
+  staples: 'food_ingredients',
+  condiments: 'food_ingredients',
+  quick_meals: 'ready_to_eat',
+  frozen_foods: 'ready_to_eat',
+  canned_preserved: 'food_ingredients',
+  snacks_sweets: 'snacks_drinks',
+  non_alcoholic_drinks: 'snacks_drinks',
+  beverages_other: 'snacks_drinks',
+  alcohol: 'snacks_drinks',
+  household: 'household',
+  health_supplements: 'personal_care',
+  other_grocery: 'other',
+  // ---- OCR prompt categoryKey ----
+  fresh: 'food_ingredients',
+  staple: 'food_ingredients',
+  dairy_egg: 'food_ingredients',
+  snack: 'snacks_drinks',
+  drink: 'snacks_drinks',
+  frozen_deli: 'ready_to_eat',
+  seasoning: 'food_ingredients',
+  // household / alcohol 已在上面
+  other: 'other',
+  // ---- 此前提案 / V1 main 等历史值 ----
+  prepared_food: 'ready_to_eat',
+  beverage: 'snacks_drinks',
+  beverages: 'snacks_drinks',
+  snacks: 'snacks_drinks',
+  ingredients: 'food_ingredients',
+  daily_goods: 'household',
+  health: 'personal_care',
+  other_food: 'other',
+};
+
+function toHalfWidthLower(s: string): string {
+  return (s || '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * 关键词分类（覆盖超市/便利店常见商品）。返回核心分类或 uncategorized。
+ * 顺序很重要：先匹配更具体/更易误伤的类别（pet/personal_care/household），
+ * 再 ready_to_eat（サンド/惣菜パン 等需早于 food_ingredients 的"パン"），最后 food_ingredients。
+ */
+export function classifyItemByName(itemName: string): ProductCategory {
+  const n = toHalfWidthLower(itemName);
+  if (!n) return 'uncategorized';
+
+  const has = (arr: string[]) => arr.some((k) => n.includes(toHalfWidthLower(k)));
+
+  // 宠物用品（很具体，优先）
+  if (
+    has([
+      'ペットフード', 'ドッグフード', 'キャットフード', 'ペットシーツ', 'ペット用', 'ペットウェット',
+      'ペットおやつ', 'ちゅーる', 'チュール', '猫缶', '犬缶', '猫砂', 'トイレ砂', 'ねこ砂',
+      '猫', '犬', 'ペット', 'cat food', 'dog food', 'pet',
+    ])
+  ) {
+    return 'pet_care';
+  }
+
+  // 个人护理（含"化粧水"等含"水"词，必须早于饮料）
+  if (
+    has([
+      '歯ブラシ', '歯磨き', 'ハミガキ', 'シャンプー', 'リンス', 'コンディショナー', 'ボディソープ',
+      '洗顔', '化粧水', '乳液', 'スキンケア', 'マスク', '目薬', '医薬', '絆創膏', 'ばんそうこう',
+      'サプリ', 'ビタミン', '生理用品', 'ナプキン', 'コンタクト', 'カミソリ', '髭剃り', '薬',
+    ])
+  ) {
+    return 'personal_care';
+  }
+
+  // 日用消耗
+  if (
+    has([
+      'ティッシュ', 'キッチンペーパー', 'トイレット', 'トイレ紙', '洗剤', '柔軟剤', '漂白',
+      'ゴミ袋', 'ごみ袋', 'ラップ', 'アルミホイル', 'ホイル', '電池', '乾電池', '掃除',
+      'スポンジ', 'ハンドソープ', '食器用', '住居用', 'キッチン用', '使い捨て',
+    ])
+  ) {
+    return 'household';
+  }
+
+  // 即食餐（サンド/惣菜パン 等需早于 food_ingredients 的 "パン"）
+  if (
+    has([
+      '弁当', 'べんとう', 'おにぎり', 'お握り', 'サンド', 'サンドイッチ', 'バーガー', 'ホットスナック',
+      'チキン', 'からあげ', '唐揚げ', 'からあげ', 'カツ', 'コロッケ', 'メンチ', '惣菜', '総菜', '惣菜パン',
+      'サラダ', 'パスタ', 'うどん', 'そば', 'ラーメン', 'グラタン', 'ドリア', 'カレー', '寿司', 'すし',
+      'おでん', '中華まん', 'まん', 'デリ', 'deli', 'bento',
+    ])
+  ) {
+    return 'ready_to_eat';
+  }
+
+  // 饮料零食（含酒类）
+  if (
+    has([
+      'コーヒー', '珈琲', 'boss', 'ボス', 'クラフトボス', 'ラテ', 'ミルクティー', 'お茶', '茶', '緑茶',
+      '水', 'ミネラルウォーター', 'サイダー', 'ジュース', 'コーラ', '炭酸', 'ドリンク', 'エナジー',
+      'チョコ', 'グミ', 'クッキー', 'ビス', 'ビスケット', 'アイス', '菓子', 'スナック', 'ポテト',
+      'ポテチ', 'キャンディ', '飴', 'プリン', 'ゼリー', 'デザート', 'ケーキ', 'せんべい', '煎餅',
+      'ビール', '酒', 'ワイン', 'ハイボール', 'チューハイ', '焼酎', '日本酒', '発泡',
+      'coffee', 'tea', 'juice', 'cola', 'snack', 'chocolate', 'beer', 'wine',
+    ])
+  ) {
+    return 'snacks_drinks';
+  }
+
+  // 食材
+  if (
+    has([
+      '豆腐', '卵', '玉子', 'たまご', '牛乳', 'ミルク', '野菜', '肉', '魚', '米', 'ごはん', 'ご飯',
+      'パン粉', '小麦粉', '麺', 'めん', '納豆', 'なっとう', 'ヨーグルト', 'チーズ', 'バター', '味噌',
+      'みそ', '醤油', 'しょうゆ', '砂糖', '塩', '油', 'じゃがいも', '玉ねぎ', 'たまねぎ', 'キャベツ',
+      'レタス', 'トマト', 'にんじん', '人参', 'きのこ', '豚', '鶏', '牛', 'ハム', 'ベーコン', 'パン',
+      'vegetable', 'fruit', 'meat', 'fish', 'rice', 'egg', 'milk', 'tofu',
+    ])
+  ) {
+    return 'food_ingredients';
+  }
+
+  return 'uncategorized';
+}
+
+/**
+ * 归一化任意来源的分类值到新 enum。顺序：
+ * 1. 已是合法新 enum → 直接使用
+ * 2. 旧 enum → 映射
+ * 3. 店铺类型词 → 忽略 rawCategory，改用 itemName
+ * 4. 按 itemName 关键词分类
+ * 5. 仍未知 → uncategorized
+ */
+export function normalizeProductCategory(
+  rawCategory: unknown,
+  itemName?: string
+): ProductCategory {
+  const raw = typeof rawCategory === 'string' ? rawCategory.trim() : '';
+  const low = toHalfWidthLower(raw);
+
+  // 1 / 2. 先做"已知映射"（含 'other' / 'uncategorized'）。店铺类型词不在映射表内，自动跳过。
+  if (raw) {
+    if (isProductCategory(low)) return low;
+    const mapped = OLD_TO_NEW[low];
+    if (mapped) return mapped;
+  }
+
+  // 3 / 4. 店铺类型词或未知 rawCategory：用商品名分类
+  if (itemName) {
+    const byName = classifyItemByName(itemName);
+    if (byName !== 'uncategorized') return byName;
+  }
+
+  // 5. 未知
+  return 'uncategorized';
+}
+
+/**
+ * 仅做"已知映射"，不触发关键词回退；未知/店铺词/uncategorized/空 → null。
+ * 供 enricher 构造候选链（learned → 分类器 → OCR）时按优先级择取。
+ */
+export function mapKnownProductCategory(rawCategory: unknown): ProductCategory | null {
+  const raw = typeof rawCategory === 'string' ? rawCategory.trim() : '';
+  if (!raw) return null;
+  const low = toHalfWidthLower(raw);
+  if (low === 'uncategorized') return null;
+  if (isProductCategory(low)) return low;
+  // 店铺类型词不在 OLD_TO_NEW，返回 null（绝不作为分类）
+  return OLD_TO_NEW[low] ?? null;
+}
+
+/**
+ * enricher 用：按优先级择取分类。
+ * candidates 依次为：本地学习 → 分类器结果(旧/新) → OCR categoryKey。
+ * 都未命中合法核心分类时，用商品名关键词；再不行则 other（若有候选映射为 other）或 uncategorized。
+ */
+export function resolveProductCategory(
+  itemName: string,
+  candidates: Array<string | null | undefined>
+): ProductCategory {
+  let otherSeen = false;
+  for (const c of candidates) {
+    const got = mapKnownProductCategory(c);
+    if (!got) continue;
+    if (got === 'other') {
+      otherSeen = true;
+      continue;
+    }
+    return got; // 命中核心分类
+  }
+  const byName = classifyItemByName(itemName);
+  if (byName !== 'uncategorized') return byName;
+  return otherSeen ? 'other' : 'uncategorized';
+}

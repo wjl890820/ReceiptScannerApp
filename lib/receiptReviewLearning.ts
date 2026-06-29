@@ -2,7 +2,7 @@
  * 审核保存：把名称/分类修正沉淀到 product_name_alias、product_dictionary、item_category_mapping（经 learnFromUserEdit）。
  */
 
-import { ALL_CATEGORIES, type Category } from './categories';
+import { PRODUCT_CATEGORIES, type ProductCategory } from './productCategory';
 import { learnFromUserEdit } from './receiptEnricher';
 import { normalizeReceiptItemName } from './productNormalizer';
 import { upsertProductDictionary } from './productDictionary';
@@ -10,8 +10,9 @@ import { upsertProductNameAlias } from './productAlias';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from './categoryTaxonomyV1';
 import { logger } from './logger';
 
-function isValidCategory(c: string): c is Category {
-  return ALL_CATEGORIES.includes(c as Category);
+// 仅学习有意义的新一级分类（uncategorized 不写学习记忆）。
+function isValidCategory(c: string): c is ProductCategory {
+  return (PRODUCT_CATEGORIES as readonly string[]).includes(c) && c !== 'uncategorized';
 }
 
 export async function applyReviewCorrectionsToLearning(params: {

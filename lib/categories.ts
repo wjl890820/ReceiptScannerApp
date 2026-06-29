@@ -47,16 +47,20 @@ export type GroceryCategory = typeof GROCERY_CATEGORIES[number];
 export type SpecialCategory = typeof SPECIAL_CATEGORIES[number];
 export type Category = GroceryCategory | SpecialCategory;
 
+import { normalizeProductCategory, CORE_PRODUCT_CATEGORIES } from './productCategory';
+
 /**
- * Check if a category is a grocery category (used for analytics)
+ * Check if a category counts toward category analytics.
+ * 统一经 normalizeProductCategory 归一，兼容新旧 enum：核心生活分类 + 'other' 计入。
  */
 export function isGroceryCategory(category: string): boolean {
-  return GROCERY_CATEGORIES.includes(category as GroceryCategory);
+  const c = normalizeProductCategory(category);
+  return (CORE_PRODUCT_CATEGORIES as readonly string[]).includes(c) || c === 'other';
 }
 
 /**
- * Check if a category should be excluded from analytics
+ * Check if a category should be excluded from analytics（仅 uncategorized）。
  */
 export function isExcludedFromAnalytics(category: string): boolean {
-  return category === 'non_grocery' || category === 'uncategorized';
+  return normalizeProductCategory(category) === 'uncategorized';
 }

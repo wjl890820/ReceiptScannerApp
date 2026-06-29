@@ -3,6 +3,7 @@ import type { ReceiptRow } from './db';
 import { normalizeMerchantName } from './productNormalizer';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
+import { normalizeProductCategory } from './productCategory';
 
 export type TimeRange = 'week' | 'month' | 'all';
 
@@ -80,15 +81,18 @@ export function calculateStats(
       for (const item of items) {
         const amount = Number(item.lineTotal) || 0;
 
-        const rawCategory = (item as any).category || '';
-        const category = typeof rawCategory === 'string' ? rawCategory : '';
+        const rawCategory = (item as any).category ?? (item as any).categoryKey;
+        const category = normalizeProductCategory(
+          rawCategory,
+          typeof (item as any).name === 'string' ? (item as any).name : undefined
+        );
         const rawStatus = (item as any).classification_status as
           | 'ok'
           | 'pending'
           | 'failed'
           | 'fallback'
           | undefined;
-        const hasCategory = !!category;
+        const hasCategory = category !== 'uncategorized';
         // 兼容旧数据：没有 classification_status 但有类别 -> 视为 ok
         const status: 'ok' | 'pending' | 'failed' | 'fallback' =
           rawStatus || (hasCategory ? 'ok' : 'failed');

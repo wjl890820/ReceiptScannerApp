@@ -23,15 +23,15 @@ import {
 import { upsertProductDictionary } from '@/lib/productDictionary';
 import { reclassifyReceiptsMissingCategories } from '@/lib/reclassifyReceipts';
 
-/** 与需求一致：legacy category key → 中文说明（映射到 DB 仍用 mapLegacyCategoryToV1） */
+/** 新一级分类 key → 中文说明（写入 DB 仍经 mapLegacyCategoryToV1，已兼容新 enum） */
 const CATEGORY_PICKER_OPTIONS: Array<{ legacyKey: string; labelZh: string }> = [
-  { legacyKey: 'produce', labelZh: '生鲜果蔬' },
-  { legacyKey: 'quick_meals', labelZh: '熟食速食' },
-  { legacyKey: 'snacks_sweets', labelZh: '零食甜点' },
-  { legacyKey: 'non_alcoholic_drinks', labelZh: '饮料' },
-  { legacyKey: 'household', labelZh: '日用品' },
-  { legacyKey: 'health_supplements', labelZh: '保健' },
-  { legacyKey: 'other_grocery', labelZh: '其他食品' },
+  { legacyKey: 'food_ingredients', labelZh: '食材' },
+  { legacyKey: 'ready_to_eat', labelZh: '即食餐' },
+  { legacyKey: 'snacks_drinks', labelZh: '饮料零食' },
+  { legacyKey: 'household', labelZh: '日用消耗' },
+  { legacyKey: 'personal_care', labelZh: '个人护理' },
+  { legacyKey: 'pet_care', labelZh: '宠物用品' },
+  { legacyKey: 'other', labelZh: '其他' },
 ];
 
 export default function UncategorizedItemsScreen() {

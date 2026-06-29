@@ -15,7 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { listReceipts, saveReceipt } from '@/lib/db';
-import { GROCERY_CATEGORIES, SPECIAL_CATEGORIES, type Category } from '@/lib/categories';
+import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { getCurrentLocale, t } from '@/lib/i18n';
 import { tryShowNextEasterEgg } from '@/lib/homeEasterEggHelpers';
@@ -38,7 +38,7 @@ function toNum(v: string, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-const categoryOptions = [...GROCERY_CATEGORIES, ...SPECIAL_CATEGORIES] as Category[];
+const categoryOptions = PRODUCT_CATEGORIES;
 
 let lineIdSeq = 0;
 /** 生成稳定的本地行 id，作为 React key，避免使用数组 index */
@@ -52,7 +52,7 @@ type LineItem = {
   /** 对应 OCR snapshot.items 的索引；人工新增行为 null */
   sourceIndex: number | null;
   name: string;
-  category: Category;
+  category: ProductCategory;
   quantity: number;
   lineTotal: number;
 };
@@ -111,9 +111,7 @@ export default function ScanReviewScreen() {
         id: makeLineId(),
         sourceIndex: idx,
         name: typeof it?.name === 'string' ? it.name : '',
-        category: (typeof it?.category === 'string' && categoryOptions.includes(it.category as Category)
-          ? it.category
-          : 'uncategorized') as Category,
+        category: normalizeProductCategory(it?.category, typeof it?.name === 'string' ? it.name : undefined),
         quantity: Number.isFinite(Number(it?.quantity)) ? Number(it.quantity) : 1,
         lineTotal: Number.isFinite(Number(it?.lineTotal ?? it?.line_total))
           ? Number(it.lineTotal ?? it.line_total)
@@ -176,9 +174,7 @@ export default function ScanReviewScreen() {
               id: typeof rawId === 'string' && rawId ? rawId : makeLineId(),
               sourceIndex,
               name: typeof li.name === 'string' ? li.name : '',
-              category: (typeof li.category === 'string' && categoryOptions.includes(li.category as Category)
-                ? li.category
-                : 'uncategorized') as Category,
+              category: normalizeProductCategory(li.category, typeof li.name === 'string' ? li.name : undefined),
               quantity: Number.isFinite(Number(li.quantity)) ? Number(li.quantity) : 1,
               lineTotal: Number.isFinite(Number(li.lineTotal)) ? Number(li.lineTotal) : 0,
             };
@@ -322,7 +318,7 @@ export default function ScanReviewScreen() {
     if (saving) return;
     setLineItems((rows) => [
       ...rows,
-      { id: makeLineId(), sourceIndex: null, name: '', category: 'uncategorized' as Category, quantity: 1, lineTotal: 0 },
+      { id: makeLineId(), sourceIndex: null, name: '', category: 'uncategorized' as ProductCategory, quantity: 1, lineTotal: 0 },
     ]);
   };
 

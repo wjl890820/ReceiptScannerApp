@@ -392,6 +392,14 @@
     "ok": "OK"
   },
   "category": {
+    "food_ingredients": "食材",
+    "ready_to_eat": "即食",
+    "snacks_drinks": "飲料・お菓子",
+    "household": "日用品",
+    "personal_care": "パーソナルケア",
+    "pet_care": "ペット用品",
+    "uncategorized": "未分類",
+    "other": "その他",
     "produce": "野菜・果物",
     "meat_seafood": "肉・魚",
     "dairy_eggs": "乳製品・卵",
@@ -402,13 +410,11 @@
     "condiments": "調味料",
     "non_alcoholic_drinks": "飲料（ノンアル）",
     "alcohol": "酒類",
-    "household": "日用品・衛生",
     "frozen_foods": "冷凍食品",
     "canned_preserved": "缶詰・保存食",
     "beverages_other": "その他飲料",
     "health_supplements": "健康補助食品",
     "other_grocery": "その他食品",
-    "uncategorized": "未分類",
     "non_grocery": "スーパー以外"
   },
   "categoriesShort": {

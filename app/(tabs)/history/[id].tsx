@@ -25,11 +25,10 @@ import { t } from '@/lib/i18n';
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { upsertProductDictionary } from '@/lib/productDictionary';
 import { upsertProductNameAlias } from '@/lib/productAlias';
-import { GROCERY_CATEGORIES, ALL_CATEGORIES, type Category } from '@/lib/categories';
+import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
-import { isGroceryCategory, isExcludedFromAnalytics } from '@/lib/categories';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
-import { mapLegacyCategoryToV1, mapV1ToLegacyCategory, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
+import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -91,83 +90,10 @@ function itemLineAmountForSummary(it: any): number {
   return up > 0 ? round0(up * q) : 0;
 }
 
-/** OCR prompt categoryKey -> legacy grocery key (see lib/receiptAnalyzer CategoryKey). */
-function mapOcrCategoryKeyToLegacy(ck: string): string {
-  switch (ck) {
-    case 'fresh':
-      return 'produce';
-    case 'staple':
-      return 'staples';
-    case 'dairy_egg':
-      return 'dairy_eggs';
-    case 'snack':
-      return 'snacks_sweets';
-    case 'drink':
-      return 'non_alcoholic_drinks';
-    case 'frozen_deli':
-      return 'frozen_foods';
-    case 'seasoning':
-      return 'condiments';
-    case 'household':
-      return 'household';
-    case 'alcohol':
-      return 'alcohol';
-    case 'other':
-    default:
-      return 'other_grocery';
-  }
-}
-
-const trimStr = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
-
-/** Legacy key + debug label (never use V1 sub/main alone as final key). */
-function resolveSummaryCategoryWithRaw(it: any): { legacy: string; raw: string } | null {
-  const tryLegacy = (c: string): string => {
-    if (!c) return '';
-    if (isExcludedFromAnalytics(c)) return '';
-    if (isGroceryCategory(c)) return c;
-    return '';
-  };
-
-  const cat = trimStr(it.category);
-  if (cat) {
-    const leg = tryLegacy(cat);
-    if (leg) return { legacy: leg, raw: cat };
-  }
-
-  const fromCls = trimStr((it as any).classification?.category);
-  if (fromCls) {
-    const leg = tryLegacy(fromCls);
-    if (leg) return { legacy: leg, raw: fromCls };
-  }
-
-  const main = trimStr(it.category_main);
-  const subRaw = it.category_sub;
-  const sub =
-    subRaw != null && String(subRaw).trim() !== '' ? trimStr(subRaw) : null;
-  if (main) {
-    try {
-      const legacy = mapV1ToLegacyCategory({ main: main as any, sub: sub as any }) as string;
-      if (legacy && isGroceryCategory(legacy) && !isExcludedFromAnalytics(legacy)) {
-        const raw = sub ? `${main}/${sub}` : main;
-        return { legacy, raw };
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  const ck = trimStr((it as any).categoryKey);
-  if (ck) {
-    const mapped = mapOcrCategoryKeyToLegacy(ck);
-    if (mapped && isGroceryCategory(mapped) && !isExcludedFromAnalytics(mapped)) {
-      return { legacy: mapped, raw: ck };
-    }
-  }
-
-  return null;
-}
-
+/**
+ * 分类汇总：直接用统一的 normalizeProductCategory 归一（兼容新旧 enum、OCR categoryKey）。
+ * 只要有商品行就会产出分桶（含"待分类"），仅当完全没有商品行时上层才显示"未找到分类信息"。
+ */
 function buildCategorySummary(
   analysis: ReceiptAnalysis | { items: ReceiptItem[] } | null,
   debug?: { source: string }
@@ -178,22 +104,16 @@ function buildCategorySummary(
   for (const it of analysis.items) {
     const status = (it as any).classification_status as string | undefined;
     if (status !== undefined && status !== 'ok' && status !== 'fallback') continue;
-    const resolved = resolveSummaryCategoryWithRaw(it);
-    if (!resolved) continue;
+    const rawCat =
+      (typeof (it as any).category === 'string' && (it as any).category) ||
+      (typeof (it as any).categoryKey === 'string' && (it as any).categoryKey) ||
+      '';
+    const cat = normalizeProductCategory(rawCat, typeof it.name === 'string' ? it.name : undefined);
     const amt = itemLineAmountForSummary(it);
-    if (__DEV__ && debug) {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[Detail][CategorySummary] item raw=${resolved.raw} mapped=${resolved.legacy} amount=${amt}`
-      );
-    }
-    map.set(resolved.legacy, (map.get(resolved.legacy) ?? 0) + amt);
+    map.set(cat, (map.get(cat) ?? 0) + amt);
   }
 
-  const arr = Array.from(map.entries()).map(([category, amount]) => ({
-    category,
-    amount,
-  }));
+  const arr = Array.from(map.entries()).map(([category, amount]) => ({ category, amount }));
   arr.sort((a, b) => b.amount - a.amount);
   if (__DEV__ && debug) {
     // eslint-disable-next-line no-console
@@ -218,7 +138,7 @@ export default function ReceiptDetailScreen() {
   const [savingItem, setSavingItem] = useState(false);
 
   // 分类选项（使用grocery分类，包含other_grocery作为fallback）
-  const categoryOptions = [...GROCERY_CATEGORIES, 'uncategorized'] as Category[];
+  const categoryOptions = PRODUCT_CATEGORIES;
 
   const analysis = useMemo(() => {
     if (!receipt) return null;
@@ -310,7 +230,7 @@ export default function ReceiptDetailScreen() {
     if (index < 0 || index >= displayItems.length) return;
     const item = displayItems[index];
     setEditingItemIndex(index);
-    setDraftCategory(item.category || 'Other');
+    setDraftCategory(normalizeProductCategory(item.category, item.name));
     setDraftQuantity(String(item.quantity || 1));
     setDraftLineTotal(String(item.lineTotal || 0));
     setItemEditOpen(true);
@@ -347,7 +267,7 @@ export default function ReceiptDetailScreen() {
       ...updatedItems[editingItemIndex],
       quantity: round0(quantity),
       lineTotal: round0(lineTotal),
-      category: draftCategory.trim() || 'Other',
+      category: (draftCategory.trim() || 'uncategorized') as ProductCategory,
     };
 
     try {

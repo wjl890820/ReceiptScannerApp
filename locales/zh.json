@@ -392,6 +392,14 @@
     "ok": "确定"
   },
   "category": {
+    "food_ingredients": "食材",
+    "ready_to_eat": "即食餐",
+    "snacks_drinks": "饮料零食",
+    "household": "日用消耗",
+    "personal_care": "个人护理",
+    "pet_care": "宠物用品",
+    "uncategorized": "待分类",
+    "other": "其他",
     "produce": "生鲜果蔬",
     "meat_seafood": "肉类海鲜",
     "dairy_eggs": "乳制品鸡蛋",
@@ -402,13 +410,11 @@
     "condiments": "调味料",
     "non_alcoholic_drinks": "无酒精饮料",
     "alcohol": "酒类",
-    "household": "日用品卫生",
     "frozen_foods": "冷冻食品",
     "canned_preserved": "罐头腌制品",
     "beverages_other": "其他饮料",
     "health_supplements": "健康补品",
     "other_grocery": "其他食品",
-    "uncategorized": "未分类",
     "non_grocery": "非超市"
   },
   "categoriesShort": {
