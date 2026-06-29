@@ -236,7 +236,10 @@ export default function AnalysisScreen() {
           ))}
           {stats.uncategorizedCount > 0 && (
             <Text style={styles.uncategorizedHint}>
-              {t('home.kpi.uncategorizedHint', { count: String(stats.uncategorizedCount) })}
+              {t('analysis.stats.pendingHint', {
+                count: String(stats.uncategorizedCount),
+                amount: `¥${Math.round(stats.uncategorizedTotal).toLocaleString()}`,
+              })}
             </Text>
           )}
         </View>

@@ -24,8 +24,11 @@
     },
     "kpi": {
       "totalSpending": "Total Spending",
-      "topCategory": "Top Category",
-      "nonEssential": "Non-Essential",
+      "topCategory": "Top Spending",
+      "nonEssential": "Indulgence",
+      "pending": "To Confirm",
+      "none": "None",
+      "pendingValue": "{count} / {amount}",
       "currency": "JPY",
       "uncategorizedHint": "{count} items are pending classification and not included in category stats"
     },
@@ -41,7 +44,7 @@
       "reason": {
         "top1": "Top category 【{category}】 accounts for {percentage}%",
         "concentration": "Top 2 categories account for {percentage}%",
-        "nonEssential": "Non-essential spending at {percentage}%",
+        "nonEssential": "Indulgence (snacks & drinks) at {percentage}%",
         "uncategorized": "{percentage}% uncategorized items",
         "general": "Review spending patterns"
       },
@@ -372,7 +375,8 @@
       "topCategories": "Top Categories",
       "topMerchants": "Top Merchants",
       "highestReceipt": "Highest Single Receipt",
-      "times": "times"
+      "times": "times",
+      "pendingHint": "To confirm: {count} / {amount}"
     },
     "priceRadar": {
       "title": "Price Radar",

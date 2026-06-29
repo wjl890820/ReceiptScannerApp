@@ -49,6 +49,31 @@ function filterGroceryReceipts(receipts: ReceiptRow[]): ReceiptRow[] {
 }
 
 /**
+ * 计算单个商品的“最终展示分类”（与饼图口径一致）：
+ * 归一到新一级分类；若分类状态不可接受或仍为 uncategorized，则落到 'uncategorized'。
+ * 注意：classification_status='fallback' 视为可接受——只要解析出了真实分类就按真实分类计，
+ *       不再因为是 fallback 就误判为“待分类”（这是“30 个商品待分类”假象的根因）。
+ */
+export function resolveItemFinalCategory(item: ReceiptItem): string {
+  const rawCategory = (item as any).category ?? (item as any).categoryKey;
+  const category = normalizeProductCategory(
+    rawCategory,
+    typeof (item as any).name === 'string' ? (item as any).name : undefined
+  );
+  const rawStatus = (item as any).classification_status as
+    | 'ok'
+    | 'pending'
+    | 'failed'
+    | 'fallback'
+    | undefined;
+  const hasCategory = category !== 'uncategorized';
+  const status: 'ok' | 'pending' | 'failed' | 'fallback' =
+    rawStatus || (hasCategory ? 'ok' : 'failed');
+  const statusAcceptable = status === 'ok' || status === 'fallback';
+  return statusAcceptable && hasCategory ? category : 'uncategorized';
+}
+
+/**
  * 按分类聚合生鲜收据商品金额（饼图数据）；仅统计分类成功且为 grocery 类别的行。
  */
 export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
@@ -67,27 +92,8 @@ export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
       if (lineTotal <= 0) continue;
       hadAnyLineTotal = true;
 
-      // 统一归一到新一级分类，避免新旧 enum 在饼图里产生同义重复分片。
-      const rawCategory = (item as any).category ?? (item as any).categoryKey;
-      const category = normalizeProductCategory(
-        rawCategory,
-        typeof (item as any).name === 'string' ? (item as any).name : undefined
-      );
-      const rawStatus = (item as any).classification_status as
-        | 'ok'
-        | 'pending'
-        | 'failed'
-        | 'fallback'
-        | undefined;
-      const hasCategory = category !== 'uncategorized';
-      const status: 'ok' | 'pending' | 'failed' | 'fallback' =
-        rawStatus || (hasCategory ? 'ok' : 'failed');
-
-      // Homepage "ALL" should not become empty just because categories are missing.
-      // - If classification not ok / missing category -> bucket as 'uncategorized'
-      // - Allow 'uncategorized' bucket in home pie chart (do not exclude it here)
-      const statusAcceptable = status === 'ok' || status === 'fallback';
-      const finalCategory = statusAcceptable && hasCategory ? category : 'uncategorized';
+      // 统一归一到新一级分类（饼图含“待分类”分片，不在此排除）。
+      const finalCategory = resolveItemFinalCategory(item);
 
       if (finalCategory !== 'uncategorized' && isExcludedFromAnalytics(finalCategory)) continue;
       if (finalCategory !== 'uncategorized' && !isGroceryCategory(finalCategory)) continue;
@@ -113,7 +119,10 @@ export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
 }
 
 /**
- * 未分类商品条数与金额汇总（与 aggregateCategoryData 口径一致：非 ok/非 grocery 类别计入未分类）。
+ * 待确认（uncategorized）商品条数与金额汇总。
+ * 口径：只统计“最终展示分类”为 'uncategorized' 的商品行（与饼图“待分类”分片完全一致）。
+ * 不再使用商品总数 / classification_status='fallback' / repeated category 等口径，
+ * 避免出现“30 个商品待分类”这类与饼图（约 2%）和成长分析（count=2）矛盾的假象。
  */
 export function computeUncategorizedSummary(
   receipts: ReceiptRow[]
@@ -132,27 +141,7 @@ export function computeUncategorizedSummary(
       const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
       if (lineTotal <= 0) continue;
 
-      const rawCategory = (item as any).category ?? (item as any).categoryKey;
-      const category = normalizeProductCategory(
-        rawCategory,
-        typeof (item as any).name === 'string' ? (item as any).name : undefined
-      );
-      const rawStatus = (item as any).classification_status as
-        | 'ok'
-        | 'pending'
-        | 'failed'
-        | 'fallback'
-        | undefined;
-      const hasCategory = category !== 'uncategorized';
-      const status: 'ok' | 'pending' | 'failed' | 'fallback' =
-        rawStatus || (hasCategory ? 'ok' : 'failed');
-
-      if (
-        status !== 'ok' ||
-        !hasCategory ||
-        isExcludedFromAnalytics(category) ||
-        !isGroceryCategory(category)
-      ) {
+      if (resolveItemFinalCategory(item) === 'uncategorized') {
         count += 1;
         total += lineTotal;
       }
@@ -160,4 +149,31 @@ export function computeUncategorizedSummary(
   }
 
   return { count, total };
+}
+
+/**
+ * 最大支出分类（用于首页“最大支出”指标）。
+ * 优先返回占比最大的非“待分类”分类；若全部为待分类则退回第一项；无数据返回 null。
+ */
+export function computeTopCategory(
+  categoryData: CategoryData[]
+): { category: string; amount: number; percentage: number } | null {
+  if (!Array.isArray(categoryData) || categoryData.length === 0) return null;
+  const sorted = [...categoryData].sort((a, b) => b.amount - a.amount);
+  const top = sorted.find((c) => c.category !== 'uncategorized') ?? sorted[0];
+  return { category: top.category, amount: top.amount, percentage: top.percentage };
+}
+
+/**
+ * 嗜好消费占比（snacks_drinks）。
+ * 仅统计饮料零食，不包含 ready_to_eat（即食餐不属于嗜好消费）。
+ */
+export function computeIndulgenceShare(categoryData: CategoryData[]): number {
+  if (!Array.isArray(categoryData) || categoryData.length === 0) return 0;
+  const total = categoryData.reduce((sum, c) => sum + c.amount, 0);
+  if (total <= 0) return 0;
+  const indulgence = categoryData
+    .filter((c) => c.category === 'snacks_drinks')
+    .reduce((sum, c) => sum + c.amount, 0);
+  return (indulgence / total) * 100;
 }

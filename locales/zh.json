@@ -24,8 +24,11 @@
     },
     "kpi": {
       "totalSpending": "总支出",
-      "topCategory": "主要类别",
-      "nonEssential": "非必需品",
+      "topCategory": "最大支出",
+      "nonEssential": "嗜好消费",
+      "pending": "待确认",
+      "none": "无",
+      "pendingValue": "{count}件 / {amount}",
       "currency": "日元",
       "uncategorizedHint": "有 {count} 个商品待分类，未计入分类统计"
     },
@@ -41,7 +44,7 @@
       "reason": {
         "top1": "主要类别【{category}】占比{percentage}%",
         "concentration": "前两大类别合计占比{percentage}%",
-        "nonEssential": "非必需品支出占比{percentage}%",
+        "nonEssential": "嗜好消费（饮料零食）占比{percentage}%",
         "uncategorized": "未分类项目占比{percentage}%",
         "general": "建议审视消费模式"
       },
@@ -372,7 +375,8 @@
       "topCategories": "主要类别",
       "topMerchants": "主要商家",
       "highestReceipt": "最高单笔",
-      "times": "次"
+      "times": "次",
+      "pendingHint": "待确认：{count}件 / {amount}"
     },
     "priceRadar": {
       "title": "价格雷达",

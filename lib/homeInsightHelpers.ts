@@ -54,13 +54,11 @@ export function computeInsightContext(
   const uncategorizedPct =
     totalSpending > 0 ? (uncategorizedAmount / totalSpending) * 100 : 0;
 
-  const nonEssentialCategories = ['snacks', 'non_alcoholic_drinks', 'ready_meals'];
-  const nonEssentialAmount = nonEssentialCategories.reduce(
-    (sum, cat) => sum + (totalsByCategory.get(cat) || 0),
-    0
-  );
+  // 嗜好消费：仅统计 snacks_drinks（饮料零食），不包含 ready_to_eat（即食餐）。
+  // 字段名沿用 nonEssentialPct（内部口径），文案对外为「嗜好消费」。
+  const indulgenceAmount = totalsByCategory.get('snacks_drinks') || 0;
   const nonEssentialPct =
-    totalSpending > 0 ? (nonEssentialAmount / totalSpending) * 100 : 0;
+    totalSpending > 0 ? (indulgenceAmount / totalSpending) * 100 : 0;
 
   const safeParseItems = (json: string | null): ReceiptItem[] | null => {
     if (!json) return null;

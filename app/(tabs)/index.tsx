@@ -39,12 +39,13 @@ import { logger } from '@/lib/logger';
 import { listReceipts, type ReceiptRow } from '@/lib/db';
 import { t } from '@/lib/i18n';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
-import { getCategoryColor, getCategoryLabel, getCategoryShortLabel } from '@/lib/categoryPalette';
+import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
 import { formatJPY } from '@/lib/formatJPY';
 import { getHomeTimeRange, setHomeTimeRange } from '@/lib/settingsStore';
 import {
   aggregateCategoryData,
   computeUncategorizedSummary,
+  computeTopCategory,
   type CategoryData,
 } from '@/lib/homeMetricsHelpers';
 
@@ -769,18 +770,12 @@ export default function HomeScreen() {
     if (categoryData.length === 0) {
       return null;
     }
-    const topCategory = categoryData[0];
-    const nonEssentialCategories = ['snacks_drinks', 'ready_to_eat'];
-    const nonEssentialAmount = categoryData
-      .filter((item) => nonEssentialCategories.includes(item.category))
-      .reduce((sum, item) => sum + item.amount, 0);
-    const nonEssentialPct = totalAmount > 0 ? (nonEssentialAmount / totalAmount) * 100 : 0;
-
+    const top = computeTopCategory(categoryData);
     return {
       totalSpending: totalAmount,
-      topCategory: topCategory.category,
-      topCategoryPct: topCategory.percentage,
-      nonEssentialPct,
+      topCategory: top?.category ?? null,
+      topCategoryPct: top?.percentage ?? 0,
+      topCategoryAmount: top?.amount ?? 0,
     };
   }, [categoryData, totalAmount]);
 
@@ -1133,7 +1128,15 @@ export default function HomeScreen() {
 
   // 只显示前5个类别
   const topCategories = useMemo(() => {
-    return categoryData.slice(0, 5);
+    // 待分类比例较低（<10%）时排到最后，避免“待分类”占据图例前列。
+    const LOW_UNCATEGORIZED_THRESHOLD = 10;
+    const arr = [...categoryData].sort((a, b) => {
+      const aLow = a.category === 'uncategorized' && a.percentage < LOW_UNCATEGORIZED_THRESHOLD;
+      const bLow = b.category === 'uncategorized' && b.percentage < LOW_UNCATEGORIZED_THRESHOLD;
+      if (aLow !== bLow) return aLow ? 1 : -1;
+      return b.amount - a.amount;
+    });
+    return arr.slice(0, 5);
   }, [categoryData]);
 
   // Calculate bottom padding for sticky button dynamically
@@ -1208,31 +1211,36 @@ export default function HomeScreen() {
             </View>
             <View style={styles.kpiItem}>
               <Text style={styles.kpiLabel}>{t('home.kpi.topCategory')}</Text>
-              <Text
-                style={styles.kpiValue}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
-                {(() => {
-                  const lab = getCategoryShortLabel(kpiData.topCategory);
-                  return (lab !== kpiData.topCategory ? lab : t('analysisV2.labels.other')) + ` (${Math.round(kpiData.topCategoryPct)}%)`;
-                })()}
-              </Text>
+              {kpiData.topCategory ? (
+                <>
+                  <Text style={styles.kpiValue} numberOfLines={2}>
+                    {(() => {
+                      const lab = getCategoryLabel(kpiData.topCategory);
+                      return lab && lab !== kpiData.topCategory ? lab : t('analysisV2.labels.other');
+                    })()}
+                  </Text>
+                  <Text style={styles.kpiSubValue} numberOfLines={1}>
+                    {`${Math.round(kpiData.topCategoryPct)}% · ${formatJPY(kpiData.topCategoryAmount)}`}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.kpiValue}>{t('home.kpi.none')}</Text>
+              )}
             </View>
             <View style={styles.kpiItem}>
-              <Text style={styles.kpiLabel}>{t('home.kpi.nonEssential')}</Text>
-              <Text style={styles.kpiValue}>{Math.round(kpiData.nonEssentialPct)}%</Text>
+              <Text style={styles.kpiLabel}>{t('home.kpi.pending')}</Text>
+              {uncategorizedSummary.count > 0 ? (
+                <Text style={styles.kpiValue} numberOfLines={1}>
+                  {t('home.kpi.pendingValue', {
+                    count: String(uncategorizedSummary.count),
+                    amount: formatJPY(uncategorizedSummary.total),
+                  })}
+                </Text>
+              ) : (
+                <Text style={styles.kpiValue}>{t('home.kpi.none')}</Text>
+              )}
             </View>
           </View>
-          {uncategorizedSummary.count > 0 && (
-            <View style={{ marginTop: 6 }}>
-              <Text style={styles.uncategorizedHint}>
-                {t('home.kpi.uncategorizedHint', {
-                  count: String(uncategorizedSummary.count),
-                })}
-              </Text>
-            </View>
-          )}
         </View>
       )}
 
@@ -1480,6 +1488,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: '#111',
+    textAlign: 'center',
+  },
+  kpiSubValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#444',
+    marginTop: 2,
+    textAlign: 'center',
   },
   uncategorizedHint: {
     fontSize: 12,

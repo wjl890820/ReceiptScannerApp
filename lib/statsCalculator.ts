@@ -3,7 +3,7 @@ import type { ReceiptRow } from './db';
 import { normalizeMerchantName } from './productNormalizer';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
-import { normalizeProductCategory } from './productCategory';
+import { resolveItemFinalCategory } from './homeMetricsHelpers';
 
 export type TimeRange = 'week' | 'month' | 'all';
 
@@ -81,35 +81,23 @@ export function calculateStats(
       for (const item of items) {
         const amount = Number(item.lineTotal) || 0;
 
-        const rawCategory = (item as any).category ?? (item as any).categoryKey;
-        const category = normalizeProductCategory(
-          rawCategory,
-          typeof (item as any).name === 'string' ? (item as any).name : undefined
-        );
-        const rawStatus = (item as any).classification_status as
-          | 'ok'
-          | 'pending'
-          | 'failed'
-          | 'fallback'
-          | undefined;
-        const hasCategory = category !== 'uncategorized';
-        // 兼容旧数据：没有 classification_status 但有类别 -> 视为 ok
-        const status: 'ok' | 'pending' | 'failed' | 'fallback' =
-          rawStatus || (hasCategory ? 'ok' : 'failed');
+        // 与首页 computeUncategorizedSummary / aggregateCategoryData 完全一致的口径：
+        // 复用共享 resolveItemFinalCategory（fallback 但有真实分类不算待分类）。
+        const finalCategory = resolveItemFinalCategory(item);
 
-        // 未分类 / 失败 / 兜底分类：计入 uncategorized，不进入 topCategories
-        if (
-          status !== 'ok' ||
-          !hasCategory ||
-          isExcludedFromAnalytics(category) ||
-          !isGroceryCategory(category)
-        ) {
+        // 待确认：最终分类为 uncategorized
+        if (finalCategory === 'uncategorized') {
           uncategorizedCount += 1;
           uncategorizedTotal += amount;
           continue;
         }
 
-        categoryMap.set(category, (categoryMap.get(category) || 0) + amount);
+        // 非分析类别（理论上仅历史脏数据）：跳过，不进入 topCategories 也不计入待确认
+        if (isExcludedFromAnalytics(finalCategory) || !isGroceryCategory(finalCategory)) {
+          continue;
+        }
+
+        categoryMap.set(finalCategory, (categoryMap.get(finalCategory) || 0) + amount);
       }
     } catch (e) {
       console.error('Failed to parse receipt for stats:', receipt.id, e);

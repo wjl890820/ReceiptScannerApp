@@ -24,8 +24,11 @@
     },
     "kpi": {
       "totalSpending": "総支出",
-      "topCategory": "主要カテゴリ",
-      "nonEssential": "非必需品",
+      "topCategory": "最大支出",
+      "nonEssential": "嗜好消費",
+      "pending": "未確認",
+      "none": "なし",
+      "pendingValue": "{count}件 / {amount}",
       "currency": "円",
       "uncategorizedHint": "未分類の商品が {count} 件あり、カテゴリ集計には含まれていません"
     },
@@ -41,7 +44,7 @@
       "reason": {
         "top1": "主要カテゴリ【{category}】が{percentage}%を占める",
         "concentration": "上位2カテゴリが合計{percentage}%を占める",
-        "nonEssential": "非必需品支出が{percentage}%",
+        "nonEssential": "嗜好消費（菓子・飲料）が{percentage}%",
         "uncategorized": "未分類項目が{percentage}%",
         "general": "支出パターンの見直しを推奨"
       },
@@ -372,7 +375,8 @@
       "topCategories": "主要カテゴリ",
       "topMerchants": "主要店舗",
       "highestReceipt": "最高額レシート",
-      "times": "回"
+      "times": "回",
+      "pendingHint": "未確認：{count}件 / {amount}"
     },
     "priceRadar": {
       "title": "価格レーダー",
