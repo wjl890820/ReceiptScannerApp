@@ -144,6 +144,20 @@ export function classifyItemByName(itemName: string): ProductCategory {
     return 'household';
   }
 
+  // 甜点/零食语境的「バター」系列（シュガーバター / バターサンド / バタークッキー 等）。
+  // 必须早于 ready_to_eat 的「サンド」与 food_ingredients 的「バター」，否则会被误判：
+  //   - シュガーバター 命中食材「バター」→ food_ingredients（错）
+  //   - バターサンド   命中即食「サンド」→ ready_to_eat（错）
+  // 普通 バター / 有塩バター / 無塩バター 不含这些复合词，仍走下方食材规则。
+  if (
+    has([
+      'シュガーバター', 'バターサンド', 'バタークッキー', 'バターケーキ', 'バター菓子',
+      'バターサブレ', 'バターフィナンシェ', 'バターワッフル',
+    ])
+  ) {
+    return 'snacks_drinks';
+  }
+
   // 即食餐（サンド/丼/ラーメン/さつまあげ/肉まん 等需早于 snacks_drinks 与 food_ingredients）
   if (
     has([

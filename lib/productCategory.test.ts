@@ -67,6 +67,25 @@ describe('classifyItemByName: 关键词分类', () => {
   it('7濃い木綿2個入 → food_ingredients', () => {
     expect(classifyItemByName('7濃い木綿2個入')).toBe('food_ingredients');
   });
+
+  // バター 甜点语境优先于食材「バター」与即食「サンド」
+  it('シュガーバター / シュガーバターの木 → snacks_drinks（不是食材 バター）', () => {
+    expect(classifyItemByName('シュガーバター')).toBe('snacks_drinks');
+    expect(classifyItemByName('シュガーバターの木')).toBe('snacks_drinks');
+  });
+  it('バターサンド → snacks_drinks（不是即食 サンド）', () => {
+    expect(classifyItemByName('バターサンド')).toBe('snacks_drinks');
+  });
+  it('バタークッキー / バターケーキ / バター菓子 → snacks_drinks', () => {
+    expect(classifyItemByName('バタークッキー')).toBe('snacks_drinks');
+    expect(classifyItemByName('バターケーキ')).toBe('snacks_drinks');
+    expect(classifyItemByName('バター菓子')).toBe('snacks_drinks');
+  });
+  it('普通 バター / 有塩バター / 無塩バター 仍是 food_ingredients', () => {
+    expect(classifyItemByName('バター')).toBe('food_ingredients');
+    expect(classifyItemByName('有塩バター')).toBe('food_ingredients');
+    expect(classifyItemByName('無塩バター')).toBe('food_ingredients');
+  });
 });
 
 describe('normalizeProductCategory: 旧→新映射 + 店铺词过滤', () => {
@@ -151,5 +170,11 @@ describe('mapKnownProductCategory / resolveProductCategory', () => {
     expect(resolveProductCategory('xyz', ['other_grocery', null, null])).toBe('other');
     // 候选映射为 other 但名字可识别 → 优先核心分类
     expect(resolveProductCategory('豆腐', ['other_grocery', null, null])).toBe('food_ingredients');
+  });
+
+  it('OCR categoryKey=snacks_drinks 的甜点黄油不被 バター 食材规则覆盖', () => {
+    // 候选链：learned=null, 分类器=null, OCR=snacks_drinks → 应直接返回 snacks_drinks
+    expect(resolveProductCategory('シュガーバター', [null, null, 'snacks_drinks'])).toBe('snacks_drinks');
+    expect(normalizeProductCategory('snacks_drinks', 'シュガーバター')).toBe('snacks_drinks');
   });
 });

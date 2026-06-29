@@ -20,6 +20,12 @@ const RECEIPT_1: Sample[] = [
   ['はいから黒糖', 'snacks_drinks'],
   ['ゴールドあずきバー', 'snacks_drinks'],
   ['クロッカンサン', 'snacks_drinks'],
+  ['シュガーバター', 'snacks_drinks'],
+  ['シュガーバターの木', 'snacks_drinks'],
+  ['バターサンド', 'snacks_drinks'],
+  ['バタークッキー', 'snacks_drinks'],
+  ['有塩バター', 'food_ingredients'],
+  ['無塩バター', 'food_ingredients'],
   ['横浜家系', 'ready_to_eat'],
 ];
 
