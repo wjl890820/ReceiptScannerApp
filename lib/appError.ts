@@ -19,6 +19,12 @@ const KNOWN_CODES = [
   'NETWORK_ERROR',
   'SERVER_ERROR',
   'INVALID_RESPONSE',
+  // Edge Function 稳定错误码（ocr-receipt）
+  'GEMINI_UPSTREAM_ERROR',
+  'OCR_PARSE_ERROR',
+  'OCR_TIMEOUT',
+  'INVALID_RECEIPT_SCHEMA',
+  'RECONCILIATION_FAILED',
 ] as const;
 
 function isKnownCode(c: string): c is (typeof KNOWN_CODES)[number] {

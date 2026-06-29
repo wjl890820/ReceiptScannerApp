@@ -172,7 +172,8 @@
     "deleteItemTitle": "删除商品行",
     "deleteItemMessage": "确定要删除这一行吗？",
     "deleteItemConfirm": "删除",
-    "saveFooterHint": "保存后写入本地历史；若一次扫了多张，点确定后会继续审核下一张。"
+    "saveFooterHint": "保存后写入本地历史；若一次扫了多张，点确定后会继续审核下一张。",
+    "amountMismatchWarning": "金额可能不一致：商品合计与小票总额对不上，请核对后再保存。"
   },
   "reviewRetro": {
     "settingsTitle": "审核复盘",
@@ -435,6 +436,10 @@
     "serverError": "服务器错误，请稍后重试。",
     "invalidResponse": "识别结果异常，请重试。",
     "failed": "识别失败，请重试。",
+    "parseError": "识别结果解析失败，请重试或更换更清晰的照片。",
+    "timeout": "识别超时，请重试。",
+    "upstreamError": "识别服务暂时不可用，请稍后重试。",
+    "invalidSchema": "识别结果结构异常，请重试。",
     "privacyNotice": "我们会记录识别次数和 token 用量用于成本分析与防滥用。我们不会保存您的图片或小票全文内容。",
     "privacyNoticeTitle": "隐私说明"
   },

@@ -20,6 +20,12 @@ const CODE_TO_I18N: Record<string, string> = {
   NETWORK_ERROR: 'ocr.networkError',
   SERVER_ERROR: 'ocr.serverError',
   INVALID_RESPONSE: 'ocr.invalidResponse',
+  // Edge Function 稳定错误码（ocr-receipt）
+  GEMINI_UPSTREAM_ERROR: 'ocr.upstreamError',
+  OCR_PARSE_ERROR: 'ocr.parseError',
+  OCR_TIMEOUT: 'ocr.timeout',
+  INVALID_RECEIPT_SCHEMA: 'ocr.invalidSchema',
+  RECONCILIATION_FAILED: 'ocr.invalidSchema',
 };
 
 /**

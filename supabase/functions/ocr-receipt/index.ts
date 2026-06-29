@@ -41,7 +41,9 @@ interface OCRResponse {
       unitPrice: number;
       lineTotal: number;
       categoryKey?: string;
+      kind?: 'item' | 'discount' | 'tax' | 'subtotal';
     }>;
+    discounts?: Array<{ label: string; amount: number }>;
     total: number;
     tax: number;
     currency: string;
@@ -260,58 +262,54 @@ function extractJsonFromText(text: string): any {
   throw new Error('No valid JSON found in response');
 }
 
-async function callGemini(imageBase64: string): Promise<any> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY not configured');
-  }
+function buildOcrPrompt(): string {
+  return [
+    'あなたは日本のスーパー/コンビニのレシート画像を読み取る OCR パーサーです。',
+    '出力は有効な JSON のみ。Markdown・コードフェンス・説明文は一切出力しないこと。',
+    '',
+    'スキーマ:',
+    '{',
+    '  "merchant": string|null,            // 店名（例: セブン-イレブン）',
+    '  "transactionDate": string|null,     // 例 "YYYY/MM/DD HH:MM"（原文の形式のまま）',
+    '  "total": number|null,               // 合計（整数 JPY）',
+    '  "tax": number|null,                 // 消費税（整数 JPY、無ければ 0）',
+    '  "currency": "JPY",',
+    '  "items": [ {',
+    '     "name": string, "quantity": number, "unitPrice": number, "lineTotal": number,',
+    '     "categoryKey": string,            // 下記 enum のみ',
+    '     "kind": "item"|"discount"|"tax"|"subtotal"',
+    '  } ],',
+    '  "discounts": [ { "label": string, "amount": number } ]   // amount は負数（例 -50）',
+    '}',
+    '',
+    'ルール:',
+    '- すべての金額は整数の JPY。小数や通貨記号（¥ 等）を付けない。',
+    '- 値引・割引・クーポン・セール・ポイント利用 などの行は商品ではない。kind="discount" とし、discounts にも入れる（amount は負数）。',
+    '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
+    '- 店舗の業態（コンビニ / スーパー / ドラッグストア / 非超市 等）を categoryKey に入れない。',
+    '- categoryKey は次の固定 enum のみ: fresh, staple, dairy_egg, snack, drink, frozen_deli, seasoning, household, alcohol, other。',
+    '- 分類が判別できない場合は categoryKey を "other" にする（新しい分類を作らない）。',
+    '- 日本のコンビニ（セブン-イレブン / ファミリーマート / ローソン / ミニストップ）のレシートは、',
+    '  「商品行 → 小計 → 値引 → 消費税(軽減税率含む) → 合計」の構造を優先して解釈する。',
+    '- 店名が 7-Eleven / セブンイレブン / セブンーイレブン の場合は merchant を "セブン-イレブン" に正規化してよい。',
+    '- レシート上に日時があれば transactionDate に原文の形式のまま入れる。',
+  ].join('\n');
+}
 
-  const categorySpec = `
-categoryKey 必须从以下枚举中选择一个：
-- fresh（生鲜：肉/鱼/蔬菜/水果/菌菇）
-- staple（主食：米/面/面包/麦片/薯类）
-- dairy_egg（乳制品/蛋）
-- snack（零食/甜品/巧克力/饼干）
-- drink（饮料：水/茶/咖啡/汽水/乳饮料）
-- frozen_deli（冷冻/熟食/便当/炸物/加工品）
-- seasoning（调味料/油/盐/酱/味噌等）
-- household（日用品：纸品/清洁/洗护/杂货）
-- alcohol（酒类）
-- other（其它/无法判断）
-只输出 JSON，不要解释。
-  `.trim();
-
-  const body = {
-    contents: [
-      {
-        parts: [
-          {
-            text:
-              '这是一张日本超市或便利店的小票照片。请识别并输出 JSON。\n' +
-              '字段：merchant（可选）、items、total、tax、currency、transactionDate（可选，收据上的交易日期时间，格式如 YYYY/MM/DD HH:MM 或 YYYY-MM-DD HH:MM）。\n' +
-              'items 每项：name, quantity, unitPrice, lineTotal, categoryKey。\n' +
-              '如果收据上有日期时间信息，请在 transactionDate 字段中提取（保持原始格式）。\n' +
-              categorySpec,
-          },
-          {
-            inline_data: {
-              mime_type: 'image/jpeg',
-              data: imageBase64,
-            },
-          },
-        ],
-      },
-    ],
-  };
-
-  // Retry logic with timeout
+/**
+ * 调用 Gemini 并返回纯文本（含 usage）。上游错误/超时附带明确 error.code。
+ */
+async function requestGeminiText(
+  parts: any[]
+): Promise<{ text: string; usage: any }> {
+  const body = { contents: [{ parts }] };
   const maxRetry = 1;
-  let lastError: Error | null = null;
+  let lastError: any = null;
 
   for (let attempt = 0; attempt <= maxRetry; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
       const response = await fetch(GEMINI_API_URL, {
         method: 'POST',
         headers: {
@@ -321,7 +319,6 @@ categoryKey 必须从以下枚举中选择一个：
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-
       clearTimeout(timeoutId);
 
       if (!response.ok) {
@@ -333,58 +330,38 @@ categoryKey 必须从以下枚举中选择一个：
           await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
           continue;
         }
-        throw new Error(`Gemini API error (${response.status}): ${errorText.substring(0, 200)}`);
+        const e = new Error(`Gemini API error (${response.status})`) as Error & { code?: string };
+        e.code = response.status === 429 ? 'RATE_LIMIT' : 'GEMINI_UPSTREAM_ERROR';
+        throw e;
       }
 
       const rawText = await response.text();
-      const data = JSON.parse(rawText);
-      const parts = data?.candidates?.[0]?.content?.parts;
-      if (!Array.isArray(parts)) {
-        throw new Error('Invalid Gemini response structure');
+      let data: any;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const e = new Error('Gemini outer JSON parse failed') as Error & { code?: string };
+        e.code = 'GEMINI_UPSTREAM_ERROR';
+        throw e;
       }
-
-      // Extract usage metadata if available
-      const usageMetadata = data?.usageMetadata || null;
-      const inputTokens = usageMetadata?.promptTokenCount || null;
-      const outputTokens = usageMetadata?.candidatesTokenCount || null;
-      const totalTokens = usageMetadata?.totalTokenCount || null;
-
-      const modelReplyText = parts
-        .map((p: any) => (typeof p.text === 'string' ? p.text : ''))
-        .join('\n');
-
-      if (!modelReplyText) {
-        throw new Error('Gemini returned no text content');
+      const partsOut = data?.candidates?.[0]?.content?.parts;
+      if (!Array.isArray(partsOut)) {
+        const e = new Error('Invalid Gemini response structure') as Error & { code?: string };
+        e.code = 'GEMINI_UPSTREAM_ERROR';
+        throw e;
       }
-
-      const parsed = extractJsonFromText(modelReplyText);
-
-      return {
-        merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
-        items: Array.isArray(parsed.items) ? parsed.items : [],
-        total: typeof parsed.total === 'number' ? parsed.total : 0,
-        tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
-        currency:
-          typeof parsed.currency === 'string' && parsed.currency.trim()
-            ? parsed.currency
-            : 'JPY',
-        transactionDate:
-          typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()
-            ? parsed.transactionDate.trim()
-            : undefined,
-        // Include usage metadata for cost tracking
-        _usageMetadata: {
-          inputTokens,
-          outputTokens,
-          totalTokens,
-        },
-      };
+      const usage = data?.usageMetadata || null;
+      const text = partsOut.map((p: any) => (typeof p.text === 'string' ? p.text : '')).join('\n');
+      return { text, usage };
     } catch (error: any) {
+      clearTimeout(timeoutId);
       lastError = error;
-      if (error.name === 'AbortError') {
-        throw new Error('Request timeout');
+      if (error?.name === 'AbortError') {
+        const e = new Error('Request timeout') as Error & { code?: string };
+        e.code = 'OCR_TIMEOUT';
+        throw e;
       }
-      if (attempt < maxRetry && (error.message?.includes('429') || error.message?.includes('503'))) {
+      if (attempt < maxRetry && (error?.message?.includes('429') || error?.message?.includes('503'))) {
         continue;
       }
       throw error;
@@ -392,6 +369,78 @@ categoryKey 必须从以下枚举中选择一个：
   }
 
   throw lastError || new Error('Gemini API call failed');
+}
+
+async function callGemini(imageBase64: string): Promise<any> {
+  if (!GEMINI_API_KEY) {
+    const e = new Error('GEMINI_API_KEY not configured') as Error & { code?: string };
+    e.code = 'SERVER_ERROR';
+    throw e;
+  }
+
+  const { text: modelReplyText, usage } = await requestGeminiText([
+    { text: buildOcrPrompt() },
+    { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+  ]);
+
+  if (!modelReplyText) {
+    const e = new Error('Gemini returned no text content') as Error & { code?: string };
+    e.code = 'OCR_PARSE_ERROR';
+    throw e;
+  }
+
+  let parsed: any;
+  try {
+    parsed = extractJsonFromText(modelReplyText);
+  } catch {
+    // 目标七：JSON 不合法时做一次 repair retry，仍失败则返回 OCR_PARSE_ERROR（不裸奔 500）
+    console.warn(
+      `[ocr-receipt] JSON parse failed, attempting repair. raw(0..1000)=${modelReplyText.slice(0, 1000)}`
+    );
+    try {
+      const { text: repairedText } = await requestGeminiText([
+        {
+          text:
+            'あなたは JSON 修復器です。次の内容を、指定スキーマに従う有効な JSON のみに修正して出力してください。' +
+            'Markdown や説明は出力しないこと。\n' +
+            'スキーマ: {merchant, transactionDate, total, tax, currency, ' +
+            'items:[{name,quantity,unitPrice,lineTotal,categoryKey,kind}], discounts:[{label,amount}]}\n\n' +
+            '--- 元の内容 ---\n' +
+            modelReplyText.slice(0, 6000),
+        },
+      ]);
+      parsed = extractJsonFromText(repairedText);
+    } catch {
+      const e = new Error('No valid JSON found in response (after repair)') as Error & {
+        code?: string;
+      };
+      e.code = 'OCR_PARSE_ERROR';
+      throw e;
+    }
+  }
+
+  const inputTokens = usage?.promptTokenCount || null;
+  const outputTokens = usage?.candidatesTokenCount || null;
+  const totalTokens = usage?.totalTokenCount || null;
+
+  return {
+    merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
+    items: Array.isArray(parsed.items) ? parsed.items : [],
+    discounts: Array.isArray(parsed.discounts) ? parsed.discounts : [],
+    total: typeof parsed.total === 'number' ? parsed.total : 0,
+    tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
+    currency:
+      typeof parsed.currency === 'string' && parsed.currency.trim() ? parsed.currency : 'JPY',
+    transactionDate:
+      typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()
+        ? parsed.transactionDate.trim()
+        : undefined,
+    _usageMetadata: {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+    },
+  };
 }
 
 /**
@@ -424,6 +473,9 @@ serve(async (req) => {
   let actorType: 'anon' | 'user' = 'anon';
   let actorHash = '';
   let actorId = '';
+  // 在外层声明，确保 catch 块也能安全访问（修复此前 catch 引用 try 内变量导致的 ReferenceError -> 裸 HTTP 500）
+  let supabase: any = null;
+  let payloadBytesForError = 0;
 
   try {
     // Initialize Supabase configuration
@@ -501,7 +553,7 @@ serve(async (req) => {
     actorHash = await hashActorId(actorId);
 
     // Create admin client with service role for DB operations
-    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    supabase = createClient(supabaseUrl, supabaseServiceKey, {
       auth: {
         persistSession: false,
       },
@@ -529,6 +581,7 @@ serve(async (req) => {
       const payloadBytes = requestData?.imageBase64
         ? Math.round((requestData.imageBase64.length * 3) / 4)
         : 0;
+      payloadBytesForError = payloadBytes;
       console.log(
         `[${requestId}] Received OCR request: method=${req.method} actorType=${actorType} payloadBytes=${payloadBytes} model=${GEMINI_MODEL}`
       );
@@ -619,7 +672,7 @@ serve(async (req) => {
     }
 
     // Validate mime type
-    if (!['image/jpeg', 'image/png'].includes(requestData.mimeType)) {
+    if (!['image/jpeg', 'image/png'].includes(requestData.mimeType as string)) {
       const responseTime = Date.now() - startTime;
       const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
       await recordUsageEvent(supabase, {
@@ -738,23 +791,21 @@ serve(async (req) => {
     // Call Gemini
     let analysis: any;
     let usageMetadata: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null } | null = null;
-    let geminiError: Error | null = null;
-
-    try {
+    {
       console.log(`[${requestId}] Calling Gemini model=${GEMINI_MODEL}`);
+      // callGemini 抛出的错误会带 code（GEMINI_UPSTREAM_ERROR / OCR_TIMEOUT / OCR_PARSE_ERROR / RATE_LIMIT），
+      // 由外层 catch 统一映射为稳定 JSON。
       const geminiResult = await callGemini(requestData.imageBase64);
       analysis = {
         merchant: geminiResult.merchant,
         items: geminiResult.items,
+        discounts: geminiResult.discounts,
         total: geminiResult.total,
         tax: geminiResult.tax,
         currency: geminiResult.currency,
         transactionDate: geminiResult.transactionDate,
       };
       usageMetadata = geminiResult._usageMetadata || null;
-    } catch (error: any) {
-      geminiError = error;
-      throw error; // Re-throw to be caught by outer catch
     }
 
     // Save to cache
@@ -804,51 +855,92 @@ serve(async (req) => {
     );
   } catch (error: any) {
     const responseTime = Date.now() - startTime;
-    const payloadBytes = requestData?.imageBase64 ? Math.round((requestData.imageBase64.length * 3) / 4) : 0;
-    
-    // Determine error code
-    let errorCode: string | null = 'SERVER_ERROR';
-    if (error.message?.includes('Rate limit')) {
-      errorCode = 'RATE_LIMIT';
-    } else if (error.message?.includes('too large') || error.message?.includes('PAYLOAD')) {
-      errorCode = 'PAYLOAD_TOO_LARGE';
-    } else if (error.message?.includes('timeout')) {
-      errorCode = 'TIMEOUT';
-    } else if (error.message?.includes('Invalid input')) {
-      errorCode = 'INVALID_INPUT';
+    const payloadBytes = payloadBytesForError;
+
+    // Determine error code: prefer explicit code from callGemini, else infer from message
+    let errorCode: string = typeof error?.code === 'string' && error.code ? error.code : 'SERVER_ERROR';
+    if (errorCode === 'SERVER_ERROR') {
+      const msg = String(error?.message || '');
+      if (/rate limit/i.test(msg) || /429/.test(msg)) {
+        errorCode = 'RATE_LIMIT';
+      } else if (/too large|payload/i.test(msg)) {
+        errorCode = 'PAYLOAD_TOO_LARGE';
+      } else if (/timeout|aborted/i.test(msg)) {
+        errorCode = 'OCR_TIMEOUT';
+      } else if (/invalid input/i.test(msg)) {
+        errorCode = 'INVALID_INPUT';
+      } else if (/gemini api error|upstream/i.test(msg)) {
+        errorCode = 'GEMINI_UPSTREAM_ERROR';
+      } else if (/no valid json|parse/i.test(msg)) {
+        errorCode = 'OCR_PARSE_ERROR';
+      }
     }
 
-    console.error(`[${requestId}] Error:`, error.message, `time=${responseTime}ms code=${errorCode}`);
+    // HTTP 状态码：尽量与语义一致，但 body 始终是稳定 JSON（客户端不会再收到 HTML/text）
+    const statusByCode: Record<string, number> = {
+      RATE_LIMIT: 429,
+      PAYLOAD_TOO_LARGE: 413,
+      INVALID_INPUT: 400,
+      OCR_TIMEOUT: 504,
+      GEMINI_UPSTREAM_ERROR: 502,
+      OCR_PARSE_ERROR: 502,
+      SERVER_ERROR: 500,
+    };
+    const httpStatus = statusByCode[errorCode] ?? 500;
 
-    // Record usage event for failed request
-    if (actorHash) {
-      await recordUsageEvent(supabase, {
-        requestId,
-        actorType,
-        actorHash,
-        model: GEMINI_MODEL,
-        inputTokens: null,
-        outputTokens: null,
-        totalTokens: null,
-        estimatedCostUsd: null,
-        payloadBytes,
-        durationMs: responseTime,
-        success: false,
-        errorCode,
-        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
-      });
+    // 清洗对外消息，避免泄漏内部细节
+    const sanitizedMessage =
+      errorCode === 'OCR_PARSE_ERROR'
+        ? 'OCR 结果解析失败，请重试或更换更清晰的照片'
+        : errorCode === 'GEMINI_UPSTREAM_ERROR'
+          ? '识别服务暂时不可用，请稍后重试'
+          : errorCode === 'OCR_TIMEOUT'
+            ? '识别超时，请重试'
+            : errorCode === 'RATE_LIMIT'
+              ? `请求过于频繁，请稍后重试（每小时上限 ${OCR_RATE_LIMIT_PER_HOUR}）`
+              : String(error?.message || 'Internal server error').slice(0, 200);
+
+    console.error(
+      `[${requestId}] Error:`,
+      String(error?.message || error).slice(0, 300),
+      `time=${responseTime}ms code=${errorCode} http=${httpStatus}`
+    );
+
+    // Record usage event for failed request (best-effort，绝不让记录失败再抛出)
+    if (actorHash && supabase) {
+      try {
+        await recordUsageEvent(supabase, {
+          requestId,
+          actorType,
+          actorHash,
+          model: GEMINI_MODEL,
+          inputTokens: null,
+          outputTokens: null,
+          totalTokens: null,
+          estimatedCostUsd: null,
+          payloadBytes,
+          durationMs: responseTime,
+          success: false,
+          errorCode,
+          edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+        });
+      } catch (logErr) {
+        console.error(`[${requestId}] Failed to record error usage event:`, logErr);
+      }
     }
 
     return new Response(
       JSON.stringify({
         success: false,
         error: {
-          code: errorCode || 'SERVER_ERROR',
-          message: error.message || 'Internal server error',
+          code: errorCode,
+          message: sanitizedMessage,
+          requestId,
+          model: GEMINI_MODEL,
         },
-      } as OCRResponse),
+      }),
       {
-        status: 500,
+        status: httpStatus,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
     );

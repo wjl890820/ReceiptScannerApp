@@ -172,7 +172,8 @@
     "deleteItemTitle": "Delete item",
     "deleteItemMessage": "Delete this item row?",
     "deleteItemConfirm": "Delete",
-    "saveFooterHint": "Saves to history. If you scanned multiple receipts, the next one opens after you tap OK."
+    "saveFooterHint": "Saves to history. If you scanned multiple receipts, the next one opens after you tap OK.",
+    "amountMismatchWarning": "Amounts may not match: the item subtotal doesn't add up to the receipt total. Please review before saving."
   },
   "reviewRetro": {
     "settingsTitle": "Review retrospective",
@@ -435,6 +436,10 @@
     "serverError": "Server error. Please try again later.",
     "invalidResponse": "Unexpected response. Please try again.",
     "failed": "Recognition failed. Please try again.",
+    "parseError": "Could not parse the recognition result. Please retry or use a clearer photo.",
+    "timeout": "Recognition timed out. Please try again.",
+    "upstreamError": "The recognition service is temporarily unavailable. Please try again later.",
+    "invalidSchema": "The recognition result structure is invalid. Please try again.",
     "privacyNotice": "We record OCR request counts and token usage for cost analysis and abuse prevention. We do NOT store your images or receipt content.",
     "privacyNoticeTitle": "Privacy Notice"
   },

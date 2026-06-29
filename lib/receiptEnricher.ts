@@ -311,8 +311,11 @@ export async function applyCategoriesWithLearning(
     let classificationOut: any = null;
 
     if (!isGrocery) {
-      // Non-grocery receipt: mark all items as non_grocery
-      category = 'non_grocery';
+      // 非 grocery 收据（如便利店/药妆店）：店铺级属性不应污染商品分类。
+      // 之前统一打成 'non_grocery'（显示为"非超市"），会作为商品分类出现在审核页。
+      // 改为 'uncategorized'：分析口径仍按收据级 is_grocery 排除（首页/统计均如此），
+      // 同时让用户可在审核页手动归类并触发学习。
+      category = 'uncategorized';
       classificationStatus = 'ok';
       classificationConfidence = 1;
     } else {

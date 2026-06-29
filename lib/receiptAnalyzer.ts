@@ -5,6 +5,7 @@ import Constants from 'expo-constants';
 
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
+import { normalizeOcrAnalysis } from './receiptOcrNormalize';
 import {
   getSupabaseUrl,
   getSupabaseAnonKey,
@@ -238,15 +239,25 @@ async function analyzeReceiptImageViaEdgeFunction(
     if (response.status === 404) {
       throw new Error('FUNCTION_NOT_FOUND');
     }
-    
-    // 其他错误：包含 status 和 body snippet
-    const errorSnippet = responseText.substring(0, 200);
-    throw new Error(`Edge Function 请求失败 (HTTP ${response.status}): ${errorSnippet}`);
+
+    // Edge Function 即使非 2xx 也返回稳定 JSON（含 error.code）；优先透传 code 给上层映射
+    const errCode =
+      typeof responseData?.error?.code === 'string' ? responseData.error.code : 'SERVER_ERROR';
+    const errMsg = responseData?.error?.message || responseText.substring(0, 200);
+    const e = new Error(`Edge Function 请求失败 (HTTP ${response.status}): ${errMsg}`) as Error & {
+      code?: string;
+    };
+    e.code = errCode;
+    throw e;
   }
 
   if (!responseData.success) {
+    // Edge Function 始终返回稳定 JSON（含 error.code），把 code 透传给上层用于映射用户友好提示
+    const errCode = typeof responseData?.error?.code === 'string' ? responseData.error.code : 'OCR_FAILED';
     const errorMessage = responseData?.error?.message || 'OCR 识别失败';
-    throw new Error(`OCR 识别失败: ${errorMessage}`);
+    const e = new Error(`OCR 识别失败: ${errorMessage}`) as Error & { code?: string };
+    e.code = errCode;
+    throw e;
   }
 
   const analysis = responseData.analysis;
@@ -287,7 +298,8 @@ async function analyzeReceiptImageViaEdgeFunction(
     transactionDate: txDateStr || undefined,
   };
 
-  return receiptAnalysis;
+  // 确定性后处理：剔除折扣/税/小计行、清洗分类、归一化店铺名、金额对账
+  return normalizeOcrAnalysis(receiptAnalysis);
 }
 
 /**
@@ -431,7 +443,7 @@ categoryKey 必须从以下枚举中选择一个：
           ocr_raw_text: rawSnippet,
         };
 
-        return analysis;
+        return normalizeOcrAnalysis(analysis);
     }
 
     if ((res.status === 429 || res.status === 503) && i < maxRetry) {

@@ -586,6 +586,14 @@ export default function ScanReviewScreen() {
         <Text style={styles.h2}>{t('scanReview.sectionYourEdits')}</Text>
         <Text style={styles.sectionSub}>{t('scanReview.sectionYourEditsSub')}</Text>
 
+        {snapshot?.amount_mismatch ? (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningBannerText}>
+              {t('scanReview.amountMismatchWarning')}
+            </Text>
+          </View>
+        ) : null}
+
         <Text style={styles.label}>{t('scanReview.merchant')}</Text>
         <TextInput value={merchant} onChangeText={setMerchant} style={styles.input} editable={!saving} />
 
@@ -789,6 +797,16 @@ const styles = StyleSheet.create({
   topBarHint: { fontSize: 11, color: '#666', textAlign: 'center', marginTop: 4, lineHeight: 14 },
   topBarBtn: { fontSize: 16, fontWeight: '700', color: '#111' },
   sectionSub: { fontSize: 13, color: '#777', marginTop: -6, marginBottom: 8, lineHeight: 18 },
+  warningBanner: {
+    backgroundColor: '#FFF4E5',
+    borderColor: '#F0A33A',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  warningBannerText: { color: '#8A5A00', fontSize: 13, lineHeight: 18 },
   saveHint: { fontSize: 13, color: '#555', marginTop: 20, lineHeight: 18 },
   container: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 },
   preview: { width: '100%', height: 200, backgroundColor: '#f0f0f0', borderRadius: 12, marginBottom: 16 },
