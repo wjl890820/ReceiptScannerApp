@@ -143,6 +143,23 @@ export function getCategoryAiRetries(): number {
 }
 
 /**
+ * Batch AI fallback (classify-items): 单张小票最多一次请求的整体超时。
+ * 比逐项 classify-item 更长（一次请求承载多商品），默认 9000ms。
+ */
+export function getCategoryBatchAiTimeoutMs(): number {
+  const v = getExtraValue('CATEGORY_BATCH_AI_TIMEOUT_MS', '9000');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1000 ? Math.floor(n) : 9000;
+}
+
+/** Batch AI fallback：单张小票最多发送的 uncategorized 商品数上限（默认 40）。 */
+export function getCategoryBatchAiMaxItems(): number {
+  const v = getExtraValue('CATEGORY_BATCH_AI_MAX_ITEMS', '40');
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 40;
+}
+
+/**
  * 获取备用反馈邮箱（用于 send-feedback 不可用时的兜底渠道）。
  */
 export function getSupportEmail(): string {

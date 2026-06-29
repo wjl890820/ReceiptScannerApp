@@ -14,6 +14,7 @@ import {
   type ClassifyInput,
 } from './categoryClassifier';
 import { getLastClassifyError, clearLastClassifyError } from './categoryAiClient';
+import { runBatchAiFallback } from './categoryBatchAi';
 import { buildAnalysisTags, mapLegacyCategoryToV1, mapV1ToLegacyCategory } from './categoryTaxonomyV1';
 import { buildReceiptStructuredAnalysis } from './structuredAnalysisEngine';
 import { buildReceiptAnalysisV1 } from './growthAnalysisEngineV1';
@@ -509,6 +510,27 @@ export async function applyCategoriesWithLearning(
   if (__DEV__ && trace) {
     console.log('[ScanTiming] classify_end_ms', { id: trace.id, ms: Date.now() - tStart, items: items.length });
   }
+
+  // 批量 AI 兜底：仅对本地分类后仍为 'uncategorized' 的商品，发起“单张小票一次”的
+  // classify-items 请求。失败/超时仅 warn，不影响保存；绝不覆盖本地学习/词典/规则结果。
+  try {
+    const tBatch = Date.now();
+    const batch = await runBatchAiFallback(enrichedItems as any[], {
+      merchantName: merchantRaw || merchantNormalized || undefined,
+    });
+    if (__DEV__) {
+      console.log('[ScanTiming] batch_ai_ms', {
+        id: trace?.id,
+        ms: Date.now() - tBatch,
+        called: batch.called,
+        applied: batch.appliedCount,
+        suggested: batch.suggestedCount,
+      });
+    }
+  } catch (e: any) {
+    if (__DEV__) console.warn('[CategoryBatchAI] enrich batch fallback failed:', e?.message);
+  }
+
   const structured = buildReceiptStructuredAnalysis({
     merchant: analysis.merchant,
     items: enrichedItems as any,
