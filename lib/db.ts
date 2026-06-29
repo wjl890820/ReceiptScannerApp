@@ -142,6 +142,7 @@ async function initIfNeeded() {
           category_id TEXT NOT NULL,
           confidence REAL NOT NULL DEFAULT 1.0,
           updated_at INTEGER NOT NULL,
+          source TEXT,
           PRIMARY KEY (normalized_name, merchant_hint)
         );
 
@@ -377,6 +378,32 @@ async function initIfNeeded() {
         // 如果迁移失败，忽略（可能是表不存在或已是最新结构）
         if (!e?.message?.includes('no such table')) {
           console.warn('[DB] Failed to migrate item_category_mapping:', e);
+        }
+      }
+
+      // 迁移：item_category_mapping 增加 source 列 + 一次性清理 legacy/auto 学习脏数据。
+      // 旧版本会在普通扫描时自动写入学习表（无 provenance），导致错误分类自我强化
+      // （如 シュガーバター 被旧数据学成 food_ingredients）。新增 source 列后，所有旧行
+      // 的 source 均为 NULL，一次性删除非 user_edit 行，仅保留用户手动修改的学习。
+      try {
+        const mapInfo = await db.getAllAsync<{ name: string }>(
+          `PRAGMA table_info(item_category_mapping)`
+        );
+        const mapCols = new Set(mapInfo.map((c) => c.name));
+        if (mapCols.size > 0 && !mapCols.has('source')) {
+          await db.runAsync(`ALTER TABLE item_category_mapping ADD COLUMN source TEXT`);
+          // 列刚新增，存量行 source 全为 NULL → 清理 legacy/auto 脏数据（仅一次）。
+          const res = await db.runAsync(
+            `DELETE FROM item_category_mapping WHERE source IS NULL OR source <> 'user_edit'`
+          );
+          const removed = (res as any)?.changes ?? 0;
+          if (removed > 0) {
+            console.warn(`[DB] Cleaned ${removed} legacy/auto item_category_mapping rows`);
+          }
+        }
+      } catch (e: any) {
+        if (!e?.message?.includes('no such table')) {
+          console.warn('[DB] Failed to migrate item_category_mapping source column:', e);
         }
       }
 

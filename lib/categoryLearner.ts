@@ -21,6 +21,14 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
   return _db;
 }
 
+/**
+ * 学习来源 provenance：
+ *  - 'user_edit'：用户在审核页/历史详情手动修改过分类（最高优先，可覆盖规则）。
+ *  - 'auto'：自动分类结果（规则/AI）。不再写入；仅历史遗留可能存在。
+ *  - null（legacy）：无 provenance 的旧数据，视为脏数据，不得高于 name_rule。
+ */
+export type LearnedCategorySource = 'user_edit' | 'auto';
+
 async function ensureMappingTableExists(db: SQLite.SQLiteDatabase): Promise<void> {
   try {
     await db.execAsync(`
@@ -30,6 +38,7 @@ async function ensureMappingTableExists(db: SQLite.SQLiteDatabase): Promise<void
         category_id TEXT NOT NULL,
         confidence REAL NOT NULL DEFAULT 1.0,
         updated_at INTEGER NOT NULL,
+        source TEXT,
         PRIMARY KEY (normalized_name, merchant_hint)
       );
 
@@ -42,6 +51,15 @@ async function ensureMappingTableExists(db: SQLite.SQLiteDatabase): Promise<void
       CREATE INDEX IF NOT EXISTS idx_item_category_mapping_name_hint
         ON item_category_mapping(normalized_name, merchant_hint);
     `);
+    // 幂等补列：旧库可能没有 source 列。
+    try {
+      const cols = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(item_category_mapping)`);
+      if (cols.length > 0 && !cols.some((c) => c.name === 'source')) {
+        await db.runAsync(`ALTER TABLE item_category_mapping ADD COLUMN source TEXT`);
+      }
+    } catch {
+      // 忽略：补列失败时按无 source（legacy）处理。
+    }
   } catch {
     // Non-fatal: callers will fall back to rules/fallback when mapping isn't available.
   }
@@ -55,7 +73,8 @@ export async function learnCategoryMapping(
   normalizedName: string,
   merchantHint: string | null,
   categoryId: string,
-  confidence: number = 1.0
+  confidence: number = 1.0,
+  source: LearnedCategorySource = 'user_edit'
 ): Promise<void> {
   if (!normalizedName || !categoryId) return;
 
@@ -71,8 +90,8 @@ export async function learnCategoryMapping(
   await db.runAsync(
     `
     INSERT OR REPLACE INTO item_category_mapping 
-    (normalized_name, merchant_hint, category_id, confidence, updated_at)
-    VALUES (?, ?, ?, ?, ?)
+    (normalized_name, merchant_hint, category_id, confidence, updated_at, source)
+    VALUES (?, ?, ?, ?, ?, ?)
     `,
     [
       normalizedName.trim().toLowerCase(),
@@ -80,6 +99,7 @@ export async function learnCategoryMapping(
       categoryId.trim(),
       confidence,
       now,
+      source,
     ]
   );
 }
@@ -91,7 +111,27 @@ export async function learnCategoryFromEdit(
   normalizedName: string,
   category: string
 ): Promise<void> {
-  await learnCategoryMapping(normalizedName, null, category, 1.0);
+  await learnCategoryMapping(normalizedName, null, category, 1.0, 'user_edit');
+}
+
+/**
+ * 一次性清理 legacy / auto 学习脏数据。
+ * 仅保留 source='user_edit'（用户手动修改）的学习记录，删除：
+ *  - source IS NULL（无 provenance 的旧自动学习数据，曾由扫描自动写入污染）
+ *  - source != 'user_edit'（如 'auto'）
+ * 不动收据历史，只清理 item_category_mapping。返回删除行数。
+ */
+export async function invalidateLegacyCategoryLearning(): Promise<number> {
+  const db = await getDb();
+  await ensureMappingTableExists(db);
+  try {
+    const res = await db.runAsync(
+      `DELETE FROM item_category_mapping WHERE source IS NULL OR source <> 'user_edit'`
+    );
+    return (res as any)?.changes ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -100,25 +140,33 @@ export async function learnCategoryFromEdit(
  *  a) Query merchant-specific row (merchant_hint = normalized merchant) first
  *  b) Fallback to merchant_hint = '' row (general mapping)
  */
-export async function getLearnedCategory(
+export type LearnedCategoryEntry = {
+  category: string;
+  /** 'user_edit' | 'auto' | null(legacy)。仅 'user_edit' 可享最高优先。 */
+  source: string | null;
+};
+
+/**
+ * 查询学习分类（含 provenance）。
+ * 调用方据 source 决定优先级：仅 'user_edit' 可覆盖 name_rule，legacy/auto 不得。
+ */
+export async function getLearnedCategoryEntry(
   normalizedName: string,
   merchantHint?: string | null
-): Promise<string | null> {
+): Promise<LearnedCategoryEntry | null> {
   if (!normalizedName) return null;
 
   const db = await getDb();
   await ensureMappingTableExists(db);
   const normalized = normalizedName.trim().toLowerCase();
-  
+
   // Try with merchant hint first (more specific)
   if (merchantHint) {
-    const normalizedMerchantHint = merchantHint
-      ? normalizeMerchantName(merchantHint)
-      : '';
+    const normalizedMerchantHint = normalizeMerchantName(merchantHint);
     try {
-      const rowWithHint = await db.getFirstAsync<{ category_id: string }>(
+      const rowWithHint = await db.getFirstAsync<{ category_id: string; source: string | null }>(
         `
-        SELECT category_id FROM item_category_mapping
+        SELECT category_id, source FROM item_category_mapping
         WHERE normalized_name = ? AND merchant_hint = ?
         ORDER BY confidence DESC, updated_at DESC
         LIMIT 1
@@ -126,30 +174,40 @@ export async function getLearnedCategory(
         [normalized, normalizedMerchantHint]
       );
       if (rowWithHint?.category_id) {
-        return rowWithHint.category_id;
+        return { category: rowWithHint.category_id, source: rowWithHint.source ?? null };
       }
     } catch {
       return null;
     }
   }
-  
+
   // Fallback to without merchant hint (general mapping: merchant_hint = '')
-  let row: { category_id: string } | null = null;
   try {
-    row = await db.getFirstAsync<{ category_id: string }>(
+    const row = await db.getFirstAsync<{ category_id: string; source: string | null }>(
       `
-      SELECT category_id FROM item_category_mapping
+      SELECT category_id, source FROM item_category_mapping
       WHERE normalized_name = ? AND merchant_hint = ''
       ORDER BY confidence DESC, updated_at DESC
       LIMIT 1
       `,
       [normalized]
     );
+    return row?.category_id ? { category: row.category_id, source: row.source ?? null } : null;
   } catch {
     return null;
   }
+}
 
-  return row?.category_id ?? null;
+/**
+ * Get learned category id (string), regardless of provenance (向后兼容)。
+ * 新代码请用 getLearnedCategoryEntry 以区分 user_edit / legacy。
+ */
+export async function getLearnedCategory(
+  normalizedName: string,
+  merchantHint?: string | null
+): Promise<string | null> {
+  const entry = await getLearnedCategoryEntry(normalizedName, merchantHint);
+  return entry?.category ?? null;
 }
 
 /**

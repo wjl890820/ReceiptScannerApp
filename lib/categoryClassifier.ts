@@ -4,7 +4,7 @@
 
 import type { Category } from './categories';
 import { ALL_CATEGORIES } from './categories';
-import { getLearnedCategory, learnCategoryMapping } from './categoryLearner';
+import { getLearnedCategoryEntry } from './categoryLearner';
 import { normalizeMerchantName } from './productNormalizer';
 import { getCategoryAiItemCap } from './env';
 import type { AnalysisTag, MainCategory, SubCategory } from './categoryTaxonomyV1';
@@ -200,8 +200,11 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
   //   6. uncategorized 兜底
   // alias 在 receiptEnricher 中先于 classifyItem 处理，仍为最高优先。
 
-  // 1. Local mapping (用户学习) —— classifyItem 内最高优先
-  const learnedCategory = await getLearnedCategory(normalized, merchantHint);
+  // 1. Local mapping (用户学习) —— 仅 source='user_edit'（用户手动修改过）才享最高优先。
+  //    legacy/auto 学习数据不得高于 name_rule，避免旧脏数据自我强化（如 シュガーバター→食材）。
+  const learnedEntry = await getLearnedCategoryEntry(normalized, merchantHint);
+  const learnedCategory =
+    learnedEntry && learnedEntry.source === 'user_edit' ? learnedEntry.category : null;
   if (learnedCategory && ALL_CATEGORIES.includes(learnedCategory as Category)) {
     if (classificationStats) classificationStats.mapping++;
     const v1 = mapLegacyCategoryToV1(learnedCategory);
@@ -209,7 +212,7 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
       categoryId: learnedCategory,
       confidence: 1.0,
       source: 'mapping',
-      reason: 'Local mapping match',
+      reason: 'Local mapping match (user_edit)',
       category_main: v1.main,
       category_sub: v1.sub,
       analysis_tags: undefined,
@@ -241,10 +244,8 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
 
   if (ruleResult && ruleResult.confidence >= 0.8) {
     if (classificationStats) classificationStats.rules++;
-    if (ruleResult.confidence >= 0.85) {
-      const mh = merchantName ? normalizeMerchantName(merchantName) : '';
-      await learnCategoryMapping(normalized, mh || null, ruleResult.legacy, ruleResult.confidence);
-    }
+    // 普通扫描不再自动写入学习表（旧设计会让错误分类自我强化）。
+    // 仅用户在审核页/历史详情手动改分类时（learnFromUserEdit, source='user_edit'）才学习。
     return {
       categoryId: ruleResult.legacy,
       confidence: ruleResult.confidence,
@@ -345,8 +346,7 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
         recordAiSuccess();
         receiptConsecutiveApiFailures = 0;
         if (classificationStats) classificationStats.ai++;
-        const mh = merchantName ? normalizeMerchantName(merchantName) : '';
-        await learnCategoryMapping(normalized, mh || null, aiResult.categoryId, aiResult.confidence);
+        // AI 结果同样不自动写入学习表（仅用户手动修改才学习）。
         const v1 = mapLegacyCategoryToV1(aiResult.categoryId);
         return {
           categoryId: aiResult.categoryId,

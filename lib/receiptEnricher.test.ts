@@ -11,10 +11,16 @@
 // 屏蔽原生依赖：env 走默认值；网络/DB 相关模块 mock 掉。
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 jest.mock('./groceryDetector', () => ({ isGroceryMerchant: () => true }));
+// 可控的学习表 mock：默认无学习记录。测试通过 setMockLearned 注入 {category, source}。
+let mockLearnedEntry: { category: string; source: string | null } | null = null;
 jest.mock('./categoryLearner', () => ({
-  getLearnedCategory: jest.fn(async () => null),
+  getLearnedCategoryEntry: jest.fn(async () => mockLearnedEntry),
+  getLearnedCategory: jest.fn(async () => mockLearnedEntry?.category ?? null),
   learnCategoryMapping: jest.fn(async () => {}),
 }));
+function setMockLearned(e: { category: string; source: string | null } | null): void {
+  mockLearnedEntry = e;
+}
 jest.mock('./productAlias', () => ({ lookupProductNameAlias: jest.fn(async () => null) }));
 jest.mock('./categoryBatchAi', () => ({
   runBatchAiFallback: jest.fn(async () => ({ called: false, appliedCount: 0, suggestedCount: 0 })),
@@ -87,6 +93,8 @@ describe('resolveProductCategoryRuntime: 运行时优先级', () => {
 });
 
 describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () => {
+  beforeEach(() => setMockLearned(null));
+
   // 真实路径：runScanPipelineToReview → applyCategoriesWithLearning（内部走真实 classifyItem）。
   // 仅 mock 宽泛 dictionary（バター→食材），不 mock classifyItem，确保覆盖运行时分类链路。
   async function enrichOne(
@@ -130,6 +138,23 @@ describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () =
 
   it('K午後MT500 + categoryKey=snacks_drinks → snacks_drinks（名规则不确定时用 OCR key 辅助）', async () => {
     expect((await enrichOne('K午後MT500', 'snacks_drinks', 130)).category).toBe('snacks_drinks');
+  });
+
+  it('learned source=user_edit シュガーバター=food_ingredients → 最终允许 food_ingredients（用户明确改过）', async () => {
+    setMockLearned({ category: 'food_ingredients', source: 'user_edit' });
+    expect((await enrichOne('シュガーバター', 'snacks_drinks', 578)).category).toBe('food_ingredients');
+  });
+
+  it('learned source=auto シュガーバター=food_ingredients → 必须被 name_rule 覆盖为 snacks_drinks', async () => {
+    setMockLearned({ category: 'food_ingredients', source: 'auto' });
+    const { category, source } = await enrichOne('シュガーバター', 'snacks_drinks', 578);
+    expect(category).toBe('snacks_drinks');
+    expect(source).not.toBe('mapping');
+  });
+
+  it('legacy learned(source=null) シュガーバター=food_ingredients → 被 name_rule 覆盖为 snacks_drinks', async () => {
+    setMockLearned({ category: 'food_ingredients', source: null });
+    expect((await enrichOne('シュガーバター', 'snacks_drinks', 578)).category).toBe('snacks_drinks');
   });
 
   it('一票多项：各自按运行时优先级得到正确分类', async () => {

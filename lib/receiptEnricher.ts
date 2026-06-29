@@ -1,6 +1,6 @@
 // lib/receiptEnricher.ts
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
-import { learnCategoryMapping, getLearnedCategory } from './categoryLearner';
+import { learnCategoryMapping, getLearnedCategoryEntry } from './categoryLearner';
 import { resolveProductCategoryRuntime, mapKnownProductCategory, classifyItemByName } from './productCategory';
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
@@ -389,11 +389,20 @@ export async function applyCategoriesWithLearning(
     //   （とりきも 不因 OCR=ready_to_eat 而被覆盖）。
     // 本地学习对便利店(非 grocery)商品也生效（分类器分支可能被跳过）。
     const ocrCategoryKey = typeof (it as any)?.categoryKey === 'string' ? (it as any).categoryKey : null;
+    // 仅用户手动修改过的学习(source='user_edit')才作为最高优先 learned；
+    // legacy/auto 脏数据不得高于 name_rule（修复 シュガーバター 被 mapping 提前判成食材）。
     let learnedRaw: string | null = null;
+    let learnedSource: string | null = null;
     try {
-      learnedRaw = await getLearnedCategory(norm.normalized_name, merchantRaw || merchantNormalized || null);
+      const learnedEntry = await getLearnedCategoryEntry(
+        norm.normalized_name,
+        merchantRaw || merchantNormalized || null
+      );
+      learnedSource = learnedEntry?.source ?? null;
+      learnedRaw = learnedEntry && learnedEntry.source === 'user_edit' ? learnedEntry.category : null;
     } catch {
       learnedRaw = null;
+      learnedSource = null;
     }
     // 按分类器来源拆分候选，保证 dictionary 不抢在具体商品名规则之前。
     const clsSource = classificationOut?.source as string | undefined;
@@ -413,12 +422,31 @@ export async function applyCategoriesWithLearning(
       ocrKey: ocrCategoryKey,
     });
 
-    // 临时开发日志：仅当分类器结果与最终结果不一致（发生纠偏）时打印，避免噪声。
-    // 用于确认 シュガーバター 等不再被 broad dictionary 抢成 food_ingredients。
+    // 临时开发日志（__DEV__）：
+    //  - 通用：分类器结果与最终结果不一致（发生纠偏）时打印一行，低噪声。
+    //  - targeted：商品名含 シュガーバター / バター 时，打印完整来源，便于定位 mapping 污染。
     if (__DEV__) {
       const classifierCategory = mapKnownProductCategory(category) ?? null;
       const nameRuleCategory = classifyItemByName(name);
-      if (classifierCategory !== productCategory) {
+      const isButterTarget = name.includes('シュガーバター') || name.includes('バター');
+      if (isButterTarget) {
+        // eslint-disable-next-line no-console
+        console.log('[CategoryResolve][butter]', {
+          name,
+          rawCategory: (it as any)?.category ?? null,
+          categoryKey: (it as any)?.categoryKey ?? null,
+          learnedCategory: learnedRaw,
+          learnedSource,
+          aliasCategory: aliasOrLearned,
+          classifierCategory,
+          classifierSource: clsSource ?? null,
+          nameRuleCategory,
+          dictionaryCategory: dictionaryCandidate,
+          ocrCategoryKey,
+          finalCategory: productCategory,
+          classification_source: clsSource ?? null,
+        });
+      } else if (classifierCategory !== productCategory) {
         // eslint-disable-next-line no-console
         console.log('[CategoryResolve]', {
           name,
@@ -606,9 +634,10 @@ export async function learnFromUserEdit(
 ): Promise<void> {
   const key = normalizeReceiptItemName(itemName).normalized_name.trim().toLowerCase();
   if (!key) return;
-  await learnCategoryMapping(key, '', category, 1.0);
+  // 用户手动编辑 → source='user_edit'（享最高优先，可覆盖 name_rule）。
+  await learnCategoryMapping(key, '', category, 1.0, 'user_edit');
   const mh = merchantHintRaw ? normalizeMerchantName(merchantHintRaw) : '';
   if (mh) {
-    await learnCategoryMapping(key, mh, category, 1.0);
+    await learnCategoryMapping(key, mh, category, 1.0, 'user_edit');
   }
 }
