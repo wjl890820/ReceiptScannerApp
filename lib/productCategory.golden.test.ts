@@ -42,7 +42,7 @@ const RECEIPT_2: Sample[] = [
   ['岩手葛巻牛乳', 'food_ingredients'],
   ['LPミルクティー', 'snacks_drinks'],
   ['塩釜発さつまあげ', 'ready_to_eat'],
-  ['濃い木綿2個入', 'food_ingredients'],
+  ['7濃い木綿2個入', 'food_ingredients'],
   ['横浜家系', 'ready_to_eat'],
 ];
 
@@ -54,7 +54,7 @@ const RECEIPT_3: Sample[] = [
   ['モンデリッチョコサン', 'snacks_drinks'],
   ['タルタルチキン南蛮丼', 'ready_to_eat'],
   ['ツナとたまごのサンド', 'ready_to_eat'],
-  ['NEWジャイアントコーン', 'snacks_drinks'],
+  ['NEWジャイアントコー', 'snacks_drinks'],
 ];
 
 const RECEIPT_4: Sample[] = [

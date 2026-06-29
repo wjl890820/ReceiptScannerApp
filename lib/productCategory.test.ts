@@ -46,6 +46,27 @@ describe('classifyItemByName: 关键词分类', () => {
   it('未知商品 → uncategorized', () => {
     expect(classifyItemByName('xyz123')).toBe('uncategorized');
   });
+
+  // 优先级回归：糖果/饮料语境的 ミルク/コーン/ドーナツ 必须早于食材 牛乳/ごま/抹茶
+  it('NEWジャイアントコー → snacks_drinks（截断也命中）', () => {
+    expect(classifyItemByName('NEWジャイアントコー')).toBe('snacks_drinks');
+    expect(classifyItemByName('ジャイアントコーン')).toBe('snacks_drinks');
+  });
+  it('金のミルク抹茶L → snacks_drinks（糖果不是食材）', () => {
+    expect(classifyItemByName('金のミルク抹茶L')).toBe('snacks_drinks');
+  });
+  it('LPミルクティー → snacks_drinks', () => {
+    expect(classifyItemByName('LPミルクティー')).toBe('snacks_drinks');
+  });
+  it('あんドーナツ白ごま → snacks_drinks（早于 ごま 食材）', () => {
+    expect(classifyItemByName('あんドーナツ白ごま')).toBe('snacks_drinks');
+  });
+  it('岩手葛巻牛乳 → food_ingredients（牛乳仍是食材）', () => {
+    expect(classifyItemByName('岩手葛巻牛乳')).toBe('food_ingredients');
+  });
+  it('7濃い木綿2個入 → food_ingredients', () => {
+    expect(classifyItemByName('7濃い木綿2個入')).toBe('food_ingredients');
+  });
 });
 
 describe('normalizeProductCategory: 旧→新映射 + 店铺词过滤', () => {

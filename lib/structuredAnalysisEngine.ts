@@ -1,14 +1,16 @@
 // lib/structuredAnalysisEngine.ts
 // Minimal structured analysis output (no AI copywriting).
 
-import type { MainCategory, SubCategory, AnalysisTag } from './categoryTaxonomyV1';
+import type { SubCategory, AnalysisTag } from './categoryTaxonomyV1';
+import { normalizeProductCategory, type ProductCategory } from './productCategory';
 
 export type ReceiptStructuredAnalysisV1 = {
   shopping_type: 'grocery' | 'mixed' | 'unknown';
-  main_category_breakdown: Array<{ category_main: MainCategory; amount: number; pct: number }>;
+  // category_main 统一输出新 8 类（不再出现 ingredients/snacks/beverages 等旧名）。
+  main_category_breakdown: Array<{ category_main: ProductCategory; amount: number; pct: number }>;
   sub_category_breakdown: Array<{ category_sub: SubCategory; amount: number; pct: number }>;
   analysis_tags_summary: Array<{ tag: AnalysisTag; count: number }>;
-  top_items: Array<{ normalized_name: string; line_total: number; category_main: MainCategory; category_sub: SubCategory | null }>;
+  top_items: Array<{ normalized_name: string; line_total: number; category_main: ProductCategory; category_sub: SubCategory | null }>;
   signals: Array<{ key: string; value?: string | number }>;
 };
 
@@ -25,14 +27,17 @@ export function buildReceiptStructuredAnalysis(input: {
   currency: string;
 }): ReceiptStructuredAnalysisV1 {
   const items = Array.isArray(input.items) ? input.items : [];
-  const mainMap = new Map<string, number>();
+  const mainMap = new Map<ProductCategory, number>();
   const subMap = new Map<string, number>();
   const tagMap = new Map<string, number>();
 
   for (const it of items) {
     const lt = safeNum(it?.line_total ?? it?.lineTotal);
     if (lt <= 0) continue;
-    const main = String(it?.category_main || 'uncategorized');
+    const main = normalizeProductCategory(
+      it?.category ?? it?.category_main,
+      it?.normalized_name ?? it?.name
+    );
     const sub = it?.category_sub ? String(it.category_sub) : '';
     mainMap.set(main, (mainMap.get(main) ?? 0) + lt);
     if (sub) subMap.set(sub, (subMap.get(sub) ?? 0) + lt);
@@ -49,7 +54,7 @@ export function buildReceiptStructuredAnalysis(input: {
 
   const main_category_breakdown = Array.from(mainMap.entries())
     .map(([k, amount]) => ({
-      category_main: k as MainCategory,
+      category_main: k,
       amount,
       pct: mainTotal > 0 ? (amount / mainTotal) * 100 : 0,
     }))
@@ -71,7 +76,10 @@ export function buildReceiptStructuredAnalysis(input: {
     .map((it) => ({
       normalized_name: String(it?.normalized_name || it?.name || ''),
       line_total: safeNum(it?.line_total ?? it?.lineTotal),
-      category_main: String(it?.category_main || 'uncategorized') as MainCategory,
+      category_main: normalizeProductCategory(
+        it?.category ?? it?.category_main,
+        it?.normalized_name ?? it?.name
+      ),
       category_sub: (it?.category_sub ? String(it.category_sub) : null) as SubCategory | null,
     }))
     .filter((x) => x.line_total > 0)

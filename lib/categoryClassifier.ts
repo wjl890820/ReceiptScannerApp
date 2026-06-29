@@ -25,6 +25,12 @@ export type ClassifyInput = {
   merchantName?: string;
   price?: number;
   locale?: string;
+  /**
+   * 是否允许在本次分类中调用 classify-item Edge Function（逐个商品 AI 慢路径）。
+   * 默认 false：主扫描流程不再逐项调用 AI（旧 ID 污染 + 3.5s 超时导致审核页延迟）。
+   * 仅当显式传 true（如离线批量重算）时才会走 AI fallback。
+   */
+  allowAi?: boolean;
 };
 
 export type ClassifyOutput = {
@@ -172,7 +178,7 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
   if (!normalizedName || !rawName) {
     if (classificationStats) classificationStats.fallback++;
     return {
-      categoryId: 'other_grocery',
+      categoryId: 'uncategorized',
       confidence: 0.0,
       source: 'fallback',
       reason: 'Empty name',
@@ -262,10 +268,14 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyOutput
     const out = useRuleFallback(fr);
     if (out) return out;
     if (classificationStats) classificationStats.fallback++;
-    return { categoryId: 'other_grocery' as Category, confidence: 0.0, source: 'fallback' as const, reason: 'No match found' };
+    // 本地学习/词典/规则/OCR 都未命中时返回 uncategorized（不再返回 other_grocery → other），
+    // 让 resolveProductCategory 走商品名关键词或落到 uncategorized，避免 other 滥用。
+    return { categoryId: 'uncategorized' as Category, confidence: 0.0, source: 'fallback' as const, reason: 'No match found' };
   };
 
+  // 主扫描默认不调用逐项 AI 慢路径（input.allowAi 未显式置 true 即跳过）。
   const skipApi =
+    !input.allowAi ||
     receiptConsecutiveApiFailures >= RECEIPT_API_FAILURE_THRESHOLD ||
     isCircuitBreakerOpen() ||
     receiptAiCallCount >= RECEIPT_AI_CALL_CAP;

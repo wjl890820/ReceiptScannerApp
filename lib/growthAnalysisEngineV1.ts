@@ -2,9 +2,9 @@
 // Growth-oriented structured analysis outputs (no AI copywriting).
 
 import type { ReceiptRow } from './db';
-import type { AnalysisLevel, PeriodTrigger } from './analysisTriggers';
+import type { AnalysisLevel } from './analysisTriggers';
 import { getAnalysisLevel } from './analysisTriggers';
-import type { MainCategory, SubCategory, AnalysisTag } from './categoryTaxonomyV1';
+import { normalizeProductCategory, type ProductCategory } from './productCategory';
 
 export type ReceiptAnalysisOutputV1 = {
   shopping_type:
@@ -16,26 +16,16 @@ export type ReceiptAnalysisOutputV1 = {
     | 'mixed'
     | 'unknown';
   shopping_signals: Array<{ key: string; value?: string | number }>;
-  ratios: Record<
-    | 'ingredients'
-    | 'prepared_food'
-    | 'snacks'
-    | 'beverages'
-    | 'alcohol'
-    | 'household'
-    | 'health'
-    | 'other'
-    | 'uncategorized',
-    number
-  >;
-  top_categories: Array<{ category_main: MainCategory; amount: number; pct: number }>;
+  // 比例口径统一到新 8 类（不再输出 ingredients/snacks/beverages/prepared_food 等旧名）。
+  ratios: Record<ProductCategory, number>;
+  top_categories: Array<{ category_main: ProductCategory; amount: number; pct: number }>;
   suggestions_seed: string[];
 };
 
 export type AggregateAnalysisOutputV1 = {
   analysis_level: AnalysisLevel;
   dominant_shopping_pattern: ReceiptAnalysisOutputV1['shopping_type'];
-  repeated_categories: Array<{ category_main: MainCategory; count: number }>;
+  repeated_categories: Array<{ category_main: ProductCategory; count: number }>;
   repeated_items: Array<{ normalized_name: string; count: number }>;
   consumption_style_signals: Array<{ key: string; value?: string | number }>;
   trend_signals: Array<{ key: string; value?: string | number }>;
@@ -44,7 +34,7 @@ export type AggregateAnalysisOutputV1 = {
 export type WeeklyReportV1 = {
   period: 'weekly';
   total_spend: number;
-  main_category_breakdown: Array<{ category_main: MainCategory; amount: number; pct: number }>;
+  main_category_breakdown: Array<{ category_main: ProductCategory; amount: number; pct: number }>;
   top_items: Array<{ normalized_name: string; amount: number; count: number }>;
   snack_beverage_share: number;
   household_restock_candidates: Array<{ normalized_name: string; count: number }>;
@@ -53,7 +43,7 @@ export type WeeklyReportV1 = {
 export type MonthlyReportV1 = {
   period: 'monthly';
   total_spend: number;
-  main_category_breakdown: Array<{ category_main: MainCategory; amount: number; pct: number }>;
+  main_category_breakdown: Array<{ category_main: ProductCategory; amount: number; pct: number }>;
   top_items: Array<{ normalized_name: string; amount: number; count: number }>;
   shopping_pattern_changes: Array<{ key: string; value?: string | number }>;
 };
@@ -79,18 +69,26 @@ function readItemsFromAnalysisJson(analysisJson: string): any[] {
   }
 }
 
-function sumByMain(items: any[]): Map<string, number> {
-  const m = new Map<string, number>();
+/** 将任意来源的商品分类归一到新 8 类（item.category 优先，回退 category_main / 商品名）。 */
+function itemMainCategory(it: any): ProductCategory {
+  return normalizeProductCategory(
+    it?.category ?? it?.category_main,
+    it?.normalized_name ?? it?.name
+  );
+}
+
+function sumByMain(items: any[]): Map<ProductCategory, number> {
+  const m = new Map<ProductCategory, number>();
   for (const it of items) {
     const lt = safeNum(it?.line_total ?? it?.lineTotal);
     if (lt <= 0) continue;
-    const main = String(it?.category_main || 'uncategorized');
+    const main = itemMainCategory(it);
     m.set(main, (m.get(main) ?? 0) + lt);
   }
   return m;
 }
 
-function totalsum(map: Map<string, number>): number {
+function totalsum<K>(map: Map<K, number>): number {
   let s = 0;
   for (const v of map.values()) s += v;
   return s;
@@ -109,19 +107,18 @@ export function buildReceiptAnalysisV1(params: {
   const total = totalsum(mainMap) || safeNum(params.total);
 
   const ratios: ReceiptAnalysisOutputV1['ratios'] = {
-    ingredients: pct(mainMap.get('ingredients') ?? 0, total),
-    prepared_food: pct(mainMap.get('prepared_food') ?? 0, total),
-    snacks: pct(mainMap.get('snacks') ?? 0, total),
-    beverages: pct(mainMap.get('beverages') ?? 0, total),
-    alcohol: pct(mainMap.get('alcohol') ?? 0, total),
+    food_ingredients: pct(mainMap.get('food_ingredients') ?? 0, total),
+    ready_to_eat: pct(mainMap.get('ready_to_eat') ?? 0, total),
+    snacks_drinks: pct(mainMap.get('snacks_drinks') ?? 0, total),
     household: pct(mainMap.get('household') ?? 0, total),
-    health: pct(mainMap.get('health') ?? 0, total),
+    personal_care: pct(mainMap.get('personal_care') ?? 0, total),
+    pet_care: pct(mainMap.get('pet_care') ?? 0, total),
     other: pct(mainMap.get('other') ?? 0, total),
     uncategorized: pct(mainMap.get('uncategorized') ?? 0, total),
   };
 
   const top_categories = Array.from(mainMap.entries())
-    .map(([k, amount]) => ({ category_main: k as MainCategory, amount, pct: pct(amount, total) }))
+    .map(([k, amount]) => ({ category_main: k, amount, pct: pct(amount, total) }))
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 3);
 
@@ -137,9 +134,9 @@ export function buildReceiptAnalysisV1(params: {
 
   let shopping_type: ReceiptAnalysisOutputV1['shopping_type'] = 'mixed';
   if (total <= 0) shopping_type = 'unknown';
-  else if (ratios.ingredients >= 55 && ingredient >= Math.max(2, Math.floor(items.length * 0.3))) shopping_type = 'cook_stockup';
-  else if (ratios.prepared_food >= 45 || ready >= Math.max(2, Math.floor(items.length * 0.3))) shopping_type = 'ready_to_eat';
-  else if (ratios.snacks + ratios.beverages >= 55) shopping_type = 'snacks_beverages';
+  else if (ratios.food_ingredients >= 55 && ingredient >= Math.max(2, Math.floor(items.length * 0.3))) shopping_type = 'cook_stockup';
+  else if (ratios.ready_to_eat >= 45 || ready >= Math.max(2, Math.floor(items.length * 0.3))) shopping_type = 'ready_to_eat';
+  else if (ratios.snacks_drinks >= 55) shopping_type = 'snacks_beverages';
   else if (ratios.household >= 45 || household >= 2) shopping_type = 'household_restock';
   else if (items.length >= 18 || total >= 12000) shopping_type = 'bulk_stockup';
 
@@ -151,7 +148,7 @@ export function buildReceiptAnalysisV1(params: {
   const suggestions_seed: string[] = [];
   if (shopping_type === 'ready_to_eat') suggestions_seed.push('consider_ingredients_balance');
   if (shopping_type === 'snacks_beverages') suggestions_seed.push('monitor_non_essential');
-  if (ratios.uncategorized >= 35) suggestions_seed.push('improve_item_categorization');
+  if ((ratios.uncategorized ?? 0) >= 35) suggestions_seed.push('improve_item_categorization');
 
   return {
     shopping_type,
@@ -167,7 +164,7 @@ export function buildAggregateAnalysisV1(receipts: ReceiptRow[]): AggregateAnaly
   const analysis_level = getAnalysisLevel(receiptCount);
 
   // Aggregate mains + repeated items
-  const mainCounts = new Map<string, number>();
+  const mainCounts = new Map<ProductCategory, number>();
   const itemCounts = new Map<string, number>();
   const shoppingTypeCounts = new Map<string, number>();
 
@@ -178,8 +175,8 @@ export function buildAggregateAnalysisV1(receipts: ReceiptRow[]): AggregateAnaly
     shoppingTypeCounts.set(receiptOut.shopping_type, (shoppingTypeCounts.get(receiptOut.shopping_type) ?? 0) + 1);
 
     for (const it of list) {
-      const main = String(it?.category_main || 'uncategorized');
-      if (main) mainCounts.set(main, (mainCounts.get(main) ?? 0) + 1);
+      const main = itemMainCategory(it);
+      mainCounts.set(main, (mainCounts.get(main) ?? 0) + 1);
       const nn = String(it?.normalized_name || it?.name || '').trim();
       if (nn) itemCounts.set(nn, (itemCounts.get(nn) ?? 0) + 1);
     }
@@ -188,7 +185,7 @@ export function buildAggregateAnalysisV1(receipts: ReceiptRow[]): AggregateAnaly
   const dominant_shopping_pattern = Array.from(shoppingTypeCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] as any || 'unknown';
 
   const repeated_categories = Array.from(mainCounts.entries())
-    .map(([category_main, count]) => ({ category_main: category_main as MainCategory, count }))
+    .map(([category_main, count]) => ({ category_main, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 6);
 
@@ -218,7 +215,7 @@ export function buildWeeklyReportV1(receipts: ReceiptRow[]): WeeklyReportV1 {
   const inWeek = receipts.filter((r) => (r.transaction_at || r.created_at) >= weekStart);
 
   let total_spend = 0;
-  const mainMap = new Map<string, number>();
+  const mainMap = new Map<ProductCategory, number>();
   const itemAgg = new Map<string, { amount: number; count: number }>();
   const householdCandidates = new Map<string, number>();
 
@@ -243,7 +240,7 @@ export function buildWeeklyReportV1(receipts: ReceiptRow[]): WeeklyReportV1 {
 
   const mainTotal = totalsum(mainMap);
   const main_category_breakdown = Array.from(mainMap.entries())
-    .map(([category_main, amount]) => ({ category_main: category_main as MainCategory, amount, pct: pct(amount, mainTotal) }))
+    .map(([category_main, amount]) => ({ category_main, amount, pct: pct(amount, mainTotal) }))
     .sort((a, b) => b.amount - a.amount);
 
   const top_items = Array.from(itemAgg.entries())
@@ -251,9 +248,7 @@ export function buildWeeklyReportV1(receipts: ReceiptRow[]): WeeklyReportV1 {
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 8);
 
-  const snack = mainMap.get('snacks') ?? 0;
-  const bev = mainMap.get('beverages') ?? 0;
-  const snack_beverage_share = pct(snack + bev, mainTotal);
+  const snack_beverage_share = pct(mainMap.get('snacks_drinks') ?? 0, mainTotal);
 
   const household_restock_candidates = Array.from(householdCandidates.entries())
     .map(([normalized_name, count]) => ({ normalized_name, count }))
@@ -276,7 +271,7 @@ export function buildMonthlyReportV1(receipts: ReceiptRow[]): MonthlyReportV1 {
   const inMonth = receipts.filter((r) => (r.transaction_at || r.created_at) >= start);
 
   let total_spend = 0;
-  const mainMap = new Map<string, number>();
+  const mainMap = new Map<ProductCategory, number>();
   const itemAgg = new Map<string, { amount: number; count: number }>();
 
   for (const r of inMonth) {
@@ -297,7 +292,7 @@ export function buildMonthlyReportV1(receipts: ReceiptRow[]): MonthlyReportV1 {
 
   const mainTotal = totalsum(mainMap);
   const main_category_breakdown = Array.from(mainMap.entries())
-    .map(([category_main, amount]) => ({ category_main: category_main as MainCategory, amount, pct: pct(amount, mainTotal) }))
+    .map(([category_main, amount]) => ({ category_main, amount, pct: pct(amount, mainTotal) }))
     .sort((a, b) => b.amount - a.amount);
 
   const top_items = Array.from(itemAgg.entries())
