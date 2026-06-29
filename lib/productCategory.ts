@@ -280,3 +280,60 @@ export function resolveProductCategory(
   if (byName !== 'uncategorized') return byName;
   return otherSeen ? 'other' : 'uncategorized';
 }
+
+/**
+ * 运行时分类优先级（enricher 用，区分候选来源，修复“宽泛 dictionary 覆盖具体商品名规则”）。
+ * 顺序：
+ *   1. 用户学习（learned）           —— 最高
+ *   2. alias / 学习映射（aliasOrLearned）
+ *   3. 具体商品名规则（classifyItemByName）—— 必须早于宽泛 dictionary / OCR
+ *   4. 本地规则 itemRulesV1（rule）
+ *   5. 宽泛词典（dictionary）
+ *   6. OCR categoryKey（ocrKey，仅辅助 fallback，不覆盖上面任何明确结果）
+ *   7. 其它：若有候选映射为 other 则 other，否则 uncategorized
+ *
+ * 关键：シュガーバター 命中 dictionary 的 バター→food_ingredients，但第 3 步的商品名规则
+ * 会先返回 snacks_drinks；とりきも 命中 OCR=ready_to_eat，但第 3 步商品名规则返回
+ * food_ingredients，OCR 不会覆盖。
+ */
+export function resolveProductCategoryRuntime(input: {
+  itemName: string;
+  learned?: string | null;
+  aliasOrLearned?: string | null;
+  rule?: string | null;
+  dictionary?: string | null;
+  ocrKey?: string | null;
+}): ProductCategory {
+  const { itemName, learned, aliasOrLearned, rule, dictionary, ocrKey } = input;
+  let otherSeen = false;
+  const consider = (raw: string | null | undefined): ProductCategory | null => {
+    const got = mapKnownProductCategory(raw);
+    if (!got) return null;
+    if (got === 'other') {
+      otherSeen = true;
+      return null;
+    }
+    return got;
+  };
+
+  // 1. 用户学习
+  let r = consider(learned);
+  if (r) return r;
+  // 2. alias / 学习映射分类器结果
+  r = consider(aliasOrLearned);
+  if (r) return r;
+  // 3. 具体商品名规则（早于宽泛 dictionary / OCR）
+  const byName = classifyItemByName(itemName);
+  if (byName !== 'uncategorized') return byName;
+  // 4. 本地规则 itemRulesV1
+  r = consider(rule);
+  if (r) return r;
+  // 5. 宽泛词典
+  r = consider(dictionary);
+  if (r) return r;
+  // 6. OCR categoryKey（辅助 fallback）
+  r = consider(ocrKey);
+  if (r) return r;
+  // 7. 兜底
+  return otherSeen ? 'other' : 'uncategorized';
+}

@@ -1,7 +1,7 @@
 // lib/receiptEnricher.ts
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
 import { learnCategoryMapping, getLearnedCategory } from './categoryLearner';
-import { resolveProductCategory } from './productCategory';
+import { resolveProductCategoryRuntime } from './productCategory';
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
@@ -381,8 +381,12 @@ export async function applyCategoriesWithLearning(
       }
     }
 
-    // 解析最终展示/存储用的"新一级分类"（item.category）：
-    //   优先级：本地学习记忆 → 既有分类器结果(legacy) → OCR categoryKey → 商品名关键词 → uncategorized
+    // 解析最终展示/存储用的"新一级分类"（item.category），按运行时优先级：
+    //   用户学习 → alias/学习映射 → 具体商品名规则(productCategory.ts) → 本地规则(itemRulesV1)
+    //   → 宽泛 dictionary → OCR categoryKey(辅助) → uncategorized
+    // 关键修复：宽泛 dictionary 的 バター→food_ingredients 不得覆盖具体商品名规则
+    //   （シュガーバター=snacks_drinks）；OCR categoryKey 仅作辅助 fallback
+    //   （とりきも 不因 OCR=ready_to_eat 而被覆盖）。
     // 本地学习对便利店(非 grocery)商品也生效（分类器分支可能被跳过）。
     const ocrCategoryKey = typeof (it as any)?.categoryKey === 'string' ? (it as any).categoryKey : null;
     let learnedRaw: string | null = null;
@@ -391,7 +395,22 @@ export async function applyCategoriesWithLearning(
     } catch {
       learnedRaw = null;
     }
-    const productCategory = resolveProductCategory(name, [learnedRaw, category, ocrCategoryKey]);
+    // 按分类器来源拆分候选，保证 dictionary 不抢在具体商品名规则之前。
+    const clsSource = classificationOut?.source as string | undefined;
+    const aliasOrLearned =
+      clsSource === 'alias' || clsSource === 'mapping' ? category : null;
+    const ruleCandidate = clsSource === 'rules' ? category : null;
+    // dictionary 与 fallback（OCR 兜底覆盖到的 legacy）都视为“宽泛”候选。
+    const dictionaryCandidate =
+      clsSource === 'dictionary' || clsSource === 'fallback' ? category : null;
+    const productCategory = resolveProductCategoryRuntime({
+      itemName: name,
+      learned: learnedRaw,
+      aliasOrLearned,
+      rule: ruleCandidate,
+      dictionary: dictionaryCandidate,
+      ocrKey: ocrCategoryKey,
+    });
 
     const enrichedItem: any = {
       ...it,

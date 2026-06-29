@@ -11,6 +11,7 @@
  */
 
 import type { ReceiptAnalysis, ReceiptItem, CategoryKey } from './receiptAnalyzer';
+import { PRODUCT_CATEGORIES, type ProductCategory } from './productCategory';
 
 export type OcrLineKind = 'item' | 'discount' | 'tax' | 'subtotal' | 'unknown';
 
@@ -119,15 +120,26 @@ export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
   return 'item';
 }
 
+/** 新一级分类（ProductCategory）也是合法 categoryKey；uncategorized 无信息量，丢弃。 */
+const VALID_NEW_CATEGORY_KEYS = new Set<string>(
+  (PRODUCT_CATEGORIES as readonly string[]).filter((c) => c !== 'uncategorized')
+);
+
 /**
- * 清洗 OCR categoryKey：仅允许固定枚举；店铺类型词或未知一律视为未知（返回 undefined）。
- * 这样店铺类型（コンビニ/スーパー/非超市…）绝不会作为商品分类写入。
+ * 清洗 OCR categoryKey：允许“旧固定枚举 + 新一级分类(ProductCategory)”；
+ * 店铺类型词（コンビニ/スーパー/非超市…）或未知一律返回 undefined。
+ * 说明：OCR prompt 现已输出新分类（如 snacks_drinks），若仍只认旧枚举会被整段丢弃，
+ *       导致 OCR categoryKey 这一辅助信号丢失。这里同时接受新枚举以保留辅助 fallback。
  */
-export function sanitizeOcrCategoryKey(raw: unknown): CategoryKey | undefined {
+export function sanitizeOcrCategoryKey(
+  raw: unknown
+): CategoryKey | ProductCategory | undefined {
   if (typeof raw !== 'string') return undefined;
   const v = raw.trim().toLowerCase();
   if (!v) return undefined;
-  return (VALID_CATEGORY_KEYS as readonly string[]).includes(v) ? (v as CategoryKey) : undefined;
+  if ((VALID_CATEGORY_KEYS as readonly string[]).includes(v)) return v as CategoryKey;
+  if (VALID_NEW_CATEGORY_KEYS.has(v)) return v as ProductCategory;
+  return undefined;
 }
 
 /**

@@ -6,6 +6,7 @@ import Constants from 'expo-constants';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import { normalizeOcrAnalysis } from './receiptOcrNormalize';
+import type { ProductCategory } from './productCategory';
 import {
   getSupabaseUrl,
   getSupabaseAnonKey,
@@ -34,7 +35,9 @@ export type ReceiptItem = {
   quantity: number;
   unitPrice: number;
   lineTotal: number;
-  categoryKey?: CategoryKey;
+  // OCR 既可能给旧枚举 CategoryKey，也可能给新一级分类（ProductCategory），
+  // 统一在 normalize 阶段保留、在 enricher 通过 normalizeProductCategory 归一。
+  categoryKey?: CategoryKey | ProductCategory;
 };
 
 export type ReceiptAnalysis = {
