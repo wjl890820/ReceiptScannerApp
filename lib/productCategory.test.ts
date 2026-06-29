@@ -93,6 +93,21 @@ describe('normalizeProductCategory: 旧→新映射 + 店铺词过滤', () => {
     expect(normalizeProductCategory(null)).toBe('uncategorized');
     expect(normalizeProductCategory('随便乱填')).toBe('uncategorized');
   });
+
+  it('rawCategory=other/uncategorized 但商品名可识别 → 用商品名覆盖（避免 other 滥用）', () => {
+    expect(normalizeProductCategory('other', '豆腐')).toBe('food_ingredients');
+    expect(normalizeProductCategory('uncategorized', 'チキンカツサンド')).toBe('ready_to_eat');
+    expect(normalizeProductCategory('other_grocery', 'クラフトボス')).toBe('snacks_drinks');
+  });
+
+  it('rawCategory=other 且商品名无法识别 → 保留 other', () => {
+    expect(normalizeProductCategory('other', 'xyz123')).toBe('other');
+    expect(normalizeProductCategory('other_grocery', 'xyz123')).toBe('other');
+  });
+
+  it('rawCategory=uncategorized 且商品名无法识别 → uncategorized', () => {
+    expect(normalizeProductCategory('uncategorized', 'xyz123')).toBe('uncategorized');
+  });
 });
 
 describe('mapKnownProductCategory / resolveProductCategory', () => {

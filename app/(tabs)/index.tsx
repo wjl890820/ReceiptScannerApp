@@ -967,7 +967,8 @@ export default function HomeScreen() {
       const result = await runScanPipelineToReview(uris[i]);
       results.push(result);
       if (!result.ok) {
-        logger.error('MultiScan', `image ${i + 1}/${total} failed`, { code: result.code, message: result.message });
+        // 单张可恢复失败（如 OCR_TIMEOUT）：仅 warn，不触发 redbox；已成功的 draft 不受影响。
+        logger.warn('MultiScan', `image ${i + 1}/${total} failed`, { code: result.code, message: result.message });
       }
     }
     setProcessingProgress(null);
@@ -1095,7 +1096,8 @@ export default function HomeScreen() {
     const result = await runScanPipelineToReview(uri);
     if (!result.ok) {
       const code = result.code || 'FAILED';
-      logger.error('Scan', 'single scan failed', { code, message: result.message });
+      // 可恢复失败（OCR_TIMEOUT 等）：warn + 重试 Alert，不触发 redbox。
+      logger.warn('Scan', 'single scan failed', { code, message: result.message });
       // 失败：先恢复状态再弹重试 Alert，避免卡在处理中
       endScan();
       Alert.alert(

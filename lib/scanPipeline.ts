@@ -7,8 +7,17 @@
 import { analyzeReceiptImage } from './receiptAnalyzer';
 import { applyCategoriesWithLearning } from './receiptEnricher';
 import { saveReceipt } from './db';
-import { toScanAppError, toScanResult } from './appError';
+import { toScanAppError, toScanResult, isRecoverableScanCode, type ScanAppError } from './appError';
 import { logger } from './logger';
+
+/**
+ * 可恢复的扫描错误（超时/限流/解析/上游等）记录为 warn，避免 RN dev redbox；
+ * 仅真正意外的错误用 error。
+ */
+function logScanFailure(tag: string, message: string, appErr: ScanAppError): void {
+  const level = isRecoverableScanCode(appErr.code) ? 'warn' : 'error';
+  logger[level](tag, message, { code: appErr.code, message: appErr.message });
+}
 import { getDefaultReceiptSource } from './receiptSourceSettings';
 import { putScanReviewDraft } from './scanReviewDraftStore';
 
@@ -80,7 +89,7 @@ export async function runScanPipeline(uri: string): Promise<ScanOneResult> {
         return { ok: true, kind: 'saved', id };
       } catch (err: unknown) {
         const appErr = toScanAppError(err, 'save');
-        logger.error('ScanPipeline', 'Pipeline failed (save)', { code: appErr.code, message: appErr.message });
+        logScanFailure('ScanPipeline', 'Pipeline failed (save)', appErr);
         if (__DEV__) {
           // eslint-disable-next-line no-console
           console.log('[ScanTiming] failed_total_ms', { id: trace.id, ms: msSince(trace.t0) });
@@ -89,7 +98,7 @@ export async function runScanPipeline(uri: string): Promise<ScanOneResult> {
       }
     } catch (err: unknown) {
       const appErr = toScanAppError(err, 'enrich');
-      logger.error('ScanPipeline', 'Pipeline failed (enrich)', { code: appErr.code, message: appErr.message });
+      logScanFailure('ScanPipeline', 'Pipeline failed (enrich)', appErr);
       if (__DEV__) {
         // eslint-disable-next-line no-console
         console.log('[ScanTiming] failed_total_ms', { id: trace.id, ms: msSince(trace.t0) });
@@ -98,7 +107,7 @@ export async function runScanPipeline(uri: string): Promise<ScanOneResult> {
     }
   } catch (err: unknown) {
     const appErr = toScanAppError(err, 'ocr');
-    logger.error('ScanPipeline', 'Pipeline failed (ocr)', { code: appErr.code, message: appErr.message });
+    logScanFailure('ScanPipeline', 'Pipeline failed (ocr)', appErr);
     if (__DEV__) {
       // eslint-disable-next-line no-console
       console.log('[ScanTiming] failed_total_ms', { id: trace.id, ms: msSince(trace.t0) });
@@ -133,12 +142,12 @@ export async function runScanPipelineToReview(uri: string): Promise<ScanOneResul
       return { ok: true, kind: 'review', draftId, traceId: trace.id };
     } catch (err: unknown) {
       const appErr = toScanAppError(err, 'enrich');
-      logger.error('ScanPipeline', 'Review draft failed (enrich)', { code: appErr.code, message: appErr.message });
+      logScanFailure('ScanPipeline', 'Review draft failed (enrich)', appErr);
       return toScanResult(appErr);
     }
   } catch (err: unknown) {
     const appErr = toScanAppError(err, 'ocr');
-    logger.error('ScanPipeline', 'Review draft failed (ocr)', { code: appErr.code, message: appErr.message });
+    logScanFailure('ScanPipeline', 'Review draft failed (ocr)', appErr);
     return toScanResult(appErr);
   }
 }

@@ -32,6 +32,15 @@ function isKnownCode(c: string): c is (typeof KNOWN_CODES)[number] {
 }
 
 /**
+ * 可恢复的扫描业务错误（用户可重试）。这类错误不应用 console.error 触发 redbox，
+ * 应记录为 warn 并通过 toast/banner/Alert 提示。
+ */
+export function isRecoverableScanCode(code: string | null | undefined): boolean {
+  if (!code) return false;
+  return isKnownCode(code) || code === 'FAILED';
+}
+
+/**
  * 从捕获的异常构造扫描错误；保留已知 code，其余归为 FAILED。
  */
 export function toScanAppError(
