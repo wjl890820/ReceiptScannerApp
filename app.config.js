@@ -43,9 +43,18 @@ export default ({ config }) => {
       plugin === 'expo-font' ||
       (Array.isArray(plugin) && plugin[0] === 'expo-font')
   );
-  const finalPlugins = hasFont
+  const finalPluginsAfterFont = hasFont
     ? finalPluginsAfterSecure
     : [...finalPluginsAfterSecure, 'expo-font'];
+
+  const hasLocalization = finalPluginsAfterFont.some(
+    (plugin) =>
+      plugin === 'expo-localization' ||
+      (Array.isArray(plugin) && plugin[0] === 'expo-localization')
+  );
+  const finalPlugins = hasLocalization
+    ? finalPluginsAfterFont
+    : [...finalPluginsAfterFont, 'expo-localization'];
 
   return {
     ...config,
@@ -56,12 +65,10 @@ export default ({ config }) => {
     ios: {
       ...(config.ios ?? {}),
       bundleIdentifier: 'com.receiptscannerapp.app',
-      buildNumber: '3',
     },
     android: {
       ...(config.android ?? {}),
       package: 'com.receiptscannerapp.app',
-      versionCode: 3,
     },
     extra: {
       ...(config.extra ?? {}),
