@@ -3,6 +3,7 @@ import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
 import { listReceiptsForListParams } from './receiptListQuery';
 import { detectMerchantType, type MerchantType } from './merchantType';
+import { ensureReceiptItemsSchema } from './receiptItemIndex';
 
 /**
  * 说明：
@@ -216,6 +217,9 @@ async function initIfNeeded() {
           updated_at INTEGER NOT NULL
         );
       `);
+
+      // Phase 3C: additive derived index schema only. No backfill or mutation hooks.
+      await ensureReceiptItemsSchema(db);
 
       // 安全迁移：检查并添加新字段（如果不存在）
       // 使用 PRAGMA table_info 获取现有列，确保幂等性
