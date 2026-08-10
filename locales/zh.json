@@ -296,6 +296,44 @@
       }
     }
   },
+  "productDetail": {
+    "title": "商品购买记录",
+    "back": "返回",
+    "loading": "加载中…",
+    "loadFailed": "无法读取商品购买记录",
+    "noHistory": "暂无购买记录",
+    "purchaseCount": "购买记录",
+    "purchaseCountValue": "{count} 次",
+    "totalQuantity": "累计数量 {count}",
+    "totalSpend": "总支出",
+    "firstPurchase": "首次购买",
+    "firstPurchaseValue": "首次购买 {date}",
+    "lastPurchase": "最近购买",
+    "recentPurchases": "最近购买记录",
+    "stores": "买过的商店",
+    "specificationVariants": "购买过的规格",
+    "seriesScopeNote": "汇总同一商品系列下购买过的不同规格。",
+    "familyScopeNote": "汇总这一商品类别中的不同商品。",
+    "targetType": {
+      "sku": "具体商品",
+      "canonical": "商品系列",
+      "family": "商品类别"
+    },
+    "family": {
+      "milk": "牛奶",
+      "eggs": "鸡蛋",
+      "tofu": "豆腐",
+      "yogurt": "酸奶",
+      "rice": "大米",
+      "bread": "面包",
+      "coffee": "咖啡",
+      "tea": "茶",
+      "water": "水",
+      "cola": "可乐",
+      "onigiri": "饭团",
+      "bento": "便当"
+    }
+  },
   "settings": {
     "title": "设置",
     "feedback": {

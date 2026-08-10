@@ -14,6 +14,7 @@ export type ReceiptItemSearchResult = {
   canonicalProductName: string | null;
   brand: string | null;
   productFamilyKey: string | null;
+  skuKey: string | null;
   category: string | null;
   purchaseQuantity: number;
   lineTotal: number | null;
@@ -107,6 +108,7 @@ export async function searchHistoryPurchasesWithDb(
        receipt_items.canonical_product_name AS canonicalProductName,
        receipt_items.brand AS brand,
        receipt_items.product_family_key AS productFamilyKey,
+       receipt_items.sku_key AS skuKey,
        receipt_items.category AS category,
        receipt_items.purchase_quantity AS purchaseQuantity,
        receipt_items.line_total AS lineTotal,

@@ -1,5 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -24,6 +24,9 @@ import {
   searchHistoryPurchases,
   type ReceiptItemSearchResult,
 } from '@/lib/receiptItemSearch';
+import {
+  buildProductSearchResultHref,
+} from '@/lib/productDetailTarget';
 
 type HistorySearchEntry =
   | { kind: 'item'; result: ReceiptItemSearchResult }
@@ -206,6 +209,13 @@ export default function HistoryScreen() {
     [router]
   );
 
+  const onProductSearchResultPress = useCallback(
+    (result: ReceiptItemSearchResult) => {
+      router.push(buildProductSearchResultHref(result) as Href);
+    },
+    [router]
+  );
+
   const searchActive =
     normalizeReceiptItemSearchQuery(searchQuery).length > 0;
   const searchSections: { title: string; data: HistorySearchEntry[] }[] = [];
@@ -320,7 +330,7 @@ export default function HistoryScreen() {
               ].filter((value): value is string => Boolean(value));
               return (
                 <Pressable
-                  onPress={() => onSearchResultPress(result.receiptId)}
+                  onPress={() => onProductSearchResultPress(result)}
                   style={({ pressed }) => [
                     styles.card,
                     pressed && { opacity: 0.6 },

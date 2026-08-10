@@ -9,6 +9,20 @@ import * as path from 'path';
 
 const LOCALE_DIR = path.resolve(__dirname, '../locales');
 const LOCALES = ['zh', 'ja', 'en'] as const;
+const PRODUCT_FAMILIES = [
+  'milk',
+  'eggs',
+  'tofu',
+  'yogurt',
+  'rice',
+  'bread',
+  'coffee',
+  'tea',
+  'water',
+  'cola',
+  'onigiri',
+  'bento',
+] as const;
 
 function loadLocale(name: string): Record<string, unknown> {
   const raw = fs.readFileSync(path.join(LOCALE_DIR, `${name}.json`), 'utf8');
@@ -43,5 +57,21 @@ describe('locales integrity', () => {
     });
 
     expect(missing).toEqual([]);
+  });
+
+  it('12 个 Product Family 都有三语用户标签', () => {
+    for (const locale of LOCALES) {
+      const translations = loadLocale(locale);
+      for (const family of PRODUCT_FAMILIES) {
+        const label = (
+          (
+            translations.productDetail as Record<string, unknown>
+          ).family as Record<string, unknown>
+        )[family];
+        expect(typeof label).toBe('string');
+        expect(String(label).trim()).not.toBe('');
+        expect(label).not.toBe(family);
+      }
+    }
   });
 });

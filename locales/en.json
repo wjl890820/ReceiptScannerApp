@@ -296,6 +296,44 @@
       }
     }
   },
+  "productDetail": {
+    "title": "Product purchase history",
+    "back": "Back",
+    "loading": "Loading…",
+    "loadFailed": "Unable to load product purchase history",
+    "noHistory": "No purchase history",
+    "purchaseCount": "Purchase records",
+    "purchaseCountValue": "{count} times",
+    "totalQuantity": "Total quantity {count}",
+    "totalSpend": "Total spend",
+    "firstPurchase": "First purchase",
+    "firstPurchaseValue": "First purchase {date}",
+    "lastPurchase": "Latest purchase",
+    "recentPurchases": "Recent purchases",
+    "stores": "Stores purchased from",
+    "specificationVariants": "Specifications purchased",
+    "seriesScopeNote": "Includes different specifications purchased from the same product series.",
+    "familyScopeNote": "Includes different products purchased in this product category.",
+    "targetType": {
+      "sku": "Specific product",
+      "canonical": "Product series",
+      "family": "Product category"
+    },
+    "family": {
+      "milk": "Milk",
+      "eggs": "Eggs",
+      "tofu": "Tofu",
+      "yogurt": "Yogurt",
+      "rice": "Rice",
+      "bread": "Bread",
+      "coffee": "Coffee",
+      "tea": "Tea",
+      "water": "Water",
+      "cola": "Cola",
+      "onigiri": "Onigiri",
+      "bento": "Bento"
+    }
+  },
   "settings": {
     "title": "Settings",
     "feedback": {

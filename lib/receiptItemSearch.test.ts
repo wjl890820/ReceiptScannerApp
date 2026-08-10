@@ -1,5 +1,6 @@
 import type * as SQLite from 'expo-sqlite';
 
+/* eslint-disable import/first -- Jest dependency mocks must run before imports. */
 jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn(),
 }));
@@ -65,6 +66,7 @@ function item(
     canonicalProductName: null,
     brand: null,
     productFamilyKey: null,
+    skuKey: null,
     category: 'food_ingredients',
     purchaseQuantity: 1,
     lineTotal: 300,
@@ -185,6 +187,7 @@ describe('searchHistoryPurchasesWithDb', () => {
         canonicalProductName: '明治 おいしい牛乳',
         brand: '明治',
         productFamilyKey: 'milk',
+        skuKey: 'meiji-milk-900',
       })
     );
     db.items.set(
@@ -193,6 +196,7 @@ describe('searchHistoryPurchasesWithDb', () => {
         canonicalProductName: '明治 おいしい牛乳',
         brand: '明治',
         productFamilyKey: 'milk',
+        skuKey: 'meiji-milk-900',
       })
     );
   });
@@ -230,6 +234,12 @@ describe('searchHistoryPurchasesWithDb', () => {
         (result) => result.itemId
       )
     ).toEqual(['new:1']);
+  });
+
+  it('returns sku_key additively for Product Detail target resolution', async () => {
+    const results = await searchHistoryPurchasesWithDb(db, '900ml');
+    expect(results.itemResults[0].skuKey).toBe('meiji-milk-900');
+    expect(db.queries[0]).toMatch(/receipt_items\.sku_key AS skuKey/i);
   });
 
   it('uses receipt-only merchant fallback without returning unrelated items', async () => {

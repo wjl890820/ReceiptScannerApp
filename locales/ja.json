@@ -296,6 +296,44 @@
       }
     }
   },
+  "productDetail": {
+    "title": "商品の購入履歴",
+    "back": "戻る",
+    "loading": "読み込み中…",
+    "loadFailed": "商品の購入履歴を読み込めませんでした",
+    "noHistory": "購入履歴がありません",
+    "purchaseCount": "購入記録",
+    "purchaseCountValue": "{count}回",
+    "totalQuantity": "累計数量 {count}",
+    "totalSpend": "合計支出",
+    "firstPurchase": "初回購入",
+    "firstPurchaseValue": "初回購入 {date}",
+    "lastPurchase": "最近の購入",
+    "recentPurchases": "最近の購入記録",
+    "stores": "購入した店舗",
+    "specificationVariants": "購入した規格",
+    "seriesScopeNote": "同じ商品シリーズで購入した異なる規格をまとめています。",
+    "familyScopeNote": "この商品カテゴリで購入した異なる商品をまとめています。",
+    "targetType": {
+      "sku": "具体商品",
+      "canonical": "商品シリーズ",
+      "family": "商品カテゴリ"
+    },
+    "family": {
+      "milk": "牛乳",
+      "eggs": "卵",
+      "tofu": "豆腐",
+      "yogurt": "ヨーグルト",
+      "rice": "米",
+      "bread": "パン",
+      "coffee": "コーヒー",
+      "tea": "お茶",
+      "water": "水",
+      "cola": "コーラ",
+      "onigiri": "おにぎり",
+      "bento": "弁当"
+    }
+  },
   "settings": {
     "title": "設定",
     "feedback": {
