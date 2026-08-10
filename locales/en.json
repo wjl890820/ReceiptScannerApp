@@ -334,6 +334,40 @@
       "bento": "Bento"
     }
   },
+  "priceHistory": {
+    "title": "Price history",
+    "loadFailed": "Price history is temporarily unavailable.",
+    "priceUnit": "Price unit",
+    "latest": "Latest record",
+    "minimum": "Lowest record",
+    "maximum": "Highest record",
+    "coverage": "Based on {comparable} of {total} comparable records; {excluded} excluded",
+    "subtitle": {
+      "sku": "Purchase prices for the same specification",
+      "canonical": "Specifications are normalized to a common unit",
+      "family": "Different brands shown using a common specification unit"
+    },
+    "kind": {
+      "purchase_unit": "Price per purchase unit",
+      "per_liter": "Price per liter",
+      "per_100g": "Price per 100 grams",
+      "per_item": "Price per item"
+    },
+    "unit": {
+      "purchase_unit": "/purchase unit",
+      "per_liter": "/L",
+      "per_100g": "/100g",
+      "per_item": "/item"
+    },
+    "status": {
+      "notEnough": "There are not enough comparable purchases to show a price history.",
+      "unsupportedFamily": "Cross-specification price comparison is not currently supported for this product category.",
+      "noComparableSpec": "Specification data is insufficient for a safe price comparison.",
+      "ambiguousDimension": "The purchases contain incompatible specifications and cannot be safely combined.",
+      "mixedCurrency": "Purchases in different currencies cannot be combined.",
+      "unknownCurrency": "Some purchases do not have a known currency and cannot be safely compared."
+    }
+  },
   "settings": {
     "title": "Settings",
     "feedback": {

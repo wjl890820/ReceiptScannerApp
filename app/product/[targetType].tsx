@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 
+import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -19,6 +20,10 @@ import {
 } from '@/lib/productHistory';
 import { parseProductDetailTarget } from '@/lib/productDetailTarget';
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
+import {
+  loadProductPriceHistory,
+  type ProductPriceHistoryResult,
+} from '@/lib/productPriceHistory';
 
 function formatCurrency(amount: number, currency: string): string {
   if (currency === 'JPY') return formatJPY(amount);
@@ -41,14 +46,19 @@ export default function ProductDetailScreen() {
     [targetKey, targetType]
   );
   const [summary, setSummary] = useState<ProductHistorySummary | null>(null);
+  const [priceHistory, setPriceHistory] =
+    useState<ProductPriceHistoryResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [priceLoadFailed, setPriceLoadFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setLoadFailed(false);
+    setPriceLoadFailed(false);
     setSummary(null);
+    setPriceHistory(null);
     if (!target) {
       setLoading(false);
       return () => {
@@ -56,13 +66,24 @@ export default function ProductDetailScreen() {
       };
     }
 
-    void loadProductHistory(target, { locale })
-      .then((result) => {
-        if (active) setSummary(result);
-      })
-      .catch((error) => {
-        console.error('[ProductDetail] load failed', error);
-        if (active) setLoadFailed(true);
+    void Promise.allSettled([
+      loadProductHistory(target, { locale }),
+      loadProductPriceHistory(target),
+    ])
+      .then(([historyResult, priceResult]) => {
+        if (!active) return;
+        if (historyResult.status === 'fulfilled') {
+          setSummary(historyResult.value);
+        } else {
+          console.error('[ProductDetail] history load failed', historyResult.reason);
+          setLoadFailed(true);
+        }
+        if (priceResult.status === 'fulfilled') {
+          setPriceHistory(priceResult.value);
+        } else {
+          console.error('[ProductDetail] price history load failed', priceResult.reason);
+          setPriceLoadFailed(true);
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -192,6 +213,21 @@ export default function ProductDetailScreen() {
                 : '—',
             })}
           </Text>
+
+          {priceHistory ? (
+            <ProductPriceHistoryChart result={priceHistory} />
+          ) : priceLoadFailed ? (
+            <>
+              <Text style={styles.sectionTitle}>
+                {t('priceHistory.title')}
+              </Text>
+              <View style={styles.sectionCard}>
+                <Text style={styles.priceLoadError}>
+                  {t('priceHistory.loadFailed')}
+                </Text>
+              </View>
+            </>
+          ) : null}
 
           <Text style={styles.sectionTitle}>{t('productDetail.stores')}</Text>
           <View style={styles.sectionCard}>
@@ -425,6 +461,12 @@ const styles = StyleSheet.create({
   factValue: {
     color: '#666',
     fontSize: 13,
+  },
+  priceLoadError: {
+    paddingVertical: 14,
+    color: '#666',
+    fontSize: 14,
+    lineHeight: 20,
   },
   chips: {
     flexDirection: 'row',

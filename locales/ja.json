@@ -334,6 +334,40 @@
       "bento": "弁当"
     }
   },
+  "priceHistory": {
+    "title": "価格履歴",
+    "loadFailed": "価格履歴を読み込めませんでした。",
+    "priceUnit": "価格単位",
+    "latest": "最新記録",
+    "minimum": "最低記録",
+    "maximum": "最高記録",
+    "coverage": "比較可能な記録 {comparable}/{total} 件を使用、{excluded} 件を除外",
+    "subtitle": {
+      "sku": "同一規格の購入価格記録",
+      "canonical": "規格を共通単位に換算しています",
+      "family": "異なるブランドを共通規格単位で表示します"
+    },
+    "kind": {
+      "purchase_unit": "購入単位価格",
+      "per_liter": "1リットルあたり",
+      "per_100g": "100グラムあたり",
+      "per_item": "1個あたり"
+    },
+    "unit": {
+      "purchase_unit": "/購入単位",
+      "per_liter": "/L",
+      "per_100g": "/100g",
+      "per_item": "/個"
+    },
+    "status": {
+      "notEnough": "比較できる購入記録が不足しているため、価格推移を表示できません。",
+      "unsupportedFamily": "この商品カテゴリでは、現在、規格をまたぐ価格比較に対応していません。",
+      "noComparableSpec": "規格情報が不足しているため、安全に価格を比較できません。",
+      "ambiguousDimension": "互換性のない規格が含まれているため、安全に統合して比較できません。",
+      "mixedCurrency": "異なる通貨の記録があるため、まとめて比較できません。",
+      "unknownCurrency": "通貨が明確でない購入記録があるため、安全に比較できません。"
+    }
+  },
   "settings": {
     "title": "設定",
     "feedback": {

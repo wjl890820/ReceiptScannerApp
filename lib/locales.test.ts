@@ -23,6 +23,21 @@ const PRODUCT_FAMILIES = [
   'onigiri',
   'bento',
 ] as const;
+const PRICE_HISTORY_KEYS = [
+  'title',
+  'subtitle.sku',
+  'subtitle.canonical',
+  'subtitle.family',
+  'coverage',
+  'kind.purchase_unit',
+  'kind.per_liter',
+  'kind.per_100g',
+  'kind.per_item',
+  'status.notEnough',
+  'status.noComparableSpec',
+  'status.unsupportedFamily',
+  'status.mixedCurrency',
+] as const;
 
 function loadLocale(name: string): Record<string, unknown> {
   const raw = fs.readFileSync(path.join(LOCALE_DIR, `${name}.json`), 'utf8');
@@ -35,6 +50,17 @@ function flattenKeys(obj: unknown, prefix = ''): string[] {
     const key = prefix ? `${prefix}.${k}` : k;
     return v && typeof v === 'object' && !Array.isArray(v) ? flattenKeys(v, key) : [key];
   });
+}
+
+function nestedString(obj: unknown, pathValue: string): string | null {
+  let current = obj;
+  for (const key of pathValue.split('.')) {
+    if (!current || typeof current !== 'object' || !(key in current)) {
+      return null;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === 'string' && current.trim() ? current : null;
 }
 
 describe('locales integrity', () => {
@@ -71,6 +97,17 @@ describe('locales integrity', () => {
         expect(typeof label).toBe('string');
         expect(String(label).trim()).not.toBe('');
         expect(label).not.toBe(family);
+      }
+    }
+  });
+
+  it('Price History 安全状态与单位都有三语文案', () => {
+    for (const locale of LOCALES) {
+      const translations = loadLocale(locale);
+      for (const key of PRICE_HISTORY_KEYS) {
+        expect(
+          nestedString(translations, `priceHistory.${key}`)
+        ).not.toBeNull();
       }
     }
   });
