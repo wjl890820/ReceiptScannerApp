@@ -368,6 +368,69 @@
       "unknownCurrency": "通貨が明確でない購入記録があるため、安全に比較できません。"
     }
   },
+  "postSaveSummary": {
+    "saved": "買い物記録を保存しました",
+    "savedSubtitle": "このレシートは安全に保存されています",
+    "fallback": "買い物記録は保存されましたが、概要を読み込めませんでした。",
+    "unsupported": "この記録はスーパー・コンビニの買い物分析には含まれません。",
+    "continueReview": "次のレシートを確認",
+    "done": "完了",
+    "viewReceipt": "このレシートを見る",
+    "viewAnalysis": "分析を見る",
+    "current": {
+      "title": "今回の買い物",
+      "total": "今回の金額",
+      "itemCount": "商品数",
+      "itemCountValue": "{count}点",
+      "highestItemValue": "金額が最も高い商品：{name}・{amount}"
+    },
+    "progress": {
+      "title": "買い物記録の進捗",
+      "profileEstablished": "買い物プロフィールができました",
+      "unlockRecent": "あと{count}枚で最近の買い物分析を確認できます",
+      "unlockFrequent": "あと{count}枚でよく買う商品を確認できます",
+      "unlockProfile": "あと{count}枚で買い物プロフィールができます"
+    },
+    "unlock": {
+      "badge": "新しく追加",
+      "first": "最初の買い物記録ができました",
+      "third": "最近の買い物分析を確認できます",
+      "fifth": "よく買う商品を確認できます",
+      "tenth": "買い物プロフィールができました"
+    },
+    "third": {
+      "totalSpend": "最近3枚の合計",
+      "averageSpend": "1回あたりの平均"
+    },
+    "frequent": {
+      "occurrences": "購入記録 {count}回",
+      "quantity": "累計数量 {count}",
+      "lastPurchased": "最近の購入 {date}",
+      "latestPrice": "最近の記録価格 {amount}",
+      "dataPreparing": "履歴の整理が進むと、よく買う商品が順次表示されます。"
+    },
+    "tenth": {
+      "frequency": "記録された買い物は平均約{days}日に1回です。",
+      "windowCompared": "最初の5回と最近の5回の買い物記録を比較しました。"
+    }
+  },
+  "engagementMilestone": {
+    "summary": {
+      "dominant": {
+        "food_ingredients": "今回は食材が中心の買い物でした。",
+        "ready_to_eat": "今回はすぐ食べられる食品が多めでした。",
+        "snacks_drinks": "今回はお菓子や飲み物の割合が高めでした。",
+        "household": "今回は日用品が多めに含まれていました。"
+      },
+      "recurringCategory": "最近3枚のうち{receiptCount}枚に{category}が含まれています。",
+      "differentMerchants": "最近3回の買い物記録はそれぞれ異なる店舗でした。",
+      "dispersed": "今回は購入カテゴリが分散しています。"
+    },
+    "change": {
+      "categoryIncrease": "最近5回の記録では、{category}の購入比率が最初の5回より約{difference}ポイント増えました。",
+      "categoryDecrease": "最近5回の記録では、{category}の購入比率が最初の5回より約{difference}ポイント減りました。"
+    }
+  },
   "settings": {
     "title": "設定",
     "feedback": {

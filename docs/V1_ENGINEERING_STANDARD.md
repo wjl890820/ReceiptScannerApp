@@ -64,6 +64,9 @@ ReceiptScannerApp V1 产品冻结与工程红线。后续 Phase 开发须遵守�
 - normalized price 只允许复用 `productPriceHistory` 的 safe eligibility 结果，不得复制价格公式或生成趋势、推荐、最便宜结论
 - milestone engine 输出纯数据与 summary key，不包含 UI、支付、quota 或 notification 行为
 - 未来第 3 张成功保存后的 UX 顺序固定为：先展示第 3 张解锁价值，再展示免费额度用尽 / 购买扫描次数；Phase 5A 不实现该 UI
+- Post-Save Summary 只能在 receipt 落库、draft 清理、queue 推进、learning 与既有 post-save 工作完成后展示；summary 失败不得改变保存成功事实
+- multi-receipt 流程每张保存后都展示独立 Summary，再由 Summary 继续 authoritative queue 中的下一张；必须使用 replace 避免返回已删除 draft
+- 未来 paywall / scan-credit 提示只能发生在第 3 张 Summary 的 milestone 价值展示及用户继续操作之后
 
 ## Phase 边界
 

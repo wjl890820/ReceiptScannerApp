@@ -20,6 +20,7 @@ import {
   buildThreeReceiptMilestone,
   countSupportedReceipts,
   evaluateEngagementMilestonesWithDb,
+  evaluateSavedReceiptMilestoneWithDb,
   getEngagementMilestoneStatus,
   type EngagementMilestoneDatabase,
   type EngagementProductRow,
@@ -535,6 +536,48 @@ describe('database evaluation and graceful degradation', () => {
       beforeSupportedReceiptCount: 2,
     });
     expect(evaluation.status.justUnlocked).toBeNull();
+    expect(evaluation.unlockedResult).toBeNull();
+  });
+
+  it('derives transient unlock from the saved receipt without persisted state', async () => {
+    const receipts = [1, 2, 3].map((number) => receipt(`r${number}`));
+    const db: EngagementMilestoneDatabase = {
+      async getAllAsync<T>() {
+        return receipts as T[];
+      },
+    };
+    const evaluation = await evaluateSavedReceiptMilestoneWithDb(db, 'r3', {
+      generatedAt: 123,
+    });
+
+    expect(evaluation.status).toMatchObject({
+      supportedReceiptCount: 3,
+      justUnlocked: 3,
+    });
+    expect(evaluation.unlockedResult).toMatchObject({
+      milestone: 3,
+      generatedAt: 123,
+    });
+  });
+
+  it('does not increment or unlock for an unsupported saved receipt', async () => {
+    const receipts = [
+      receipt('r1'),
+      receipt('r2'),
+      receipt('other', { merchant_type: 'other' }),
+    ];
+    const db: EngagementMilestoneDatabase = {
+      async getAllAsync<T>() {
+        return receipts as T[];
+      },
+    };
+    const evaluation = await evaluateSavedReceiptMilestoneWithDb(db, 'other');
+
+    expect(evaluation.status).toMatchObject({
+      supportedReceiptCount: 2,
+      justUnlocked: null,
+      nextMilestone: 3,
+    });
     expect(evaluation.unlockedResult).toBeNull();
   });
 });

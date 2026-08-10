@@ -368,6 +368,69 @@
       "unknownCurrency": "部分购买记录缺少明确币种，暂时无法安全比较。"
     }
   },
+  "postSaveSummary": {
+    "saved": "购物记录已保存",
+    "savedSubtitle": "这张小票已经安全保存",
+    "fallback": "已保存购物记录，摘要数据暂时无法读取。",
+    "unsupported": "这张记录不会计入超市和便利店购物分析。",
+    "continueReview": "继续审核下一张",
+    "done": "完成",
+    "viewReceipt": "查看这张小票",
+    "viewAnalysis": "查看分析",
+    "current": {
+      "title": "本次购物",
+      "total": "本次金额",
+      "itemCount": "商品数量",
+      "itemCountValue": "{count} 件商品",
+      "highestItemValue": "最高金额商品：{name} · {amount}"
+    },
+    "progress": {
+      "title": "购物记录进度",
+      "profileEstablished": "购物画像已建立",
+      "unlockRecent": "再记录 {count} 张，解锁近期购物分析",
+      "unlockFrequent": "再记录 {count} 张，发现常购商品",
+      "unlockProfile": "再记录 {count} 张，生成购物画像"
+    },
+    "unlock": {
+      "badge": "新解锁",
+      "first": "第一条购物记录已建立",
+      "third": "近期购物分析已解锁",
+      "fifth": "常购商品已解锁",
+      "tenth": "我的购物画像已生成"
+    },
+    "third": {
+      "totalSpend": "最近3张总支出",
+      "averageSpend": "平均每次支出"
+    },
+    "frequent": {
+      "occurrences": "购买记录 {count} 次",
+      "quantity": "累计数量 {count}",
+      "lastPurchased": "最近购买 {date}",
+      "latestPrice": "最近记录价格 {amount}",
+      "dataPreparing": "常购商品分析将在历史记录整理完成后逐步显示。"
+    },
+    "tenth": {
+      "frequency": "已记录的购物平均约每 {days} 天一次。",
+      "windowCompared": "已比较前5次与最近5次购物记录。"
+    }
+  },
+  "engagementMilestone": {
+    "summary": {
+      "dominant": {
+        "food_ingredients": "这次购物以食材为主。",
+        "ready_to_eat": "这次购买的即食食品较多。",
+        "snacks_drinks": "这次零食和饮料占比较高。",
+        "household": "这次包含较多日用品。"
+      },
+      "recurringCategory": "最近3张记录中，有 {receiptCount} 张包含{category}。",
+      "differentMerchants": "最近3张购物记录来自不同商店。",
+      "dispersed": "这次购买类别比较分散。"
+    },
+    "change": {
+      "categoryIncrease": "最近5次记录中，{category}购买占比较前5次增加约 {difference} 个百分点。",
+      "categoryDecrease": "最近5次记录中，{category}购买占比较前5次减少约 {difference} 个百分点。"
+    }
+  },
   "settings": {
     "title": "设置",
     "feedback": {

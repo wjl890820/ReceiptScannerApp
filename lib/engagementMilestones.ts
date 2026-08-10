@@ -62,6 +62,18 @@ export type MilestoneHighestItem = {
   sourceIndex: number;
 };
 
+export type ReceiptShoppingSummary = {
+  receiptId: string;
+  merchant: string | null;
+  transactionAt: number;
+  total: number;
+  currency: string;
+  itemCount: number;
+  highestItem: MilestoneHighestItem | null;
+  categoryStructure: MilestoneCategoryStructure;
+  summary: MilestoneDeterministicSummary;
+};
+
 export type FrequentProductPriceSummary = {
   priceKind: ProductPriceKind;
   currency: string;
@@ -120,6 +132,7 @@ export type FirstReceiptMilestone = EngagementMilestoneBase & {
   merchant: string | null;
   transactionAt: number;
   total: number;
+  currency: string;
   itemCount: number;
   highestItem: MilestoneHighestItem | null;
   categoryStructure: MilestoneCategoryStructure;
@@ -443,6 +456,18 @@ export function buildFirstReceiptMilestone(
   );
   const receipt = receipts[0];
   if (!receipt) return null;
+  const shoppingSummary = buildReceiptShoppingSummary(receipt);
+
+  return {
+    ...milestoneBase(1, receipts.length, generatedAt, false),
+    milestone: 1,
+    ...shoppingSummary,
+  };
+}
+
+export function buildReceiptShoppingSummary(
+  receipt: EngagementReceipt
+): ReceiptShoppingSummary {
   const items = getReceiptItems(receipt) as Record<string, unknown>[];
   let highestItem: MilestoneHighestItem | null = null;
   items.forEach((item, sourceIndex) => {
@@ -457,10 +482,7 @@ export function buildFirstReceiptMilestone(
     }
   });
   const categoryStructure = buildMilestoneCategoryStructure([receipt]);
-
   return {
-    ...milestoneBase(1, receipts.length, generatedAt, false),
-    milestone: 1,
     receiptId: receipt.id,
     merchant:
       receipt.merchant_raw?.trim() ||
@@ -468,6 +490,7 @@ export function buildFirstReceiptMilestone(
       null,
     transactionAt: receiptTimestamp(receipt),
     total: receiptTotal(receipt),
+    currency: receipt.currency,
     itemCount: items.length,
     highestItem,
     categoryStructure,
@@ -865,14 +888,14 @@ async function readProductRows(
   );
 }
 
-export async function evaluateEngagementMilestonesWithDb(
+async function evaluateReceiptSetWithDb(
   db: EngagementMilestoneDatabase,
+  receipts: EngagementReceipt[],
   options: {
     beforeSupportedReceiptCount?: number | null;
     generatedAt?: number;
-  } = {}
+  }
 ): Promise<EngagementMilestoneEvaluation> {
-  const receipts = await readAllReceipts(db);
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const status = getEngagementMilestoneStatus(
     supportedReceipts.length,
@@ -937,6 +960,34 @@ export async function evaluateEngagementMilestonesWithDb(
   };
 }
 
+export async function evaluateEngagementMilestonesWithDb(
+  db: EngagementMilestoneDatabase,
+  options: {
+    beforeSupportedReceiptCount?: number | null;
+    generatedAt?: number;
+  } = {}
+): Promise<EngagementMilestoneEvaluation> {
+  const receipts = await readAllReceipts(db);
+  return evaluateReceiptSetWithDb(db, receipts, options);
+}
+
+export async function evaluateSavedReceiptMilestoneWithDb(
+  db: EngagementMilestoneDatabase,
+  savedReceiptId: string,
+  options: { generatedAt?: number } = {}
+): Promise<EngagementMilestoneEvaluation> {
+  const receipts = await readAllReceipts(db);
+  const supportedCount = countSupportedReceipts(receipts);
+  const savedReceipt = receipts.find((receipt) => receipt.id === savedReceiptId);
+  const savedReceiptIsSupported =
+    savedReceipt != null && isV1SupportedReceipt(savedReceipt);
+  return evaluateReceiptSetWithDb(db, receipts, {
+    generatedAt: options.generatedAt,
+    beforeSupportedReceiptCount:
+      supportedCount - (savedReceiptIsSupported ? 1 : 0),
+  });
+}
+
 async function getEngagementMilestoneDb(): Promise<SQLite.SQLiteDatabase> {
   const [{ initIfNeeded }, ExpoSQLite] = await Promise.all([
     import('./db'),
@@ -957,4 +1008,12 @@ export async function evaluateEngagementMilestones(
 ): Promise<EngagementMilestoneEvaluation> {
   const db = await getEngagementMilestoneDb();
   return evaluateEngagementMilestonesWithDb(db, options);
+}
+
+export async function evaluateSavedReceiptMilestone(
+  savedReceiptId: string,
+  options: { generatedAt?: number } = {}
+): Promise<EngagementMilestoneEvaluation> {
+  const db = await getEngagementMilestoneDb();
+  return evaluateSavedReceiptMilestoneWithDb(db, savedReceiptId, options);
 }

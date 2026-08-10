@@ -368,6 +368,69 @@
       "unknownCurrency": "Some purchases do not have a known currency and cannot be safely compared."
     }
   },
+  "postSaveSummary": {
+    "saved": "Shopping record saved",
+    "savedSubtitle": "This receipt has been saved safely",
+    "fallback": "Your shopping record was saved, but its summary is temporarily unavailable.",
+    "unsupported": "This record is not included in supermarket and convenience-store analysis.",
+    "continueReview": "Review next receipt",
+    "done": "Done",
+    "viewReceipt": "View this receipt",
+    "viewAnalysis": "View analysis",
+    "current": {
+      "title": "This shopping trip",
+      "total": "Amount",
+      "itemCount": "Items",
+      "itemCountValue": "{count} items",
+      "highestItemValue": "Highest amount item: {name} · {amount}"
+    },
+    "progress": {
+      "title": "Shopping record progress",
+      "profileEstablished": "Your shopping profile is established",
+      "unlockRecent": "Record {count} more to unlock recent shopping analysis",
+      "unlockFrequent": "Record {count} more to discover frequent products",
+      "unlockProfile": "Record {count} more to create your shopping profile"
+    },
+    "unlock": {
+      "badge": "New",
+      "first": "Your first shopping record is established",
+      "third": "Recent shopping analysis unlocked",
+      "fifth": "Frequent products unlocked",
+      "tenth": "Your shopping profile is ready"
+    },
+    "third": {
+      "totalSpend": "Last 3 receipts",
+      "averageSpend": "Average per receipt"
+    },
+    "frequent": {
+      "occurrences": "{count} purchase records",
+      "quantity": "Total quantity {count}",
+      "lastPurchased": "Last purchased {date}",
+      "latestPrice": "Latest recorded price {amount}",
+      "dataPreparing": "Frequent products will appear as your purchase history is organized."
+    },
+    "tenth": {
+      "frequency": "Recorded shopping averages about once every {days} days.",
+      "windowCompared": "The first 5 and latest 5 shopping records were compared."
+    }
+  },
+  "engagementMilestone": {
+    "summary": {
+      "dominant": {
+        "food_ingredients": "This shopping trip was mainly ingredients.",
+        "ready_to_eat": "This trip included more ready-to-eat food.",
+        "snacks_drinks": "Snacks and drinks made up a larger share of this trip.",
+        "household": "This trip included more household items."
+      },
+      "recurringCategory": "{category} appeared in {receiptCount} of the last 3 records.",
+      "differentMerchants": "The last 3 shopping records were from different stores.",
+      "dispersed": "This purchase was spread across several categories."
+    },
+    "change": {
+      "categoryIncrease": "In the latest 5 records, the purchase share of {category} increased by about {difference} percentage points versus the first 5.",
+      "categoryDecrease": "In the latest 5 records, the purchase share of {category} decreased by about {difference} percentage points versus the first 5."
+    }
+  },
   "settings": {
     "title": "Settings",
     "feedback": {

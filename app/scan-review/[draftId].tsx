@@ -33,6 +33,7 @@ import { peekNextDraftId } from '@/lib/scanReviewQueue';
 import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
+import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
 
 function toNum(v: string, fallback = 0): number {
   const n = Number(String(v).replace(/,/g, '').trim());
@@ -514,21 +515,12 @@ export default function ScanReviewScreen() {
         });
       }
 
-      Alert.alert(t('scanReview.savedTitle'), t('scanReview.savedMessage'), [
-        {
-          text: t('easterEgg.ok'),
-          onPress: () => {
-            // draft 与队列已在保存成功后处理完毕，这里只负责导航。
-            // 保存成功导航必须放行离开保护，避免被未保存确认拦截。
-            allowLeaveRef.current = true;
-            if (nextDraftId) {
-              router.replace(`/scan-review/${nextDraftId}` as any);
-            } else {
-              router.back();
-            }
-          },
-        },
-      ]);
+      // draft、queue、learning 与 post-save 工作均已完成；这里只替换最终展示目的地。
+      // replace 会移除已删除 draft 的 editor，避免 Back 返回旧审核页。
+      allowLeaveRef.current = true;
+      router.replace(
+        buildPostSaveSummaryHref(receiptId, nextDraftId) as any
+      );
     } catch (e: any) {
       // 保存失败：保留 draft、不清队列、不放行离开、不跳转；技术细节进日志。
       logger.warn('ScanReview', 'Save failed', { error: e });
