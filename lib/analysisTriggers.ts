@@ -1,5 +1,7 @@
 // lib/analysisTriggers.ts
 
+import { ENGAGEMENT_MILESTONES } from './engagementMilestones';
+
 export type AnalysisLevel = 'L1' | 'L2' | 'L3' | 'L4' | 'L5';
 export type PeriodTrigger = 'weekly' | 'monthly';
 
@@ -12,7 +14,9 @@ export function getAnalysisLevel(receiptCount: number): AnalysisLevel {
 }
 
 export function shouldTriggerByCount(receiptCount: number): boolean {
-  return [1, 3, 5, 10, 20].includes(receiptCount);
+  return ENGAGEMENT_MILESTONES.includes(
+    receiptCount as (typeof ENGAGEMENT_MILESTONES)[number]
+  );
 }
 
 export function shouldTriggerByPeriod(period: PeriodTrigger, now: Date = new Date()): boolean {

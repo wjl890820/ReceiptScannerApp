@@ -53,6 +53,17 @@ ReceiptScannerApp V1 产品冻结与工程红线。后续 Phase 开发须遵守�
 - 主扫描：OCR（1 次）+ 可选 batch classify-items（0–1 次）
 - 逐项 `classify-item` 默认关闭（`allowAi=false`）
 - Batch AI 须受 `ENABLE_BATCH_AI_CLASSIFICATION` 控制
+- Engagement Milestone Engine 必须完全 deterministic，不得调用 AI 或网络服务
+
+## Engagement Milestone Freeze
+
+- 唯一正式阈值由 `lib/engagementMilestones.ts:ENGAGEMENT_MILESTONES` 定义：`1 / 3 / 5 / 10`
+- milestone count 只计算 `isV1SupportedReceipt()` 判定为 supermarket / convenience 的 receipts；不得使用 `receipt_items` 行数
+- 第 1 / 3 张统计通过 `getReceiptItems()` 读取最终商品；第 5 / 10 张跨小票商品聚合必须使用 `receipt_items INNER JOIN receipts`
+- derived index coverage 不完整时 frequent products 必须 graceful degrade，不得同步扫描或重建全库
+- normalized price 只允许复用 `productPriceHistory` 的 safe eligibility 结果，不得复制价格公式或生成趋势、推荐、最便宜结论
+- milestone engine 输出纯数据与 summary key，不包含 UI、支付、quota 或 notification 行为
+- 未来第 3 张成功保存后的 UX 顺序固定为：先展示第 3 张解锁价值，再展示免费额度用尽 / 购买扫描次数；Phase 5A 不实现该 UI
 
 ## Phase 边界
 
