@@ -484,6 +484,13 @@ export async function deleteReceiptItemIndex(
   );
 }
 
+export async function clearReceiptItemIndex(
+  db: ReceiptItemIndexDatabase
+): Promise<void> {
+  await ensureReceiptItemsSchema(db);
+  await db.runAsync(`DELETE FROM receipt_items`, []);
+}
+
 export async function getReceiptItemIndexRows(
   db: ReceiptItemIndexDatabase,
   receiptId: string

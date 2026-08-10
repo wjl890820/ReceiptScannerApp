@@ -3,7 +3,15 @@ import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
 import { listReceiptsForListParams } from './receiptListQuery';
 import { detectMerchantType, type MerchantType } from './merchantType';
-import { ensureReceiptItemsSchema } from './receiptItemIndex';
+import {
+  clearReceiptItemIndex,
+  deleteReceiptItemIndex,
+  ensureReceiptItemsSchema,
+  rebuildReceiptItemIndex,
+  type ReceiptItemIndexReceipt,
+} from './receiptItemIndex';
+import { getReceiptItems } from './receiptItems';
+import { logger } from './logger';
 
 /**
  * 说明：
@@ -75,6 +83,17 @@ export type SaveReceiptParams = {
   /** 审核页保存：标记 user_edited=1 */
   reviewedSave?: boolean;
   note?: string | null;
+};
+
+export type UpdateReceiptParams = {
+  id: string;
+  imageUri?: string;
+  analysis?: any;
+  user_edited?: number;
+  final_total?: number | null;
+  final_category?: string | null;
+  note?: string | null;
+  user_items_json?: string | null;
 };
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -528,6 +547,106 @@ export { initIfNeeded };
 // 新数据库 receipts_v2.db 强制包含 transaction_at 列，不再需要复杂的检测和迁移逻辑
 // 旧数据库 receipts.db 已弃用，用户需要重新扫描小票（V1 前允许的破坏性升级）
 
+async function readReceiptItemIndexSource(
+  db: SQLite.SQLiteDatabase,
+  receiptId: string
+): Promise<ReceiptItemIndexReceipt | null> {
+  return db.getFirstAsync<ReceiptItemIndexReceipt>(
+    `SELECT id, analysis_json, user_items_json
+     FROM receipts
+     WHERE id = ?
+     LIMIT 1`,
+    [receiptId]
+  );
+}
+
+function receiptItemsSignature(receipt: ReceiptItemIndexReceipt): string {
+  return JSON.stringify(getReceiptItems(receipt));
+}
+
+function updateCanChangeReceiptItems(params: UpdateReceiptParams): boolean {
+  return (
+    params.user_items_json !== undefined ||
+    (params.analysis !== null &&
+      typeof params.analysis === 'object' &&
+      !Array.isArray(params.analysis))
+  );
+}
+
+async function bestEffortRebuildReceiptItemIndex(
+  db: SQLite.SQLiteDatabase,
+  receiptId: string,
+  knownReceipt?: ReceiptItemIndexReceipt | null
+): Promise<void> {
+  try {
+    const receipt =
+      knownReceipt === undefined
+        ? await readReceiptItemIndexSource(db, receiptId)
+        : knownReceipt;
+    if (!receipt) return;
+    await rebuildReceiptItemIndex(db, receipt);
+  } catch (error) {
+    logger.warn('ReceiptItemIndex', 'receipt_item_index_rebuild_failed', {
+      operation: 'rebuild',
+      receipt_id: receiptId,
+      error,
+    });
+  }
+}
+
+async function bestEffortRebuildReceiptItemIndexIfChanged(
+  db: SQLite.SQLiteDatabase,
+  receiptId: string,
+  previousItemsSignature: string | undefined
+): Promise<void> {
+  try {
+    const receipt = await readReceiptItemIndexSource(db, receiptId);
+    if (!receipt) return;
+    const nextItemsSignature = receiptItemsSignature(receipt);
+    if (
+      previousItemsSignature !== undefined &&
+      previousItemsSignature === nextItemsSignature
+    ) {
+      return;
+    }
+    await rebuildReceiptItemIndex(db, receipt);
+  } catch (error) {
+    logger.warn('ReceiptItemIndex', 'receipt_item_index_rebuild_failed', {
+      operation: 'rebuild',
+      receipt_id: receiptId,
+      error,
+    });
+  }
+}
+
+async function bestEffortDeleteReceiptItemIndex(
+  db: SQLite.SQLiteDatabase,
+  receiptId: string
+): Promise<void> {
+  try {
+    await deleteReceiptItemIndex(db, receiptId);
+  } catch (error) {
+    logger.warn('ReceiptItemIndex', 'receipt_item_index_delete_failed', {
+      operation: 'delete',
+      receipt_id: receiptId,
+      error,
+    });
+  }
+}
+
+async function bestEffortClearReceiptItemIndex(
+  db: SQLite.SQLiteDatabase
+): Promise<void> {
+  try {
+    await clearReceiptItemIndex(db);
+  } catch (error) {
+    logger.warn('ReceiptItemIndex', 'receipt_item_index_clear_failed', {
+      operation: 'clear',
+      error,
+    });
+  }
+}
+
 /**
  * 保存一条记录（你现在是“手动保存”按钮触发）
  */
@@ -663,6 +782,9 @@ export async function saveReceipt(
       await db.runAsync(`UPDATE receipts SET ${sets.join(', ')} WHERE id = ?`, vals);
     }
   }
+
+  // Receipt is already durable; derived-index failure must not change save success.
+  await bestEffortRebuildReceiptItemIndex(db, id);
 
   if (__DEV__) {
     // eslint-disable-next-line no-console
@@ -852,6 +974,9 @@ export async function deleteReceipts(ids: string[]): Promise<void> {
     `DELETE FROM receipts WHERE id IN (${placeholders})`,
     ids
   );
+  for (const id of new Set(ids)) {
+    await bestEffortDeleteReceiptItemIndex(db, id);
+  }
 }
 
 /**
@@ -868,6 +993,7 @@ export async function clearReceipts(): Promise<void> {
   await initIfNeeded();
   const db = await getDb();
   await db.runAsync(`DELETE FROM receipts`);
+  await bestEffortClearReceiptItemIndex(db);
 }
 
 /**
@@ -875,18 +1001,21 @@ export async function clearReceipts(): Promise<void> {
  * 你传入任何字段都可以覆盖：total/tax/currency/merchant/items 等（统一存在 analysis_json）
  * 也支持更新用户手动编辑字段：user_edited, final_total, final_category, note
  */
-export async function updateReceipt(params: {
-  id: string;
-  imageUri?: string;
-  analysis?: any;
-  user_edited?: number;
-  final_total?: number | null;
-  final_category?: string | null;
-  note?: string | null;
-  user_items_json?: string | null;
-}): Promise<void> {
+export async function updateReceipt(params: UpdateReceiptParams): Promise<void> {
   await initIfNeeded();
   const db = await getDb();
+  const mayChangeReceiptItems = updateCanChangeReceiptItems(params);
+  let previousItemsSignature: string | undefined;
+  if (mayChangeReceiptItems) {
+    try {
+      const previousReceipt = await readReceiptItemIndexSource(db, params.id);
+      if (previousReceipt) {
+        previousItemsSignature = receiptItemsSignature(previousReceipt);
+      }
+    } catch {
+      // The receipt UPDATE remains authoritative. Rebuild conservatively afterward.
+    }
+  }
 
   const sets: string[] = [];
   const values: any[] = [];
@@ -981,4 +1110,12 @@ export async function updateReceipt(params: {
     `,
     values
   );
+
+  if (mayChangeReceiptItems) {
+    await bestEffortRebuildReceiptItemIndexIfChanged(
+      db,
+      params.id,
+      previousItemsSignature
+    );
+  }
 }

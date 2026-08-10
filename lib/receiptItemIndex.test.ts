@@ -3,6 +3,7 @@ import type * as SQLite from 'expo-sqlite';
 import { applyProductIdentityToItem } from './receiptItemIdentity';
 import {
   buildReceiptItemIndexRows,
+  clearReceiptItemIndex,
   deleteReceiptItemIndex,
   ensureReceiptItemsSchema,
   getReceiptItemIndexRows,
@@ -60,6 +61,10 @@ class MemoryIndexDb implements ReceiptItemIndexDatabase {
   ): Promise<unknown> {
     const values = Array.isArray(params) ? params : [];
     if (/DELETE FROM receipt_items/i.test(source)) {
+      if (values.length === 0) {
+        this.rows.clear();
+        return {};
+      }
       const receiptId = String(values[0]);
       for (const [id, row] of this.rows) {
         if (row.receipt_id === receiptId) this.rows.delete(id);
@@ -334,6 +339,17 @@ describe('receipt item index persistence primitives', () => {
 
     expect(await getReceiptItemIndexRows(db, 'a')).toEqual([]);
     expect(await getReceiptItemIndexRows(db, 'b')).toHaveLength(1);
+  });
+
+  it('clear removes all index rows without dropping the schema', async () => {
+    const db = new MemoryIndexDb();
+    await rebuildReceiptItemIndex(db, receipt('a', [{ name: 'A' }]));
+    await rebuildReceiptItemIndex(db, receipt('b', [{ name: 'B' }]));
+
+    await clearReceiptItemIndex(db);
+
+    expect(await getReceiptItemIndexRows(db, 'a')).toEqual([]);
+    expect(await getReceiptItemIndexRows(db, 'b')).toEqual([]);
   });
 
   it('rolls back delete when an insert fails and rethrows', async () => {
