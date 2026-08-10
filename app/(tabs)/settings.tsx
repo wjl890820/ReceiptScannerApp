@@ -37,6 +37,7 @@ import {
   type ReceiptSource,
 } from '@/lib/receiptSourceSettings';
 import {
+  canUnlockDevToolsViaSecretTap,
   formatAboutVersionLine,
   localePreferenceLabelKey,
   resolveInstalledAppMetadata,
@@ -44,14 +45,46 @@ import {
   shouldShowSettingsProEntry,
 } from '@/lib/settingsPresentation';
 
-async function loadExpoConstants(): Promise<any | null> {
+async function loadInstalledAppMetadataFromNative(): Promise<{
+  name: string;
+  version: string;
+  build: string;
+}> {
+  let nativeAppVersion: string | null = null;
+  let nativeBuildVersion: string | null = null;
+  let expoConfig: any = null;
+  let manifest2: any = null;
+
+  try {
+    const Application = await import('expo-application');
+    nativeAppVersion = Application.nativeApplicationVersion ?? null;
+    nativeBuildVersion = Application.nativeBuildVersion ?? null;
+  } catch (e) {
+    console.warn('[Settings] Failed to import expo-application:', e);
+  }
+
   try {
     const mod = await import('expo-constants');
-    return (mod as any).default ?? mod;
+    const constants = (mod as any).default ?? mod;
+    expoConfig = constants?.expoConfig ?? null;
+    manifest2 = constants?.manifest2 ?? null;
+    // Prefer Application.*; Constants fields are deprecated fallbacks only.
+    if (!nativeAppVersion) {
+      nativeAppVersion = constants?.nativeAppVersion ?? null;
+    }
+    if (!nativeBuildVersion) {
+      nativeBuildVersion = constants?.nativeBuildVersion ?? null;
+    }
   } catch (e) {
-    console.warn('[Settings] Failed to import Constants:', e);
-    return null;
+    console.warn('[Settings] Failed to import expo-constants:', e);
   }
+
+  return resolveInstalledAppMetadata({
+    nativeAppVersion,
+    nativeBuildVersion,
+    expoConfig,
+    manifest2,
+  });
 }
 
 function SettingsRow({
@@ -104,9 +137,8 @@ export default function SettingsScreen() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const constants = await loadExpoConstants();
-      if (!constants || cancelled) return;
-      const meta = resolveInstalledAppMetadata(constants);
+      const meta = await loadInstalledAppMetadataFromNative();
+      if (cancelled) return;
       setCurrentVersion(meta.version);
       setCurrentBuild(meta.build);
       setCurrentName(meta.name);
@@ -206,6 +238,11 @@ export default function SettingsScreen() {
 
   const onPressVersionArea = useMemo(() => {
     return async () => {
+      // Production Release: ignore secret taps entirely (no unlock path).
+      if (!canUnlockDevToolsViaSecretTap(__DEV__)) {
+        return;
+      }
+
       const now = Date.now();
       const withinWindow = now - lastTapAtRef.current <= 2000;
       lastTapAtRef.current = now;

@@ -14,6 +14,14 @@ export function shouldShowSettingsDevTools(
   return Boolean(unlocked || isDevBuild);
 }
 
+/**
+ * Secret About-area tap unlock is intentional only for development /
+ * internal builds. Production Release must not unlock by accident.
+ */
+export function canUnlockDevToolsViaSecretTap(isDevBuild: boolean): boolean {
+  return Boolean(isDevBuild);
+}
+
 /** Coming-soon Pro is hidden from the normal release Settings list. */
 export function shouldShowSettingsProEntry(options: {
   comingSoon: boolean;
@@ -36,17 +44,19 @@ export function resolveInstalledAppMetadata(source: {
   const nativeVersion = String(source.nativeAppVersion ?? '').trim();
   const nativeBuild = String(source.nativeBuildVersion ?? '').trim();
   const cfgVersion = String(source.expoConfig?.version ?? '').trim();
-  const cfgBuild = String(source.expoConfig?.ios?.buildNumber ?? '').trim();
   const name = String(
     source.expoConfig?.name ||
       source.manifest2?.extra?.expoClient?.name ||
       'Receipt Scanner'
   ).trim();
 
+  // Build must come from the installed native binary.
+  // Never fall back to expoConfig.ios.buildNumber — that value commonly lags
+  // behind TestFlight / App Store binaries (and embeds repo app.json).
   return {
     name: name || 'Receipt Scanner',
     version: nativeVersion || cfgVersion || '—',
-    build: nativeBuild || cfgBuild || '—',
+    build: nativeBuild || '—',
   };
 }
 

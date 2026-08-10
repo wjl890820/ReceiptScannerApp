@@ -1118,14 +1118,15 @@ export default function HomeScreen() {
     router.push(`/scan-review/${result.draftId}` as any);
   };
 
-  // Calculate bottom padding for sticky button dynamically
-  // stickyHeight is measured via onLayout and includes the container's padding
-  // Use fallback height for initial render to prevent overlap before measurement
+  // Calculate bottom padding for sticky button dynamically.
+  // Always keep the last Progressive Home card clear of the bottom tab bar.
+  // stickyHeight is measured via onLayout and includes the container's padding.
   const FALLBACK_STICKY_HEIGHT = 88; // Conservative estimate: button (~48) + padding (40)
+  const TAB_BAR_CONTENT_CLEARANCE = 72;
   const bottomPadding =
     pendingReview.pendingCount > 0
       ? (stickyHeight || FALLBACK_STICKY_HEIGHT) + 16
-      : 32;
+      : TAB_BAR_CONTENT_CLEARANCE + Math.max(insets.bottom, 0);
   const handleRecentPurchasePress = useCallback(
     (receiptId: string) => {
       router.push(`/history/${encodeURIComponent(receiptId)}` as any);

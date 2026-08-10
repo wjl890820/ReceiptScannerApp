@@ -1,50 +1,63 @@
 // app/(tabs)/_layout.tsx
 import { Tabs } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { t } from '@/lib/i18n';
+import { subscribeLocaleChange, t } from '@/lib/i18n';
+import { TAB_BAR_PRESENTATION } from '@/lib/tabBarPresentation';
+
+function readTabTitles() {
+  try {
+    return {
+      home: t('tabs.home'),
+      history: t('tabs.history'),
+      settings: t('tabs.settings'),
+      analysis: t('tabs.analysis'),
+    };
+  } catch (e) {
+    console.warn('[TabLayout] Translation failed, using fallback:', e);
+    return {
+      home: '首页',
+      history: '历史',
+      settings: '设置',
+      analysis: '分析',
+    };
+  }
+}
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
-  // Delay t() calls to avoid triggering i18n/Localization initialization during module load
-  // Use useMemo to ensure translations are only accessed after component mount
-  const tabTitles = useMemo(() => {
-    try {
-      return {
-        home: t('tabs.home'),
-        history: t('tabs.history'),
-        settings: t('tabs.settings'),
-        analysis: t('tabs.analysis'),
-      };
-    } catch (e) {
-      // Fallback to English if translation fails
-      console.warn('[TabLayout] Translation failed, using fallback:', e);
-      return {
-        home: '首页',
-        history: '历史',
-        settings: '设置',
-        analysis: '分析',
-      };
-    }
+  // Refresh labels on locale change (also covers root Stack remount races).
+  const [tabTitles, setTabTitles] = useState(readTabTitles);
+  useEffect(() => {
+    return subscribeLocaleChange(() => {
+      setTabTitles(readTabTitles());
+    });
   }, []);
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
         tabBarButton: HapticTab,
+        tabBarShowLabel: true,
+        tabBarActiveTintColor: TAB_BAR_PRESENTATION.active,
+        tabBarInactiveTintColor: TAB_BAR_PRESENTATION.inactive,
+        tabBarStyle: {
+          backgroundColor: TAB_BAR_PRESENTATION.background,
+          borderTopColor: TAB_BAR_PRESENTATION.border,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '500',
+        },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: tabTitles.home,
+          tabBarLabel: tabTitles.home,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="house.fill" color={color} />
           ),
@@ -55,6 +68,7 @@ export default function TabLayout() {
         name="analysis"
         options={{
           title: tabTitles.analysis,
+          tabBarLabel: tabTitles.analysis,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="chart.bar.fill" color={color} />
           ),
@@ -65,6 +79,7 @@ export default function TabLayout() {
         name="history/index"
         options={{
           title: tabTitles.history,
+          tabBarLabel: tabTitles.history,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="clock.fill" color={color} />
           ),
@@ -80,6 +95,7 @@ export default function TabLayout() {
         name="settings"
         options={{
           title: tabTitles.settings,
+          tabBarLabel: tabTitles.settings,
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="gearshape.fill" color={color} />
           ),

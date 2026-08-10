@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {
+  canUnlockDevToolsViaSecretTap,
   formatAboutVersionLine,
   localePreferenceLabelKey,
   resolveInstalledAppMetadata,
@@ -21,6 +22,11 @@ describe('settings release visibility', () => {
     expect(shouldShowSettingsDevTools(true, true)).toBe(true);
   });
 
+  it('blocks secret tap unlock outside development builds', () => {
+    expect(canUnlockDevToolsViaSecretTap(false)).toBe(false);
+    expect(canUnlockDevToolsViaSecretTap(true)).toBe(true);
+  });
+
   it('hides coming-soon Pro from the release Settings list', () => {
     expect(shouldShowSettingsProEntry({ comingSoon: true })).toBe(false);
     expect(shouldShowSettingsProEntry({ comingSoon: false })).toBe(true);
@@ -28,11 +34,11 @@ describe('settings release visibility', () => {
 });
 
 describe('settings version/build presentation', () => {
-  it('prefers native installed metadata over config fallbacks', () => {
+  it('prefers native installed metadata over config version fallback', () => {
     expect(
       resolveInstalledAppMetadata({
         nativeAppVersion: '1.0.5',
-        nativeBuildVersion: '19',
+        nativeBuildVersion: '20',
         expoConfig: {
           version: '1.0.4',
           name: 'Receipt Scanner',
@@ -42,7 +48,25 @@ describe('settings version/build presentation', () => {
     ).toEqual({
       name: 'Receipt Scanner',
       version: '1.0.5',
-      build: '19',
+      build: '20',
+    });
+  });
+
+  it('never presents stale expoConfig buildNumber as installed build', () => {
+    expect(
+      resolveInstalledAppMetadata({
+        nativeAppVersion: '1.0.5',
+        nativeBuildVersion: null,
+        expoConfig: {
+          version: '1.0.5',
+          name: 'Receipt Scanner',
+          ios: { buildNumber: '15' },
+        },
+      })
+    ).toEqual({
+      name: 'Receipt Scanner',
+      version: '1.0.5',
+      build: '—',
     });
   });
 
@@ -52,12 +76,12 @@ describe('settings version/build presentation', () => {
       version: '—',
       build: '—',
     });
-    expect(formatAboutVersionLine('1.0.5', '19')).toBe('1.0.5 (19)');
+    expect(formatAboutVersionLine('1.0.5', '20')).toBe('1.0.5 (20)');
     expect(formatAboutVersionLine('1.0.5', '—')).toBe('1.0.5');
     expect(formatAboutVersionLine('unknown', 'unknown')).toBe('—');
   });
 
-  it('does not hardcode build 15 in Settings presentation helpers or screen', () => {
+  it('does not hardcode build 15/20 in Settings presentation helpers or screen', () => {
     const files = [
       path.resolve(__dirname, 'settingsPresentation.ts'),
       path.resolve(__dirname, '../app/(tabs)/settings.tsx'),
@@ -65,10 +89,12 @@ describe('settings version/build presentation', () => {
     for (const file of files) {
       const source = fs.readFileSync(file, 'utf8');
       expect(source).not.toMatch(/['"]15['"]/);
+      expect(source).not.toMatch(/['"]20['"]/);
       expect(source).not.toMatch(/hardcode.*1\.0\.5|version\s*=\s*['"]1\.0\.5['"]/i);
     }
   });
 });
+
 
 describe('settings language labels', () => {
   it('maps preferences to localized label keys', () => {
@@ -106,13 +132,16 @@ describe('settings release surface contracts', () => {
     );
   });
 
-  it('keeps Dev Tools code and only gates visibility', () => {
+  it('keeps Dev Tools code and only gates visibility / unlock', () => {
     expect(settingsSource).toContain('shouldShowSettingsDevTools');
+    expect(settingsSource).toContain('canUnlockDevToolsViaSecretTap');
+    expect(settingsSource).toContain('expo-application');
     expect(settingsSource).toContain('Developer Tools');
     expect(settingsSource).toContain('Product dictionary stats');
     expect(settingsSource).toContain('runReclassifyExistingReceipts');
     expect(settingsSource).toContain('Default receipt source');
     expect(settingsSource).toContain('DEV_TOOLS_ENABLED_KEY');
+    expect(settingsSource).toContain('Hide Dev Tools');
   });
 
   it('does not introduce payment or quota code', () => {
