@@ -11,6 +11,10 @@ import {
   type ReceiptItemIndexReceipt,
 } from './receiptItemIndex';
 import { getReceiptItems } from './receiptItems';
+import {
+  runReceiptItemIndexBackfillBatch,
+  type ReceiptItemIndexBackfillBatchResult,
+} from './receiptItemIndexBackfill';
 import { logger } from './logger';
 
 /**
@@ -541,6 +545,14 @@ async function initIfNeeded() {
  * 导出初始化函数供其他模块使用（如 categoryLearner）
  */
 export { initIfNeeded };
+
+export async function runReceiptItemIndexMaintenanceBatch(
+  batchSize?: number
+): Promise<ReceiptItemIndexBackfillBatchResult> {
+  await initIfNeeded();
+  const db = await getDb();
+  return runReceiptItemIndexBackfillBatch(db, { batchSize });
+}
 
 // debugReceiptsSchema 函数已移除，改为在 initIfNeeded 最后直接打印
 

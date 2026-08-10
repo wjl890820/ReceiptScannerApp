@@ -5,7 +5,7 @@
 
 (global as unknown as { __DEV__: boolean }).__DEV__ = false;
 
-jest.mock('expo-sqlite', () => ({}), { virtual: true });
+jest.mock('expo-sqlite', () => ({}));
 jest.mock('./db', () => ({ initIfNeeded: jest.fn() }), { virtual: true });
 
 import { fixJsonItems } from './categoryBackfill';

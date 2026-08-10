@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { initI18n } from '@/lib/i18n';
 import { runCategoryBackfillOnceOnStartup } from '@/lib/categoryBackfill';
+import { runReceiptItemIndexMaintenanceBatch } from '@/lib/db';
 
 // Prevent auto-hiding splash screen until i18n is ready
 SplashScreen.preventAutoHideAsync();
@@ -19,8 +20,12 @@ export default function RootLayout() {
       } finally {
         setIsReady(true);
         await SplashScreen.hideAsync();
-        // 非阻塞：启动后回填旧数据的商品分类（幂等，自带"已执行"标记）。
-        runCategoryBackfillOnceOnStartup().catch(() => {});
+        // UI 已可交互后串行执行维护：先完成既有 category mutation，
+        // 再 best-effort 跑一个小批次 derived-index backfill。
+        void runCategoryBackfillOnceOnStartup()
+          .catch(() => {})
+          .then(() => runReceiptItemIndexMaintenanceBatch())
+          .catch(() => {});
       }
     }
 

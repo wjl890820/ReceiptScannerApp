@@ -11,6 +11,10 @@
 import * as SQLite from 'expo-sqlite';
 import { initIfNeeded } from './db';
 import { normalizeProductCategory } from './productCategory';
+import {
+  rebuildReceiptItemIndex,
+  type ReceiptItemIndexReceipt,
+} from './receiptItemIndex';
 import { logger } from './logger';
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -110,6 +114,28 @@ export async function backfillReceiptItemCategories(): Promise<BackfillResult> {
       fixedReceipts += 1;
     } catch (e) {
       logger.warn('CategoryBackfill', 'update receipt failed', { id: row.id, error: e });
+      continue;
+    }
+
+    // The category mutation is already durable. Index repair is derived-only
+    // and must never change the backfill's receipt success result.
+    try {
+      const updatedReceipt = await db.getFirstAsync<ReceiptItemIndexReceipt>(
+        `SELECT id, analysis_json, user_items_json
+         FROM receipts
+         WHERE id = ?
+         LIMIT 1`,
+        [row.id]
+      );
+      if (updatedReceipt) {
+        await rebuildReceiptItemIndex(db, updatedReceipt);
+      }
+    } catch (e) {
+      logger.warn('ReceiptItemIndex', 'receipt_item_index_rebuild_failed', {
+        operation: 'category_backfill_rebuild',
+        receipt_id: row.id,
+        error: e,
+      });
     }
   }
 
