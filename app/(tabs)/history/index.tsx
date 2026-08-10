@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
   Pressable,
   RefreshControl,
   SectionList,
@@ -24,6 +25,11 @@ import {
   searchHistoryPurchases,
   type ReceiptItemSearchResult,
 } from '@/lib/receiptItemSearch';
+import {
+  performHistoryPurchaseSearch,
+  resolveHistorySearchSubmitAction,
+  shouldApplyHistorySearchQueryChange,
+} from '@/lib/historySearchUi';
 import {
   buildProductSearchResultHref,
 } from '@/lib/productDetailTarget';
@@ -45,6 +51,7 @@ export default function HistoryScreen() {
   const [receiptResults, setReceiptResults] = useState<ReceiptListRow[]>([]);
   const searchQueryRef = useRef('');
   const searchRequestSequence = useRef(0);
+  const lastCompletedNormalizedQueryRef = useRef('');
 
   const load = useCallback(async () => {
     try {
@@ -57,9 +64,10 @@ export default function HistoryScreen() {
   }, []);
 
   const executeSearch = useCallback(async (query: string) => {
-    const normalizedQuery = normalizeReceiptItemSearchQuery(query);
     const requestId = ++searchRequestSequence.current;
+    const normalizedQuery = normalizeReceiptItemSearchQuery(query);
     if (!normalizedQuery) {
+      lastCompletedNormalizedQueryRef.current = '';
       setSearching(false);
       setItemResults([]);
       setReceiptResults([]);
@@ -68,15 +76,32 @@ export default function HistoryScreen() {
 
     setSearching(true);
     try {
-      const results = await searchHistoryPurchases(normalizedQuery);
-      if (requestId !== searchRequestSequence.current) return;
-      setItemResults(results.itemResults);
-      setReceiptResults(results.receiptResults);
-    } catch (error) {
-      if (requestId !== searchRequestSequence.current) return;
-      console.error('[HistorySearch] search failed', error);
-      setItemResults([]);
-      setReceiptResults([]);
+      const outcome = await performHistoryPurchaseSearch({
+        rawQuery: query,
+        isCurrent: () => requestId === searchRequestSequence.current,
+        searchFn: searchHistoryPurchases,
+      });
+
+      if (outcome.status === 'stale') {
+        return;
+      }
+      if (outcome.status === 'empty') {
+        lastCompletedNormalizedQueryRef.current = '';
+        setItemResults([]);
+        setReceiptResults([]);
+        return;
+      }
+      if (outcome.status === 'error') {
+        console.error('[HistorySearch] search failed', outcome.error);
+        lastCompletedNormalizedQueryRef.current = '';
+        setItemResults([]);
+        setReceiptResults([]);
+        return;
+      }
+
+      lastCompletedNormalizedQueryRef.current = outcome.normalizedQuery;
+      setItemResults(outcome.itemResults as ReceiptItemSearchResult[]);
+      setReceiptResults(outcome.receiptResults as ReceiptListRow[]);
     } finally {
       if (requestId === searchRequestSequence.current) {
         setSearching(false);
@@ -113,8 +138,15 @@ export default function HistoryScreen() {
   }, [executeSearch, load]);
 
   const onSearchQueryChange = useCallback((value: string) => {
+    // IME confirm / keyboard Search may re-fire the same text. Resetting
+    // loading+results without a searchQuery change leaves a permanent spinner.
+    if (!shouldApplyHistorySearchQueryChange(searchQueryRef.current, value)) {
+      return;
+    }
+
     searchRequestSequence.current += 1;
     searchQueryRef.current = value;
+    lastCompletedNormalizedQueryRef.current = '';
     setSearchQuery(value);
     if (normalizeReceiptItemSearchQuery(value)) {
       setSelectMode(false);
@@ -129,9 +161,35 @@ export default function HistoryScreen() {
     }
   }, []);
 
+  const onSubmitSearch = useCallback(() => {
+    Keyboard.dismiss();
+    const action = resolveHistorySearchSubmitAction({
+      rawQuery: searchQueryRef.current,
+      lastCompletedNormalizedQuery: lastCompletedNormalizedQueryRef.current,
+    });
+
+    if (action.type === 'clear') {
+      searchRequestSequence.current += 1;
+      lastCompletedNormalizedQueryRef.current = '';
+      setSearching(false);
+      setItemResults([]);
+      setReceiptResults([]);
+      return;
+    }
+
+    if (action.type === 'keep_results') {
+      // Live search already finished for this query — keep rows, end spinner.
+      setSearching(false);
+      return;
+    }
+
+    void executeSearch(action.query);
+  }, [executeSearch]);
+
   const clearSearch = useCallback(() => {
     searchQueryRef.current = '';
     searchRequestSequence.current += 1;
+    lastCompletedNormalizedQueryRef.current = '';
     setSearchQuery('');
     setSearching(false);
     setItemResults([]);
@@ -262,12 +320,15 @@ export default function HistoryScreen() {
         <TextInput
           value={searchQuery}
           onChangeText={onSearchQueryChange}
+          onSubmitEditing={onSubmitSearch}
           placeholder={t('history.search.placeholder')}
           placeholderTextColor="#888"
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
+          blurOnSubmit
           style={styles.searchInput}
+          accessibilityLabel={t('history.search.placeholder')}
         />
         {searchQuery.length > 0 && (
           <Pressable

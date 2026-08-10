@@ -2,6 +2,9 @@ import type * as SQLite from 'expo-sqlite';
 import * as ExpoSQLite from 'expo-sqlite';
 
 import { initIfNeeded, type ReceiptListRow } from './db';
+import { normalizeReceiptItemSearchQuery } from './receiptItemSearchNormalize';
+
+export { normalizeReceiptItemSearchQuery } from './receiptItemSearchNormalize';
 
 export type ReceiptItemSearchResult = {
   receiptId: string;
@@ -55,15 +58,6 @@ function positiveLimit(value: unknown, fallback: number): number {
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
-}
-
-export function normalizeReceiptItemSearchQuery(value: unknown): string {
-  if (typeof value !== 'string') return '';
-  return value
-    .normalize('NFKC')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
 }
 
 async function getSearchDb(): Promise<SQLite.SQLiteDatabase> {
