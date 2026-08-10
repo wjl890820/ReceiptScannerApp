@@ -173,6 +173,11 @@ export type EngagementMilestoneEvaluation = {
   unlockedResult: EngagementMilestoneResult | null;
 };
 
+export type CurrentEngagementMilestoneEvaluation = {
+  status: EngagementMilestoneStatus;
+  currentResult: EngagementMilestoneResult | null;
+};
+
 export type EngagementReceipt = V1SupportedReceiptSource & {
   id: string;
   created_at: number;
@@ -888,6 +893,28 @@ async function readProductRows(
   );
 }
 
+async function readProductInsightContext(
+  db: EngagementMilestoneDatabase
+): Promise<MilestoneProductInsightContext> {
+  try {
+    const rows = await readProductRows(db);
+    try {
+      const { buildProductPriceHistory } = await import(
+        './productPriceHistory'
+      );
+      return {
+        rows,
+        queryFailed: false,
+        priceHistoryBuilder: buildProductPriceHistory,
+      };
+    } catch {
+      return { rows, queryFailed: false };
+    }
+  } catch {
+    return { rows: [], queryFailed: true };
+  }
+}
+
 async function evaluateReceiptSetWithDb(
   db: EngagementMilestoneDatabase,
   receipts: EngagementReceipt[],
@@ -925,24 +952,7 @@ async function evaluateReceiptSetWithDb(
     };
   }
 
-  let productContext: MilestoneProductInsightContext;
-  try {
-    const rows = await readProductRows(db);
-    try {
-      const { buildProductPriceHistory } = await import(
-        './productPriceHistory'
-      );
-      productContext = {
-        rows,
-        queryFailed: false,
-        priceHistoryBuilder: buildProductPriceHistory,
-      };
-    } catch {
-      productContext = { rows, queryFailed: false };
-    }
-  } catch {
-    productContext = { rows: [], queryFailed: true };
-  }
+  const productContext = await readProductInsightContext(db);
   return {
     status,
     unlockedResult:
@@ -988,6 +998,53 @@ export async function evaluateSavedReceiptMilestoneWithDb(
   });
 }
 
+export async function evaluateCurrentEngagementMilestoneWithDb(
+  db: EngagementMilestoneDatabase,
+  options: { generatedAt?: number } = {}
+): Promise<CurrentEngagementMilestoneEvaluation> {
+  const receipts = await readAllReceipts(db);
+  const supportedReceipts = filterV1SupportedReceipts(receipts);
+  const status = getEngagementMilestoneStatus(supportedReceipts.length);
+  const generatedAt = options.generatedAt ?? Date.now();
+  if (supportedReceipts.length === 0) {
+    return { status, currentResult: null };
+  }
+  if (supportedReceipts.length < 3) {
+    return {
+      status,
+      currentResult: buildFirstReceiptMilestone(
+        supportedReceipts,
+        generatedAt
+      ),
+    };
+  }
+  if (supportedReceipts.length < 5) {
+    return {
+      status,
+      currentResult: buildThreeReceiptMilestone(
+        supportedReceipts,
+        generatedAt
+      ),
+    };
+  }
+  const productContext = await readProductInsightContext(db);
+  return {
+    status,
+    currentResult:
+      supportedReceipts.length < 10
+        ? buildFiveReceiptMilestone(
+            supportedReceipts,
+            productContext,
+            generatedAt
+          )
+        : buildTenReceiptMilestone(
+            supportedReceipts,
+            productContext,
+            generatedAt
+          ),
+  };
+}
+
 async function getEngagementMilestoneDb(): Promise<SQLite.SQLiteDatabase> {
   const [{ initIfNeeded }, ExpoSQLite] = await Promise.all([
     import('./db'),
@@ -1016,4 +1073,11 @@ export async function evaluateSavedReceiptMilestone(
 ): Promise<EngagementMilestoneEvaluation> {
   const db = await getEngagementMilestoneDb();
   return evaluateSavedReceiptMilestoneWithDb(db, savedReceiptId, options);
+}
+
+export async function evaluateCurrentEngagementMilestone(
+  options: { generatedAt?: number } = {}
+): Promise<CurrentEngagementMilestoneEvaluation> {
+  const db = await getEngagementMilestoneDb();
+  return evaluateCurrentEngagementMilestoneWithDb(db, options);
 }

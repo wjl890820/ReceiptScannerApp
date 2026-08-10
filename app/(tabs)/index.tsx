@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Text as SvgText, TSpan } from 'react-native-svg';
 
+import { ProgressiveHomeInsights } from '@/components/ProgressiveHomeInsights';
 import type { ReceiptAnalysis, ReceiptItem } from '@/lib/receiptAnalyzer';
 import { pingOcrEdge, probeSupabaseNetwork } from '@/lib/ocrService';
 import {
@@ -37,15 +38,22 @@ import { getScanErrorMessage } from '@/lib/scanError';
 import { logger } from '@/lib/logger';
 
 import { listReceipts, type ReceiptRow } from '@/lib/db';
+import {
+  evaluateCurrentEngagementMilestone,
+  type MilestoneFrequentProduct,
+} from '@/lib/engagementMilestones';
+import {
+  buildHomeProgressiveExperience,
+  type HomeProgressiveExperience,
+} from '@/lib/homeProgressiveExperience';
 import { t } from '@/lib/i18n';
+import { buildProductDetailHref } from '@/lib/productDetailTarget';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 import { getCategoryColor, getCategoryLabel } from '@/lib/categoryPalette';
 import { formatJPY } from '@/lib/formatJPY';
-import { getHomeTimeRange, setHomeTimeRange } from '@/lib/settingsStore';
+import { getHomeTimeRange } from '@/lib/settingsStore';
 import {
   aggregateCategoryData,
-  computeUncategorizedSummary,
-  computeTopCategory,
   type CategoryData,
 } from '@/lib/homeMetricsHelpers';
 
@@ -589,6 +597,10 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
+  const [homeExperience, setHomeExperience] =
+    useState<HomeProgressiveExperience>(() =>
+      buildHomeProgressiveExperience([], null)
+    );
   const [timeRange, setTimeRange] = useState<TimeRange>('7D');
   const [scanning, setScanning] = useState(false);
   const [processingProgress, setProcessingProgress] = useState<{ current: number; total: number } | null>(null);
@@ -614,27 +626,29 @@ export default function HomeScreen() {
     loadTimeRange();
   }, []);
 
-  // Save time range preference when changed
-  const handleTimeRangeChange = useCallback(async (newRange: TimeRange) => {
-    setTimeRange(newRange);
-    try {
-      await setHomeTimeRange(newRange);
-    } catch (e) {
-      // If saving fails, log but don't block UI
-      if (__DEV__) {
-        console.warn('[Home] Failed to save time range preference:', e);
-      }
-    }
-  }, []);
-
   // 加载所有收据用于饼图
   const loadReceipts = useCallback(async () => {
     try {
       setLoadingReceipts(true);
       const allReceipts = await listReceipts();
       setReceipts(allReceipts);
+      setHomeExperience(buildHomeProgressiveExperience(allReceipts, null));
+      try {
+        const evaluation = await evaluateCurrentEngagementMilestone();
+        setHomeExperience(
+          buildHomeProgressiveExperience(allReceipts, evaluation)
+        );
+      } catch (analyticsError) {
+        logger.warn('Home', 'progressive analytics failed', {
+          error: analyticsError,
+        });
+        setHomeExperience(
+          buildHomeProgressiveExperience(allReceipts, null, true)
+        );
+      }
     } catch (e: any) {
       console.error('加载收据失败:', e);
+      setHomeExperience(buildHomeProgressiveExperience([], null, true));
     } finally {
       setLoadingReceipts(false);
     }
@@ -718,14 +732,6 @@ export default function HomeScreen() {
     console.log('[Home][Metrics] categoryData', categoryData, 'missing_item_category_count', missingCategoryCount);
   }
 
-  const totalAmount = useMemo(() => {
-    return categoryData.reduce((sum, item) => sum + item.amount, 0);
-  }, [categoryData]);
-
-  const uncategorizedSummary = useMemo(() => {
-    return computeUncategorizedSummary(filteredReceipts);
-  }, [filteredReceipts]);
-
   // Compute insight context
   const insightContext = useMemo(() => {
     return computeInsightContext(filteredReceipts, categoryData);
@@ -764,20 +770,6 @@ export default function HomeScreen() {
       level,
     };
   }, [homeInsight]);
-
-  // KPI data
-  const kpiData = useMemo(() => {
-    if (categoryData.length === 0) {
-      return null;
-    }
-    const top = computeTopCategory(categoryData);
-    return {
-      totalSpending: totalAmount,
-      topCategory: top?.category ?? null,
-      topCategoryPct: top?.percentage ?? 0,
-      topCategoryAmount: top?.amount ?? 0,
-    };
-  }, [categoryData, totalAmount]);
 
   // 扫描小票
   const handleScanReceipt = async () => {
@@ -1126,24 +1118,31 @@ export default function HomeScreen() {
     router.push(`/scan-review/${result.draftId}` as any);
   };
 
-  // 只显示前5个类别
-  const topCategories = useMemo(() => {
-    // 待分类比例较低（<10%）时排到最后，避免“待分类”占据图例前列。
-    const LOW_UNCATEGORIZED_THRESHOLD = 10;
-    const arr = [...categoryData].sort((a, b) => {
-      const aLow = a.category === 'uncategorized' && a.percentage < LOW_UNCATEGORIZED_THRESHOLD;
-      const bLow = b.category === 'uncategorized' && b.percentage < LOW_UNCATEGORIZED_THRESHOLD;
-      if (aLow !== bLow) return aLow ? 1 : -1;
-      return b.amount - a.amount;
-    });
-    return arr.slice(0, 5);
-  }, [categoryData]);
-
   // Calculate bottom padding for sticky button dynamically
   // stickyHeight is measured via onLayout and includes the container's padding
   // Use fallback height for initial render to prevent overlap before measurement
   const FALLBACK_STICKY_HEIGHT = 88; // Conservative estimate: button (~48) + padding (40)
-  const bottomPadding = (stickyHeight || FALLBACK_STICKY_HEIGHT) + 16;
+  const bottomPadding =
+    pendingReview.pendingCount > 0
+      ? (stickyHeight || FALLBACK_STICKY_HEIGHT) + 16
+      : 32;
+  const handleRecentPurchasePress = useCallback(
+    (receiptId: string) => {
+      router.push(`/history/${encodeURIComponent(receiptId)}` as any);
+    },
+    [router]
+  );
+  const handleProductPress = useCallback(
+    (product: MilestoneFrequentProduct) => {
+      router.push(
+        buildProductDetailHref({
+          type: product.groupingType,
+          key: product.key,
+        }) as any
+      );
+    },
+    [router]
+  );
 
   return (
     <View style={styles.screenContainer}>
@@ -1153,139 +1152,25 @@ export default function HomeScreen() {
           { paddingBottom: bottomPadding },
         ]}
       >
-        <Text style={styles.title}>{t('home.title')}</Text>
-        <Text style={styles.subtitle}>{t('home.subtitle')}</Text>
-
-        {/* 时间范围选择器 */}
-        <View style={styles.timeRangeContainer}>
-        <Pressable
-          style={[styles.timeRangeButton, timeRange === '7D' && styles.timeRangeButtonSelected]}
-          onPress={() => handleTimeRangeChange('7D')}
-        >
-          <Text
-            style={[
-              styles.timeRangeButtonText,
-              timeRange === '7D' && styles.timeRangeButtonTextSelected,
-            ]}
-          >
-            {t('home.timeRange.7d')}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.timeRangeButton, timeRange === '30D' && styles.timeRangeButtonSelected]}
-          onPress={() => handleTimeRangeChange('30D')}
-        >
-          <Text
-            style={[
-              styles.timeRangeButtonText,
-              timeRange === '30D' && styles.timeRangeButtonTextSelected,
-            ]}
-          >
-            {t('home.timeRange.30d')}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.timeRangeButton, timeRange === 'ALL' && styles.timeRangeButtonSelected]}
-          onPress={() => handleTimeRangeChange('ALL')}
-        >
-          <Text
-            style={[
-              styles.timeRangeButtonText,
-              timeRange === 'ALL' && styles.timeRangeButtonTextSelected,
-            ]}
-          >
-            {t('home.timeRange.all')}
-          </Text>
-        </Pressable>
-      </View>
-
-      {/* KPI Summary Card */}
-      {!loadingReceipts && kpiData && (
-        <View style={styles.kpiCard}>
-          <View style={styles.kpiRow}>
-            <View style={styles.kpiItem}>
-              <Text style={styles.kpiLabel}>{t('home.kpi.totalSpending')}</Text>
-              <Text style={styles.kpiValue}>
-                {formatJPY(kpiData.totalSpending)}
-              </Text>
-            </View>
-            <View style={styles.kpiItem}>
-              <Text style={styles.kpiLabel}>{t('home.kpi.topCategory')}</Text>
-              {kpiData.topCategory ? (
-                <>
-                  <Text style={styles.kpiValue} numberOfLines={2}>
-                    {(() => {
-                      const lab = getCategoryLabel(kpiData.topCategory);
-                      return lab && lab !== kpiData.topCategory ? lab : t('analysisV2.labels.other');
-                    })()}
-                  </Text>
-                  <Text style={styles.kpiSubValue} numberOfLines={1}>
-                    {`${Math.round(kpiData.topCategoryPct)}% · ${formatJPY(kpiData.topCategoryAmount)}`}
-                  </Text>
-                </>
-              ) : (
-                <Text style={styles.kpiValue}>{t('home.kpi.none')}</Text>
-              )}
-            </View>
-            <View style={styles.kpiItem}>
-              <Text style={styles.kpiLabel}>{t('home.kpi.pending')}</Text>
-              {uncategorizedSummary.count > 0 ? (
-                <Text style={styles.kpiValue} numberOfLines={1}>
-                  {t('home.kpi.pendingValue', {
-                    count: String(uncategorizedSummary.count),
-                    amount: formatJPY(uncategorizedSummary.total),
-                  })}
-                </Text>
-              ) : (
-                <Text style={styles.kpiValue}>{t('home.kpi.none')}</Text>
-              )}
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* 饼图 */}
-      {!loadingReceipts && (
-        <View style={styles.pieChartContainer}>
-          {totalAmount > 0 ? (
-            <>
-              <PieChart data={categoryData} total={totalAmount} />
-              
-              {/* 类别列表 - 只显示前5个 */}
-              <View style={styles.categoryList}>
-                {topCategories.map((item) => {
-                  const color = getCategoryColor(item.category);
-                  return (
-                    <View key={item.category} style={styles.categoryListItem}>
-                      <View style={[styles.categoryDot, { backgroundColor: color }]} />
-                      <Text style={styles.categoryName}>{getCategoryLabel(item.category)}</Text>
-                      <Text style={styles.categoryAmount}>
-                        {formatJPY(item.amount)}
-                      </Text>
-                      <Text style={styles.categoryPercentage}>
-                        {Math.round(item.percentage)}%
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-
-            </>
-          ) : (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>{t('home.pieChart.emptyData')}</Text>
-            </View>
-          )}
-        </View>
-      )}
+        <ProgressiveHomeInsights
+          experience={homeExperience}
+          loading={loadingReceipts}
+          scanning={scanning}
+          processingProgress={processingProgress}
+          onScan={handleScanReceipt}
+          onRecentPurchasePress={handleRecentPurchasePress}
+          onProductPress={handleProductPress}
+        />
       </ScrollView>
 
-      {/* Sticky Scan Button */}
-      <View
-        style={[styles.stickyButtonContainer, { paddingBottom: insets.bottom + 16 }]}
-        onLayout={(e) => setStickyHeight(e.nativeEvent.layout.height)}
-      >
-        {pendingReview.pendingCount > 0 && pendingReview.nextDraftId && (
+      {pendingReview.pendingCount > 0 && pendingReview.nextDraftId && (
+        <View
+          style={[
+            styles.stickyButtonContainer,
+            { paddingBottom: insets.bottom + 12 },
+          ]}
+          onLayout={(e) => setStickyHeight(e.nativeEvent.layout.height)}
+        >
           <Pressable
             style={[styles.continueReviewCard, scanning && styles.scanButtonDisabled]}
             onPress={handleContinueReview}
@@ -1303,24 +1188,8 @@ export default function HomeScreen() {
               <Text style={styles.continueReviewBtnText}>{t('home.continueReviewButton')}</Text>
             </View>
           </Pressable>
-        )}
-        <Pressable
-          style={[styles.scanButton, scanning && styles.scanButtonDisabled]}
-          onPress={handleScanReceipt}
-          disabled={scanning}
-        >
-          <Text style={styles.scanButtonText}>
-            {processingProgress
-              ? t('home.scan.processingMulti', {
-                  current: processingProgress.current,
-                  total: processingProgress.total,
-                })
-              : scanning
-              ? t('home.scan.processing')
-              : t('home.scan.button')}
-          </Text>
-        </Pressable>
-      </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1328,10 +1197,11 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
+    backgroundColor: '#f7f8fa',
   },
   container: {
-    paddingTop: 80,
-    paddingHorizontal: 24,
+    paddingTop: 64,
+    paddingHorizontal: 20,
     paddingBottom: 40,
   },
   title: {
@@ -1554,24 +1424,24 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: '#fff',
-    paddingHorizontal: 24,
-    paddingTop: 12,
+    paddingHorizontal: 20,
+    paddingTop: 10,
     paddingBottom: 40,
     borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
+    borderTopColor: '#e7e9ec',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
   continueReviewCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff7e6',
+    backgroundColor: '#f1f6ff',
     borderWidth: 1,
-    borderColor: '#f0c36d',
-    borderRadius: 12,
+    borderColor: '#d4e4fb',
+    borderRadius: 14,
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginBottom: 12,
@@ -1583,15 +1453,15 @@ const styles = StyleSheet.create({
   continueReviewTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#7a5200',
+    color: '#1f3655',
   },
   continueReviewSubtitle: {
     fontSize: 13,
-    color: '#9a7320',
+    color: '#61738b',
     marginTop: 2,
   },
   continueReviewBtn: {
-    backgroundColor: '#f5a623',
+    backgroundColor: '#1677ff',
     borderRadius: 10,
     paddingVertical: 9,
     paddingHorizontal: 14,

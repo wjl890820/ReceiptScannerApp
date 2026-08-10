@@ -13,6 +13,51 @@
   "home": {
     "title": "Spending Overview",
     "subtitle": "Automatically generated from receipts",
+    "progressive": {
+      "title": "Home",
+      "subtitle": "Record purchases and discover your shopping trends",
+      "scan": {
+        "eyebrow": "QUICK RECORD",
+        "title": "Scan a shopping receipt",
+        "subtitle": "Take a photo or import from your library, including multiple receipts.",
+        "support": "Supports receipts from Japanese supermarkets and convenience stores"
+      },
+      "empty": {
+        "title": "Scan your first receipt to start your shopping record",
+        "subtitle": "More records make recent shopping changes easier to spot."
+      },
+      "recent": {
+        "title": "Recent Purchase",
+        "items": "{count} items"
+      },
+      "progress": {
+        "section": "Record Progress",
+        "title": "Next insight",
+        "unlockRecent": "Record {count} more to unlock recent shopping analysis.",
+        "unlockFrequent": "Record {count} more to discover frequent products.",
+        "unlockProfile": "Record {count} more to create your shopping profile.",
+        "profileEstablished": "Shopping profile established",
+        "profileEstablishedHint": "The profile below is based only on recorded purchases."
+      },
+      "insight": {
+        "title": "Recent Insights",
+        "total": "Last 3 total",
+        "average": "Average per purchase",
+        "category": "Category mix"
+      },
+      "frequent": {
+        "title": "Frequent Products",
+        "occurrences": "Recorded in {count} purchases",
+        "quantity": "{count} items total",
+        "preparing": "There are not yet enough recorded products for a reliable frequent list."
+      },
+      "profile": {
+        "title": "Shopping Profile",
+        "category": "Category mix of recorded purchases",
+        "frequency": "Recorded purchases average about {days} days apart."
+      },
+      "analyticsUnavailable": "Shopping insights are temporarily unavailable. You can still scan receipts."
+    },
     "timeRange": {
       "7d": "7 days",
       "30d": "30 days",

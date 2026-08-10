@@ -13,6 +13,51 @@
   "home": {
     "title": "支出構成の概要",
     "subtitle": "レシートから自動分析",
+    "progressive": {
+      "title": "ホーム",
+      "subtitle": "買い物を記録して、傾向を見つけましょう",
+      "scan": {
+        "eyebrow": "かんたん記録",
+        "title": "買い物レシートをスキャン",
+        "subtitle": "撮影またはアルバムから読み込み。複数枚も選択できます。",
+        "support": "日本のスーパー・コンビニのレシートに対応"
+      },
+      "empty": {
+        "title": "最初のレシートをスキャンして、買い物記録を始めましょう",
+        "subtitle": "記録が増えると、最近の買い物の変化が見つかります。"
+      },
+      "recent": {
+        "title": "最近の買い物",
+        "items": "商品 {count} 点"
+      },
+      "progress": {
+        "section": "記録の進み具合",
+        "title": "次のインサイト",
+        "unlockRecent": "あと {count} 枚で、最近の買い物分析が見られます。",
+        "unlockFrequent": "あと {count} 枚で、よく買う商品が見つかります。",
+        "unlockProfile": "あと {count} 枚で、買い物プロフィールができます。",
+        "profileEstablished": "買い物プロフィールができました",
+        "profileEstablishedHint": "以下は記録済みの買い物だけに基づく内容です。"
+      },
+      "insight": {
+        "title": "最近のインサイト",
+        "total": "直近3回の合計",
+        "average": "1回あたりの平均",
+        "category": "カテゴリ構成"
+      },
+      "frequent": {
+        "title": "よく買う商品",
+        "occurrences": "{count} 回の買い物で記録",
+        "quantity": "合計 {count} 点",
+        "preparing": "信頼できる一覧を作るには、商品の記録がまだ足りません。"
+      },
+      "profile": {
+        "title": "買い物プロフィール",
+        "category": "記録済みの買い物のカテゴリ構成",
+        "frequency": "記録済みの買い物の平均間隔は約 {days} 日です。"
+      },
+      "analyticsUnavailable": "買い物インサイトを読み込めませんでした。レシートのスキャンは続けられます。"
+    },
     "timeRange": {
       "7d": "7日",
       "30d": "30日",

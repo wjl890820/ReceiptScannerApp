@@ -13,6 +13,51 @@
   "home": {
     "title": "消费结构概览",
     "subtitle": "基于小票自动生成",
+    "progressive": {
+      "title": "首页",
+      "subtitle": "记录购物，发现你的购物趋势",
+      "scan": {
+        "eyebrow": "快速记录",
+        "title": "扫描一张购物小票",
+        "subtitle": "拍照或从相册导入，可一次选择多张小票。",
+        "support": "支持日本超市与便利店小票"
+      },
+      "empty": {
+        "title": "扫描第一张小票，开始建立你的购物记录",
+        "subtitle": "记录越完整，越容易发现近期的购物变化。"
+      },
+      "recent": {
+        "title": "近期购物",
+        "items": "{count} 件商品"
+      },
+      "progress": {
+        "section": "记录进度",
+        "title": "下一项洞察",
+        "unlockRecent": "再记录 {count} 张，解锁近期购物分析。",
+        "unlockFrequent": "再记录 {count} 张，发现常购商品。",
+        "unlockProfile": "再记录 {count} 张，生成购物画像。",
+        "profileEstablished": "购物画像已建立",
+        "profileEstablishedHint": "以下画像仅基于已记录的购物。"
+      },
+      "insight": {
+        "title": "近期洞察",
+        "total": "最近 3 次总支出",
+        "average": "平均每次支出",
+        "category": "分类结构"
+      },
+      "frequent": {
+        "title": "常购商品",
+        "occurrences": "记录于 {count} 次购物",
+        "quantity": "共 {count} 件",
+        "preparing": "已记录的商品还不足以形成可靠的常购列表。"
+      },
+      "profile": {
+        "title": "购物画像",
+        "category": "已记录购物的分类构成",
+        "frequency": "已记录购物的平均间隔约为 {days} 天。"
+      },
+      "analyticsUnavailable": "购物洞察暂时无法载入，你仍可继续扫描小票。"
+    },
     "timeRange": {
       "7d": "7天",
       "30d": "30天",

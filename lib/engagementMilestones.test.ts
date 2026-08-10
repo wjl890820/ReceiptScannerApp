@@ -19,6 +19,7 @@ import {
   buildTenReceiptMilestone,
   buildThreeReceiptMilestone,
   countSupportedReceipts,
+  evaluateCurrentEngagementMilestoneWithDb,
   evaluateEngagementMilestonesWithDb,
   evaluateSavedReceiptMilestoneWithDb,
   getEngagementMilestoneStatus,
@@ -470,6 +471,35 @@ describe('tenth receipt shopping profile', () => {
 });
 
 describe('database evaluation and graceful degradation', () => {
+  it.each([
+    [0, null],
+    [1, 1],
+    [3, 3],
+    [5, 5],
+    [10, 10],
+    [11, 10],
+  ] as const)(
+    'builds the current Home milestone view at count %s',
+    async (count, milestone) => {
+      const receipts = Array.from({ length: count }, (_, index) =>
+        receipt(`r${index + 1}`)
+      );
+      const db: EngagementMilestoneDatabase = {
+        async getAllAsync<T>(source: string) {
+          return (/FROM receipt_items/i.test(source) ? [] : receipts) as T[];
+        },
+      };
+      const evaluation = await evaluateCurrentEngagementMilestoneWithDb(db, {
+        generatedAt: 888,
+      });
+      expect(evaluation.status.supportedReceiptCount).toBe(count);
+      expect(evaluation.currentResult?.milestone ?? null).toBe(milestone);
+      if (evaluation.currentResult) {
+        expect(evaluation.currentResult.generatedAt).toBe(888);
+      }
+    }
+  );
+
   it('keeps supported count accurate when product index coverage is incomplete', async () => {
     const receipts = [1, 2, 3, 4, 5].map((number) =>
       withItems(receipt(`r${number}`), [
