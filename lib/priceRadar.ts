@@ -1,5 +1,6 @@
 // lib/priceRadar.ts
 import type { ReceiptRow } from './db';
+import { getReceiptItems } from './receiptItems';
 import { normalizeProductName, normalizeMerchantName, calculateUnitPrice } from './productNormalizer';
 
 export type ProductPriceRecord = {
@@ -44,8 +45,7 @@ export function extractProductPrices(receipts: ReceiptRow[]): ProductPriceRecord
     try {
       if (!receipt || !receipt.id) continue;
 
-      const analysis = JSON.parse(receipt.analysis_json || '{}');
-      const items = Array.isArray(analysis.items) ? analysis.items : [];
+      const items = getReceiptItems(receipt) as any[];
       
       const merchantKey = normalizeMerchantName(
         receipt.merchant_normalized || receipt.merchant_raw || ''
@@ -248,8 +248,7 @@ export function computeCategoryPriceIndex(
       try {
         if (!receipt || !receipt.id) continue;
 
-        const analysis = JSON.parse(receipt.analysis_json || '{}');
-        const items = Array.isArray(analysis.items) ? analysis.items : [];
+        const items = getReceiptItems(receipt) as any[];
         const merchantKey = normalizeMerchantName(
           receipt.merchant_normalized || receipt.merchant_raw || ''
         );

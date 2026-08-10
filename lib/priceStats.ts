@@ -1,4 +1,5 @@
 import { listReceipts, type ReceiptRow } from './db';
+import { getReceiptItems } from './receiptItems';
 
 export type CanonicalPriceStat = {
   canonical_name: string;
@@ -20,17 +21,8 @@ export async function getCanonicalNamePriceStats(limit = 50): Promise<CanonicalP
   const map = new Map<string, { sum: number; count: number; min: number; max: number; lastAt: number; lastPrice: number }>();
 
   for (const r of receipts) {
-    let items: any[] = [];
-    try {
-      if (r.user_edited === 1 && r.user_items_json) {
-        items = JSON.parse(r.user_items_json || '[]');
-      } else {
-        const analysis = JSON.parse(r.analysis_json || '{}');
-        items = Array.isArray(analysis?.items) ? analysis.items : [];
-      }
-    } catch {
-      continue;
-    }
+    const items = getReceiptItems(r) as any[];
+    if (!Array.isArray(items) || items.length === 0) continue;
 
     const at = (r.transaction_at ?? (r as any).scanned_at ?? r.created_at) || r.created_at;
     for (const it of items) {

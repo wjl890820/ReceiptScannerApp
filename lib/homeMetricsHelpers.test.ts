@@ -10,10 +10,6 @@ import {
   type CategoryData,
 } from './homeMetricsHelpers';
 
-jest.mock('./groceryDetector', () => ({
-  isGroceryMerchant: jest.fn(() => true),
-}));
-
 jest.mock('./categories', () => ({
   isGroceryCategory: jest.fn((cat: string) => cat !== 'uncategorized' && cat.length > 0),
   isExcludedFromAnalytics: jest.fn(() => false),
@@ -32,6 +28,7 @@ function minimalReceipt(overrides: Partial<ReceiptRow> = {}): ReceiptRow {
     analysis_json: '{}',
     merchant_raw: 'Store',
     merchant_normalized: 'store',
+    merchant_type: 'supermarket',
     user_edited: 0,
     final_total: null,
     final_category: null,

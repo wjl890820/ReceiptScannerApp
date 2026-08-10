@@ -1,16 +1,23 @@
 // lib/statsCalculator.ts
 import type { ReceiptRow } from './db';
+import { getReceiptItems } from './receiptItems';
 import { normalizeMerchantName } from './productNormalizer';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
+import { isV1SupportedReceipt } from './merchantType';
 import { resolveItemFinalCategory } from './homeMetricsHelpers';
+import type { ReceiptItem } from './receiptAnalyzer';
 
 export type TimeRange = 'week' | 'month' | 'all';
 
 export type WeeklyMonthlyStats = {
   totalSpend: number; // All receipts total
-  grocerySpend: number; // Grocery receipts only
-  topCategories: Array<{ category: string; amount: number }>; // Grocery categories only
+  /** Legacy：仅 supermarket 小票合计（不含 convenience） */
+  grocerySpend: number;
+  /** V1：supermarket + convenience 小票合计 */
+  supportedSpend: number;
+  supportedReceiptCount: number;
+  topCategories: Array<{ category: string; amount: number }>; // V1 supported receipts only
   topMerchants: Array<{ merchant: string; count: number; total: number }>;
   highestSingleReceipt: { amount: number; merchant: string; date: number } | null;
   mostFrequentMerchant: { merchant: string; count: number } | null;
@@ -66,18 +73,22 @@ export function calculateStats(
   // Total spend (all receipts)
   const totalSpend = filteredReceipts.reduce((sum, r) => sum + (r.total || 0), 0);
 
-  // Grocery spend (grocery receipts only)
+  // Grocery spend (supermarket only — legacy field, unchanged semantics)
   const groceryReceipts = filteredReceipts.filter(isGroceryReceipt);
   const grocerySpend = groceryReceipts.reduce((sum, r) => sum + (r.total || 0), 0);
 
-  // Category statistics (grocery receipts only, exclude non_grocery and uncategorized)
+  // V1 supported spend (supermarket + convenience)
+  const supportedReceipts = filteredReceipts.filter(isV1SupportedReceipt);
+  const supportedSpend = supportedReceipts.reduce((sum, r) => sum + (r.total || 0), 0);
+  const supportedReceiptCount = supportedReceipts.length;
+
+  // Category statistics (V1 supported receipts only)
   const categoryMap = new Map<string, number>();
   let uncategorizedCount = 0;
   let uncategorizedTotal = 0;
-  for (const receipt of groceryReceipts) {
+  for (const receipt of supportedReceipts) {
     try {
-      const analysis = JSON.parse(receipt.analysis_json || '{}');
-      const items = analysis.items || [];
+      const items = getReceiptItems(receipt) as ReceiptItem[];
       for (const item of items) {
         const amount = Number(item.lineTotal) || 0;
 
@@ -156,6 +167,8 @@ export function calculateStats(
   return {
     totalSpend,
     grocerySpend,
+    supportedSpend,
+    supportedReceiptCount,
     topCategories,
     topMerchants,
     highestSingleReceipt,

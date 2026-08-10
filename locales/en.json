@@ -371,6 +371,7 @@
     "stats": {
       "totalSpend": "Total Spend",
       "grocerySpend": "Grocery Spend",
+      "supportedSpend": "Supermarket & convenience spend",
       "groceryOnly": "Grocery receipts only",
       "topCategories": "Top Categories",
       "topMerchants": "Top Merchants",
@@ -460,6 +461,10 @@
   },
   "grocery": {
     "onlyNote": "Category breakdown is shown for grocery receipts only."
+  },
+  "v1": {
+    "supportedNote": "Category breakdown includes supermarket and convenience receipts.",
+    "priceRadarSupermarketOnly": "Price Radar currently uses supermarket data only"
   },
   "analysisV2": {
     "sections": {

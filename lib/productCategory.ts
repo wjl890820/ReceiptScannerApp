@@ -39,6 +39,27 @@ export const CORE_PRODUCT_CATEGORIES: readonly ProductCategory[] = [
   'pet_care',
 ];
 
+/**
+ * V1 首发活跃分类（新写入数据的正常消费类别 + 待确认状态）。
+ * uncategorized 是状态，不是正常消费类别。
+ */
+export const V1_ACTIVE_PRODUCT_CATEGORIES: readonly ProductCategory[] = [
+  'food_ingredients',
+  'ready_to_eat',
+  'snacks_drinks',
+  'household',
+  'other',
+  'uncategorized',
+];
+
+/**
+ * legacy-compatible / inactive-for-new-V1：旧数据可读，新 V1 首发不主动归类到此。
+ */
+export const V1_LEGACY_COMPAT_PRODUCT_CATEGORIES: readonly ProductCategory[] = [
+  'personal_care',
+  'pet_care',
+];
+
 function isProductCategory(v: string): v is ProductCategory {
   return (PRODUCT_CATEGORIES as readonly string[]).includes(v);
 }

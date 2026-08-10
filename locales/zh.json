@@ -371,6 +371,7 @@
     "stats": {
       "totalSpend": "总支出",
       "grocerySpend": "生鲜支出",
+      "supportedSpend": "超市·便利店支出",
       "groceryOnly": "仅生鲜收据",
       "topCategories": "主要类别",
       "topMerchants": "主要商家",
@@ -460,6 +461,10 @@
   },
   "grocery": {
     "onlyNote": "分类统计仅对“超市小票”显示。"
+  },
+  "v1": {
+    "supportedNote": "分类统计包含超市与便利店小票。",
+    "priceRadarSupermarketOnly": "价格雷达暂时仅使用超市数据"
   },
   "analysisV2": {
     "sections": {

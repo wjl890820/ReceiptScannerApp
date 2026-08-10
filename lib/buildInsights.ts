@@ -4,6 +4,7 @@
  */
 
 import type { ReceiptRow } from './db';
+import { getReceiptItems } from './receiptItems';
 import { calculateStats, type WeeklyMonthlyStats } from './statsCalculator';
 
 const MS_DAY = 24 * 60 * 60 * 1000;
@@ -28,12 +29,7 @@ function filterByRange(receipts: ReceiptRow[], startMs: number, endMs: number): 
 function countItems(receipts: ReceiptRow[]): number {
   let n = 0;
   for (const r of receipts) {
-    try {
-      const a = JSON.parse(r.analysis_json || '{}');
-      n += Array.isArray(a?.items) ? a.items.length : 0;
-    } catch {
-      /* ignore */
-    }
+    n += getReceiptItems(r).length;
   }
   return n;
 }
@@ -174,10 +170,10 @@ export function buildInsights(
 
 function buildStory(stats: WeeklyMonthlyStats): StoryOutput {
   const top = stats.topCategories[0];
-  if (!top || stats.grocerySpend <= 0) {
+  if (!top || stats.supportedSpend <= 0) {
     return { type: 'fallback', fallbackKey: 'analysisV2.story.fallback' };
   }
-  const pct = Math.round((100 * top.amount) / stats.grocerySpend);
+  const pct = Math.round((100 * top.amount) / stats.supportedSpend);
   const conclusionKey = 'analysisV2.story.conclusion';
   const conclusionParams = { cat: top.category, pct, amt: Math.round(top.amount) };
   const explanationKey = pickExplanationKey(top.category);
@@ -216,9 +212,9 @@ function buildChanges(
 
   const topNow = current.topCategories[0];
   const topPrev = previous.topCategories[0];
-  if (topNow && topPrev && current.grocerySpend > 0 && previous.grocerySpend > 0) {
-    const pctNow = (100 * topNow.amount) / current.grocerySpend;
-    const pctPrev = (100 * topPrev.amount) / previous.grocerySpend;
+  if (topNow && topPrev && current.supportedSpend > 0 && previous.supportedSpend > 0) {
+    const pctNow = (100 * topNow.amount) / current.supportedSpend;
+    const pctPrev = (100 * topPrev.amount) / previous.supportedSpend;
     const sameCat = topNow.category === topPrev.category;
     if (sameCat) {
       const diff = pctNow - pctPrev;
@@ -261,11 +257,11 @@ function buildChanges(
 
 function buildTips(stats: WeeklyMonthlyStats): TipOutput[] {
   const tips: TipOutput[] = [];
-  if (stats.grocerySpend <= 0) return tips;
+  if (stats.supportedSpend <= 0) return tips;
 
   const byCat = new Map<string, number>();
   for (const c of stats.topCategories) byCat.set(c.category, c.amount);
-  const pct = (cat: string) => (100 * (byCat.get(cat) ?? 0)) / stats.grocerySpend;
+  const pct = (cat: string) => (100 * (byCat.get(cat) ?? 0)) / stats.supportedSpend;
 
   const quickPct = pct('quick_meals') + pct('snacks_sweets');
   const drinksPct = pct('non_alcoholic_drinks') + pct('beverages_other') + pct('alcohol');

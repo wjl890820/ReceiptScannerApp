@@ -3,6 +3,7 @@
  */
 import type { ReceiptRow } from './db';
 import type { CategoryData } from './homeMetricsHelpers';
+import { getReceiptItems } from './receiptItems';
 import { getCategoryLabel } from './categoryPalette';
 import { formatJPY } from './formatJPY';
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
@@ -84,16 +85,8 @@ export function computeInsightContext(
 
   const receiptTotals: number[] = [];
   for (const receipt of receipts) {
-    let items: ReceiptItem[] | null = null;
-
-    if (receipt.user_items_json) {
-      items = safeParseItems(receipt.user_items_json);
-    } else {
-      const analysis = safeParseAnalysis(receipt.analysis_json);
-      items = analysis?.items ?? null;
-    }
-
-    if (!items || !Array.isArray(items)) continue;
+    const items = getReceiptItems(receipt) as ReceiptItem[];
+    if (!Array.isArray(items) || items.length === 0) continue;
 
     const receiptTotal = items.reduce((sum, item) => {
       const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;

@@ -371,6 +371,7 @@
     "stats": {
       "totalSpend": "総支出",
       "grocerySpend": "食品支出",
+      "supportedSpend": "スーパー・コンビニ支出",
       "groceryOnly": "食品レシートのみ",
       "topCategories": "主要カテゴリ",
       "topMerchants": "主要店舗",
@@ -460,6 +461,10 @@
   },
   "grocery": {
     "onlyNote": "カテゴリ内訳はスーパーのレシートのみ表示されます。"
+  },
+  "v1": {
+    "supportedNote": "カテゴリ内訳はスーパー・コンビニのレシートを含みます。",
+    "priceRadarSupermarketOnly": "価格レーダーは現時点スーパーのみ"
   },
   "analysisV2": {
     "sections": {

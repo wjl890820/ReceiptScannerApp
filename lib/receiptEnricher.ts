@@ -4,7 +4,11 @@ import { learnCategoryMapping, getLearnedCategoryEntry } from './categoryLearner
 import { resolveProductCategoryRuntime, mapKnownProductCategory, classifyItemByName } from './productCategory';
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
-import { isGroceryMerchant } from './groceryDetector';
+import {
+  detectMerchantType,
+  isV1SupportedMerchantType,
+  type MerchantType,
+} from './merchantType';
 import {
   classifyItem,
   resetClassificationStats,
@@ -14,7 +18,13 @@ import {
   type ClassifyInput,
 } from './categoryClassifier';
 import { getLastClassifyError, clearLastClassifyError } from './categoryAiClient';
-import { runBatchAiFallback } from './categoryBatchAi';
+import { runBatchAiFallback, selectUncategorizedItems } from './categoryBatchAi';
+import { isBatchAiClassificationEnabled } from './env';
+import {
+  buildClassificationTelemetry,
+  countClassificationBuckets,
+  logClassificationTelemetryDev,
+} from './classificationTelemetry';
 import { buildAnalysisTags, mapLegacyCategoryToV1, mapV1ToLegacyCategory } from './categoryTaxonomyV1';
 import { buildReceiptStructuredAnalysis } from './structuredAnalysisEngine';
 import { buildReceiptAnalysisV1 } from './growthAnalysisEngineV1';
@@ -281,10 +291,13 @@ export async function applyCategoriesWithLearning(
   const items = Array.isArray(analysis.items) ? analysis.items : [];
   const enrichedItems: ReceiptItem[] = [];
 
-  // Detect if this is a grocery receipt
+  // V1 商户类型：supermarket + convenience 均进入正常分类 pipeline；other/unknown 保守 uncategorized。
   const merchantRaw = analysis.merchant || '';
   const merchantNormalized = (analysis as any).merchant_normalized || null;
-  const isGrocery = isGroceryMerchant(merchantRaw, merchantNormalized);
+  const merchantType: MerchantType = detectMerchantType(merchantRaw, merchantNormalized);
+  const isV1Supported = isV1SupportedMerchantType(merchantType);
+  // Legacy compatibility：is_grocery 仅表示 supermarket（勿用于 V1 analytics 支持判断）。
+  const isGroceryLegacy = merchantType === 'supermarket';
 
   resetClassificationStats();
   startReceiptClassification();
@@ -312,11 +325,8 @@ export async function applyCategoriesWithLearning(
     let classificationConfidence = 0;
     let classificationOut: any = null;
 
-    if (!isGrocery) {
-      // 非 grocery 收据（如便利店/药妆店）：店铺级属性不应污染商品分类。
-      // 之前统一打成 'non_grocery'（显示为"非超市"），会作为商品分类出现在审核页。
-      // 改为 'uncategorized'：分析口径仍按收据级 is_grocery 排除（首页/统计均如此），
-      // 同时让用户可在审核页手动归类并触发学习。
+    if (!isV1Supported) {
+      // other / unknown：不支持 V1 核心零售，保守 uncategorized（不进入 V1 analytics）。
       category = 'uncategorized';
       classificationStatus = 'ok';
       classificationConfidence = 1;
@@ -381,81 +391,82 @@ export async function applyCategoriesWithLearning(
       }
     }
 
-    // 解析最终展示/存储用的"新一级分类"（item.category），按运行时优先级：
-    //   用户学习 → alias/学习映射 → 具体商品名规则(productCategory.ts) → 本地规则(itemRulesV1)
-    //   → 宽泛 dictionary → OCR categoryKey(辅助) → uncategorized
-    // 关键修复：宽泛 dictionary 的 バター→food_ingredients 不得覆盖具体商品名规则
-    //   （シュガーバター=snacks_drinks）；OCR categoryKey 仅作辅助 fallback
-    //   （とりきも 不因 OCR=ready_to_eat 而被覆盖）。
-    // 本地学习对便利店(非 grocery)商品也生效（分类器分支可能被跳过）。
-    const ocrCategoryKey = typeof (it as any)?.categoryKey === 'string' ? (it as any).categoryKey : null;
-    // 仅用户手动修改过的学习(source='user_edit')才作为最高优先 learned；
-    // legacy/auto 脏数据不得高于 name_rule（修复 シュガーバター 被 mapping 提前判成食材）。
-    let learnedRaw: string | null = null;
-    let learnedSource: string | null = null;
-    try {
-      const learnedEntry = await getLearnedCategoryEntry(
-        norm.normalized_name,
-        merchantRaw || merchantNormalized || null
-      );
-      learnedSource = learnedEntry?.source ?? null;
-      learnedRaw = learnedEntry && learnedEntry.source === 'user_edit' ? learnedEntry.category : null;
-    } catch {
-      learnedRaw = null;
-      learnedSource = null;
-    }
-    // 按分类器来源拆分候选，保证 dictionary 不抢在具体商品名规则之前。
-    const clsSource = classificationOut?.source as string | undefined;
-    const aliasOrLearned =
-      clsSource === 'alias' || clsSource === 'mapping' ? category : null;
-    // 'name_rule' = classifyItem 内部命中 productCategory 具体商品名规则，按规则候选处理。
-    const ruleCandidate = clsSource === 'rules' || clsSource === 'name_rule' ? category : null;
-    // dictionary 与 fallback（OCR 兜底覆盖到的 legacy）都视为“宽泛”候选。
-    const dictionaryCandidate =
-      clsSource === 'dictionary' || clsSource === 'fallback' ? category : null;
-    const productCategory = resolveProductCategoryRuntime({
-      itemName: name,
-      learned: learnedRaw,
-      aliasOrLearned,
-      rule: ruleCandidate,
-      dictionary: dictionaryCandidate,
-      ocrKey: ocrCategoryKey,
-    });
+    // 解析最终展示/存储用的"新一级分类"（item.category）
+    let productCategory: ReturnType<typeof resolveProductCategoryRuntime>;
+    if (!isV1Supported) {
+      // other / unknown：保守 uncategorized，不得被 OCR key / name rule 覆盖。
+      productCategory = 'uncategorized';
+    } else {
+      // 优先级：用户学习 → alias → 商品名规则 → rules → dictionary → OCR key → uncategorized
+      const ocrCategoryKey = typeof (it as any)?.categoryKey === 'string' ? (it as any).categoryKey : null;
+      // 仅用户手动修改过的学习(source='user_edit')才作为最高优先 learned；
+      // legacy/auto 脏数据不得高于 name_rule（修复 シュガーバター 被 mapping 提前判成食材）。
+      let learnedRaw: string | null = null;
+      let learnedSource: string | null = null;
+      try {
+        const learnedEntry = await getLearnedCategoryEntry(
+          norm.normalized_name,
+          merchantRaw || merchantNormalized || null
+        );
+        learnedSource = learnedEntry?.source ?? null;
+        learnedRaw = learnedEntry && learnedEntry.source === 'user_edit' ? learnedEntry.category : null;
+      } catch {
+        learnedRaw = null;
+        learnedSource = null;
+      }
+      // 按分类器来源拆分候选，保证 dictionary 不抢在具体商品名规则之前。
+      const clsSource = classificationOut?.source as string | undefined;
+      const aliasOrLearned =
+        clsSource === 'alias' || clsSource === 'mapping' ? category : null;
+      // 'name_rule' = classifyItem 内部命中 productCategory 具体商品名规则，按规则候选处理。
+      const ruleCandidate = clsSource === 'rules' || clsSource === 'name_rule' ? category : null;
+      // dictionary 与 fallback（OCR 兜底覆盖到的 legacy）都视为“宽泛”候选。
+      const dictionaryCandidate =
+        clsSource === 'dictionary' || clsSource === 'fallback' ? category : null;
+      productCategory = resolveProductCategoryRuntime({
+        itemName: name,
+        learned: learnedRaw,
+        aliasOrLearned,
+        rule: ruleCandidate,
+        dictionary: dictionaryCandidate,
+        ocrKey: ocrCategoryKey,
+      });
 
-    // 临时开发日志（__DEV__）：
-    //  - 通用：分类器结果与最终结果不一致（发生纠偏）时打印一行，低噪声。
-    //  - targeted：商品名含 シュガーバター / バター 时，打印完整来源，便于定位 mapping 污染。
-    if (__DEV__) {
-      const classifierCategory = mapKnownProductCategory(category) ?? null;
-      const nameRuleCategory = classifyItemByName(name);
-      const isButterTarget = name.includes('シュガーバター') || name.includes('バター');
-      if (isButterTarget) {
-        // eslint-disable-next-line no-console
-        console.log('[CategoryResolve][butter]', {
-          name,
-          rawCategory: (it as any)?.category ?? null,
-          categoryKey: (it as any)?.categoryKey ?? null,
-          learnedCategory: learnedRaw,
-          learnedSource,
-          aliasCategory: aliasOrLearned,
-          classifierCategory,
-          classifierSource: clsSource ?? null,
-          nameRuleCategory,
-          dictionaryCategory: dictionaryCandidate,
-          ocrCategoryKey,
-          finalCategory: productCategory,
-          classification_source: clsSource ?? null,
-        });
-      } else if (classifierCategory !== productCategory) {
-        // eslint-disable-next-line no-console
-        console.log('[CategoryResolve]', {
-          name,
-          classifierSource: clsSource ?? null,
-          classifierCategory,
-          nameRuleCategory,
-          ocrCategoryKey,
-          finalCategory: productCategory,
-        });
+      // 临时开发日志（__DEV__）：
+      //  - 通用：分类器结果与最终结果不一致（发生纠偏）时打印一行，低噪声。
+      //  - targeted：商品名含 シュガーバター / バター 时，打印完整来源，便于定位 mapping 污染。
+      if (__DEV__) {
+        const classifierCategory = mapKnownProductCategory(category) ?? null;
+        const nameRuleCategory = classifyItemByName(name);
+        const isButterTarget = name.includes('シュガーバター') || name.includes('バター');
+        if (isButterTarget) {
+          // eslint-disable-next-line no-console
+          console.log('[CategoryResolve][butter]', {
+            name,
+            rawCategory: (it as any)?.category ?? null,
+            categoryKey: (it as any)?.categoryKey ?? null,
+            learnedCategory: learnedRaw,
+            learnedSource,
+            aliasCategory: aliasOrLearned,
+            classifierCategory,
+            classifierSource: clsSource ?? null,
+            nameRuleCategory,
+            dictionaryCategory: dictionaryCandidate,
+            ocrCategoryKey,
+            finalCategory: productCategory,
+            classification_source: clsSource ?? null,
+          });
+        } else if (classifierCategory !== productCategory) {
+          // eslint-disable-next-line no-console
+          console.log('[CategoryResolve]', {
+            name,
+            classifierSource: clsSource ?? null,
+            classifierCategory,
+            nameRuleCategory,
+            ocrCategoryKey,
+            finalCategory: productCategory,
+          });
+        }
       }
     }
 
@@ -577,25 +588,48 @@ export async function applyCategoriesWithLearning(
     console.log('[ScanTiming] classify_end_ms', { id: trace.id, ms: Date.now() - tStart, items: items.length });
   }
 
-  // 批量 AI 兜底：仅对本地分类后仍为 'uncategorized' 的商品，发起“单张小票一次”的
-  // classify-items 请求。失败/超时仅 warn，不影响保存；绝不覆盖本地学习/词典/规则结果。
-  try {
-    const tBatch = Date.now();
-    const batch = await runBatchAiFallback(enrichedItems as any[], {
-      merchantName: merchantRaw || merchantNormalized || undefined,
-    });
-    if (__DEV__) {
-      console.log('[ScanTiming] batch_ai_ms', {
-        id: trace?.id,
-        ms: Date.now() - tBatch,
-        called: batch.called,
-        applied: batch.appliedCount,
-        suggested: batch.suggestedCount,
+  // 批量 AI 兜底（受 ENABLE_BATCH_AI_CLASSIFICATION 控制）：仅 uncategorized → 单票一次 classify-items。
+  const localBuckets = countClassificationBuckets(enrichedItems);
+  const batchAiEnabled = isBatchAiClassificationEnabled();
+  let batchResult: Awaited<ReturnType<typeof runBatchAiFallback>> | null = null;
+  let batchAiItemCount = 0;
+  let batchAiDurationMs: number | undefined;
+
+  if (batchAiEnabled && isV1Supported) {
+    try {
+      const tBatch = Date.now();
+      batchAiItemCount = selectUncategorizedItems(enrichedItems as any[]).length;
+      batchResult = await runBatchAiFallback(enrichedItems as any[], {
+        merchantName: merchantRaw || merchantNormalized || undefined,
       });
+      batchAiDurationMs = Date.now() - tBatch;
+      if (__DEV__) {
+        console.log('[ScanTiming] batch_ai_ms', {
+          id: trace?.id,
+          ms: batchAiDurationMs,
+          called: batchResult.called,
+          applied: batchResult.appliedCount,
+          suggested: batchResult.suggestedCount,
+        });
+      }
+    } catch (e: any) {
+      if (__DEV__) console.warn('[CategoryBatchAI] enrich batch fallback failed:', e?.message);
     }
-  } catch (e: any) {
-    if (__DEV__) console.warn('[CategoryBatchAI] enrich batch fallback failed:', e?.message);
+  } else if (__DEV__) {
+    console.log('[CategoryBatchAI] skipped (ENABLE_BATCH_AI_CLASSIFICATION=false)');
   }
+
+  const classificationTelemetry = buildClassificationTelemetry({
+    items: enrichedItems,
+    localBuckets,
+    batchAiEnabled,
+    batchResult,
+    batchAiItemCount,
+    classificationDurationMs: Date.now() - tStart,
+    batchAiDurationMs,
+    merchantType,
+  });
+  logClassificationTelemetryDev(classificationTelemetry);
 
   const structured = buildReceiptStructuredAnalysis({
     merchant: analysis.merchant,
@@ -611,7 +645,8 @@ export async function applyCategoriesWithLearning(
   return {
     ...analysis,
     items: enrichedItems as any,
-    is_grocery: isGrocery, // Add flag to analysis for later filtering
+    merchant_type: merchantType,
+    is_grocery: isGroceryLegacy, // Legacy：仅 supermarket=true；V1 analytics 用 isV1SupportedReceipt
     analysis_engine_v1: structured,
     analysis_outputs_v1: {
       receipt_level: receiptLevel,
@@ -619,6 +654,7 @@ export async function applyCategoriesWithLearning(
         receipt_template: receiptTemplate,
       },
     },
+    classification_telemetry_v1: classificationTelemetry,
   } as any;
 }
 

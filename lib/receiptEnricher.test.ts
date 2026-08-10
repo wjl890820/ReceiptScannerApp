@@ -10,7 +10,14 @@
 
 // 屏蔽原生依赖：env 走默认值；网络/DB 相关模块 mock 掉。
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
-jest.mock('./groceryDetector', () => ({ isGroceryMerchant: () => true }));
+jest.mock('./env', () => ({
+  isBatchAiClassificationEnabled: jest.fn(() => true),
+  getCategoryAiItemCap: () => 3,
+  getCategoryAiTimeoutMs: () => 3500,
+  getCategoryAiRetries: () => 0,
+  getCategoryBatchAiTimeoutMs: () => 9000,
+  getCategoryBatchAiMaxItems: () => 40,
+}));
 // 可控的学习表 mock：默认无学习记录。测试通过 setMockLearned 注入 {category, source}。
 let mockLearnedEntry: { category: string; source: string | null } | null = null;
 jest.mock('./categoryLearner', () => ({
@@ -23,6 +30,21 @@ function setMockLearned(e: { category: string; source: string | null } | null): 
 }
 jest.mock('./productAlias', () => ({ lookupProductNameAlias: jest.fn(async () => null) }));
 jest.mock('./categoryBatchAi', () => ({
+  selectUncategorizedItems: (items: any[]) => {
+    const out: { index: number; rawName: string }[] = [];
+    if (!Array.isArray(items)) return out;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it || it.category !== 'uncategorized') continue;
+      const rawName =
+        (typeof it.name === 'string' && it.name) ||
+        (typeof it.raw_name === 'string' && it.raw_name) ||
+        '';
+      if (!rawName.trim()) continue;
+      out.push({ index: i, rawName });
+    }
+    return out;
+  },
   runBatchAiFallback: jest.fn(async () => ({ called: false, appliedCount: 0, suggestedCount: 0 })),
 }));
 jest.mock('./categoryAiClient', () => ({
@@ -42,6 +64,8 @@ jest.mock('./productDictionary', () => ({
 
 import { resolveProductCategoryRuntime } from './productCategory';
 import { applyCategoriesWithLearning } from './receiptEnricher';
+import { runBatchAiFallback } from './categoryBatchAi';
+import { isBatchAiClassificationEnabled } from './env';
 
 describe('resolveProductCategoryRuntime: 运行时优先级', () => {
   it('シュガーバター：商品名规则早于宽泛 dictionary(バター→food) 与 OCR', () => {
@@ -173,5 +197,100 @@ describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () =
     const out = await applyCategoriesWithLearning(analysis);
     const cats = (out.items as any[]).map((it) => it.category);
     expect(cats).toEqual(['snacks_drinks', 'snacks_drinks', 'food_ingredients', 'food_ingredients']);
+  });
+});
+
+describe('Phase 2: convenience merchant support', () => {
+  beforeEach(() => {
+    setMockLearned(null);
+    (isBatchAiClassificationEnabled as jest.Mock).mockReturnValue(true);
+    (runBatchAiFallback as jest.Mock).mockClear();
+    (runBatchAiFallback as jest.Mock).mockResolvedValue({
+      called: false,
+      appliedCount: 0,
+      suggestedCount: 0,
+    });
+  });
+
+  async function enrichAtMerchant(
+    merchant: string,
+    name: string,
+    categoryKey = 'ready_to_eat',
+    lineTotal = 100
+  ) {
+    const analysis: any = {
+      merchant,
+      items: [{ name, quantity: 1, unitPrice: lineTotal, lineTotal, categoryKey }],
+      total: lineTotal,
+      tax: 0,
+      currency: 'JPY',
+    };
+    return applyCategoriesWithLearning(analysis);
+  }
+
+  it('FamilyMart + おにぎり → 正常分类 ready_to_eat（非 merchant 强制 uncategorized）', async () => {
+    const out = await enrichAtMerchant('ファミリーマート', 'おにぎり', 'ready_to_eat', 150);
+    expect((out as any).merchant_type).toBe('convenience');
+    expect((out as any).is_grocery).toBe(false);
+    expect((out.items as any[])[0].category).toBe('ready_to_eat');
+  });
+
+  it('FamilyMart + 水 → snacks_drinks（不得因 convenience 全部 ready_to_eat）', async () => {
+    const out = await enrichAtMerchant('ファミリーマート', '水', 'snacks_drinks', 100);
+    expect((out.items as any[])[0].category).toBe('snacks_drinks');
+  });
+
+  it('Lawson + 商品 → 进入正常分类 pipeline', async () => {
+    const out = await enrichAtMerchant('ローソン', 'とりきも', 'ready_to_eat', 180);
+    expect((out as any).merchant_type).toBe('convenience');
+    expect((out.items as any[])[0].category).toBe('food_ingredients');
+  });
+
+  it('other merchant（药妆）→ 全部 uncategorized，不调用 Batch AI', async () => {
+    const out = await enrichAtMerchant('マツキヨ', 'シャンプー', 'personal_care', 500);
+    expect((out as any).merchant_type).toBe('other');
+    expect((out.items as any[])[0].category).toBe('uncategorized');
+    expect(runBatchAiFallback).not.toHaveBeenCalled();
+    expect((out as any).classification_telemetry_v1?.batch_ai_called).toBe(false);
+  });
+});
+
+describe('Phase 2: Batch AI merchant gate', () => {
+  beforeEach(() => {
+    setMockLearned(null);
+    (runBatchAiFallback as jest.Mock).mockClear();
+    (runBatchAiFallback as jest.Mock).mockResolvedValue({
+      called: true,
+      appliedCount: 1,
+      suggestedCount: 1,
+    });
+  });
+
+  it('supported convenience + flag ON + 本地 uncategorized → 可进入 batch fallback', async () => {
+    (isBatchAiClassificationEnabled as jest.Mock).mockReturnValue(true);
+    const analysis: any = {
+      merchant: 'ファミリーマート',
+      items: [{ name: 'なぞ商品xyz', quantity: 1, unitPrice: 100, lineTotal: 100 }],
+      total: 100,
+      tax: 0,
+      currency: 'JPY',
+    };
+    const out = await applyCategoriesWithLearning(analysis);
+    expect(runBatchAiFallback).toHaveBeenCalled();
+    expect((out as any).classification_telemetry_v1?.merchant_type).toBe('convenience');
+    expect((out as any).classification_telemetry_v1?.batch_ai_enabled).toBe(true);
+  });
+
+  it('supported convenience + flag OFF → 不调用 Batch AI', async () => {
+    (isBatchAiClassificationEnabled as jest.Mock).mockReturnValue(false);
+    const analysis: any = {
+      merchant: 'ローソン',
+      items: [{ name: 'なぞ商品xyz', quantity: 1, unitPrice: 100, lineTotal: 100 }],
+      total: 100,
+      tax: 0,
+      currency: 'JPY',
+    };
+    await applyCategoriesWithLearning(analysis);
+    expect(runBatchAiFallback).not.toHaveBeenCalled();
   });
 });

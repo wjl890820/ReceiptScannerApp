@@ -2,6 +2,8 @@
 // Growth-oriented structured analysis outputs (no AI copywriting).
 
 import type { ReceiptRow } from './db';
+import { getReceiptItems } from './receiptItems';
+import { filterV1SupportedReceipts } from './merchantType';
 import type { AnalysisLevel } from './analysisTriggers';
 import { getAnalysisLevel } from './analysisTriggers';
 import { normalizeProductCategory, type ProductCategory } from './productCategory';
@@ -160,7 +162,8 @@ export function buildReceiptAnalysisV1(params: {
 }
 
 export function buildAggregateAnalysisV1(receipts: ReceiptRow[]): AggregateAnalysisOutputV1 {
-  const receiptCount = receipts.length;
+  const supported = filterV1SupportedReceipts(receipts);
+  const receiptCount = supported.length;
   const analysis_level = getAnalysisLevel(receiptCount);
 
   // Aggregate mains + repeated items
@@ -168,9 +171,8 @@ export function buildAggregateAnalysisV1(receipts: ReceiptRow[]): AggregateAnaly
   const itemCounts = new Map<string, number>();
   const shoppingTypeCounts = new Map<string, number>();
 
-  for (const r of receipts) {
-    const items = r.user_items_json ? (() => { try { return JSON.parse(r.user_items_json); } catch { return null; } })() : null;
-    const list = Array.isArray(items) ? items : readItemsFromAnalysisJson(r.analysis_json);
+  for (const r of supported) {
+    const list = getReceiptItems(r) as any[];
     const receiptOut = buildReceiptAnalysisV1({ items: list, total: r.total });
     shoppingTypeCounts.set(receiptOut.shopping_type, (shoppingTypeCounts.get(receiptOut.shopping_type) ?? 0) + 1);
 
@@ -210,9 +212,10 @@ export function buildAggregateAnalysisV1(receipts: ReceiptRow[]): AggregateAnaly
 }
 
 export function buildWeeklyReportV1(receipts: ReceiptRow[]): WeeklyReportV1 {
+  const supported = filterV1SupportedReceipts(receipts);
   const now = Date.now();
   const weekStart = now - 7 * 24 * 60 * 60 * 1000;
-  const inWeek = receipts.filter((r) => (r.transaction_at || r.created_at) >= weekStart);
+  const inWeek = supported.filter((r) => (r.transaction_at || r.created_at) >= weekStart);
 
   let total_spend = 0;
   const mainMap = new Map<ProductCategory, number>();
@@ -221,7 +224,7 @@ export function buildWeeklyReportV1(receipts: ReceiptRow[]): WeeklyReportV1 {
 
   for (const r of inWeek) {
     total_spend += safeNum(r.total);
-    const list = readItemsFromAnalysisJson(r.analysis_json);
+    const list = getReceiptItems(r) as any[];
     const m = sumByMain(list);
     for (const [k, v] of m.entries()) mainMap.set(k, (mainMap.get(k) ?? 0) + v);
 
@@ -266,9 +269,10 @@ export function buildWeeklyReportV1(receipts: ReceiptRow[]): WeeklyReportV1 {
 }
 
 export function buildMonthlyReportV1(receipts: ReceiptRow[]): MonthlyReportV1 {
+  const supported = filterV1SupportedReceipts(receipts);
   const now = Date.now();
   const start = now - 30 * 24 * 60 * 60 * 1000;
-  const inMonth = receipts.filter((r) => (r.transaction_at || r.created_at) >= start);
+  const inMonth = supported.filter((r) => (r.transaction_at || r.created_at) >= start);
 
   let total_spend = 0;
   const mainMap = new Map<ProductCategory, number>();
@@ -276,7 +280,7 @@ export function buildMonthlyReportV1(receipts: ReceiptRow[]): MonthlyReportV1 {
 
   for (const r of inMonth) {
     total_spend += safeNum(r.total);
-    const list = readItemsFromAnalysisJson(r.analysis_json);
+    const list = getReceiptItems(r) as any[];
     const m = sumByMain(list);
     for (const [k, v] of m.entries()) mainMap.set(k, (mainMap.get(k) ?? 0) + v);
     for (const it of list) {

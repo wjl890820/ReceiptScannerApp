@@ -159,6 +159,28 @@ export function getCategoryBatchAiMaxItems(): number {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 40;
 }
 
+function parseEnvBool(raw: string, defaultValue: boolean): boolean {
+  const v = raw.trim().toLowerCase();
+  if (v === '') return defaultValue;
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  return defaultValue;
+}
+
+/**
+ * Batch AI 分类 fallback 开关（ENABLE_BATCH_AI_CLASSIFICATION）。
+ * 默认 true，保持与当前生产行为兼容；设为 false/0/off 时跳过 classify-items。
+ */
+export function isBatchAiClassificationEnabled(): boolean {
+  const fromEnv =
+    _envVar('ENABLE_BATCH_AI_CLASSIFICATION') ||
+    _envVar('EXPO_PUBLIC_ENABLE_BATCH_AI_CLASSIFICATION');
+  if (fromEnv) return parseEnvBool(fromEnv, true);
+  const fromExtra = getExtraValue('ENABLE_BATCH_AI_CLASSIFICATION', '');
+  if (fromExtra) return parseEnvBool(fromExtra, true);
+  return true;
+}
+
 /**
  * 获取备用反馈邮箱（用于 send-feedback 不可用时的兜底渠道）。
  */

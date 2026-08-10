@@ -211,14 +211,14 @@ export default function AnalysisScreen() {
         <Text style={styles.cardValue}>
           ¥{Math.round(stats.totalSpend).toLocaleString()}
         </Text>
-        {stats.grocerySpend > 0 && (
+        {stats.supportedSpend > 0 && (
           <Text style={styles.cardSubtitle}>
-            {t('analysis.stats.grocerySpend')}: ¥{Math.round(stats.grocerySpend).toLocaleString()}
+            {t('analysis.stats.supportedSpend')}: ¥{Math.round(stats.supportedSpend).toLocaleString()}
           </Text>
         )}
         {timeRange !== 'all' && (
           <Text style={[styles.cardSubtitle, { marginTop: 4, fontSize: 12 }]}>
-            {t('grocery.onlyNote')}
+            {t('v1.supportedNote')}
           </Text>
         )}
       </View>
@@ -227,7 +227,7 @@ export default function AnalysisScreen() {
       {(stats.topCategories.length > 0 || stats.uncategorizedCount > 0) && (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{t('analysis.stats.topCategories')}</Text>
-          <Text style={styles.cardSubtitle}>{t('grocery.onlyNote')}</Text>
+          <Text style={styles.cardSubtitle}>{t('v1.supportedNote')}</Text>
           {stats.topCategories.map((item, idx) => (
             <View key={idx} style={styles.statRow}>
               <Text style={styles.statLabel}>{getCategoryLabel(item.category)}</Text>
@@ -275,7 +275,9 @@ export default function AnalysisScreen() {
       {receipts.length >= 5 && priceRadarData ? (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{t('analysis.priceRadar.title')}</Text>
-          <Text style={styles.cardSubtitle}>{t('analysis.priceRadar.subtitle')}</Text>
+          <Text style={styles.cardSubtitle}>
+            {t('analysis.priceRadar.subtitle')} · {t('v1.priceRadarSupermarketOnly')}
+          </Text>
 
           {priceRadarData.topProducts.length > 0 ? (
             priceRadarData.topProducts.slice(0, 5).map((product, idx) => (

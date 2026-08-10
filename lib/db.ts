@@ -2,6 +2,7 @@
 import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
 import { listReceiptsForListParams } from './receiptListQuery';
+import { detectMerchantType, type MerchantType } from './merchantType';
 
 /**
  * 说明：
@@ -20,6 +21,8 @@ export type ReceiptRow = {
 
   merchant_raw: string | null;
   merchant_normalized: string | null;
+  /** V1 additive：商户类型（supermarket / convenience / other / unknown） */
+  merchant_type?: MerchantType | null;
   store_raw?: string | null;
   store_normalized?: string | null;
   source?: string | null;
@@ -296,6 +299,15 @@ async function initIfNeeded() {
           }
         }
       }
+      if (!columnNames.has('merchant_type')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN merchant_type TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) {
+            throw e;
+          }
+        }
+      }
       if (!columnNames.has('recognition_snapshot_json')) {
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN recognition_snapshot_json TEXT`);
@@ -538,6 +550,8 @@ export async function saveReceipt(
   const merchantNormalized =
     merchantRawTrimmed ? merchantRawTrimmed.replace(/\s+/g, ' ').trim().toLowerCase() : null;
 
+  const merchantType = detectMerchantType(merchantRawTrimmed, merchantNormalized);
+
   // New stable fields
   const source = params.source || 'self';
   const storeRaw = merchantRawTrimmed;
@@ -589,11 +603,12 @@ export async function saveReceipt(
       image_uri,
       source,
       merchant_raw, merchant_normalized,
+      merchant_type,
       store_raw, store_normalized,
       total, tax, currency,
       analysis_json,
       recognition_snapshot_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
@@ -604,6 +619,7 @@ export async function saveReceipt(
     source,
     merchantRawTrimmed,
     merchantNormalized,
+    merchantType,
     storeRaw,
     storeNormalized,
     total,
@@ -620,7 +636,7 @@ export async function saveReceipt(
     });
     // eslint-disable-next-line no-console
     console.log('[DB][saveReceipt] insert shape', {
-      insertColumnsCount: 15,
+      insertColumnsCount: 16,
       placeholderCount,
       paramsCount: insertParams.length,
       preview,
@@ -671,6 +687,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
       COALESCE(transaction_at, created_at) AS transaction_at,
       image_uri,
       merchant_raw, merchant_normalized,
+      merchant_type,
       total, tax, currency,
       analysis_json,
       COALESCE(user_edited, 0) as user_edited,
@@ -705,6 +722,7 @@ export async function listReceiptsForList(
       id, created_at,
       COALESCE(transaction_at, created_at) AS transaction_at,
       merchant_raw, merchant_normalized,
+      merchant_type,
       total, tax, currency,
       analysis_json,
       COALESCE(user_edited, 0) as user_edited,
@@ -798,6 +816,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       COALESCE(transaction_at, created_at) AS transaction_at,
       image_uri,
       merchant_raw, merchant_normalized,
+      merchant_type,
       total, tax, currency,
       analysis_json,
       recognition_snapshot_json,

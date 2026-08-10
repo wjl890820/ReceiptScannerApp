@@ -4,7 +4,8 @@
  */
 import type { ReceiptRow } from './db';
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
-import { isGroceryMerchant } from './groceryDetector';
+import { getReceiptItems } from './receiptItems';
+import { filterV1SupportedReceipts } from './merchantType';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { normalizeProductCategory } from './productCategory';
 
@@ -36,23 +37,13 @@ function safeParseAnalysis(json: string | null): ReceiptAnalysis | null {
   }
 }
 
-function filterGroceryReceipts(receipts: ReceiptRow[]): ReceiptRow[] {
-  return receipts.filter((r) => {
-    if (isGroceryMerchant(r.merchant_raw || null, r.merchant_normalized || null)) return true;
-    try {
-      const analysis = JSON.parse(r.analysis_json || '{}');
-      return analysis.is_grocery === true;
-    } catch {
-      return false;
-    }
-  });
+function filterV1SupportedReceiptRows(receipts: ReceiptRow[]): ReceiptRow[] {
+  return filterV1SupportedReceipts(receipts);
 }
 
 /**
  * 计算单个商品的“最终展示分类”（与饼图口径一致）：
  * 归一到新一级分类；若分类状态不可接受或仍为 uncategorized，则落到 'uncategorized'。
- * 注意：classification_status='fallback' 视为可接受——只要解析出了真实分类就按真实分类计，
- *       不再因为是 fallback 就误判为“待分类”（这是“30 个商品待分类”假象的根因）。
  */
 export function resolveItemFinalCategory(item: ReceiptItem): string {
   const rawCategory = (item as any).category ?? (item as any).categoryKey;
@@ -74,17 +65,15 @@ export function resolveItemFinalCategory(item: ReceiptItem): string {
 }
 
 /**
- * 按分类聚合生鲜收据商品金额（饼图数据）；仅统计分类成功且为 grocery 类别的行。
+ * 按分类聚合 V1 支持零售小票（supermarket + convenience）商品金额（饼图数据）。
  */
 export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
-  const groceryReceipts = filterGroceryReceipts(receipts);
+  const supportedReceipts = filterV1SupportedReceiptRows(receipts);
   const categoryMap = new Map<string, number>();
 
-  for (const receipt of groceryReceipts) {
-    const items = receipt.user_items_json
-      ? safeParseItems(receipt.user_items_json)
-      : safeParseAnalysis(receipt.analysis_json)?.items ?? null;
-    if (!items || !Array.isArray(items)) continue;
+  for (const receipt of supportedReceipts) {
+    const items = getReceiptItems(receipt) as ReceiptItem[];
+    if (!Array.isArray(items) || items.length === 0) continue;
 
     let hadAnyLineTotal = false;
     for (const item of items) {
@@ -127,15 +116,13 @@ export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
 export function computeUncategorizedSummary(
   receipts: ReceiptRow[]
 ): { count: number; total: number } {
-  const groceryReceipts = filterGroceryReceipts(receipts);
+  const supportedReceipts = filterV1SupportedReceiptRows(receipts);
   let count = 0;
   let total = 0;
 
-  for (const receipt of groceryReceipts) {
-    const items = receipt.user_items_json
-      ? safeParseItems(receipt.user_items_json)
-      : safeParseAnalysis(receipt.analysis_json)?.items ?? null;
-    if (!items || !Array.isArray(items)) continue;
+  for (const receipt of supportedReceipts) {
+    const items = getReceiptItems(receipt) as ReceiptItem[];
+    if (!Array.isArray(items) || items.length === 0) continue;
 
     for (const item of items) {
       const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
