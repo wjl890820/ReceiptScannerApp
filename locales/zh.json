@@ -235,6 +235,14 @@
       "empty": "暂无记录。请先在首页识别并保存。",
       "noCategoryInfo": "未找到分类信息"
     },
+    "search": {
+      "placeholder": "搜索商品或商店",
+      "clear": "清除搜索",
+      "searching": "搜索中…",
+      "noResults": "没有找到相关购买记录",
+      "products": "商品匹配",
+      "receipts": "小票匹配"
+    },
     "errors": {
       "loadTitle": "读取失败",
       "loadMessage": "无法读取历史记录"

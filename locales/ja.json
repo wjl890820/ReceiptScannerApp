@@ -235,6 +235,14 @@
       "empty": "まだ記録がありません。ホームでスキャンして保存してください。",
       "noCategoryInfo": "カテゴリ情報なし"
     },
+    "search": {
+      "placeholder": "商品・店舗を検索",
+      "clear": "検索をクリア",
+      "searching": "検索中…",
+      "noResults": "該当する購入履歴がありません",
+      "products": "商品に一致",
+      "receipts": "レシートに一致"
+    },
     "errors": {
       "loadTitle": "読み込みに失敗しました",
       "loadMessage": "履歴を読み込めませんでした"

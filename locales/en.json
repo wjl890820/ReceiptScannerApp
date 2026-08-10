@@ -235,6 +235,14 @@
       "empty": "No records yet. Scan and save from Home first.",
       "noCategoryInfo": "No category info"
     },
+    "search": {
+      "placeholder": "Search products or stores",
+      "clear": "Clear search",
+      "searching": "Searching…",
+      "noResults": "No matching purchases found",
+      "products": "Product matches",
+      "receipts": "Receipt matches"
+    },
     "errors": {
       "loadTitle": "Load failed",
       "loadMessage": "Could not load history"
