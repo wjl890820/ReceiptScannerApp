@@ -31,6 +31,7 @@ import { buildReceiptAnalysisV1 } from './growthAnalysisEngineV1';
 import { buildReceiptTemplateL1 } from './analysisTemplatesV1';
 import { upsertProductDictionary } from './productDictionary';
 import { lookupProductNameAlias } from './productAlias';
+import { applyProductIdentityToItem } from './receiptItemIdentity';
 
 /**
  * Infer grocery category based on product name (rule-based fallback)
@@ -494,7 +495,11 @@ export async function applyCategoriesWithLearning(
         if (typeof cn === 'string' && cn.trim()) return cn.trim();
         return norm.normalized_name;
       })(),
-      brand: null,
+      // Preserve a trusted classifier/dictionary brand for the identity adapter.
+      brand:
+        typeof classificationOut?.brand === 'string' && classificationOut.brand.trim()
+          ? classificationOut.brand.trim()
+          : null,
       quantity: (it as any)?.quantity ?? 1,
       unit_price: (it as any)?.unitPrice ?? (it as any)?.unit_price ?? 0,
       line_total: (it as any)?.lineTotal ?? (it as any)?.line_total ?? 0,
@@ -617,6 +622,19 @@ export async function applyCategoriesWithLearning(
     }
   } else if (__DEV__) {
     console.log('[CategoryBatchAI] skipped (ENABLE_BATCH_AI_CLASSIFICATION=false)');
+  }
+
+  // Product Identity is annotation-only and runs after the final category
+  // (including optional Batch AI) has been decided.
+  for (let i = 0; i < enrichedItems.length; i++) {
+    const item = enrichedItems[i] as any;
+    enrichedItems[i] = applyProductIdentityToItem(item, {
+      finalName: item?.name,
+      finalCategory: item?.category,
+      merchantName: merchantRaw || merchantNormalized || null,
+      classificationBrand: item?.brand,
+      useExistingClassificationEvidence: true,
+    }) as any;
   }
 
   const classificationTelemetry = buildClassificationTelemetry({

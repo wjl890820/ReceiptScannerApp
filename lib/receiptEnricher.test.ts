@@ -294,3 +294,45 @@ describe('Phase 2: Batch AI merchant gate', () => {
     expect(runBatchAiFallback).not.toHaveBeenCalled();
   });
 });
+
+describe('Phase 3B: Product Identity annotation', () => {
+  beforeEach(() => {
+    setMockLearned(null);
+    (isBatchAiClassificationEnabled as jest.Mock).mockReturnValue(false);
+    (runBatchAiFallback as jest.Mock).mockClear();
+  });
+
+  it('normal scan persists additive identity while preserving legacy normalized/canonical fields', async () => {
+    const rawName = '明治ｵｲｼｲ牛乳900ML';
+    const analysis: any = {
+      merchant: 'イオン',
+      items: [
+        {
+          name: rawName,
+          quantity: 1,
+          unitPrice: 280,
+          lineTotal: 280,
+          categoryKey: 'dairy_egg',
+        },
+      ],
+      total: 280,
+      tax: 0,
+      currency: 'JPY',
+    };
+
+    const out = await applyCategoriesWithLearning(analysis);
+    const item = (out.items as any[])[0];
+
+    expect(item.normalized_name).toBe('明治ｵｲｼｲ牛乳');
+    expect(item.canonical_name).toBe('明治ｵｲｼｲ牛乳');
+    expect(item.normalized_full_name).toBe('明治オイシイ牛乳900ml');
+    expect(item.canonical_product_name).toBe('明治 おいしい牛乳');
+    expect(item.brand).toBe('明治');
+    expect(item.product_family_key).toBe('milk');
+    expect(item.spec_size_value).toBe(900);
+    expect(item.spec_size_unit).toBe('ml');
+    expect(item.spec_pack_count).toBe(1);
+    expect(item.volume_base_ml).toBe(900);
+    expect(item.identity_version).toBe(1);
+  });
+});

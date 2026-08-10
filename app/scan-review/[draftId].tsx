@@ -32,6 +32,7 @@ import {
 import { peekNextDraftId } from '@/lib/scanReviewQueue';
 import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
+import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
 
 function toNum(v: string, fallback = 0): number {
   const n = Number(String(v).replace(/,/g, '').trim());
@@ -347,9 +348,11 @@ export default function ScanReviewScreen() {
       const unitPrice = Number.isFinite(Number(s.unitPrice ?? s.unit_price))
         ? Number(s.unitPrice ?? s.unit_price)
         : 0;
-      return {
+      const finalName = line.name.trim();
+      const classifiedName = typeof s.name === 'string' ? s.name.trim() : '';
+      const finalItem = {
         ...s,
-        name: line.name.trim(),
+        name: finalName,
         ocr_recognized_name: ocrName,
         category: line.category,
         quantity: line.quantity,
@@ -358,8 +361,17 @@ export default function ScanReviewScreen() {
         review_source_index: isUserAdded ? null : line.sourceIndex,
         user_added: isUserAdded,
       };
+      return applyProductIdentityToItem(finalItem, {
+        finalName,
+        finalCategory: line.category,
+        merchantName: merchant.trim() || null,
+        // A rename invalidates classifier identity evidence from the snapshot.
+        classificationBrand:
+          finalName === classifiedName ? (s as any)?.brand : null,
+        useExistingClassificationEvidence: finalName === classifiedName,
+      });
     });
-  }, [lineItems, snapshot]);
+  }, [lineItems, merchant, snapshot]);
 
   const snapItemsArr = Array.isArray(snapshot?.items) ? snapshot.items : [];
 

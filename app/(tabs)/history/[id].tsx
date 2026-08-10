@@ -29,6 +29,7 @@ import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } fr
 import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
+import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -263,12 +264,20 @@ export default function ReceiptDetailScreen() {
 
     // 更新商品列表
     const updatedItems = [...displayItems];
-    updatedItems[editingItemIndex] = {
-      ...updatedItems[editingItemIndex],
+    const existingItem = updatedItems[editingItemIndex] as ReceiptItem & Record<string, unknown>;
+    const finalCategory = (draftCategory.trim() || 'uncategorized') as ProductCategory;
+    updatedItems[editingItemIndex] = applyProductIdentityToItem({
+      ...existingItem,
       quantity: round0(quantity),
       lineTotal: round0(lineTotal),
-      category: (draftCategory.trim() || 'uncategorized') as ProductCategory,
-    };
+      category: finalCategory,
+    }, {
+      finalName: existingItem.name,
+      finalCategory,
+      merchantName: receipt.merchant_raw,
+      classificationBrand: (existingItem as any).brand,
+      useExistingClassificationEvidence: true,
+    });
 
     try {
       setSavingItem(true);
