@@ -487,6 +487,17 @@
   },
   "settings": {
     "title": "Settings",
+    "language": {
+      "title": "Language",
+      "subtitle": "Choose the app display language",
+      "pickMessage": "Select a language",
+      "options": {
+        "system": "System",
+        "zh": "简体中文",
+        "ja": "日本語",
+        "en": "English"
+      }
+    },
     "feedback": {
       "title": "Send Feedback",
       "subtitle": "Share your thoughts and suggestions"

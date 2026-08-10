@@ -487,6 +487,17 @@
   },
   "settings": {
     "title": "設定",
+    "language": {
+      "title": "言語",
+      "subtitle": "アプリの表示言語を選択",
+      "pickMessage": "言語を選択",
+      "options": {
+        "system": "システムに合わせる",
+        "zh": "简体中文",
+        "ja": "日本語",
+        "en": "English"
+      }
+    },
     "feedback": {
       "title": "フィードバックを送信",
       "subtitle": "ご意見やご提案をお聞かせください"

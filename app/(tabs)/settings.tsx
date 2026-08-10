@@ -1,98 +1,116 @@
 // app/(tabs)/settings.tsx
 
-import { useRouter, type Href } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter, type Href } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-// Lazy import Constants to avoid initialization crashes
-let Constants: typeof import('expo-constants') | null = null;
+import {
+  Alert,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { PRIVACY_POLICY_URL } from '@/constants/privacy';
-import { t } from '@/lib/i18n';
+import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { listReceipts } from '@/lib/db';
+import { DEV_TOOLS_ENABLED_KEY } from '@/lib/devToolsAccess';
+import {
+  getCurrentLocalePreference,
+  setLocalePreference,
+  t,
+  type LocalePreference,
+} from '@/lib/i18n';
 import { getMissingInProductDictionaryTop100 } from '@/lib/missingDictionaryCandidates';
+import { getCanonicalNamePriceStats } from '@/lib/priceStats';
 import {
   getProductDictionaryCount,
   getTopProductDictionary,
   upsertProductDictionary,
 } from '@/lib/productDictionary';
 import { reclassifyReceiptsMissingCategories } from '@/lib/reclassifyReceipts';
-import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
-import { getDefaultReceiptSource, setDefaultReceiptSource, type ReceiptSource } from '@/lib/receiptSourceSettings';
-import { getCanonicalNamePriceStats } from '@/lib/priceStats';
-import { DEV_TOOLS_ENABLED_KEY } from '@/lib/devToolsAccess';
+import {
+  getDefaultReceiptSource,
+  setDefaultReceiptSource,
+  type ReceiptSource,
+} from '@/lib/receiptSourceSettings';
+import {
+  formatAboutVersionLine,
+  localePreferenceLabelKey,
+  resolveInstalledAppMetadata,
+  shouldShowSettingsDevTools,
+  shouldShowSettingsProEntry,
+} from '@/lib/settingsPresentation';
 
-async function getConstants() {
-  if (!Constants) {
-    try {
-      Constants = await import('expo-constants');
-    } catch (e) {
-      console.warn('[Settings] Failed to import Constants:', e);
-      return null;
-    }
+async function loadExpoConstants(): Promise<any | null> {
+  try {
+    const mod = await import('expo-constants');
+    return (mod as any).default ?? mod;
+  } catch (e) {
+    console.warn('[Settings] Failed to import Constants:', e);
+    return null;
   }
-  return Constants;
+}
+
+function SettingsRow({
+  title,
+  subtitle,
+  value,
+  onPress,
+  accessibilityLabel,
+}: {
+  title: string;
+  subtitle?: string;
+  value?: string;
+  onPress: () => void;
+  accessibilityLabel: string;
+}) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+    >
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+      </View>
+      {value ? <Text style={styles.rowValue}>{value}</Text> : null}
+      <Text style={styles.chevron}>›</Text>
+    </Pressable>
+  );
 }
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [devToolsEnabled, setDevToolsEnabled] = useState(false);
-  const [currentVersion, setCurrentVersion] = useState<string>('unknown');
-  const [currentBuild, setCurrentBuild] = useState<string>('unknown');
+  const [currentVersion, setCurrentVersion] = useState<string>('—');
+  const [currentBuild, setCurrentBuild] = useState<string>('—');
   const [currentName, setCurrentName] = useState<string>('Receipt Scanner');
-  const [defaultReceiptSource, setDefaultReceiptSourceState] = useState<ReceiptSource>('self');
+  const [defaultReceiptSource, setDefaultReceiptSourceState] =
+    useState<ReceiptSource>('self');
+  const [localePreference, setLocalePreferenceState] =
+    useState<LocalePreference>(getCurrentLocalePreference());
   const tapCountRef = useRef(0);
   const lastTapAtRef = useRef(0);
-  
-  // Read real installed version/build (Release/TestFlight compatible)
+
+  const showDevTools = shouldShowSettingsDevTools(devToolsEnabled, __DEV__);
+  const showPro = shouldShowSettingsProEntry({ comingSoon: true });
+  const aboutVersionLine = formatAboutVersionLine(currentVersion, currentBuild);
+
   useEffect(() => {
     let cancelled = false;
-
-    const applyFromConstants = (C: any) => {
-      // 1) Prefer native app version/build from the installed package
-      const v = String(C?.nativeAppVersion || '').trim();
-      const b = String(C?.nativeBuildVersion || '').trim();
-
-      // 2) Fallback to Expo config (may still be correct but is not guaranteed to be "installed package")
-      const cfgV = String(C?.expoConfig?.version || '').trim();
-      const cfgB = String(C?.expoConfig?.ios?.buildNumber || '').trim();
-
-      const finalV = v || cfgV || 'unknown';
-      const finalB = b || cfgB || 'unknown';
-      const finalName = String(C?.expoConfig?.name || C?.manifest2?.extra?.expoClient?.name || 'Receipt Scanner');
-
-      if (!cancelled) {
-        setCurrentVersion(finalV);
-        setCurrentBuild(finalB);
-        setCurrentName(finalName);
-      }
-    };
-
-    // Try sync require first
-    try {
-      if (typeof require !== 'undefined') {
-        try {
-          const ConstantsSync = require('expo-constants');
-          applyFromConstants(ConstantsSync);
-        } catch {
-          // ignore, will try async import
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    // Async import as backup
     (async () => {
-      try {
-        const mod = await getConstants();
-        if (!mod) return;
-        applyFromConstants(mod.default ?? mod);
-      } catch {
-        // ignore
-      }
+      const constants = await loadExpoConstants();
+      if (!constants || cancelled) return;
+      const meta = resolveInstalledAppMetadata(constants);
+      setCurrentVersion(meta.version);
+      setCurrentBuild(meta.build);
+      setCurrentName(meta.name);
     })();
-
     return () => {
       cancelled = true;
     };
@@ -109,9 +127,59 @@ export default function SettingsScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const v = await AsyncStorage.getItem(DEV_TOOLS_ENABLED_KEY);
+        if (!cancelled) setDevToolsEnabled(v === '1');
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onPressLanguage = useMemo(() => {
+    return () => {
+      const options: { id: LocalePreference; label: string }[] = [
+        {
+          id: 'system',
+          label: t('settings.language.options.system'),
+        },
+        { id: 'zh', label: t('settings.language.options.zh') },
+        { id: 'ja', label: t('settings.language.options.ja') },
+        { id: 'en', label: t('settings.language.options.en') },
+      ];
+      Alert.alert(
+        t('settings.language.title'),
+        t('settings.language.pickMessage'),
+        [
+          ...options.map((option) => ({
+            text: option.label,
+            onPress: () => {
+              void (async () => {
+                try {
+                  await setLocalePreference(option.id);
+                  setLocalePreferenceState(option.id);
+                } catch {
+                  // Keep current preference if persistence/runtime apply fails.
+                }
+              })();
+            },
+          })),
+          { text: t('home.scan.cancel'), style: 'cancel' as const },
+        ],
+        { cancelable: true }
+      );
+    };
+  }, []);
+
   const onPressDefaultReceiptSource = useMemo(() => {
     return async () => {
-      const options: Array<{ id: ReceiptSource; label: string }> = [
+      const options: { id: ReceiptSource; label: string }[] = [
         { id: 'self', label: 'self' },
         { id: 'family', label: 'family' },
         { id: 'friend', label: 'friend' },
@@ -136,21 +204,6 @@ export default function SettingsScreen() {
     };
   }, [defaultReceiptSource]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const v = await AsyncStorage.getItem(DEV_TOOLS_ENABLED_KEY);
-        if (!cancelled) setDevToolsEnabled(v === '1');
-      } catch {
-        // ignore
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const onPressVersionArea = useMemo(() => {
     return async () => {
       const now = Date.now();
@@ -159,7 +212,10 @@ export default function SettingsScreen() {
       tapCountRef.current = withinWindow ? tapCountRef.current + 1 : 1;
 
       if (__DEV__) {
-        console.log('[Settings][DevToolsTap]', { count: tapCountRef.current, withinWindow });
+        console.log('[Settings][DevToolsTap]', {
+          count: tapCountRef.current,
+          withinWindow,
+        });
       }
 
       if (tapCountRef.current >= 7) {
@@ -494,245 +550,258 @@ export default function SettingsScreen() {
     };
   }, []);
 
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      style={styles.screen}
+    >
       <Text style={styles.title}>{t('settings.title')}</Text>
 
-      {/* Send Feedback */}
-      <Pressable
-        style={styles.section}
-        onPress={() => router.push('/(tabs)/feedback')}
-      >
-        <View style={styles.sectionContent}>
-          <Text style={styles.sectionTitle}>{t('settings.feedback.title')}</Text>
-          <Text style={styles.sectionSubtitle}>{t('settings.feedback.subtitle')}</Text>
-        </View>
-        <Text style={styles.arrow}>→</Text>
-      </Pressable>
-
-      {/* Advanced Insights Pro */}
-      <Pressable
-        style={styles.section}
-        onPress={() => router.push('/(tabs)/pro-insight')}
-      >
-        <View style={styles.sectionContent}>
-          <Text style={styles.sectionTitle}>{t('settings.pro.title')}</Text>
-          <Text style={styles.sectionSubtitle}>{t('settings.pro.subtitle')}</Text>
-        </View>
-        <Text style={styles.arrow}>→</Text>
-      </Pressable>
-
-      {/* Privacy Policy */}
-      <Pressable
-        style={styles.section}
-        onPress={async () => {
-          try {
-            const canOpen = await Linking.canOpenURL(PRIVACY_POLICY_URL);
-            if (canOpen) {
-              await Linking.openURL(PRIVACY_POLICY_URL);
-            } else {
+      <View style={styles.group}>
+        <SettingsRow
+          title={t('settings.language.title')}
+          subtitle={t('settings.language.subtitle')}
+          value={t(localePreferenceLabelKey(localePreference))}
+          onPress={onPressLanguage}
+          accessibilityLabel={t('settings.language.title')}
+        />
+        {showPro ? (
+          <>
+            <View style={styles.separator} />
+            <SettingsRow
+              title={t('settings.pro.title')}
+              subtitle={t('settings.pro.subtitle')}
+              onPress={() => router.push('/(tabs)/pro-insight')}
+              accessibilityLabel={t('settings.pro.title')}
+            />
+          </>
+        ) : null}
+        <View style={styles.separator} />
+        <SettingsRow
+          title={t('settings.feedback.title')}
+          subtitle={t('settings.feedback.subtitle')}
+          onPress={() => router.push('/(tabs)/feedback')}
+          accessibilityLabel={t('settings.feedback.title')}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
+          title={t('settings.privacy.title')}
+          subtitle={t('settings.privacy.subtitle')}
+          onPress={async () => {
+            try {
+              const canOpen = await Linking.canOpenURL(PRIVACY_POLICY_URL);
+              if (canOpen) {
+                await Linking.openURL(PRIVACY_POLICY_URL);
+              } else {
+                Alert.alert(
+                  t('settings.privacy.title'),
+                  t('settings.privacy.alert'),
+                  [{ text: t('settings.privacy.ok') || 'OK' }]
+                );
+              }
+            } catch {
               Alert.alert(
                 t('settings.privacy.title'),
                 t('settings.privacy.alert'),
                 [{ text: t('settings.privacy.ok') || 'OK' }]
               );
             }
-          } catch (error) {
-            // Fallback to alert if URL opening fails
-            Alert.alert(
-              t('settings.privacy.title'),
-              t('settings.privacy.alert'),
-              [{ text: t('settings.privacy.ok') || 'OK' }]
-            );
-          }
-        }}
-      >
-        <View style={styles.sectionContent}>
-          <Text style={styles.sectionTitle}>{t('settings.privacy.title')}</Text>
-          <Text style={styles.sectionSubtitle}>{t('settings.privacy.subtitle')}</Text>
-        </View>
-        <Text style={styles.arrow}>→</Text>
-      </Pressable>
+          }}
+          accessibilityLabel={t('settings.privacy.title')}
+        />
+        <View style={styles.separator} />
+        <SettingsRow
+          title={t('settings.about.title')}
+          subtitle={`${currentName} · ${aboutVersionLine}`}
+          onPress={onPressVersionArea}
+          accessibilityLabel={`${t('settings.about.title')}, ${aboutVersionLine}`}
+        />
+      </View>
 
-      {/* Default receipt source */}
-      <Pressable style={styles.section} onPress={onPressDefaultReceiptSource}>
-        <View style={styles.sectionContent}>
-          <Text style={styles.sectionTitle}>Default receipt source</Text>
-          <Text style={styles.sectionSubtitle}>{defaultReceiptSource}</Text>
+      {showDevTools ? (
+        <View style={styles.devGroup}>
+          <Text style={styles.devSectionLabel}>Developer Tools</Text>
+          <View style={styles.group}>
+            <SettingsRow
+              title="Default receipt source"
+              subtitle={defaultReceiptSource}
+              onPress={onPressDefaultReceiptSource}
+              accessibilityLabel="Default receipt source"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Product dictionary stats"
+              subtitle="Count + top names + fallback candidates"
+              onPress={runProductDictionaryStats}
+              accessibilityLabel="Product dictionary stats"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Top normalized_name (Top 100)"
+              subtitle="From receipts items frequency"
+              onPress={runNormalizedNameTop100}
+              accessibilityLabel="Top normalized_name"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Missing in product_dictionary (Top 100)"
+              subtitle="High priority fill candidates"
+              onPress={runMissingInDictionaryTop100}
+              accessibilityLabel="Missing in product_dictionary"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Uncategorized Items"
+              subtitle="列表选择分类 → 写入 product_dictionary"
+              onPress={() => router.push('/(tabs)/uncategorized-items' as Href)}
+              accessibilityLabel="Uncategorized Items"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Backfill product_dictionary from receipts"
+              subtitle="Bulk upsert reliable items only"
+              onPress={runBackfillProductDictionaryFromReceipts}
+              accessibilityLabel="Backfill product_dictionary"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Hit rates: dictionary / rules / AI"
+              subtitle="Computed from receipts items"
+              onPress={runHitRateStatsFromReceipts}
+              accessibilityLabel="Hit rates"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title={t('reviewRetro.settingsTitle')}
+              subtitle={t('reviewRetro.settingsSubtitle')}
+              onPress={() => router.push('/review-retrospective' as Href)}
+              accessibilityLabel={t('reviewRetro.settingsTitle')}
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Price stats by canonical_name"
+              subtitle="avg/min/max/last/count (Top 50)"
+              onPress={runPriceStatsByCanonicalName}
+              accessibilityLabel="Price stats by canonical_name"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Hide Dev Tools"
+              subtitle="Disable and clear local flag"
+              onPress={disableDevTools}
+              accessibilityLabel="Hide Dev Tools"
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title="Reclassify existing receipts"
+              subtitle="One-off: fill missing item.category into analysis_json"
+              onPress={runReclassifyExistingReceipts}
+              accessibilityLabel="Reclassify existing receipts"
+            />
+          </View>
+          <View style={styles.debugMeta}>
+            <Text style={styles.debugMetaText}>
+              currentVersion: {currentVersion}
+            </Text>
+            <Text style={styles.debugMetaText}>
+              currentBuild: {currentBuild}
+            </Text>
+            <Text style={styles.debugMetaText}>
+              devToolsEnabled: {String(devToolsEnabled)}
+            </Text>
+          </View>
         </View>
-        <Text style={styles.arrow}>→</Text>
-      </Pressable>
-
-      {/* About */}
-      <Pressable style={styles.aboutSection} onPress={onPressVersionArea} hitSlop={12}>
-        <Text style={styles.aboutTitle}>{t('settings.about.title')}</Text>
-        <Text style={styles.aboutText}>{currentName}</Text>
-        <Text style={styles.aboutText}>
-          {t('settings.about.version')} {currentVersion} ({currentBuild})
-        </Text>
-      </Pressable>
-
-      {devToolsEnabled && (
-        <View style={[styles.aboutSection, { marginTop: 18 }]}>
-          <Text style={styles.aboutTitle}>Dev Tools</Text>
-          <Pressable
-            style={styles.section}
-            onPress={runProductDictionaryStats}
-          >
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Product dictionary stats</Text>
-              <Text style={styles.sectionSubtitle}>Count + top names + fallback candidates</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable style={styles.section} onPress={runNormalizedNameTop100}>
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Top normalized_name (Top 100)</Text>
-              <Text style={styles.sectionSubtitle}>From receipts items frequency</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable style={styles.section} onPress={runMissingInDictionaryTop100}>
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Missing in product_dictionary (Top 100)</Text>
-              <Text style={styles.sectionSubtitle}>High priority fill candidates</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable
-            style={styles.section}
-            onPress={() => router.push('/(tabs)/uncategorized-items' as Href)}
-          >
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Uncategorized Items（快捷补全）</Text>
-              <Text style={styles.sectionSubtitle}>列表选择分类 → 写入 product_dictionary</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable style={styles.section} onPress={runBackfillProductDictionaryFromReceipts}>
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Backfill product_dictionary from receipts</Text>
-              <Text style={styles.sectionSubtitle}>Bulk upsert reliable items only</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable style={styles.section} onPress={runHitRateStatsFromReceipts}>
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Hit rates: dictionary / rules / AI</Text>
-              <Text style={styles.sectionSubtitle}>Computed from receipts items</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable
-            style={styles.section}
-            onPress={() => router.push('/review-retrospective' as Href)}
-          >
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>{t('reviewRetro.settingsTitle')}</Text>
-              <Text style={styles.sectionSubtitle}>{t('reviewRetro.settingsSubtitle')}</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable style={styles.section} onPress={runPriceStatsByCanonicalName}>
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Price stats by canonical_name</Text>
-              <Text style={styles.sectionSubtitle}>avg/min/max/last/count (Top 50)</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable style={styles.section} onPress={disableDevTools}>
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Hide Dev Tools</Text>
-              <Text style={styles.sectionSubtitle}>Disable and clear local flag</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.section, { marginBottom: 0 }]}
-            onPress={runReclassifyExistingReceipts}
-          >
-            <View style={styles.sectionContent}>
-              <Text style={styles.sectionTitle}>Reclassify existing receipts</Text>
-              <Text style={styles.sectionSubtitle}>One-off: fill missing item.category into analysis_json</Text>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {(__DEV__ || devToolsEnabled) && (
-        <View style={{ marginTop: 18 }}>
-          <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
-            currentVersion: {currentVersion}
-          </Text>
-          <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
-            currentBuild: {currentBuild}
-          </Text>
-          <Text style={{ fontSize: 12, color: '#888', lineHeight: 16 }}>
-            devToolsEnabled: {String(devToolsEnabled)}
-          </Text>
-        </View>
-      )}
+      ) : null}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#f7f8fa',
+  },
   container: {
-    paddingTop: 80,
-    paddingHorizontal: 24,
+    paddingTop: 72,
+    paddingHorizontal: 16,
     paddingBottom: 40,
   },
   title: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 32,
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#15181c',
+    marginBottom: 22,
   },
-  section: {
+  group: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e1e4e8',
+    overflow: 'hidden',
+  },
+  row: {
+    minHeight: 64,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#f8f8f8',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
   },
-  sectionContent: {
+  rowText: {
     flex: 1,
+    paddingRight: 10,
   },
-  sectionTitle: {
+  rowTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#111',
-    marginBottom: 4,
+    color: '#15181c',
   },
-  sectionSubtitle: {
+  rowSubtitle: {
+    marginTop: 3,
     fontSize: 13,
-    color: '#666',
+    color: '#68707a',
     lineHeight: 18,
   },
-  arrow: {
-    fontSize: 20,
-    color: '#999',
-    marginLeft: 12,
-  },
-  aboutSection: {
-    marginTop: 32,
-    paddingTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
-  },
-  aboutTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111',
-    marginBottom: 12,
-  },
-  aboutText: {
+  rowValue: {
+    maxWidth: 120,
+    marginRight: 6,
     fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
+    fontWeight: '600',
+    color: '#1677ff',
+    textAlign: 'right',
+  },
+  chevron: {
+    fontSize: 24,
+    color: '#9aa2ad',
+    lineHeight: 26,
+  },
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#e7e9ec',
+    marginLeft: 16,
+  },
+  pressed: {
+    opacity: 0.72,
+  },
+  devGroup: {
+    marginTop: 28,
+  },
+  devSectionLabel: {
+    marginBottom: 10,
+    marginLeft: 4,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#8a929c',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  debugMeta: {
+    marginTop: 14,
+    paddingHorizontal: 4,
+  },
+  debugMetaText: {
+    fontSize: 12,
+    color: '#8a929c',
+    lineHeight: 17,
   },
 });
