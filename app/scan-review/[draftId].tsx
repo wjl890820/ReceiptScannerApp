@@ -4,16 +4,21 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ReceiptItemCard } from '@/components/review/ReceiptItemCard';
+import { ReceiptReviewDetails } from '@/components/review/ReceiptReviewDetails';
+import { ReceiptReviewSaveBar } from '@/components/review/ReceiptReviewSaveBar';
+import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
 import { listReceipts, saveReceipt } from '@/lib/db';
 import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { getCategoryLabel } from '@/lib/categoryPalette';
@@ -22,7 +27,7 @@ import { tryShowNextEasterEgg } from '@/lib/homeEasterEggHelpers';
 import { getDefaultReceiptSource } from '@/lib/receiptSourceSettings';
 import { applyReviewCorrectionsToLearning } from '@/lib/receiptReviewLearning';
 import { runPostSaveGrowthAnalysis } from '@/lib/postSaveGrowthAnalysis';
-import { RECEIPT_REVIEW_ERROR_TAGS, isReceiptReviewErrorTag } from '@/lib/reviewErrorTags';
+import { isReceiptReviewErrorTag } from '@/lib/reviewErrorTags';
 import {
   getScanReviewDraft,
   persistScanReviewDraftEditorState,
@@ -34,6 +39,7 @@ import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
 import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
+import { shouldShowReviewDevDetails } from '@/lib/scanReviewPresentation';
 
 function toNum(v: string, fallback = 0): number {
   const n = Number(String(v).replace(/,/g, '').trim());
@@ -82,6 +88,7 @@ export default function ScanReviewScreen() {
   const [saving, setSaving] = useState(false);
   const [categoryModalIndex, setCategoryModalIndex] = useState(-1);
   const [showDevTrace, setShowDevTrace] = useState(false);
+  const [stickyHeight, setStickyHeight] = useState(0);
   const persistPayloadRef = useRef<{ id: string; state: ScanReviewEditorStateV1 } | null>(null);
   const saveInFlightRef = useRef(false);
   // 离开保护：程序导航（保存成功/放弃/缺失返回）前置 true 以放行，避免被未保存确认拦截。
@@ -375,6 +382,9 @@ export default function ScanReviewScreen() {
   }, [lineItems, merchant, snapshot]);
 
   const snapItemsArr = Array.isArray(snapshot?.items) ? snapshot.items : [];
+  const showDevDetails = shouldShowReviewDevDetails(showDevTrace, __DEV__);
+  const FALLBACK_STICKY_HEIGHT = 88;
+  const bottomPadding = (stickyHeight || FALLBACK_STICKY_HEIGHT) + 20;
 
   /**
    * 小票保存成功后立即清理对应 draft，并取得队列中的下一张 draft id。
@@ -535,8 +545,8 @@ export default function ScanReviewScreen() {
   if (loading) {
     return (
       <View style={[styles.center, { paddingTop: insets.top + 40 }]}>
-        <ActivityIndicator />
-        <Text style={{ marginTop: 12 }}>{t('scanReview.loading')}</Text>
+        <ActivityIndicator color="#1677ff" />
+        <Text style={{ marginTop: 12, color: '#68707a' }}>{t('scanReview.loading')}</Text>
       </View>
     );
   }
@@ -544,7 +554,7 @@ export default function ScanReviewScreen() {
   if (missing || !snapshot) {
     return (
       <View style={[styles.center, { paddingTop: insets.top + 40, paddingHorizontal: 24 }]}>
-        <Text style={{ textAlign: 'center' }}>{t('scanReview.missingMessage')}</Text>
+        <Text style={{ textAlign: 'center', color: '#3f4751' }}>{t('scanReview.missingMessage')}</Text>
         <Pressable style={[styles.primaryBtn, { marginTop: 20 }]} onPress={() => router.back()}>
           <Text style={styles.primaryBtnText}>{t('scanReview.back')}</Text>
         </Pressable>
@@ -553,9 +563,19 @@ export default function ScanReviewScreen() {
   }
 
   return (
-    <>
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={0}
+    >
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.topBarSide}>
+        <Pressable
+          onPress={() => router.back()}
+          hitSlop={12}
+          style={styles.topBarSide}
+          accessibilityRole="button"
+          accessibilityLabel={t('scanReview.back')}
+        >
           <Text style={styles.topBarBtn}>{t('scanReview.back')}</Text>
         </Pressable>
         <View style={styles.topBarCenter}>
@@ -564,178 +584,122 @@ export default function ScanReviewScreen() {
             {t('scanReview.flowHint')}
           </Text>
         </View>
-        <Pressable onPress={onDiscard} hitSlop={12} disabled={saving} style={[styles.topBarSide, { alignItems: 'flex-end' }]}>
-          <Text style={[styles.topBarBtn, { color: '#c33' }]}>{t('scanReview.discard')}</Text>
+        <Pressable
+          onPress={onDiscard}
+          hitSlop={12}
+          disabled={saving}
+          style={[styles.topBarSide, { alignItems: 'flex-end' }]}
+          accessibilityRole="button"
+          accessibilityLabel={t('scanReview.discard')}
+        >
+          <Text style={[styles.topBarBtn, styles.discardBtn, saving && { opacity: 0.4 }]}>
+            {t('scanReview.discard')}
+          </Text>
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[styles.container, { paddingBottom: bottomPadding }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         {imageUri ? (
           <Image source={{ uri: imageUri }} style={styles.preview} resizeMode="contain" />
         ) : null}
 
-        {showDevTrace ? (
-          <>
-            <Text style={styles.label}>{t('scanReview.traceId')}</Text>
-            <Text selectable style={styles.mono}>
-              {traceId || '—'}
-            </Text>
-          </>
-        ) : null}
-
-        <Text style={styles.h2}>{t('scanReview.sectionYourEdits')}</Text>
-        <Text style={styles.sectionSub}>{t('scanReview.sectionYourEditsSub')}</Text>
-
-        {snapshot?.amount_mismatch ? (
-          <View style={styles.warningBanner}>
-            <Text style={styles.warningBannerText}>
-              {t('scanReview.amountMismatchWarning')}
-            </Text>
-          </View>
-        ) : null}
-
-        <Text style={styles.label}>{t('scanReview.merchant')}</Text>
-        <TextInput value={merchant} onChangeText={setMerchant} style={styles.input} editable={!saving} />
-
-        <Text style={styles.label}>{t('scanReview.date')}</Text>
-        <TextInput value={dateStr} onChangeText={setDateStr} style={styles.input} editable={!saving} />
-
-        <View style={styles.row2}>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <Text style={styles.label}>{t('scanReview.total')}</Text>
-            <TextInput value={totalStr} onChangeText={setTotalStr} keyboardType="decimal-pad" style={styles.input} editable={!saving} />
-          </View>
-          <View style={{ flex: 1, marginLeft: 8 }}>
-            <Text style={styles.label}>{t('scanReview.tax')}</Text>
-            <TextInput value={taxStr} onChangeText={setTaxStr} keyboardType="decimal-pad" style={styles.input} editable={!saving} />
-          </View>
-        </View>
-
-        <Text style={styles.label}>{t('scanReview.currency')}</Text>
-        <TextInput value={currency} onChangeText={setCurrency} style={styles.input} editable={!saving} />
-
-        <Text style={styles.label}>{t('scanReview.note')}</Text>
-        <TextInput
-          value={note}
-          onChangeText={setNote}
-          style={[styles.input, { minHeight: 72 }]}
-          multiline
+        <ReceiptSummaryCard
+          merchant={merchant}
+          dateStr={dateStr}
+          totalStr={totalStr}
+          taxStr={taxStr}
+          currency={currency}
+          note={note}
+          amountMismatch={Boolean(snapshot?.amount_mismatch)}
           editable={!saving}
-          placeholder={t('scanReview.notePlaceholder')}
+          onMerchantChange={setMerchant}
+          onDateChange={setDateStr}
+          onTotalChange={setTotalStr}
+          onTaxChange={setTaxStr}
+          onCurrencyChange={setCurrency}
+          onNoteChange={setNote}
         />
 
-        <Text style={styles.h2}>{t('scanReview.errorTagsTitle')}</Text>
-        <View style={styles.tagWrap}>
-          {RECEIPT_REVIEW_ERROR_TAGS.map((tag) => {
-            const on = errorTags.has(tag);
-            return (
-              <Pressable
-                key={tag}
-                onPress={() => toggleErrorTag(tag)}
-                style={[styles.tagChip, on && styles.tagChipOn]}
-              >
-                <Text style={[styles.tagChipText, on && styles.tagChipTextOn]}>
-                  {t(`scanReview.errorTags.${tag}`)}
-                </Text>
-              </Pressable>
-            );
-          })}
+        <View style={styles.itemsHeader}>
+          <Text style={styles.itemsTitle}>{t('scanReview.itemsTitle')}</Text>
+          <Text style={styles.itemsCount}>
+            {t('scanReview.itemsCount', { count: lineItems.length })}
+          </Text>
         </View>
 
-        <Text style={styles.h2}>{t('scanReview.itemsTitle')}</Text>
         {lineItems.length === 0 ? (
           <Text style={styles.muted}>{t('scanReview.emptyLineItems')}</Text>
         ) : null}
-        {lineItems.map((line, idx) => {
-          const srcName =
-            line.sourceIndex !== null && typeof snapItemsArr[line.sourceIndex]?.name === 'string'
-              ? snapItemsArr[line.sourceIndex].name
-              : '—';
-          return (
-          <View key={line.id} style={styles.itemCard}>
-            <View style={styles.itemCardHead}>
-              <Text style={[styles.ocrHint, { flex: 1, marginBottom: 0 }]} numberOfLines={1}>
-                {t('scanReview.recognizedName')}: {srcName}
-              </Text>
-              <Pressable onPress={() => removeLineItem(idx)} disabled={saving} hitSlop={8}>
-                <Text style={[styles.deleteItemBtn, saving && { opacity: 0.4 }]}>
-                  {t('scanReview.deleteItem')}
-                </Text>
-              </Pressable>
-            </View>
-            <Text style={styles.label}>{t('scanReview.itemName')}</Text>
-            <TextInput
-              value={line.name}
-              onChangeText={(v) => updateLine(idx, { name: v })}
-              style={styles.input}
-              editable={!saving}
-            />
-            <Pressable onPress={() => setCategoryModalIndex(idx)} style={styles.catBtn}>
-              <Text style={styles.catBtnText}>
-                {t('scanReview.category')}: {getCategoryLabel(line.category)}
-              </Text>
-            </Pressable>
-            <View style={styles.row2}>
-              <View style={{ flex: 1, marginRight: 6 }}>
-                <Text style={styles.label}>{t('scanReview.qty')}</Text>
-                <TextInput
-                  value={String(line.quantity)}
-                  onChangeText={(v) => {
-                    const q = parseInt(v.replace(/[^\d]/g, ''), 10);
-                    updateLine(idx, { quantity: Number.isFinite(q) && q > 0 ? q : 1 });
-                  }}
-                  keyboardType="number-pad"
-                  style={styles.input}
-                  editable={!saving}
-                />
-              </View>
-              <View style={{ flex: 1, marginLeft: 6 }}>
-                <Text style={styles.label}>{t('scanReview.lineTotal')}</Text>
-                <TextInput
-                  value={String(line.lineTotal)}
-                  onChangeText={(v) => updateLine(idx, { lineTotal: toNum(v, 0) })}
-                  keyboardType="decimal-pad"
-                  style={styles.input}
-                  editable={!saving}
-                />
-              </View>
-            </View>
-          </View>
-          );
-        })}
+
+        <View style={styles.itemList}>
+          {lineItems.map((line, idx) => {
+            const recognizedName =
+              line.sourceIndex !== null
+                ? snapItemsArr[line.sourceIndex]?.name
+                : null;
+            return (
+              <ReceiptItemCard
+                key={line.id}
+                name={line.name}
+                category={line.category}
+                quantity={line.quantity}
+                lineTotal={line.lineTotal}
+                recognizedName={recognizedName}
+                editable={!saving}
+                onNameChange={(v) => updateLine(idx, { name: v })}
+                onCategoryPress={() => setCategoryModalIndex(idx)}
+                onQuantityChange={(v) => {
+                  const q = parseInt(v.replace(/[^\d]/g, ''), 10);
+                  updateLine(idx, {
+                    quantity: Number.isFinite(q) && q > 0 ? q : 1,
+                  });
+                }}
+                onLineTotalChange={(v) =>
+                  updateLine(idx, { lineTotal: toNum(v, 0) })
+                }
+                onDelete={() => removeLineItem(idx)}
+              />
+            );
+          })}
+        </View>
 
         <Pressable
           style={[styles.addItemBtn, saving && { opacity: 0.5 }]}
           onPress={addLineItem}
           disabled={saving}
+          accessibilityRole="button"
+          accessibilityLabel={t('scanReview.addItem')}
         >
           <Text style={styles.addItemBtnText}>＋ {t('scanReview.addItem')}</Text>
         </Pressable>
 
-        <Text style={styles.h2}>{t('scanReview.sectionPipelineRef')}</Text>
-        <Text style={styles.sectionSub}>{t('scanReview.sectionPipelineRefSub')}</Text>
-        <Text style={styles.label}>{t('scanReview.ocrRawTitle')}</Text>
-        {ocrText ? (
-          <Text selectable style={styles.ocrBlock}>
-            {ocrText}
-          </Text>
-        ) : (
-          <Text style={styles.muted}>{t('scanReview.ocrRawEmpty')}</Text>
-        )}
-
-        <Text style={styles.saveHint}>{t('scanReview.saveFooterHint')}</Text>
-        <Pressable
-          style={[styles.primaryBtn, { marginTop: 10, marginBottom: 40 }, saving && { opacity: 0.6 }]}
-          onPress={onSave}
-          disabled={saving}
-        >
-          <Text style={styles.primaryBtnText}>{saving ? t('scanReview.saving') : t('scanReview.save')}</Text>
-        </Pressable>
+        <ReceiptReviewDetails
+          errorTags={errorTags}
+          onToggleErrorTag={toggleErrorTag}
+          showDevDetails={showDevDetails}
+          traceId={traceId}
+          ocrText={ocrText}
+        />
       </ScrollView>
+
+      <ReceiptReviewSaveBar
+        saving={saving}
+        bottomInset={insets.bottom}
+        onSave={onSave}
+        onLayoutHeight={setStickyHeight}
+      />
 
       <Modal visible={categoryModalIndex >= 0} animationType="slide" presentationStyle="pageSheet">
         <View style={styles.modalHead}>
-          <Pressable onPress={() => setCategoryModalIndex(-1)}>
+          <Pressable
+            onPress={() => setCategoryModalIndex(-1)}
+            accessibilityRole="button"
+            accessibilityLabel={t('history.detail.edit.cancel')}
+          >
             <Text style={styles.modalHeadBtn}>{t('history.detail.edit.cancel')}</Text>
           </Pressable>
           <Text style={styles.modalHeadTitle}>{t('scanReview.categoryModalTitle')}</Text>
@@ -750,6 +714,8 @@ export default function ScanReviewScreen() {
                   if (categoryModalIndex >= 0) updateLine(categoryModalIndex, { category: cat });
                   setCategoryModalIndex(-1);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={getCategoryLabel(cat)}
               >
                 <View
                   style={[
@@ -775,101 +741,89 @@ export default function ScanReviewScreen() {
           </View>
         </ScrollView>
       </Modal>
-    </>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  screen: {
+    flex: 1,
+    backgroundColor: '#f7f8fa',
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f7f8fa',
+  },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e5e5',
+    borderBottomColor: '#e7e9ec',
     backgroundColor: '#fff',
   },
   topBarSide: { minWidth: 56, justifyContent: 'center' },
   topBarCenter: { flex: 1, alignItems: 'center', paddingHorizontal: 4 },
-  topBarTitle: { fontSize: 17, fontWeight: '800', textAlign: 'center' },
-  topBarHint: { fontSize: 11, color: '#666', textAlign: 'center', marginTop: 4, lineHeight: 14 },
-  topBarBtn: { fontSize: 16, fontWeight: '700', color: '#111' },
-  sectionSub: { fontSize: 13, color: '#777', marginTop: -6, marginBottom: 8, lineHeight: 18 },
-  warningBanner: {
-    backgroundColor: '#FFF4E5',
-    borderColor: '#F0A33A',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+  topBarTitle: { fontSize: 17, fontWeight: '800', textAlign: 'center', color: '#15181c' },
+  topBarHint: {
+    fontSize: 12,
+    color: '#68707a',
+    textAlign: 'center',
+    marginTop: 3,
+    lineHeight: 16,
+  },
+  topBarBtn: { fontSize: 16, fontWeight: '700', color: '#1677ff' },
+  discardBtn: { color: '#d94848' },
+  container: { paddingHorizontal: 16, paddingTop: 14 },
+  preview: {
+    width: '100%',
+    height: 148,
+    backgroundColor: '#eef1f4',
+    borderRadius: 14,
+    marginBottom: 14,
+  },
+  itemsHeader: {
+    marginTop: 22,
     marginBottom: 10,
-  },
-  warningBannerText: { color: '#8A5A00', fontSize: 13, lineHeight: 18 },
-  saveHint: { fontSize: 13, color: '#555', marginTop: 20, lineHeight: 18 },
-  container: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 },
-  preview: { width: '100%', height: 200, backgroundColor: '#f0f0f0', borderRadius: 12, marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: '700', color: '#666', marginTop: 10, marginBottom: 6 },
-  input: {
-    backgroundColor: '#f3f3f3',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-  },
-  mono: { fontSize: 12, color: '#333' },
-  row2: { flexDirection: 'row', marginTop: 4 },
-  h2: { fontSize: 18, fontWeight: '900', marginTop: 18, marginBottom: 10 },
-  tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  tagChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    backgroundColor: '#fafafa',
-  },
-  tagChipOn: { borderColor: '#111', backgroundColor: '#111' },
-  tagChipText: { fontSize: 13, fontWeight: '700', color: '#333' },
-  tagChipTextOn: { color: '#fff' },
-  itemCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e5e5',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    backgroundColor: '#fafafa',
-  },
-  ocrHint: { fontSize: 12, color: '#888', marginBottom: 8 },
-  itemCardHead: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'baseline',
     justifyContent: 'space-between',
-    marginBottom: 8,
   },
-  deleteItemBtn: { fontSize: 13, fontWeight: '700', color: '#c33', marginLeft: 12 },
+  itemsTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#171a1f',
+  },
+  itemsCount: {
+    fontSize: 13,
+    color: '#8a929c',
+    fontWeight: '600',
+  },
+  itemList: {
+    gap: 10,
+  },
+  muted: { fontSize: 14, color: '#8a929c', marginBottom: 8 },
   addItemBtn: {
-    marginTop: 4,
+    marginTop: 12,
     marginBottom: 8,
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingVertical: 13,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#06c',
-    borderStyle: 'dashed',
+    borderColor: '#cfe1fb',
     alignItems: 'center',
-    backgroundColor: '#f5f9ff',
+    backgroundColor: '#fff',
   },
-  addItemBtnText: { fontSize: 15, fontWeight: '800', color: '#06c' },
-  catBtn: { marginTop: 10, alignSelf: 'flex-start' },
-  catBtnText: { fontSize: 15, fontWeight: '800', color: '#06c' },
-  ocrBlock: { fontSize: 11, color: '#333', backgroundColor: '#f6f6f6', padding: 10, borderRadius: 8 },
-  muted: { fontSize: 14, color: '#888' },
+  addItemBtnText: { fontSize: 15, fontWeight: '800', color: '#1677ff' },
   primaryBtn: {
-    backgroundColor: '#111',
+    backgroundColor: '#1677ff',
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
+    paddingHorizontal: 24,
   },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   modalHead: {
@@ -881,18 +835,19 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e6e6e6',
+    backgroundColor: '#fff',
   },
-  modalHeadBtn: { fontSize: 16, fontWeight: '800', color: '#111' },
-  modalHeadTitle: { fontSize: 16, fontWeight: '900' },
+  modalHeadBtn: { fontSize: 16, fontWeight: '800', color: '#1677ff' },
+  modalHeadTitle: { fontSize: 16, fontWeight: '900', color: '#15181c' },
   catOption: {
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#f8f8f8',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d7dde5',
+    backgroundColor: '#f5f7fa',
   },
-  catOptionOn: { borderColor: '#111', backgroundColor: '#111' },
-  catOptionText: { fontSize: 14, fontWeight: '700', color: '#333' },
+  catOptionOn: { borderColor: '#1677ff', backgroundColor: '#1677ff' },
+  catOptionText: { fontSize: 14, fontWeight: '700', color: '#3f4751' },
   catOptionTextOn: { color: '#fff' },
 });
