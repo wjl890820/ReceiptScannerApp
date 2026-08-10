@@ -16,6 +16,8 @@ import {
 
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { buildAnalysisTags, mapLegacyCategoryToV1 } from '@/lib/categoryTaxonomyV1';
+import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
+import { t } from '@/lib/i18n';
 import {
   getMissingInProductDictionaryTop100,
   type MissingDictionaryCandidate,
@@ -36,11 +38,32 @@ const CATEGORY_PICKER_OPTIONS: Array<{ legacyKey: string; labelZh: string }> = [
 
 export default function UncategorizedItemsScreen() {
   const router = useRouter();
+  /** null = checking; false = denied; true = allowed */
+  const [unlocked, setUnlocked] = useState<boolean | null>(null);
   const [rows, setRows] = useState<MissingDictionaryCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [reclassifyBusy, setReclassifyBusy] = useState(false);
   const [pickerFor, setPickerFor] = useState<MissingDictionaryCandidate | null>(null);
   const [upserting, setUpserting] = useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ok = await isDevToolsUnlocked();
+      if (cancelled) return;
+      if (!ok) {
+        Alert.alert(t('devTools.gateTitle'), t('devTools.gateBody'), [
+          { text: t('easterEgg.ok'), onPress: () => router.back() },
+        ]);
+        setUnlocked(false);
+        return;
+      }
+      setUnlocked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,7 +71,8 @@ export default function UncategorizedItemsScreen() {
       const data = await getMissingInProductDictionaryTop100(1500, 100);
       setRows(data);
     } catch (e: any) {
-      Alert.alert('加载失败', e?.message || String(e));
+      console.warn('[UncategorizedItems] load failed', e);
+      Alert.alert('加载失败');
     } finally {
       setLoading(false);
     }
@@ -56,8 +80,8 @@ export default function UncategorizedItemsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load])
+      if (unlocked) load();
+    }, [load, unlocked])
   );
 
   const onPickCategory = async (legacyKey: string) => {
@@ -78,7 +102,8 @@ export default function UncategorizedItemsScreen() {
       setPickerFor(null);
       setRows((prev) => prev.filter((r) => r.normalized_name !== name));
     } catch (e: any) {
-      Alert.alert('保存失败', e?.message || String(e));
+      console.warn('[UncategorizedItems] upsert failed', e);
+      Alert.alert('保存失败');
     } finally {
       setUpserting(false);
     }
@@ -94,7 +119,8 @@ export default function UncategorizedItemsScreen() {
         `updated=${s.touched}\nuserEditedSkipped=${s.skippedUserEdited}\nnoItemsSkipped=${s.skippedNoItems}\nalreadyOkSkipped=${s.skippedAlreadyCategorized}\nfailed=${s.failed}`
       );
     } catch (e: any) {
-      Alert.alert('重分类失败', e?.message || String(e));
+      console.warn('[UncategorizedItems] reclassify failed', e);
+      Alert.alert('重分类失败');
     } finally {
       setReclassifyBusy(false);
     }
@@ -121,6 +147,14 @@ export default function UncategorizedItemsScreen() {
       </Pressable>
     );
   };
+
+  if (unlocked !== true) {
+    return (
+      <View style={[styles.root, { alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator color="#1677ff" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>

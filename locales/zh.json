@@ -7,11 +7,11 @@
     "gateBody": "请在设置中连续快速点击「版本号」区域约 7 次（每次间隔约 2 秒内）以开启开发者工具。"
   },
   "common": {
-    "uncategorizedTag": "待分类",
+    "uncategorizedTag": "待确认",
     "unknownMerchant": "未知商店"
   },
   "home": {
-    "title": "消费结构概览",
+    "title": "购物结构概览",
     "subtitle": "基于小票自动生成",
     "progressive": {
       "title": "首页",
@@ -70,28 +70,28 @@
     "kpi": {
       "totalSpending": "总支出",
       "topCategory": "最大支出",
-      "nonEssential": "嗜好消费",
+      "nonEssential": "嗜好支出",
       "pending": "待确认",
       "none": "无",
       "pendingValue": "{count}件 / {amount}",
       "currency": "日元",
-      "uncategorizedHint": "有 {count} 个商品待分类，未计入分类统计"
+      "uncategorizedHint": "有 {count} 个商品待确认，未计入分类统计"
     },
     "insight": {
       "noData": "暂无数据",
-      "mainCategory": "本期消费主要集中在【{category}】（{percentage}%）",
+      "mainCategory": "本期购物支出主要集中在【{category}】（{percentage}%）",
       "structureConcentrated": "，结构偏集中",
       "headline": {
         "highConcentration": "高度集中（{percentage}%）",
         "moderateConcentration": "中度集中（{percentage}%）",
-        "balanced": "消费结构均衡"
+        "balanced": "购物结构均衡"
       },
       "reason": {
         "top1": "主要类别【{category}】占比{percentage}%",
         "concentration": "前两大类别合计占比{percentage}%",
-        "nonEssential": "嗜好消费（饮料零食）占比{percentage}%",
-        "uncategorized": "未分类项目占比{percentage}%",
-        "general": "建议审视消费模式"
+        "nonEssential": "嗜好支出（饮料零食）占比{percentage}%",
+        "uncategorized": "待确认项目占比{percentage}%",
+        "general": "建议审视购物支出结构"
       },
       "comparison": {
         "increased": "【{category}】增长+{change}%（{from}% → {to}%）",
@@ -100,10 +100,10 @@
       "suggestion": {
         "label": "建议",
         "diversify": "考虑分散支出到更多类别",
-        "controlNonEssential": "减少非必需品支出以改善财务状况",
+        "controlNonEssential": "减少非必需品支出",
         "improveCategories": "完善分类以提高分析准确性",
-        "monitor": "监控消费模式并根据需要调整",
-        "maintain": "保持当前均衡的消费结构"
+        "monitor": "留意购物支出结构并根据需要调整",
+        "maintain": "保持当前均衡的购物结构"
       }
     },
     "scan": {
@@ -176,7 +176,7 @@
     "loading": "加载草稿…",
     "missingTitle": "草稿失效",
     "missingMessage": "草稿已失效或应用已重启，请重新扫描。",
-    "traceId": "本次识别 trace_id",
+    "traceId": "本次识别追踪号",
     "merchant": "店铺",
     "merchantPlaceholder": "商店名",
     "date": "日期",
@@ -509,12 +509,15 @@
     "privacy": {
       "title": "隐私政策",
       "subtitle": "我们如何处理你的数据",
-      "alert": "隐私政策：我们不会保存您的收据图片或完整内容。OCR使用数据仅用于成本追踪，已匿名化。所有收据数据均存储在您的设备本地。详情请参阅 PRIVACY_POLICY.md。",
+      "alert": "隐私政策：我们不会保存您的收据图片或完整内容。OCR 用量统计已匿名化，仅用于成本追踪。所有收据数据均存储在您的设备本地。",
       "ok": "确定"
     },
     "about": {
       "title": "关于",
       "version": "版本"
+    },
+    "devTools": {
+      "unlocked": "开发者工具已开启"
     }
   },
   "feedback": {
@@ -525,6 +528,7 @@
     "feedbackPlaceholder": "请描述您的问题或建议",
     "emailLabel": "联系邮箱（可选）",
     "emailPlaceholder": "your.email@example.com",
+    "emailSubject": "Receipt Scanner 用户反馈",
     "submit": "提交",
     "submitting": "提交中...",
     "error": {
@@ -633,7 +637,7 @@
     "household": "日用消耗",
     "personal_care": "个人护理",
     "pet_care": "宠物用品",
-    "uncategorized": "待分类",
+    "uncategorized": "待确认",
     "other": "其他",
     "produce": "生鲜果蔬",
     "meat_seafood": "肉类海鲜",
@@ -690,11 +694,11 @@
     "updated": "已更新"
   },
   "grocery": {
-    "onlyNote": "分类统计仅对“超市小票”显示。"
+    "onlyNote": "分类统计仅对「超市与便利店」小票显示。"
   },
   "v1": {
     "supportedNote": "分类统计包含超市与便利店小票。",
-    "priceRadarSupermarketOnly": "价格雷达暂时仅使用超市数据"
+    "priceRadarSupermarketOnly": "价格雷达已停用；正式路径请使用商品详情中的价格历史"
   },
   "analysisV2": {
     "sections": {
@@ -703,7 +707,7 @@
       "tips": "可行动建议"
     },
     "story": {
-      "conclusion": "最近你的消费主要花在「{catLabel}」（约 {pct}% / ¥{amt}）。",
+      "conclusion": "最近你的购物支出主要花在「{catLabel}」（约 {pct}% / ¥{amt}）。",
       "explainQuickMeals": "可能最近比较忙。",
       "explainSnacks": "可能最近想解压或嘴馋。",
       "explainDrinks": "可能最近饮料买得比较多。",

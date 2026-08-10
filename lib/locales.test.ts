@@ -37,6 +37,7 @@ const PRICE_HISTORY_KEYS = [
   'status.noComparableSpec',
   'status.unsupportedFamily',
   'status.mixedCurrency',
+  'status.ambiguousDimension',
 ] as const;
 
 function loadLocale(name: string): Record<string, unknown> {

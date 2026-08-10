@@ -534,8 +534,7 @@ export default function ScanReviewScreen() {
     } catch (e: any) {
       // 保存失败：保留 draft、不清队列、不放行离开、不跳转；技术细节进日志。
       logger.warn('ScanReview', 'Save failed', { error: e });
-      const detail = e?.message ? `\n\n${String(e.message)}` : '';
-      Alert.alert(t('scanReview.saveFailedTitle'), `${t('scanReview.saveFailedMessage')}${detail}`);
+      Alert.alert(t('scanReview.saveFailedTitle'), t('scanReview.saveFailedMessage'));
     } finally {
       setSaving(false);
       saveInFlightRef.current = false;

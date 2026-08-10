@@ -30,7 +30,7 @@ export default function FeedbackScreen() {
       Alert.alert(t('feedback.error.title'), t('feedback.error.notConfigured'));
       return;
     }
-    const subject = 'ReceiptScanner feedback';
+    const subject = t('feedback.emailSubject');
     const body = bodyFromState && bodyFromState.trim().length > 0 ? bodyFromState : feedback;
     const url = `mailto:${encodeURIComponent(supportEmail)}?subject=${encodeURIComponent(
       subject

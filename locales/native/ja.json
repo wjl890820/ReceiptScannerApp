@@ -1,0 +1,10 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "小票を撮影して認識するため、カメラを使用します。",
+    "NSPhotoLibraryUsageDescription": "小票画像を選択して認識するため、写真ライブラリへのアクセスを使用します。"
+  },
+  "android": {
+    "NSCameraUsageDescription": "小票を撮影して認識するため、カメラを使用します。",
+    "NSPhotoLibraryUsageDescription": "小票画像を選択して認識するため、写真ライブラリへのアクセスを使用します。"
+  }
+}

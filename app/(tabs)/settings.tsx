@@ -226,7 +226,7 @@ export default function SettingsScreen() {
           // ignore
         }
         setDevToolsEnabled(true);
-        Alert.alert('Dev Tools enabled');
+        Alert.alert(t('settings.devTools.unlocked'));
       }
     };
   }, []);

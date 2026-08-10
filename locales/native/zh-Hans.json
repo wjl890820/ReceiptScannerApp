@@ -1,0 +1,10 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "需要使用相机拍摄小票以便识别商品明细。",
+    "NSPhotoLibraryUsageDescription": "需要访问相册以选择小票图片进行识别。"
+  },
+  "android": {
+    "NSCameraUsageDescription": "需要使用相机拍摄小票以便识别商品明细。",
+    "NSPhotoLibraryUsageDescription": "需要访问相册以选择小票图片进行识别。"
+  }
+}

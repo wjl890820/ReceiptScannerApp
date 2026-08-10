@@ -216,7 +216,7 @@ export default function ReceiptDetailScreen() {
       setReceipt(row ?? null);
     } catch (e: any) {
       console.error(e);
-      Alert.alert(t('history.errors.loadTitle'), e?.message ?? t('history.detail.loadMessage'));
+      Alert.alert(t('history.errors.loadTitle'), t('history.detail.loadMessage'));
       setReceipt(null);
     } finally {
       setLoading(false);
@@ -330,7 +330,7 @@ export default function ReceiptDetailScreen() {
       Alert.alert(t('history.detail.savedTitle'));
     } catch (e: any) {
       console.error(e);
-      Alert.alert(t('history.detail.saveFailedTitle'), e?.message ?? t('history.detail.retry'));
+      Alert.alert(t('history.detail.saveFailedTitle'), t('history.detail.retry'));
     } finally {
       setSavingItem(false);
     }
@@ -354,7 +354,7 @@ export default function ReceiptDetailScreen() {
               router.back();
             } catch (e: any) {
               console.error(e);
-              Alert.alert(t('history.detail.deleteFailedTitle'), e?.message ?? t('history.detail.retry'));
+              Alert.alert(t('history.detail.deleteFailedTitle'), t('history.detail.retry'));
             }
           },
         },

@@ -1,0 +1,10 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "Camera access is used to photograph receipts for recognition.",
+    "NSPhotoLibraryUsageDescription": "Photo library access is used to select receipt images for recognition."
+  },
+  "android": {
+    "NSCameraUsageDescription": "Camera access is used to photograph receipts for recognition.",
+    "NSPhotoLibraryUsageDescription": "Photo library access is used to select receipt images for recognition."
+  }
+}

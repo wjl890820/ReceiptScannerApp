@@ -52,7 +52,7 @@ export default function HistoryScreen() {
       setRows(data);
     } catch (e: any) {
       console.error(e);
-      Alert.alert(t('history.errors.loadTitle'), e?.message ?? t('history.errors.loadMessage'));
+      Alert.alert(t('history.errors.loadTitle'), t('history.errors.loadMessage'));
     }
   }, []);
 
@@ -184,7 +184,7 @@ export default function HistoryScreen() {
               await load();
             } catch (e: any) {
               console.error(e);
-              Alert.alert(t('history.batchDelete.deleteFailed'), e?.message ?? '');
+              Alert.alert(t('history.batchDelete.deleteFailed'));
             } finally {
               setDeleting(false);
             }

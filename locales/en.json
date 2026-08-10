@@ -176,7 +176,7 @@
     "loading": "Loading draft…",
     "missingTitle": "Draft missing",
     "missingMessage": "Draft expired or app restarted. Please scan again.",
-    "traceId": "Scan trace_id",
+    "traceId": "Scan trace ID",
     "merchant": "Store",
     "merchantPlaceholder": "Store name",
     "date": "Date",
@@ -509,12 +509,15 @@
     "privacy": {
       "title": "Privacy Policy",
       "subtitle": "How we handle your data",
-      "alert": "Privacy Policy: We do NOT store your receipt images or full content. OCR usage data is anonymized for cost tracking only. All receipt data is stored locally on your device. See PRIVACY_POLICY.md for details.",
+      "alert": "Privacy Policy: We do NOT store your receipt images or full content. OCR usage metrics are anonymized for cost tracking only. All receipt data stays on your device.",
       "ok": "OK"
     },
     "about": {
       "title": "About",
       "version": "Version"
+    },
+    "devTools": {
+      "unlocked": "Developer Tools enabled"
     }
   },
   "feedback": {
@@ -525,6 +528,7 @@
     "feedbackPlaceholder": "Please describe your issue or suggestion",
     "emailLabel": "Contact Email (Optional)",
     "emailPlaceholder": "your.email@example.com",
+    "emailSubject": "Receipt Scanner feedback",
     "submit": "Submit",
     "submitting": "Submitting...",
     "error": {
@@ -690,11 +694,11 @@
     "updated": "Updated"
   },
   "grocery": {
-    "onlyNote": "Category breakdown is shown for grocery receipts only."
+    "onlyNote": "Category breakdown is shown for supermarket and convenience store receipts."
   },
   "v1": {
     "supportedNote": "Category breakdown includes supermarket and convenience receipts.",
-    "priceRadarSupermarketOnly": "Price Radar currently uses supermarket data only"
+    "priceRadarSupermarketOnly": "Price Radar is hidden; use Safe Price History on product detail"
   },
   "analysisV2": {
     "sections": {

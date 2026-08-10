@@ -25,10 +25,10 @@ export default function TabLayout() {
       // Fallback to English if translation fails
       console.warn('[TabLayout] Translation failed, using fallback:', e);
       return {
-        home: 'Home',
-        history: 'History',
-        settings: 'Settings',
-        analysis: 'Analysis',
+        home: '首页',
+        history: '历史',
+        settings: '设置',
+        analysis: '分析',
       };
     }
   }, []);

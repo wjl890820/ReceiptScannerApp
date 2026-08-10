@@ -1,12 +1,31 @@
 // app/(tabs)/pro-insight.tsx
 import { useRouter } from 'expo-router';
-import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { t } from '@/lib/i18n';
+import { shouldShowSettingsProEntry } from '@/lib/settingsPresentation';
+
+/** Release freeze: Pro purchase is not shipped. */
+const PRO_COMING_SOON = true;
 
 export default function ProInsightScreen() {
   const router = useRouter();
+  const allowed = shouldShowSettingsProEntry({ comingSoon: PRO_COMING_SOON });
+
+  useEffect(() => {
+    if (!allowed) {
+      router.replace('/(tabs)/settings');
+    }
+  }, [allowed, router]);
+
+  if (!allowed) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color="#1677ff" />
+      </View>
+    );
+  }
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -71,6 +90,12 @@ export default function ProInsightScreen() {
 }
 
 const styles = StyleSheet.create({
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
   container: {
     flexGrow: 1,
     backgroundColor: '#fff',
@@ -80,61 +105,59 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 20,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: '#e5e5e5',
   },
   backButton: {
     marginBottom: 12,
   },
   backButtonText: {
     fontSize: 16,
-    color: '#111',
-    fontWeight: '700',
+    color: '#1677ff',
   },
   title: {
     fontSize: 28,
-    fontWeight: '800',
+    fontWeight: '700',
     color: '#111',
   },
   content: {
     padding: 20,
   },
   section: {
-    marginBottom: 32,
+    marginBottom: 28,
   },
   sectionTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#111',
-    marginBottom: 16,
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
+    color: '#222',
   },
   featureList: {
-    gap: 12,
+    gap: 10,
   },
   featureItem: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    gap: 8,
   },
   featureBullet: {
     fontSize: 16,
-    color: '#666',
-    marginRight: 12,
-    marginTop: 2,
+    lineHeight: 22,
   },
   featureText: {
     flex: 1,
     fontSize: 15,
-    color: '#333',
     lineHeight: 22,
+    color: '#444',
   },
   footer: {
-    marginTop: 20,
-    paddingTop: 20,
+    marginTop: 8,
+    paddingTop: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e0e0e0',
+    borderTopColor: '#eee',
   },
   footerText: {
     fontSize: 14,
-    color: '#999',
+    color: '#888',
     textAlign: 'center',
   },
 });

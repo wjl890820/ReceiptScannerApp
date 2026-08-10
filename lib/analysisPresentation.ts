@@ -151,8 +151,11 @@ export function buildAnalysisInsightPresentation(
     return {
       kind: 'story',
       titleKey: 'analysis.release.insightTitle',
-      bodyKey: story.conclusionKey,
-      bodyParams: story.conclusionParams,
+      bodyKey: 'analysis.release.topCategoryInsight',
+      bodyParams: {
+        category: String(story.conclusionParams.cat ?? ''),
+        pct: Number(story.conclusionParams.pct ?? 0),
+      },
     };
   }
 
