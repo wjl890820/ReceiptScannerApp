@@ -599,6 +599,28 @@
       "title": "分类价格指数",
       "category": "类别",
       "items": "项"
+    },
+    "release": {
+      "empty": {
+        "title": "当前范围还没有购物记录",
+        "subtitle": "扫描日本超市或便利店小票后，这里会逐步生成购物分析。",
+        "cta": "去首页扫描"
+      },
+      "periodEmpty": {
+        "title": "这个时间范围还没有记录",
+        "subtitle": "其他时间范围可能已有分析。可以切换到「全部」查看已有数据。",
+        "switchAll": "切换到全部"
+      },
+      "overviewTitle": "本期概览",
+      "totalSpend": "总支出",
+      "receiptCount": "记录次数",
+      "averageSpend": "平均每次",
+      "itemCount": "商品数量",
+      "categoryTitle": "分类构成",
+      "insightTitle": "本期洞察",
+      "topCategoryInsight": "最近记录中，「{catLabel}」支出占比最高（约 {pct}%）。",
+      "lowDataHint": "继续记录后，这里的趋势会更完整。",
+      "loadFailed": "暂时无法加载分析"
     }
   },
   "easterEgg": {
@@ -686,7 +708,7 @@
       "explainSnacks": "可能最近想解压或嘴馋。",
       "explainDrinks": "可能最近饮料买得比较多。",
       "explainDefault": "可以留意一下这个类别的支出。",
-      "fallback": "数据还不够，我先展示概览。"
+      "fallback": "记录还不够生成趋势，先展示可核对的概览。"
     },
     "changes": {
       "spendUp": "这段{periodDays}天总支出比上期多了 ¥{delta}。",
@@ -701,7 +723,7 @@
       "timeQuick": "如果你想省时间又不想总吃外食，可以准备 2 个固定快捷组合（例如：酸奶+水果 / 鸡胸+沙拉）。"
     },
     "confidence": {
-      "low": "最近记录较少，结论仅供参考。",
+      "low": "最近记录较少，趋势仍在形成中。",
       "med": "记录渐多，洞察会更稳。",
       "high": "数据较充分，结论可信度较高。"
     },
