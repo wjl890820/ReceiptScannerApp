@@ -104,6 +104,19 @@ describe('reconcileReceiptTotals: 金额对账', () => {
   it('total 缺失时不报错', () => {
     expect(reconcileReceiptTotals(300, 0, 0, 0).ok).toBe(true);
   });
+  it('内税 + product coupon: gross+disc=total → ok; never overwrites total', () => {
+    // Sample 007 shape: 8951 - 600 = 8351, tax 619 included
+    const r = reconcileReceiptTotals(8951, -600, 619, 8351);
+    expect(r.ok).toBe(true);
+    expect(r.total).toBe(8351);
+  });
+
+  it('外税: items + tax = total → ok', () => {
+    // Sample 003 shape
+    const r = reconcileReceiptTotals(2442, 0, 195, 2637);
+    expect(r.ok).toBe(true);
+    expect(r.total).toBe(2637);
+  });
 });
 
 describe('normalizeOcrAnalysis: 整体后处理', () => {
@@ -143,5 +156,22 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     const out = normalizeOcrAnalysis(analysis);
     expect(out.items).toHaveLength(1);
     expect(out.amount_mismatch).toBe(true);
+  });
+
+  it('explicit discounts[] + same negative item collapses to one discount', () => {
+    const out = normalizeOcrAnalysis({
+      items: [
+        { name: 'FERRERO ROCHER ORIGINS', quantity: 1, unitPrice: 2988, lineTotal: 2988 },
+        { name: 'CPN ROCHER ORIGINS CPN', quantity: 1, unitPrice: -600, lineTotal: -600 },
+      ],
+      discounts: [{ label: 'ROCHER ORIGINS CPN', amount: -600 }],
+      total: 2388,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.discounts).toHaveLength(1);
+    expect(out.discounts![0].amount).toBe(-600);
+    expect(out.items).toHaveLength(1);
+    expect(out.amount_mismatch).toBe(false);
   });
 });

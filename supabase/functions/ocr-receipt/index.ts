@@ -9,6 +9,8 @@ const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
+/** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
+const OCR_CACHE_VERSION = 2;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -18,7 +20,12 @@ const GEMINI_PRICE_OUTPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_OUTPUT_
 const SERVER_SALT = Deno.env.get('SERVER_SALT') || ''; // Salt for hashing actor IDs (privacy)
 
 // Log OCR model at cold start (no secrets)
-console.log(`[ocr-receipt] boot model=${GEMINI_MODEL}`);
+console.log(`[ocr-receipt] boot model=${GEMINI_MODEL} cacheVersion=${OCR_CACHE_VERSION}`);
+
+/** Cache lookup key: prompt/parser version + image content hash (not image hash alone). */
+function buildOcrCacheKey(imageContentHash: string): string {
+  return `v${OCR_CACHE_VERSION}:${imageContentHash}`;
+}
 
 interface OCRRequest {
   imageBase64?: string;
@@ -271,8 +278,8 @@ function buildOcrPrompt(): string {
     '{',
     '  "merchant": string|null,            // 店名（例: セブン-イレブン）',
     '  "transactionDate": string|null,     // 例 "YYYY/MM/DD HH:MM"（原文の形式のまま）',
-    '  "total": number|null,               // 合計（整数 JPY）',
-    '  "tax": number|null,                 // 消費税（整数 JPY、無ければ 0）',
+    '  "total": number|null,               // 印刷された最終支払合計（整数 JPY）。自己計算しない',
+    '  "tax": number|null,                 // 印刷された消費税額（整数 JPY、無ければ 0）',
     '  "currency": "JPY",',
     '  "items": [ {',
     '     "name": string, "quantity": number, "unitPrice": number, "lineTotal": number,',
@@ -286,6 +293,20 @@ function buildOcrPrompt(): string {
     '- すべての金額は整数の JPY。小数や通貨記号（¥ 等）を付けない。',
     '- 値引・割引・クーポン・セール・ポイント利用 などの行は商品ではない。kind="discount" とし、discounts にも入れる（amount は負数）。',
     '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
+    '',
+    '【total / tax の厳守ルール】',
+    '- total は、レシート上に明確に印刷された最終支払合計行を優先してそのまま転記すること。',
+    '  例ラベル: 合計 / お買上計 / お買上げ計 / 支払合計 / 合計金額。',
+    '- 最終合計（final printed total）が印刷されている場合、その金額を必ず total に入れる。',
+    '  items / 小計 / tax / discounts から total を再計算・再構成してはならない。',
+    '- tax は印刷された消費税額を転記する。total に税を足し直してはならない。',
+    '- 日本のレシートは内税（total に税込み）でも外税（小計+税=合計が印刷）でもよい。',
+    '  どちらの場合も、印刷された最終合計があれば total はその金額であり、税を二重加算しない。',
+    '- 例（内税・正しい）: 合計 8351・消費税 619 → total=8351, tax=619。total=8970（8351+619）は禁止。',
+    '- 例（外税・正しい）: 小計 2442・税 195・合計 2637 → total=2637, tax=195。',
+    '- クーポン/値引は discounts に入れ、items に入れない。印刷された最終合計がある限り、',
+    '  items±discounts+tax で total を上書きしない。',
+    '',
     '- 商品分類(categoryKey)は次の固定 enum のみから選ぶ:',
     '  food_ingredients(食材), ready_to_eat(弁当・惣菜・即食), snacks_drinks(飲料・お菓子・酒),',
     '  household(日用消耗品), personal_care(個人ケア・医薬), pet_care(ペット用品), uncategorized(不明), other(その他)。',
@@ -306,7 +327,13 @@ function buildOcrPrompt(): string {
 async function requestGeminiText(
   parts: any[]
 ): Promise<{ text: string; usage: any }> {
-  const body = { contents: [{ parts }] };
+  // Low temperature for structured OCR extraction (not guaranteed absolute determinism).
+  const body = {
+    contents: [{ parts }],
+    generationConfig: {
+      temperature: 0,
+    },
+  };
   const maxRetry = 1;
   let lastError: any = null;
 
@@ -406,7 +433,9 @@ async function callGemini(imageBase64: string): Promise<any> {
         {
           text:
             'あなたは JSON 修復器です。次の内容を、指定スキーマに従う有効な JSON のみに修正して出力してください。' +
-            'Markdown や説明は出力しないこと。\n' +
+            'Markdown や説明は出力しないこと。' +
+            'total は印刷された最終合計の転記であり、items/小計/tax/discounts から再計算しないこと。' +
+            '印刷済み total に tax を足し直さないこと。\n' +
             'スキーマ: {merchant, transactionDate, total, tax, currency, ' +
             'items:[{name,quantity,unitPrice,lineTotal,categoryKey,kind}], discounts:[{label,amount}]}\n\n' +
             '--- 元の内容 ---\n' +
@@ -707,9 +736,10 @@ serve(async (req) => {
       );
     }
 
-    // Compute image hash
-    const imageHash = await computeSHA256(requestData.imageBase64);
-    const hashPrefix = imageHash.substring(0, 8);
+    // Compute image content hash, then versioned cache key (invalidates old prompt results).
+    const imageContentHash = await computeSHA256(requestData.imageBase64);
+    const cacheKey = buildOcrCacheKey(imageContentHash);
+    const hashPrefix = imageContentHash.substring(0, 8);
 
     // Check rate limit
     const rateLimitOk = await checkRateLimit(supabase, deviceId);
@@ -752,13 +782,13 @@ serve(async (req) => {
     }
 
     // Check cache
-    const cacheResult = await checkCache(supabase, imageHash);
+    const cacheResult = await checkCache(supabase, cacheKey);
     if (cacheResult.cached && cacheResult.analysis) {
       const responseTime = Date.now() - startTime;
       const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
       
       console.log(
-        `[${requestId}] Cache hit: deviceId=${deviceId.substring(0, 8)} userId=${userId || 'none'} hash=${hashPrefix} time=${responseTime}ms`
+        `[${requestId}] Cache hit: deviceId=${deviceId.substring(0, 8)} userId=${userId || 'none'} hash=${hashPrefix} cacheKeyPrefix=v${OCR_CACHE_VERSION} time=${responseTime}ms`
       );
 
       // Record usage event for cache hit (no tokens, but still track request)
@@ -783,7 +813,7 @@ serve(async (req) => {
           success: true,
           analysis: cacheResult.analysis,
           cached: true,
-          hash: imageHash,
+          hash: imageContentHash,
         } as OCRResponse),
         {
           status: 200,
@@ -813,7 +843,7 @@ serve(async (req) => {
     }
 
     // Save to cache
-    await saveToCache(supabase, imageHash, analysis, deviceId);
+    await saveToCache(supabase, cacheKey, analysis, deviceId);
 
     const responseTime = Date.now() - startTime;
     const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
@@ -850,7 +880,7 @@ serve(async (req) => {
         success: true,
         analysis,
         cached: false,
-        hash: imageHash,
+        hash: imageContentHash,
       } as OCRResponse),
       {
         status: 200,

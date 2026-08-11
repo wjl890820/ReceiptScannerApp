@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {
+  authoritativeReceiptTotal,
   shouldShowLegacyPostSaveEasterEggAlert,
   shouldShowRecognizedNameHint,
   shouldShowReviewDevDetails,
@@ -28,6 +29,11 @@ describe('scanReview presentation visibility', () => {
   it('disables legacy post-save easter egg Alerts on Release builds', () => {
     expect(shouldShowLegacyPostSaveEasterEggAlert(false)).toBe(false);
     expect(shouldShowLegacyPostSaveEasterEggAlert(true)).toBe(true);
+  });
+
+  it('keeps explicit receipt.total authoritative (never total+tax)', () => {
+    expect(authoritativeReceiptTotal({ total: 8351, tax: 619 })).toBe(8351);
+    expect(authoritativeReceiptTotal({ total: 2637, tax: 195 })).toBe(2637);
   });
 });
 

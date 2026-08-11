@@ -126,7 +126,7 @@ export function computeUncategorizedSummary(
     if (!Array.isArray(items) || items.length === 0) continue;
 
     for (const item of items) {
-      const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
+      const lineTotal = itemAmountForAnalytics(item);
       if (lineTotal <= 0) continue;
 
       if (resolveItemFinalCategory(item) === 'uncategorized') {

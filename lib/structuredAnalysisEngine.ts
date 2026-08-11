@@ -3,6 +3,7 @@
 
 import type { SubCategory, AnalysisTag } from './categoryTaxonomyV1';
 import { normalizeProductCategory, type ProductCategory } from './productCategory';
+import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 
 export type ReceiptStructuredAnalysisV1 = {
   shopping_type: 'grocery' | 'mixed' | 'unknown';
@@ -32,7 +33,7 @@ export function buildReceiptStructuredAnalysis(input: {
   const tagMap = new Map<string, number>();
 
   for (const it of items) {
-    const lt = safeNum(it?.line_total ?? it?.lineTotal);
+    const lt = itemAmountForAnalytics(it);
     if (lt <= 0) continue;
     const main = normalizeProductCategory(
       it?.category ?? it?.category_main,
@@ -75,7 +76,7 @@ export function buildReceiptStructuredAnalysis(input: {
   const top_items = items
     .map((it) => ({
       normalized_name: String(it?.normalized_name || it?.name || ''),
-      line_total: safeNum(it?.line_total ?? it?.lineTotal),
+      line_total: itemAmountForAnalytics(it),
       category_main: normalizeProductCategory(
         it?.category ?? it?.category_main,
         it?.normalized_name ?? it?.name
@@ -97,6 +98,8 @@ export function buildReceiptStructuredAnalysis(input: {
     signals: [
       { key: 'currency', value: input.currency },
       { key: 'items_count', value: items.length },
+      { key: 'total_amount', value: safeNum(input.total) },
+      { key: 'merchandise_amount', value: mainTotal },
     ],
   };
 }

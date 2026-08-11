@@ -657,7 +657,11 @@ export async function applyCategoriesWithLearning(
     currency: analysis.currency,
   });
 
-  const receiptLevel = buildReceiptAnalysisV1({ items: enrichedItems as any, total: analysis.total });
+  const receiptLevel = buildReceiptAnalysisV1({
+    items: enrichedItems as any,
+    total: analysis.total,
+    discounts: Array.isArray((analysis as any)?.discounts) ? (analysis as any).discounts : null,
+  });
   const receiptTemplate = buildReceiptTemplateL1(receiptLevel);
 
   return {

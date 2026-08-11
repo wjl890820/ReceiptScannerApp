@@ -29,6 +29,58 @@ export type ReceiptReconciliation = {
   warnings: string[];
 };
 
+/** Coupon noise ignored when matching explicit discounts[] to negative item lines. */
+const DISCOUNT_IDENTITY_NOISE = [
+  'cpn',
+  'coupon',
+  'クーポン',
+  '値引',
+  '値引き',
+  '割引',
+  'わりびき',
+  'セール',
+  'discount',
+  'off',
+];
+
+/**
+ * Conservative logical-discount identity: normalized content tokens + |amount|.
+ * Does NOT dedupe by amount alone (two different -600 coupons stay distinct).
+ */
+export function normalizeDiscountIdentityLabel(label: string): string {
+  let s = toHalfWidthLower(label || '').replace(/[^\p{L}\p{N}]+/gu, ' ');
+  for (const noise of DISCOUNT_IDENTITY_NOISE) {
+    s = s.replace(new RegExp(noise, 'gi'), ' ');
+  }
+  return s
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .sort()
+    .join(' ');
+}
+
+function discountIdentityKey(d: ReceiptDiscount): string {
+  const amt = Math.abs(Math.round(Number(d.amount) || 0));
+  return `${normalizeDiscountIdentityLabel(d.label)}|${amt}`;
+}
+
+/** Append discount unless the same logical coupon is already present. */
+export function pushUniqueReceiptDiscount(
+  discounts: ReceiptDiscount[],
+  next: ReceiptDiscount
+): void {
+  const amount = Number(next.amount);
+  if (!Number.isFinite(amount) || amount === 0) return;
+  const row: ReceiptDiscount = {
+    label: typeof next.label === 'string' && next.label.trim() ? next.label.trim() : '値引',
+    amount: amount < 0 ? amount : -Math.abs(amount),
+  };
+  const key = discountIdentityKey(row);
+  if (discounts.some((d) => discountIdentityKey(d) === key)) return;
+  discounts.push(row);
+}
+
 /** OCR categoryKey 合法枚举（与 receiptAnalyzer.CategoryKey 对齐） */
 const VALID_CATEGORY_KEYS: readonly CategoryKey[] = [
   'fresh',
@@ -196,16 +248,14 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   const keptItems: ReceiptItem[] = [];
   const discounts: ReceiptDiscount[] = [];
 
-  // Preserve discounts already returned by the OCR edge (if any).
+  // Explicit Edge discounts[] first — authoritative labels preferred when both present.
   const incomingDiscounts = Array.isArray((analysis as NormalizedOcrAnalysis).discounts)
     ? ((analysis as NormalizedOcrAnalysis).discounts as ReceiptDiscount[])
     : [];
   for (const d of incomingDiscounts) {
-    const amount = Number(d?.amount);
-    if (!Number.isFinite(amount) || amount === 0) continue;
-    discounts.push({
-      label: typeof d?.label === 'string' && d.label.trim() ? d.label : '値引',
-      amount: amount < 0 ? amount : -Math.abs(amount),
+    pushUniqueReceiptDiscount(discounts, {
+      label: typeof d?.label === 'string' ? d.label : '値引',
+      amount: Number(d?.amount),
     });
   }
 
@@ -215,7 +265,11 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     const kind = classifyLineKind(name, lineTotal);
 
     if (kind === 'discount') {
-      discounts.push({ label: name || '値引', amount: lineTotal <= 0 ? lineTotal : -Math.abs(lineTotal) });
+      // Negative coupon lines often duplicate an entry already in discounts[].
+      pushUniqueReceiptDiscount(discounts, {
+        label: name || '値引',
+        amount: lineTotal <= 0 ? lineTotal : -Math.abs(lineTotal),
+      });
       continue;
     }
     if (kind === 'tax' || kind === 'subtotal') {
@@ -232,6 +286,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     });
   }
 
+  // Allocation runs only after discount representations are collapsed.
   const allocated = applyReceiptDiscountsToItems(keptItems, discounts);
   const itemsPositiveSum = allocated.items.reduce(
     (s, it) => s + (it.lineTotal > 0 ? it.lineTotal : 0),
@@ -240,6 +295,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   const discountsSum = discounts.reduce((s, d) => s + (d.amount < 0 ? d.amount : -Math.abs(d.amount)), 0);
   const tax = Number.isFinite(analysis.tax) ? analysis.tax : 0;
   const total = Number.isFinite(analysis.total) ? analysis.total : 0;
+  // Validation only — never overwrites analysis.total.
   const reconciliation = reconcileReceiptTotals(itemsPositiveSum, discountsSum, tax, total);
 
   const merchant_normalized = normalizeMerchant(analysis.merchant);

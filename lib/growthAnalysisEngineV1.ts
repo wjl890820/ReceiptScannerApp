@@ -7,7 +7,11 @@ import { filterV1SupportedReceipts } from './merchantType';
 import type { AnalysisLevel } from './analysisTriggers';
 import { getAnalysisLevel } from './analysisTriggers';
 import { normalizeProductCategory, type ProductCategory } from './productCategory';
-
+import {
+  itemAmountForAnalytics,
+  receiptLevelUnallocatedDiscountSum,
+  type DiscountLine,
+} from './receiptDiscountAllocation';
 export type ReceiptAnalysisOutputV1 = {
   shopping_type:
     | 'cook_stockup'
@@ -82,7 +86,7 @@ function itemMainCategory(it: any): ProductCategory {
 function sumByMain(items: any[]): Map<ProductCategory, number> {
   const m = new Map<ProductCategory, number>();
   for (const it of items) {
-    const lt = safeNum(it?.line_total ?? it?.lineTotal);
+    const lt = itemAmountForAnalytics(it);
     if (lt <= 0) continue;
     const main = itemMainCategory(it);
     m.set(main, (m.get(main) ?? 0) + lt);
@@ -103,24 +107,36 @@ function pct(amount: number, total: number): number {
 export function buildReceiptAnalysisV1(params: {
   items: any[];
   total?: number;
+  /** Full receipt discounts[] (bound + unbound). Used only for receipt-level discount signal. */
+  discounts?: DiscountLine[] | null;
 }): ReceiptAnalysisOutputV1 {
   const items = Array.isArray(params.items) ? params.items : [];
   const mainMap = sumByMain(items);
-  const total = totalsum(mainMap) || safeNum(params.total);
+  // Category merchandise mix denominator — never force this to equal receipt.total.
+  const merchandiseTotal = totalsum(mainMap);
+  // Authoritative paid total when OCR/extracted total exists.
+  const receiptTotal =
+    Number.isFinite(Number(params.total)) && Number(params.total) > 0
+      ? Math.round(Number(params.total))
+      : merchandiseTotal;
+  const receiptLevelDiscount = receiptLevelUnallocatedDiscountSum(items, params.discounts);
+
+  // Mix ratios are share of merchandise lines (gross/effective item analytics), not of net receipt.
+  const ratioDenom = merchandiseTotal;
 
   const ratios: ReceiptAnalysisOutputV1['ratios'] = {
-    food_ingredients: pct(mainMap.get('food_ingredients') ?? 0, total),
-    ready_to_eat: pct(mainMap.get('ready_to_eat') ?? 0, total),
-    snacks_drinks: pct(mainMap.get('snacks_drinks') ?? 0, total),
-    household: pct(mainMap.get('household') ?? 0, total),
-    personal_care: pct(mainMap.get('personal_care') ?? 0, total),
-    pet_care: pct(mainMap.get('pet_care') ?? 0, total),
-    other: pct(mainMap.get('other') ?? 0, total),
-    uncategorized: pct(mainMap.get('uncategorized') ?? 0, total),
+    food_ingredients: pct(mainMap.get('food_ingredients') ?? 0, ratioDenom),
+    ready_to_eat: pct(mainMap.get('ready_to_eat') ?? 0, ratioDenom),
+    snacks_drinks: pct(mainMap.get('snacks_drinks') ?? 0, ratioDenom),
+    household: pct(mainMap.get('household') ?? 0, ratioDenom),
+    personal_care: pct(mainMap.get('personal_care') ?? 0, ratioDenom),
+    pet_care: pct(mainMap.get('pet_care') ?? 0, ratioDenom),
+    other: pct(mainMap.get('other') ?? 0, ratioDenom),
+    uncategorized: pct(mainMap.get('uncategorized') ?? 0, ratioDenom),
   };
 
   const top_categories = Array.from(mainMap.entries())
-    .map(([k, amount]) => ({ category_main: k, amount, pct: pct(amount, total) }))
+    .map(([k, amount]) => ({ category_main: k, amount, pct: pct(amount, ratioDenom) }))
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 3);
 
@@ -135,16 +151,18 @@ export function buildReceiptAnalysisV1(params: {
   const household = tagCounts.get('household_essential') ?? 0;
 
   let shopping_type: ReceiptAnalysisOutputV1['shopping_type'] = 'mixed';
-  if (total <= 0) shopping_type = 'unknown';
+  if (merchandiseTotal <= 0 && receiptTotal <= 0) shopping_type = 'unknown';
   else if (ratios.food_ingredients >= 55 && ingredient >= Math.max(2, Math.floor(items.length * 0.3))) shopping_type = 'cook_stockup';
   else if (ratios.ready_to_eat >= 45 || ready >= Math.max(2, Math.floor(items.length * 0.3))) shopping_type = 'ready_to_eat';
   else if (ratios.snacks_drinks >= 55) shopping_type = 'snacks_beverages';
   else if (ratios.household >= 45 || household >= 2) shopping_type = 'household_restock';
-  else if (items.length >= 18 || total >= 12000) shopping_type = 'bulk_stockup';
+  else if (items.length >= 18 || receiptTotal >= 12000 || merchandiseTotal >= 12000) shopping_type = 'bulk_stockup';
 
   const shopping_signals: ReceiptAnalysisOutputV1['shopping_signals'] = [
     { key: 'items_count', value: items.length },
-    { key: 'total_amount', value: total },
+    { key: 'total_amount', value: receiptTotal },
+    { key: 'merchandise_amount', value: merchandiseTotal },
+    { key: 'receipt_level_discount', value: receiptLevelDiscount },
   ];
 
   const suggestions_seed: string[] = [];
@@ -173,7 +191,14 @@ export function buildAggregateAnalysisV1(receipts: ReceiptRow[]): AggregateAnaly
 
   for (const r of supported) {
     const list = getReceiptItems(r) as any[];
-    const receiptOut = buildReceiptAnalysisV1({ items: list, total: r.total });
+    let discounts: any[] | null = null;
+    try {
+      const obj = JSON.parse(r.analysis_json || '{}');
+      discounts = Array.isArray(obj?.discounts) ? obj.discounts : null;
+    } catch {
+      discounts = null;
+    }
+    const receiptOut = buildReceiptAnalysisV1({ items: list, total: r.total, discounts });
     shoppingTypeCounts.set(receiptOut.shopping_type, (shoppingTypeCounts.get(receiptOut.shopping_type) ?? 0) + 1);
 
     for (const it of list) {
@@ -230,7 +255,7 @@ export function buildWeeklyReportV1(receipts: ReceiptRow[]): WeeklyReportV1 {
 
     for (const it of list) {
       const nn = String(it?.normalized_name || it?.name || '').trim();
-      const lt = safeNum(it?.line_total ?? it?.lineTotal);
+      const lt = itemAmountForAnalytics(it);
       if (!nn || lt <= 0) continue;
       const cur = itemAgg.get(nn) ?? { amount: 0, count: 0 };
       cur.amount += lt;
@@ -285,7 +310,7 @@ export function buildMonthlyReportV1(receipts: ReceiptRow[]): MonthlyReportV1 {
     for (const [k, v] of m.entries()) mainMap.set(k, (mainMap.get(k) ?? 0) + v);
     for (const it of list) {
       const nn = String(it?.normalized_name || it?.name || '').trim();
-      const lt = safeNum(it?.line_total ?? it?.lineTotal);
+      const lt = itemAmountForAnalytics(it);
       if (!nn || lt <= 0) continue;
       const cur = itemAgg.get(nn) ?? { amount: 0, count: 0 };
       cur.amount += lt;

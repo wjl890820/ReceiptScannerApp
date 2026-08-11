@@ -141,3 +141,28 @@ export function itemAmountForAnalytics(item: DiscountableItem): number {
   const gross = grossOf(item);
   return Number.isFinite(gross) ? gross : 0;
 }
+
+/**
+ * Sum of discount amounts that are NOT confidently bound to a product line.
+ * Both discounts[] and item.discountAllocated are negative (or 0).
+ * Unallocated = total discounts − already allocated onto items.
+ */
+export function receiptLevelUnallocatedDiscountSum(
+  items: DiscountableItem[],
+  discounts: DiscountLine[] | null | undefined
+): number {
+  const discList = Array.isArray(discounts) ? discounts : [];
+  const discountsSum = discList.reduce((s, d) => {
+    const amount = Number(d?.amount);
+    if (!Number.isFinite(amount) || amount === 0) return s;
+    return s + (amount < 0 ? amount : -Math.abs(amount));
+  }, 0);
+  const boundSum = (Array.isArray(items) ? items : []).reduce((s, it) => {
+    const a = Number(it?.discountAllocated);
+    if (!Number.isFinite(a) || a === 0) return s;
+    return s + (a < 0 ? a : -Math.abs(a));
+  }, 0);
+  // Remaining receipt-level (unallocated) portion; clamp so we never invent extra discount.
+  const unallocated = discountsSum - boundSum;
+  return unallocated > 0 ? 0 : unallocated;
+}

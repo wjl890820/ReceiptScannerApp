@@ -7,7 +7,7 @@ import { getReceiptItems } from './receiptItems';
 import { getCategoryLabel } from './categoryPalette';
 import { formatJPY } from './formatJPY';
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
-
+import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 export type InsightLevel = 'info' | 'warn' | 'alert';
 
 export type InsightContext = {
@@ -89,7 +89,7 @@ export function computeInsightContext(
     if (!Array.isArray(items) || items.length === 0) continue;
 
     const receiptTotal = items.reduce((sum, item) => {
-      const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
+      const lineTotal = itemAmountForAnalytics(item);
       return sum + (lineTotal > 0 ? lineTotal : 0);
     }, 0);
 

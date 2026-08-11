@@ -3,6 +3,18 @@
  * Pure UI visibility logic — no draft/save side effects.
  */
 
+/**
+ * Explicit receipt.total is authoritative for Review/History display.
+ * tax is informational and must never be auto-added on top.
+ */
+export function authoritativeReceiptTotal(input: {
+  total: number;
+  tax?: number;
+}): number {
+  const total = Number(input.total);
+  return Number.isFinite(total) ? total : 0;
+}
+
 export function normalizeRecognizedName(
   value: unknown
 ): string | null {
