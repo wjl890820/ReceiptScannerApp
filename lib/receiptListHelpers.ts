@@ -4,6 +4,7 @@
 
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { getCategoryLabel } from './categoryPalette';
+import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { normalizeProductCategory } from './productCategory';
 
 function safeNumber(v: unknown): number {
@@ -42,11 +43,12 @@ export function buildTopCategories(
     );
     if (isExcludedFromAnalytics(key) || !isGroceryCategory(key)) continue;
 
-    const lineTotal = safeNumber(it?.lineTotal);
+    const amount = itemAmountForAnalytics(it);
     const quantity = safeNumber(it?.quantity);
     const unitPrice = safeNumber(it?.unitPrice);
-    const amount = lineTotal > 0 ? lineTotal : quantity * unitPrice;
-    map.set(key, (map.get(key) ?? 0) + safeNumber(amount));
+    const resolved = amount > 0 ? amount : quantity * unitPrice;
+    if (resolved <= 0) continue;
+    map.set(key, (map.get(key) ?? 0) + resolved);
   }
 
   const arr = Array.from(map.entries())
@@ -59,15 +61,19 @@ export function buildTopCategories(
 
 /**
  * 历史列表中日期 + 税的元信息行。
+ * Never pretend created_at is the purchase datetime.
  */
 export function buildHistoryMetaLine(
   transactionAt: number | null | undefined,
-  createdAt: number,
+  _createdAt: number,
   taxLabel: string,
   tax: number,
-  formatDate: (ts: number) => string
+  formatDate: (ts: number) => string,
+  unknownDateLabel = '—'
 ): string {
-  const ts = transactionAt || createdAt;
-  return `${formatDate(ts)} · ${taxLabel} ${tax}`;
+  const datePart =
+    transactionAt != null && Number.isFinite(transactionAt) && transactionAt > 0
+      ? formatDate(transactionAt)
+      : unknownDateLabel;
+  return `${datePart} · ${taxLabel} ${tax}`;
 }
-

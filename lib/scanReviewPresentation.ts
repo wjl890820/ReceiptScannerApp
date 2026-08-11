@@ -31,3 +31,13 @@ export function shouldShowReviewDevDetails(
 ): boolean {
   return Boolean(devToolsUnlocked || isDevBuild);
 }
+
+/**
+ * Legacy growth / Price Radar / old milestone Alert after save.
+ * Release uses Post-Save Summary only; keep Alert for __DEV__ debugging.
+ */
+export function shouldShowLegacyPostSaveEasterEggAlert(
+  isDevBuild: boolean
+): boolean {
+  return Boolean(isDevBuild);
+}

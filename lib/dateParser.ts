@@ -1,205 +1,224 @@
-// lib/dateParser.ts
-
 /**
- * 解析收据上的日期时间字符串
- * 支持多种格式：日本收据常见格式
- * - YYYY/MM/DD HH:MM
- * - YYYY-MM-DD HH:MM
- * - YYYY年MM月DD日(日) 13:33、YYYY年M月D日 HH:MM 等
- * - MM/DD HH:MM (假设当前年份)
+ * Receipt purchase datetime parsing for Japanese retail receipts.
+ * Always uses Asia/Tokyo wall-clock semantics. Never falls back to "now"
+ * unless callers explicitly pass fallbackToNow=true (save path must pass false).
  */
 
+export type ParseReceiptDateTimeOptions = {
+  fallbackToNow?: boolean;
+  /** Injected clock for tests — defaults to Date.now(). */
+  nowMs?: number;
+};
+
 /**
- * 归一化收据日期时间字符串，便于统一解析（Asia/Tokyo）
- * - 去掉全角空格
- * - 去掉曜日括号 (日)(月)…（半角/全角括号）
- * - YYYY年M月D日 -> YYYY-MM-DD（月日补零）
- * - 保留 HH:MM，无则默认 00:00
- * @returns 如 "2025-10-19 13:33"，无法归一化时返回空字符串
+ * Strip weekday markers / full-width spaces and normalize JP / slash / dash forms
+ * into "YYYY-MM-DD HH:mm" when possible. Returns '' only when unusable.
  */
 export function normalizeReceiptDateTime(input: string): string {
   if (!input || typeof input !== 'string') return '';
-  let s = input.trim();
-  // a) 全角空格 -> 半角
-  s = s.replace(/\u3000/g, ' ');
-  // b) 去掉曜日括号 (日)、(月)、（火）等
-  s = s.replace(/[（(][月火水木金土日][)）]/g, '');
-  s = s.trim();
-  // c) YYYY年M月D日 -> YYYY-MM-DD（补零）
-  const dateMatch = s.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
-  if (!dateMatch) return '';
-  const y = dateMatch[1];
-  const m = dateMatch[2].padStart(2, '0');
-  const d = dateMatch[3].padStart(2, '0');
-  // e) 时间：有则保留 HH:MM 或 HH:MM:SS，无则 00:00
-  const timeMatch = s.match(/(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
-  const hh = timeMatch ? timeMatch[1].padStart(2, '0') : '00';
-  const mm = timeMatch ? timeMatch[2].padStart(2, '0') : '00';
-  return `${y}-${m}-${d} ${hh}:${mm}`;
+  let s = input.trim().replace(/\u3000/g, ' ');
+  // Remove weekday markers: (土) / （日） etc.
+  s = s.replace(/[（(][月火水木金土日][)）]/g, '').trim();
+  s = s.replace(/\s+/g, ' ');
+
+  // YYYY年M月D日[ HH:mm[:ss]]
+  const jp = s.match(
+    /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/
+  );
+  if (jp) {
+    return formatNormalized(
+      jp[1],
+      jp[2],
+      jp[3],
+      jp[4] ?? '0',
+      jp[5] ?? '0',
+      jp[6]
+    );
+  }
+
+  // YYYY/MM/DD or YYYY-MM-DD [HH:mm[:ss]]
+  const ymd = s.match(
+    /^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
+  );
+  if (ymd) {
+    return formatNormalized(
+      ymd[1],
+      ymd[2],
+      ymd[3],
+      ymd[4] ?? '0',
+      ymd[5] ?? '0',
+      ymd[6]
+    );
+  }
+
+  // MM/DD/YYYY [HH:mm[:ss]] (Costco US-style)
+  const mdy = s.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
+  );
+  if (mdy) {
+    return formatNormalized(
+      mdy[3],
+      mdy[1],
+      mdy[2],
+      mdy[4] ?? '0',
+      mdy[5] ?? '0',
+      mdy[6]
+    );
+  }
+
+  return '';
+}
+
+function formatNormalized(
+  y: string,
+  m: string,
+  d: string,
+  hh: string,
+  mm: string,
+  ss?: string | null
+): string {
+  const base = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')} ${hh.padStart(2, '0')}:${mm.padStart(2, '0')}`;
+  if (ss != null && ss !== '') {
+    return `${base}:${String(ss).padStart(2, '0')}`;
+  }
+  return base;
+}
+
+function tokyoTimestamp(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number
+): number | null {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}+09:00`;
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return null;
+  // Validate calendar day via Tokyo components
+  const check = new Date(ts);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(check);
+  const cy = Number(parts.find((p) => p.type === 'year')?.value);
+  const cm = Number(parts.find((p) => p.type === 'month')?.value);
+  const cd = Number(parts.find((p) => p.type === 'day')?.value);
+  if (cy !== year || cm !== month || cd !== day) return null;
+  return ts;
+}
+
+function withinReasonableRange(ts: number, nowMs: number): boolean {
+  const oneDayLater = nowMs + 24 * 60 * 60 * 1000;
+  const fiveYearsAgo = nowMs - 5 * 365.25 * 24 * 60 * 60 * 1000;
+  return ts >= fiveYearsAgo && ts <= oneDayLater;
 }
 
 /**
- * 解析日期时间字符串为 epoch timestamp（Asia/Tokyo 优先）
- * 先归一化再解析；归一化后为 YYYY-MM-DD HH:MM 时构造 ISO +09:00
- * @param dateTimeStr 日期时间字符串（可能包含各种格式）
- * @param fallbackToNow 如果解析失败，是否返回当前时间（默认false，返回null）
- * @returns epoch timestamp (number) 或 null
+ * Strict machine-safe ISO-8601 with explicit timezone (Z or ±HH:MM).
+ * Date-only / timezone-less strings are intentionally rejected here.
+ */
+function parseStrictMachineIso(value: string): number | null {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      value
+    )
+  ) {
+    return null;
+  }
+  const ts = new Date(value).getTime();
+  return Number.isNaN(ts) ? null : ts;
+}
+
+/**
+ * Parse receipt purchase datetime → epoch ms (Asia/Tokyo wall clock).
+ *
+ * Precedence:
+ * 1) Deterministic human receipt formats (JP / slash / Costco MM/DD/YYYY)
+ * 2) Strict ISO-8601 with explicit timezone only
+ * Never: new Date(rawReceiptString) for human/slash/date-only values.
  */
 export function parseReceiptDateTime(
   dateTimeStr: string | null | undefined,
-  fallbackToNow: boolean = false
+  fallbackToNow: boolean | ParseReceiptDateTimeOptions = false,
+  nowMsArg?: number
 ): number | null {
-  if (!dateTimeStr || typeof dateTimeStr !== 'string') {
-    return fallbackToNow ? Date.now() : null;
-  }
+  const options: ParseReceiptDateTimeOptions =
+    typeof fallbackToNow === 'object' && fallbackToNow
+      ? fallbackToNow
+      : { fallbackToNow: Boolean(fallbackToNow), nowMs: nowMsArg };
 
+  const fallback = Boolean(options.fallbackToNow);
+  const nowMs = options.nowMs ?? Date.now();
+
+  if (!dateTimeStr || typeof dateTimeStr !== 'string') {
+    return fallback ? nowMs : null;
+  }
   const trimmed = dateTimeStr.trim();
   if (!trimmed) {
-    return fallbackToNow ? Date.now() : null;
+    return fallback ? nowMs : null;
   }
 
-  // 先归一化（日文 "2025年10月19日(日) 13:33" -> "2025-10-19 13:33"）
+  // 1) Deterministic receipt formats → Tokyo wall-clock components → +09:00 ISO.
   const normalized = normalizeReceiptDateTime(trimmed);
-  const workStr = normalized || trimmed;
+  const workStr = normalized || trimmed.replace(/[（(][月火水木金土日][)）]/g, '').trim();
 
-  // 归一化后的 "YYYY-MM-DD HH:MM" 用手写解析，构造 Asia/Tokyo ISO 避免本地时区歧义
-  const isoMatch = workStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
-  if (isoMatch) {
-    const year = parseInt(isoMatch[1], 10);
-    const month = parseInt(isoMatch[2], 10);
-    const day = parseInt(isoMatch[3], 10);
-    const hour = parseInt(isoMatch[4], 10);
-    const minute = parseInt(isoMatch[5], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+09:00`;
-      const ts = new Date(iso).getTime();
-      if (!isNaN(ts)) {
-        const now = Date.now();
-        const oneDayLater = now + 24 * 60 * 60 * 1000;
-        const fiveYearsAgo = now - 5 * 365 * 24 * 60 * 60 * 1000;
-        if (ts >= fiveYearsAgo && ts <= oneDayLater) return ts;
-      }
-    }
+  const withTime = workStr.match(
+    /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/
+  );
+  if (withTime) {
+    const ts = tokyoTimestamp(
+      Number(withTime[1]),
+      Number(withTime[2]),
+      Number(withTime[3]),
+      Number(withTime[4]),
+      Number(withTime[5]),
+      Number(withTime[6] ?? '0')
+    );
+    if (ts != null && withinReasonableRange(ts, nowMs)) return ts;
   }
 
-  // 尝试多种格式（原有正则，用于非归一化格式）
-  const patterns = [
-    // YYYY/MM/DD HH:MM 或 YYYY/MM/DD HH:MM:SS
-    /^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/,
-    // YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS
-    /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/,
-    // YYYY年MM月DD日 HH:MM
-    /^(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/,
-    // MM/DD HH:MM (假设当前年份)
-    /^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/,
-    // YYYY/MM/DD (只有日期：时间设为当天 00:00，用于小票发生时间排序)
-    /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/,
-    // YYYY-MM-DD (只有日期：时间设为当天 00:00)
-    /^(\d{4})-(\d{1,2})-(\d{1,2})$/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = workStr.match(pattern);
-    if (match) {
-      try {
-        let year: number;
-        let month: number;
-        let day: number;
-        let hour = 0;
-        let minute = 0;
-        let second = 0;
-
-        if (pattern.source.includes('年')) {
-          // YYYY年MM月DD日格式
-          year = parseInt(match[1], 10);
-          month = parseInt(match[2], 10);
-          day = parseInt(match[3], 10);
-          hour = parseInt(match[4] || '0', 10);
-          minute = parseInt(match[5] || '0', 10);
-          second = parseInt(match[6] || '0', 10);
-        } else if (match.length === 4 || match.length === 5) {
-          // MM/DD HH:MM 格式（没有年份）
-          const now = new Date();
-          year = now.getFullYear();
-          month = parseInt(match[1], 10);
-          day = parseInt(match[2], 10);
-          hour = parseInt(match[3] || '0', 10);
-          minute = parseInt(match[4] || '0', 10);
-          second = parseInt(match[5] || '0', 10);
-        } else if (match.length === 3) {
-          // 只有日期 YYYY/MM/DD
-          year = parseInt(match[1], 10);
-          month = parseInt(match[2], 10);
-          day = parseInt(match[3], 10);
-        } else {
-          // YYYY/MM/DD HH:MM 或 YYYY-MM-DD HH:MM
-          year = parseInt(match[1], 10);
-          month = parseInt(match[2], 10);
-          day = parseInt(match[3], 10);
-          hour = parseInt(match[4] || '0', 10);
-          minute = parseInt(match[5] || '0', 10);
-          second = parseInt(match[6] || '0', 10);
-        }
-
-        // 验证日期有效性
-        if (month < 1 || month > 12 || day < 1 || day > 31) {
-          continue;
-        }
-
-        const date = new Date(year, month - 1, day, hour, minute, second);
-
-        // 验证日期是否有效（例如不会出现2月30日）
-        if (
-          date.getFullYear() !== year ||
-          date.getMonth() !== month - 1 ||
-          date.getDate() !== day
-        ) {
-          continue;
-        }
-
-        // 检查日期是否在未来（超过当前时间+1天认为是无效的，可能是年份错误）
-        const now = Date.now();
-        const oneDayLater = now + 24 * 60 * 60 * 1000;
-        if (date.getTime() > oneDayLater) {
-          // 可能是年份错误，尝试减一年
-          const prevYear = new Date(year - 1, month - 1, day, hour, minute, second);
-          if (prevYear.getTime() <= oneDayLater) {
-            return prevYear.getTime();
-          }
-          continue;
-        }
-
-        // 检查日期是否太旧（超过5年认为是无效的）
-        const fiveYearsAgo = now - 5 * 365 * 24 * 60 * 60 * 1000;
-        if (date.getTime() < fiveYearsAgo) {
-          continue;
-        }
-
-        return date.getTime();
-      } catch (e) {
-        console.error('日期解析错误:', e, '输入:', trimmed);
-        continue;
-      }
-    }
+  const dateOnly = workStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (dateOnly) {
+    const ts = tokyoTimestamp(
+      Number(dateOnly[1]),
+      Number(dateOnly[2]),
+      Number(dateOnly[3]),
+      0,
+      0,
+      0
+    );
+    if (ts != null && withinReasonableRange(ts, nowMs)) return ts;
   }
 
-  // 如果所有模式都失败，尝试使用原生Date解析
-  try {
-    const parsed = new Date(workStr);
-    if (!isNaN(parsed.getTime())) {
-      const now = Date.now();
-      const oneDayLater = now + 24 * 60 * 60 * 1000;
-      const fiveYearsAgo = now - 5 * 365 * 24 * 60 * 60 * 1000;
-      const timestamp = parsed.getTime();
-
-      // 验证日期在合理范围内
-      if (timestamp >= fiveYearsAgo && timestamp <= oneDayLater) {
-        return timestamp;
-      }
-    }
-  } catch (e) {
-    // ignore
+  // MM/DD without year — assume current Tokyo calendar year
+  const md = workStr.match(/^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (md) {
+    const tokyoYear = Number(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+      }).format(new Date(nowMs))
+    );
+    const ts = tokyoTimestamp(
+      tokyoYear,
+      Number(md[1]),
+      Number(md[2]),
+      Number(md[3]),
+      Number(md[4]),
+      Number(md[5] ?? '0')
+    );
+    if (ts != null && withinReasonableRange(ts, nowMs)) return ts;
   }
 
-  return fallbackToNow ? Date.now() : null;
+  // 2) Only after deterministic formats fail: verified machine ISO with timezone.
+  const machineIso = parseStrictMachineIso(trimmed);
+  if (machineIso != null && withinReasonableRange(machineIso, nowMs)) {
+    return machineIso;
+  }
+
+  return fallback ? nowMs : null;
 }

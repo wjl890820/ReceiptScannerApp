@@ -19,6 +19,7 @@ import { ReceiptItemCard } from '@/components/review/ReceiptItemCard';
 import { ReceiptReviewDetails } from '@/components/review/ReceiptReviewDetails';
 import { ReceiptReviewSaveBar } from '@/components/review/ReceiptReviewSaveBar';
 import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
+import { parseReceiptDateTime } from '@/lib/dateParser';
 import { listReceipts, saveReceipt } from '@/lib/db';
 import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { getCategoryLabel } from '@/lib/categoryPalette';
@@ -39,7 +40,10 @@ import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
 import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
-import { shouldShowReviewDevDetails } from '@/lib/scanReviewPresentation';
+import {
+  shouldShowLegacyPostSaveEasterEggAlert,
+  shouldShowReviewDevDetails,
+} from '@/lib/scanReviewPresentation';
 
 function toNum(v: string, fallback = 0): number {
   const n = Number(String(v).replace(/,/g, '').trim());
@@ -512,17 +516,21 @@ export default function ScanReviewScreen() {
         logger.warn('ScanReview', 'Post-save growth analysis failed', { error: e });
       }
 
-      const allReceipts = await listReceipts();
-      const locale = getCurrentLocale();
-      const egg = await tryShowNextEasterEgg(allReceipts.length, allReceipts, locale);
-      if (egg.shown && egg.content) {
-        await new Promise<void>((resolve) => {
-          Alert.alert(
-            egg.content.title,
-            egg.content.bullets.join('\n\n') + (egg.content.cta ? `\n\n${egg.content.cta}` : ''),
-            [{ text: t('easterEgg.ok'), onPress: () => resolve() }]
-          );
-        });
+      // Release: Post-Save Summary is the only milestone presentation.
+      // Keep legacy Alert only for __DEV__ (still computes nothing mandatory).
+      if (shouldShowLegacyPostSaveEasterEggAlert(__DEV__)) {
+        const allReceipts = await listReceipts();
+        const locale = getCurrentLocale();
+        const egg = await tryShowNextEasterEgg(allReceipts.length, allReceipts, locale);
+        if (egg.shown && egg.content) {
+          await new Promise<void>((resolve) => {
+            Alert.alert(
+              egg.content.title,
+              egg.content.bullets.join('\n\n') + (egg.content.cta ? `\n\n${egg.content.cta}` : ''),
+              [{ text: t('easterEgg.ok'), onPress: () => resolve() }]
+            );
+          });
+        }
       }
 
       // draft、queue、learning 与 post-save 工作均已完成；这里只替换最终展示目的地。
@@ -614,6 +622,7 @@ export default function ScanReviewScreen() {
           currency={currency}
           note={note}
           amountMismatch={Boolean(snapshot?.amount_mismatch)}
+          dateNeedsConfirm={parseReceiptDateTime(dateStr.trim() || null, false) == null}
           editable={!saving}
           onMerchantChange={setMerchant}
           onDateChange={setDateStr}

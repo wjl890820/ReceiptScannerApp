@@ -230,7 +230,8 @@
     "deleteItemMessage": "确定要删除这项商品吗？",
     "deleteItemConfirm": "删除",
     "saveFooterHint": "保存后写入本地历史；若一次扫了多张，点确定后会继续审核下一张。",
-    "amountMismatchWarning": "金额可能不一致：商品合计与小票总额对不上，请核对后再保存。"
+    "amountMismatchWarning": "金额可能不一致：商品合计与小票总额对不上，请核对后再保存。",
+    "dateNeedsConfirm": "未能确认购买日期，请核对后再保存。未确认时不会使用扫描时间作为购买日期。"
   },
   "reviewRetro": {
     "settingsTitle": "审核复盘",
@@ -287,7 +288,8 @@
       "title": "历史记录",
       "subtitle": "点击任意一条进入详情页",
       "empty": "暂无记录。请先在首页识别并保存。",
-      "noCategoryInfo": "未找到分类信息"
+      "noCategoryInfo": "未找到分类信息",
+      "dateUnknown": "日期待确认"
     },
     "search": {
       "placeholder": "搜索商品或商店",
@@ -328,6 +330,7 @@
       "loading": "加载中…",
       "editedHint": "（已手动编辑商品）",
       "taxLabel": "税",
+      "dateUnknown": "日期待确认",
       "categorySummaryTitle": "分类汇总：",
       "noCategoryInfo": "暂无分类信息",
       "itemsTitle": "商品明细：",

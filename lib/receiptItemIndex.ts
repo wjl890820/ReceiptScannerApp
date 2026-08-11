@@ -382,11 +382,14 @@ export function buildReceiptItemIndexRows(
       : derived.spec_confidence;
 
     const purchaseQuantity = positiveNumberOrNull(item.quantity) ?? 1;
+    const effectiveLineTotal = nonNegativeNumberOrNull(item.effectiveLineTotal);
     const camelLineTotal = nonNegativeNumberOrNull(item.lineTotal);
     const snakeLineTotal =
       camelLineTotal == null ? nonNegativeNumberOrNull(item.line_total) : null;
-    const hasValidLineTotal = camelLineTotal != null || snakeLineTotal != null;
-    const lineTotal = camelLineTotal ?? snakeLineTotal ?? 0;
+    // Prefer paid/net amount for derived index + Price History; gross stays in analysis_json.
+    const hasValidLineTotal =
+      effectiveLineTotal != null || camelLineTotal != null || snakeLineTotal != null;
+    const lineTotal = effectiveLineTotal ?? camelLineTotal ?? snakeLineTotal ?? 0;
     const purchaseUnitPrice = hasValidLineTotal
       ? lineTotal / purchaseQuantity
       : null;

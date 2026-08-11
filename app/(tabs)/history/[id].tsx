@@ -81,8 +81,10 @@ function round0(n: number) {
   return Math.round(n);
 }
 
-/** Amount for summary: line_total / lineTotal first, else unit * qty */
+/** Amount for summary: prefer effective/net, then line_total / lineTotal, else unit * qty */
 function itemLineAmountForSummary(it: any): number {
+  const effective = toNum(it.effectiveLineTotal, NaN);
+  if (Number.isFinite(effective) && effective >= 0) return round0(effective);
   const lt = toNum(it.lineTotal ?? it.line_total, 0);
   if (lt > 0) return round0(lt);
   const qRaw = toNum(it.quantity, 0);
@@ -386,7 +388,9 @@ export default function ReceiptDetailScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.merchant}>{merchant}</Text>
             <Text style={styles.date}>
-              {formatDate(receipt.transaction_at || receipt.created_at)}
+              {receipt.transaction_at
+                ? formatDate(receipt.transaction_at)
+                : t('history.detail.dateUnknown')}
             </Text>
           </View>
         </View>

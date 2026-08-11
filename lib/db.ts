@@ -707,7 +707,8 @@ export async function saveReceipt(
       : null;
 
   // Extract transaction_at from analysis.transactionDate (或 transactionAt / purchasedAt / datetime)
-  // 仅日期：dateParser 用当天 00:00；日期+时间：按原字符串解析（ISO 或本地/Asia/Tokyo 格式）；解析失败则 null，排序回退 created_at
+  // Always use dedicated receipt date parser (Hermes new Date(string) is unreliable for slash/JP forms).
+  // Never fall back to Date.now()/scan time — parse failure stays null (purchase date unknown).
   let transactionAt: number | null = null;
   const txDateStr =
     params.analysis.transactionDate ||
@@ -716,17 +717,16 @@ export async function saveReceipt(
     (params.analysis as any).datetime;
   if (txDateStr && typeof txDateStr === 'string' && txDateStr.trim()) {
     try {
-      const isoDate = new Date(txDateStr.trim());
-      if (!isNaN(isoDate.getTime())) {
-        transactionAt = isoDate.getTime();
-      } else {
-        const { parseReceiptDateTime } = await import('./dateParser');
-        transactionAt = parseReceiptDateTime(txDateStr.trim(), false);
+      const { parseReceiptDateTime } = await import('./dateParser');
+      transactionAt = parseReceiptDateTime(txDateStr.trim(), false);
+      if (transactionAt == null && __DEV__) {
+        console.warn('[DB] Unrecognized transactionDate (stored null):', txDateStr);
       }
     } catch (e) {
       if (__DEV__) {
         console.warn('[DB] Failed to parse transactionDate:', txDateStr, e);
       }
+      transactionAt = null;
     }
   }
 
@@ -822,7 +822,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
     `
     SELECT
       id, created_at,
-      COALESCE(transaction_at, created_at) AS transaction_at,
+      transaction_at,
       image_uri,
       merchant_raw, merchant_normalized,
       merchant_type,
@@ -858,7 +858,7 @@ export async function listReceiptsForList(
     `
     SELECT
       id, created_at,
-      COALESCE(transaction_at, created_at) AS transaction_at,
+      transaction_at,
       merchant_raw, merchant_normalized,
       merchant_type,
       total, tax, currency,
@@ -951,7 +951,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
     `
     SELECT
       id, created_at,
-      COALESCE(transaction_at, created_at) AS transaction_at,
+      transaction_at,
       image_uri,
       merchant_raw, merchant_normalized,
       merchant_type,

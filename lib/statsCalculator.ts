@@ -1,12 +1,13 @@
 // lib/statsCalculator.ts
-import type { ReceiptRow } from './db';
+import type { ReceiptItem } from './receiptAnalyzer';
+import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { getReceiptItems } from './receiptItems';
 import { normalizeMerchantName } from './productNormalizer';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
 import { isV1SupportedReceipt } from './merchantType';
 import { resolveItemFinalCategory } from './homeMetricsHelpers';
-import type { ReceiptItem } from './receiptAnalyzer';
+import type { ReceiptRow } from './db';
 
 export type TimeRange = 'week' | 'month' | 'all';
 
@@ -90,7 +91,7 @@ export function calculateStats(
     try {
       const items = getReceiptItems(receipt) as ReceiptItem[];
       for (const item of items) {
-        const amount = Number(item.lineTotal) || 0;
+        const amount = itemAmountForAnalytics(item);
 
         // 与首页 computeUncategorizedSummary / aggregateCategoryData 完全一致的口径：
         // 复用共享 resolveItemFinalCategory（fallback 但有真实分类不算待分类）。

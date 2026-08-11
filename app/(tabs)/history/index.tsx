@@ -439,7 +439,8 @@ export default function HistoryScreen() {
                     receipt.created_at,
                     t('history.detail.taxLabel'),
                     receipt.tax,
-                    formatDate
+                    formatDate,
+                    t('history.list.dateUnknown')
                   )}
                 </Text>
                 {topCats.length > 0 && (
@@ -492,7 +493,8 @@ export default function HistoryScreen() {
                         item.created_at,
                         t('history.detail.taxLabel'),
                         item.tax,
-                        formatDate
+                        formatDate,
+                        t('history.list.dateUnknown')
                       )}
                     </Text>
                     {topCats.length > 0 ? (

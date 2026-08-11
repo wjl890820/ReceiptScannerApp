@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {
+  shouldShowLegacyPostSaveEasterEggAlert,
   shouldShowRecognizedNameHint,
   shouldShowReviewDevDetails,
 } from './scanReviewPresentation';
@@ -22,6 +23,11 @@ describe('scanReview presentation visibility', () => {
     expect(shouldShowReviewDevDetails(false, false)).toBe(false);
     expect(shouldShowReviewDevDetails(true, false)).toBe(true);
     expect(shouldShowReviewDevDetails(false, true)).toBe(true);
+  });
+
+  it('disables legacy post-save easter egg Alerts on Release builds', () => {
+    expect(shouldShowLegacyPostSaveEasterEggAlert(false)).toBe(false);
+    expect(shouldShowLegacyPostSaveEasterEggAlert(true)).toBe(true);
   });
 });
 
@@ -76,6 +82,20 @@ describe('scanReview release UI presentation wiring', () => {
     expect(postSaveIndex).toBeGreaterThan(learningIndex);
     expect(summaryNavigationIndex).toBeGreaterThan(postSaveIndex);
     expect(source).toContain('router.replace(');
+    expect(source).toContain('shouldShowLegacyPostSaveEasterEggAlert');
+    expect(source).toContain('buildPostSaveSummaryHref');
+  });
+
+  it('does not show legacy growth / Price Radar Alerts on Release save path', () => {
+    expect(source).toContain('shouldShowLegacyPostSaveEasterEggAlert(__DEV__)');
+    const gateIndex = source.indexOf(
+      'shouldShowLegacyPostSaveEasterEggAlert(__DEV__)'
+    );
+    const eggCallIndex = source.indexOf(
+      'tryShowNextEasterEgg(allReceipts.length'
+    );
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(eggCallIndex).toBeGreaterThan(gateIndex);
   });
 });
 

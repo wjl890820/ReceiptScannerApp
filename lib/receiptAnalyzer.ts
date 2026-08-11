@@ -34,10 +34,15 @@ export type ReceiptItem = {
   name: string;
   quantity: number;
   unitPrice: number;
+  /** Gross merchandise line amount (before product-level coupon). */
   lineTotal: number;
   // OCR 既可能给旧枚举 CategoryKey，也可能给新一级分类（ProductCategory），
   // 统一在 normalize 阶段保留、在 enricher 通过 normalizeProductCategory 归一。
   categoryKey?: CategoryKey | ProductCategory;
+  /** Paid/net line amount after bound product coupons (optional additive). */
+  effectiveLineTotal?: number;
+  /** Sum of negative coupon amounts bound to this line. */
+  discountAllocated?: number;
 };
 
 export type ReceiptAnalysis = {
@@ -49,6 +54,8 @@ export type ReceiptAnalysis = {
   transactionDate?: string; // ISO string or date string from receipt
   /** 可选：模型/OCR 侧原始文本，供审核页展示（有则填，无则省略） */
   ocr_raw_text?: string;
+  /** Optional OCR-edge discount lines (merged again in normalize). */
+  discounts?: Array<{ label: string; amount: number }>;
 };
 
 type ScanTrace = { id: string; t0: number };
@@ -299,6 +306,7 @@ async function analyzeReceiptImageViaEdgeFunction(
         ? analysis.currency
         : '¥',
     transactionDate: txDateStr || undefined,
+    discounts: Array.isArray(analysis.discounts) ? analysis.discounts : undefined,
   };
 
   // 确定性后处理：剔除折扣/税/小计行、清洗分类、归一化店铺名、金额对账

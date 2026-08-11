@@ -11,6 +11,7 @@ type ReceiptSummaryCardProps = {
   currency: string;
   note: string;
   amountMismatch: boolean;
+  dateNeedsConfirm: boolean;
   editable: boolean;
   onMerchantChange: (value: string) => void;
   onDateChange: (value: string) => void;
@@ -28,6 +29,7 @@ export function ReceiptSummaryCard({
   currency,
   note,
   amountMismatch,
+  dateNeedsConfirm,
   editable,
   onMerchantChange,
   onDateChange,
@@ -42,6 +44,13 @@ export function ReceiptSummaryCard({
         <View style={styles.warningBanner}>
           <Text style={styles.warningBannerText}>
             {t('scanReview.amountMismatchWarning')}
+          </Text>
+        </View>
+      ) : null}
+      {dateNeedsConfirm ? (
+        <View style={styles.warningBanner}>
+          <Text style={styles.warningBannerText}>
+            {t('scanReview.dateNeedsConfirm')}
           </Text>
         </View>
       ) : null}

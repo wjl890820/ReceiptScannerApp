@@ -29,12 +29,21 @@ describe('buildHistoryMetaLine', () => {
     const ts = 1700000000000;
     const line = buildHistoryMetaLine(ts, ts - 1000, '税', 10, formatDate);
     expect(line).toContain('税 10');
+    expect(line).toContain(formatDate(ts));
   });
 
-  it('falls back to created_at when transaction_at is null', () => {
+  it('shows unknown purchase date label instead of created_at', () => {
     const ts = 1700000000000;
-    const line = buildHistoryMetaLine(null, ts, '税', 0, formatDate);
-    expect(line).toContain('税 0');
+    const line = buildHistoryMetaLine(
+      null,
+      ts,
+      '税',
+      0,
+      formatDate,
+      '日期待确认'
+    );
+    expect(line).toContain('日期待确认');
+    expect(line).not.toContain(formatDate(ts));
   });
 });
 

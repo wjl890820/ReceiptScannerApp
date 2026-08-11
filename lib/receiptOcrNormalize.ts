@@ -12,6 +12,7 @@
 
 import type { ReceiptAnalysis, ReceiptItem, CategoryKey } from './receiptAnalyzer';
 import { PRODUCT_CATEGORIES, type ProductCategory } from './productCategory';
+import { applyReceiptDiscountsToItems } from './receiptDiscountAllocation';
 
 export type OcrLineKind = 'item' | 'discount' | 'tax' | 'subtotal' | 'unknown';
 
@@ -49,6 +50,7 @@ const DISCOUNT_KEYWORDS = [
   'わりびき',
   'クーポン',
   'coupon',
+  'cpn',
   'セール',
   'ポイント利用',
   'ポイント割',
@@ -194,6 +196,19 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   const keptItems: ReceiptItem[] = [];
   const discounts: ReceiptDiscount[] = [];
 
+  // Preserve discounts already returned by the OCR edge (if any).
+  const incomingDiscounts = Array.isArray((analysis as NormalizedOcrAnalysis).discounts)
+    ? ((analysis as NormalizedOcrAnalysis).discounts as ReceiptDiscount[])
+    : [];
+  for (const d of incomingDiscounts) {
+    const amount = Number(d?.amount);
+    if (!Number.isFinite(amount) || amount === 0) continue;
+    discounts.push({
+      label: typeof d?.label === 'string' && d.label.trim() ? d.label : '値引',
+      amount: amount < 0 ? amount : -Math.abs(amount),
+    });
+  }
+
   for (const it of rawItems) {
     const name = typeof it?.name === 'string' ? it.name : '';
     const lineTotal = Number.isFinite(Number(it?.lineTotal)) ? Number(it.lineTotal) : 0;
@@ -217,7 +232,11 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     });
   }
 
-  const itemsPositiveSum = keptItems.reduce((s, it) => s + (it.lineTotal > 0 ? it.lineTotal : 0), 0);
+  const allocated = applyReceiptDiscountsToItems(keptItems, discounts);
+  const itemsPositiveSum = allocated.items.reduce(
+    (s, it) => s + (it.lineTotal > 0 ? it.lineTotal : 0),
+    0
+  );
   const discountsSum = discounts.reduce((s, d) => s + (d.amount < 0 ? d.amount : -Math.abs(d.amount)), 0);
   const tax = Number.isFinite(analysis.tax) ? analysis.tax : 0;
   const total = Number.isFinite(analysis.total) ? analysis.total : 0;
@@ -227,8 +246,9 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
 
   return {
     ...analysis,
-    items: keptItems,
+    items: allocated.items,
     merchant_normalized,
+    // Keep full coupon list (bound + unbound) for audit; binding is on items.
     discounts,
     reconciliation,
     amount_mismatch: !reconciliation.ok,

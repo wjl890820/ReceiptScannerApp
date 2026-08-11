@@ -4,6 +4,7 @@
  */
 import type { ReceiptRow } from './db';
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
+import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { getReceiptItems } from './receiptItems';
 import { filterV1SupportedReceipts } from './merchantType';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
@@ -77,7 +78,7 @@ export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
 
     let hadAnyLineTotal = false;
     for (const item of items) {
-      const lineTotal = typeof item.lineTotal === 'number' ? item.lineTotal : 0;
+      const lineTotal = itemAmountForAnalytics(item);
       if (lineTotal <= 0) continue;
       hadAnyLineTotal = true;
 

@@ -230,7 +230,8 @@
     "deleteItemMessage": "Delete this item?",
     "deleteItemConfirm": "Delete",
     "saveFooterHint": "Saves to history. If you scanned multiple receipts, the next one opens after you tap OK.",
-    "amountMismatchWarning": "Amounts may not match: the item subtotal doesn't add up to the receipt total. Please review before saving."
+    "amountMismatchWarning": "Amounts may not match: the item subtotal doesn't add up to the receipt total. Please review before saving.",
+    "dateNeedsConfirm": "Could not confirm the purchase date. Please check before saving. Scan time will not be used as the purchase date."
   },
   "reviewRetro": {
     "settingsTitle": "Review retrospective",
@@ -287,7 +288,8 @@
       "title": "History",
       "subtitle": "Tap any item for details",
       "empty": "No records yet. Scan and save from Home first.",
-      "noCategoryInfo": "No category info"
+      "noCategoryInfo": "No category info",
+      "dateUnknown": "Date to confirm"
     },
     "search": {
       "placeholder": "Search products or stores",
@@ -328,6 +330,7 @@
       "loading": "Loading…",
       "editedHint": "(Manually edited items)",
       "taxLabel": "Tax",
+      "dateUnknown": "Date to confirm",
       "categorySummaryTitle": "Category summary:",
       "noCategoryInfo": "No category info",
       "itemsTitle": "Items:",
