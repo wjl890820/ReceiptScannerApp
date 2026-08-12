@@ -13,12 +13,16 @@ export type ParseReceiptDateTimeOptions = {
 /**
  * Strip weekday markers / full-width spaces and normalize JP / slash / dash forms
  * into "YYYY-MM-DD HH:mm" when possible. Returns '' only when unusable.
+ *
+ * OCR may insert spaces around separators (e.g. "2026/ 2/21") and optional
+ * JP weekday annotations between date and time ((土) / （土）). Those are
+ * normalized deterministically — no fuzzy guessing.
  */
 export function normalizeReceiptDateTime(input: string): string {
   if (!input || typeof input !== 'string') return '';
   let s = input.trim().replace(/\u3000/g, ' ');
-  // Remove weekday markers: (土) / （日） etc.
-  s = s.replace(/[（(][月火水木金土日][)）]/g, '').trim();
+  // Remove recognized JP weekday markers only; leave a space so date|time stay split.
+  s = s.replace(/[（(][月火水木金土日][)）]/g, ' ').trim();
   s = s.replace(/\s+/g, ' ');
 
   // YYYY年M月D日[ HH:mm[:ss]]
@@ -36,9 +40,9 @@ export function normalizeReceiptDateTime(input: string): string {
     );
   }
 
-  // YYYY/MM/DD or YYYY-MM-DD [HH:mm[:ss]]
+  // YYYY/MM/DD or YYYY-MM-DD [HH:mm[:ss]] — allow OCR whitespace around separators
   const ymd = s.match(
-    /^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
+    /^(\d{4})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
   );
   if (ymd) {
     return formatNormalized(
@@ -51,9 +55,9 @@ export function normalizeReceiptDateTime(input: string): string {
     );
   }
 
-  // MM/DD/YYYY [HH:mm[:ss]] (Costco US-style)
+  // MM/DD/YYYY [HH:mm[:ss]] (Costco US-style) — allow OCR whitespace around /
   const mdy = s.match(
-    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
+    /^(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
   );
   if (mdy) {
     return formatNormalized(
@@ -164,7 +168,9 @@ export function parseReceiptDateTime(
 
   // 1) Deterministic receipt formats → Tokyo wall-clock components → +09:00 ISO.
   const normalized = normalizeReceiptDateTime(trimmed);
-  const workStr = normalized || trimmed.replace(/[（(][月火水木金土日][)）]/g, '').trim();
+  const workStr =
+    normalized ||
+    trimmed.replace(/[（(][月火水木金土日][)）]/g, ' ').replace(/\s+/g, ' ').trim();
 
   const withTime = workStr.match(
     /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/

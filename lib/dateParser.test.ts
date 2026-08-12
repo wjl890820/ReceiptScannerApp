@@ -94,6 +94,24 @@ describe('receipt datetime parsing', () => {
     );
   });
 
+  describe('Sample 029 OCR spacing + weekday annotation', () => {
+    const cases = [
+      '2026/ 2/21(土) 12:28',
+      '2026/2/21（土）12:28',
+      '2026 / 2 / 21 12:28',
+      '2026年2月21日(土) 12:28',
+      '2026年2月21日（土）12:28',
+      '2026/2/21 12:28', // canonical control
+    ];
+
+    it.each(cases)('parses %s → 2026-02-21 12:28 Asia/Tokyo', (raw) => {
+      expect(normalizeReceiptDateTime(raw)).toBe('2026-02-21 12:28');
+      const ts = parseReceiptDateTime(raw, { nowMs: NOW_MS });
+      expect(ts).not.toBeNull();
+      expectLocalParts(ts!, 2026, 2, 21, 12, 28);
+    });
+  });
+
   it('accepts only strict machine ISO with timezone after deterministic formats', () => {
     const ts = parseReceiptDateTime('2026-01-16T18:49:34+09:00', {
       nowMs: NOW_MS,
