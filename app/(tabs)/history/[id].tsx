@@ -191,8 +191,8 @@ export default function ReceiptDetailScreen() {
   }, [displayAnalysis, receipt]);
 
   const merchant =
-    receipt?.merchant_normalized ||
     receipt?.merchant_raw ||
+    receipt?.merchant_normalized ||
     analysis?.merchant ||
     t('common.unknownMerchant');
 
@@ -403,7 +403,12 @@ export default function ReceiptDetailScreen() {
             {t('history.detail.editedHint')}
           </Text>
         )}
-        <Text style={styles.tax}>{t('history.detail.taxLabel')} {receipt.tax}</Text>
+        <Text style={styles.tax}>
+          {t('history.detail.taxLabel')}{' '}
+          {receipt.tax_is_known === 1 && receipt.tax != null && Number.isFinite(receipt.tax)
+            ? receipt.tax
+            : t('common.uncategorizedTag')}
+        </Text>
 
         {/* 分类汇总 */}
         <Text style={styles.h2}>{t('history.detail.categorySummaryTitle')}</Text>

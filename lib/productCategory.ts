@@ -143,25 +143,32 @@ export function classifyItemByName(itemName: string): ProductCategory {
     return 'pet_care';
   }
 
-  // 个人护理（含"化粧水"等含"水"词，必须早于饮料）
+  // 个人护理（legacy 可读；V1 新写入会再经 sanitizeV1ActiveCategoryWrite）
+  // 含"化粧水"等含"水"词，必须早于饮料。剃须刀归日用（V1 无 personal_care 活跃写入）。
   if (
     has([
       '歯ブラシ', '歯磨き', 'ハミガキ', 'シャンプー', 'リンス', 'コンディショナー', 'ボディソープ',
       '洗顔', '化粧水', '乳液', 'スキンケア', 'マスク', '目薬', '医薬', '絆創膏', 'ばんそうこう',
-      'サプリ', 'ビタミン', '生理用品', 'ナプキン', 'コンタクト', 'カミソリ', '髭剃り', '薬',
+      'サプリ', 'ビタミン', '生理用品', 'ナプキン', 'コンタクト', '薬',
     ])
   ) {
     return 'personal_care';
   }
 
-  // 日用消耗
+  // 日用消耗（食品包装の「ラップ」より先にサランラップ系を日用扱い；食品ラップは下方で即食）
   if (
     has([
       'ティッシュ', 'キッチンペーパー', 'トイレット', 'トイレ紙', '洗剤', '柔軟剤', '漂白',
-      'ゴミ袋', 'ごみ袋', 'ラップ', 'アルミホイル', 'ホイル', '電池', '乾電池', '掃除',
+      'ゴミ袋', 'ごみ袋', 'サランラップ', 'アルミホイル', 'ホイル', '電池', '乾電池', '掃除',
       'スポンジ', 'ハンドソープ', '食器用', '住居用', 'キッチン用', '使い捨て',
+      'カミソリ', '髭剃り', '剃刀', 'razor', 'proglide', 'ジレット',
     ])
   ) {
+    return 'household';
+  }
+
+  // 保鲜膜「ラップ」単独（サラダラップ等の食品名は ready_to_eat 側で先に食コンテキスト判定）
+  if (has(['ラップ']) && !has(['サラダ', 'メキシカン', 'sandwich', 'サンド', 'burrito', 'タコス', 'トルティー'])) {
     return 'household';
   }
 
@@ -180,14 +187,24 @@ export function classifyItemByName(itemName: string): ProductCategory {
   }
 
   // 即食餐（サンド/丼/ラーメン/さつまあげ/肉まん 等需早于 snacks_drinks 与 food_ingredients）
+  // 炒麺/ブルダック等インスタント麺は食材の「麺」より先。サラダラップ等の食品ラップもここ。
   if (
     has([
       '弁当', 'べんとう', 'おにぎり', 'お握り', 'サンド', 'サンドイッチ', 'バーガー', 'ホットスナック',
       'チキン', 'グリルチキン', 'チキン南蛮', '南蛮', 'からあげ', '唐揚げ', 'カツ', 'コロッケ', 'メンチ',
       '惣菜', '総菜', '惣菜パン', 'サラダ', 'パスタ', 'うどん', 'そば', 'ラーメン', 'ワンタン', 'ワンタン麺',
+      '炒麺', 'カップ麺', 'カップめん', 'ヌードル', 'ブルダック', 'buldak', 'インスタント麺',
       'グラタン', 'ドリア', 'カレー', '寿司', 'すし', 'おでん', '中華まん', '肉まん', 'まん', '丼',
       'ぼうとう', 'ほうとう', 'さつまあげ', 'さつま揚げ', '横浜家系', '家系', 'deli', 'bento',
     ])
+  ) {
+    return 'ready_to_eat';
+  }
+
+  // 食品ラップ（メキシカンサラダラップ等）：household の単独「ラップ」より食品文脈を優先
+  if (
+    has(['ラップ']) &&
+    has(['サラダ', 'メキシカン', 'チキン', 'ビーフ', 'ポーク', 'チーズ', 'burrito', 'タコス', 'トルティー', 'サンド'])
   ) {
     return 'ready_to_eat';
   }
@@ -196,6 +213,7 @@ export function classifyItemByName(itemName: string): ProductCategory {
   // 注意：以下糖果/饮料语境的 ミルク/抹茶/コーン/ドーナツ 必须早于下方
   //       食材规则里的 牛乳 / ごま / 抹茶 等，避免「金のミルク / 抹茶ラテ /
   //       ミルクティー / あんドーナツ / ジャイアントコーン」被误判为食材。
+  // プロテインボール/バーは食品スナック（サプリのプロテインより先に判定）。
   if (
     has([
       'コーヒー', '珈琲', 'boss', 'ボス', 'クラフトボス', 'ラテ', 'チャイラテ', 'ミルクティー',
@@ -208,12 +226,14 @@ export function classifyItemByName(itemName: string): ProductCategory {
       '黒コッペ', 'コッペ', '菓子', 'スナック', 'ポテト', 'ポテチ', 'キャンディ', '飴', 'プリン', 'ゼリー',
       'デザート', 'ケーキ', 'せんべい', '煎餅', 'ビール', '酒', 'ワイン', 'ハイボール', 'チューハイ',
       '焼酎', '日本酒', '発泡', 'coffee', 'tea', 'juice', 'cola', 'snack', 'chocolate', 'beer', 'wine',
+      'プロテインボール', 'プロテインバー', 'protein ball', 'protein bar', 'プロテインスナック',
     ])
   ) {
     return 'snacks_drinks';
   }
 
   // 食材（注意：牛乳 归食材，但 ミルクティー/ミルク抹茶 等已在上面 snacks 命中）
+  // 「麺」は即食インスタント語が未命中のときのみ（生麺・乾麺など食材）。
   if (
     has([
       '豆腐', '木綿', '卵', '鶏卵', '玉子', 'たまご', '牛乳', '野菜', 'ヤサイ', '肉', '魚', '米', 'ごはん',
@@ -339,22 +359,40 @@ export function resolveProductCategoryRuntime(input: {
 
   // 1. 用户学习
   let r = consider(learned);
-  if (r) return r;
+  if (r) return sanitizeV1ActiveCategoryWrite(r);
   // 2. alias / 学习映射分类器结果
   r = consider(aliasOrLearned);
-  if (r) return r;
+  if (r) return sanitizeV1ActiveCategoryWrite(r);
   // 3. 具体商品名规则（早于宽泛 dictionary / OCR）
   const byName = classifyItemByName(itemName);
-  if (byName !== 'uncategorized') return byName;
+  if (byName !== 'uncategorized') return sanitizeV1ActiveCategoryWrite(byName);
   // 4. 本地规则 itemRulesV1
   r = consider(rule);
-  if (r) return r;
+  if (r) return sanitizeV1ActiveCategoryWrite(r);
   // 5. 宽泛词典
   r = consider(dictionary);
-  if (r) return r;
+  if (r) return sanitizeV1ActiveCategoryWrite(r);
   // 6. OCR categoryKey（辅助 fallback）
   r = consider(ocrKey);
-  if (r) return r;
+  if (r) return sanitizeV1ActiveCategoryWrite(r);
   // 7. 兜底
   return otherSeen ? 'other' : 'uncategorized';
+}
+
+/**
+ * V1 新写入边界：legacy personal_care / pet_care 可读但不可作为新分类结果落库。
+ * 不把模型错误永久映射到某一活跃类；统一降为 uncategorized，由 name_rule 等先行命中活跃类。
+ */
+export function sanitizeV1ActiveCategoryWrite(category: ProductCategory): ProductCategory {
+  if ((V1_ACTIVE_PRODUCT_CATEGORIES as readonly string[]).includes(category)) {
+    return category;
+  }
+  return 'uncategorized';
+}
+
+/** legacy 兼容读取：保留原值；仅文档/调用方区分读写。 */
+export function isV1LegacyCompatCategory(category: string | null | undefined): boolean {
+  return (V1_LEGACY_COMPAT_PRODUCT_CATEGORIES as readonly string[]).includes(
+    String(category || '')
+  );
 }

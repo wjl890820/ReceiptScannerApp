@@ -140,6 +140,59 @@ export function isGroceryMerchant(
 }
 
 /**
+ * Conservative Costco detector for cropped-header receipts.
+ * Requires multiple strong signals — never a single generic English word alone.
+ */
+export function detectCostcoReceiptSignals(input: {
+  merchant?: string | null;
+  items?: Array<{ name?: string | null }> | null;
+}): { isCostco: boolean; score: number; reasons: string[] } {
+  const merchant = String(input.merchant || '');
+  const mNorm = normalizeMerchantName(merchant);
+  const itemText = (input.items || [])
+    .map((it) => String(it?.name || ''))
+    .join('\n');
+  const blob = normalizeMerchantName(`${merchant}\n${itemText}`);
+  const reasons: string[] = [];
+  let score = 0;
+
+  if (/costco|コストコ/.test(mNorm) || /costco|コストコ/.test(blob)) {
+    return { isCostco: true, score: 10, reasons: ['explicit_costco_name'] };
+  }
+
+  if (/biz\s*\/?\s*gold|bizgold/.test(mNorm)) {
+    score += 1;
+    reasons.push('biz_gold_merchant');
+  }
+  if (/wholesale/.test(mNorm)) {
+    score += 1;
+    reasons.push('wholesale_merchant');
+  }
+  if (/御買上げ点数|お買上げ点数|お買上点数|会員/.test(itemText) || /御買上げ点数|お買上げ点数/.test(merchant)) {
+    score += 1;
+    reasons.push('costco_points_or_member_label');
+  }
+  // Costco JP line-item tax marks often end with E or T after the amount/name.
+  const etHits = (input.items || []).filter((it) =>
+    /\s[ET]$|[ET]\s*$/i.test(String(it?.name || '').trim())
+  ).length;
+  if (etHits >= 2) {
+    score += 1;
+    reasons.push('et_tax_suffix_items');
+  }
+  // Costco-style leading item codes (5–6 digits) on several lines
+  const codeHits = (input.items || []).filter((it) =>
+    /^\d{5,6}\b/.test(String(it?.name || '').trim())
+  ).length;
+  if (codeHits >= 3) {
+    score += 1;
+    reasons.push('item_code_layout');
+  }
+
+  return { isCostco: score >= 2, score, reasons };
+}
+
+/**
  * Legacy function for backward compatibility
  * @deprecated Use isGroceryMerchant instead
  */

@@ -9,7 +9,7 @@
  */
 export function authoritativeReceiptTotal(input: {
   total: number;
-  tax?: number;
+  tax?: number | null;
 }): number {
   const total = Number(input.total);
   return Number.isFinite(total) ? total : 0;

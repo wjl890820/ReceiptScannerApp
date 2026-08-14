@@ -475,12 +475,23 @@ export default function ScanReviewScreen() {
         trace_id: traceId,
         saved_at: Date.now(),
       };
+      const taxTrimmed = taxStr.trim();
+      let taxValue: number | null = null;
+      let taxIsKnown = false;
+      if (taxTrimmed) {
+        const parsedTax = toNum(taxTrimmed, NaN);
+        if (Number.isFinite(parsedTax)) {
+          taxValue = parsedTax;
+          taxIsKnown = true;
+        }
+      }
       const finalAnalysis = {
         ...snapshot,
         merchant: merchant.trim() || undefined,
         transactionDate: dateStr.trim() || undefined,
         total: toNum(totalStr, 0),
-        tax: toNum(taxStr, 0),
+        tax: taxIsKnown ? taxValue : null,
+        tax_is_known: taxIsKnown,
         currency: currency.trim() || 'JPY',
         items: finalItemsForSave,
         review_meta,

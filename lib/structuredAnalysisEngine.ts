@@ -24,7 +24,7 @@ export function buildReceiptStructuredAnalysis(input: {
   merchant?: string;
   items: any[];
   total: number;
-  tax: number;
+  tax: number | null;
   currency: string;
 }): ReceiptStructuredAnalysisV1 {
   const items = Array.isArray(input.items) ? input.items : [];

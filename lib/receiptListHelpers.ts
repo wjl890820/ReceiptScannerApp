@@ -62,18 +62,33 @@ export function buildTopCategories(
 /**
  * 历史列表中日期 + 税的元信息行。
  * Never pretend created_at is the purchase datetime.
+ * Unknown tax (tax_is_known=0) must not display as a fake "税 0".
  */
 export function buildHistoryMetaLine(
   transactionAt: number | null | undefined,
   _createdAt: number,
   taxLabel: string,
-  tax: number,
+  tax: number | null | undefined,
   formatDate: (ts: number) => string,
-  unknownDateLabel = '—'
+  unknownDateLabel = '—',
+  unknownTaxLabel = '待确认',
+  taxIsKnown?: boolean | number | null
 ): string {
   const datePart =
     transactionAt != null && Number.isFinite(transactionAt) && transactionAt > 0
       ? formatDate(transactionAt)
       : unknownDateLabel;
-  return `${datePart} · ${taxLabel} ${tax}`;
+  const known = taxIsKnown === true || taxIsKnown === 1;
+  const taxPart =
+    known && tax != null && Number.isFinite(tax)
+      ? `${taxLabel} ${tax}`
+      : `${taxLabel} ${unknownTaxLabel}`;
+  return `${datePart} · ${taxPart}`;
+}
+
+/** True when receipt tax is evidence-backed (including explicit printed 0). */
+export function isReceiptTaxKnown(
+  taxIsKnown: boolean | number | null | undefined
+): boolean {
+  return taxIsKnown === true || taxIsKnown === 1;
 }

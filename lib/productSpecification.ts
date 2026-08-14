@@ -149,7 +149,7 @@ export function parseProductSpecification(rawName: string): ProductSpecification
     );
   }
 
-  const count = text.match(/(\d+)\s*(個|本|枚|袋|パック)\s*(?:入)?/);
+  const count = text.match(/(\d+)\s*(個|本|枚|袋|パック|pc|pcs|pk|pack)\s*(?:入)?/i);
   if (count) {
     const countValue = Number(count[1]);
     if (!Number.isInteger(countValue) || countValue < 1 || countValue > MAX_PACK_COUNT) {

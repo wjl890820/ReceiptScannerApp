@@ -9,6 +9,8 @@ import {
   normalizeProductCategory,
   mapKnownProductCategory,
   resolveProductCategory,
+  resolveProductCategoryRuntime,
+  sanitizeV1ActiveCategoryWrite,
   PRODUCT_CATEGORIES,
 } from './productCategory';
 
@@ -85,6 +87,25 @@ describe('classifyItemByName: 关键词分类', () => {
     expect(classifyItemByName('バター')).toBe('food_ingredients');
     expect(classifyItemByName('有塩バター')).toBe('food_ingredients');
     expect(classifyItemByName('無塩バター')).toBe('food_ingredients');
+  });
+
+  // Sample 013 / 024 / 050 accuracy RC
+  it('メキシカンサラダラップ → ready_to_eat（不是 household ラップ）', () => {
+    expect(classifyItemByName('メキシカンサラダラップ')).toBe('ready_to_eat');
+  });
+  it('ブルダック炒麺 / ブルダック炒麺C → ready_to_eat（不是食材 麺）', () => {
+    expect(classifyItemByName('ブルダック炒麺')).toBe('ready_to_eat');
+    expect(classifyItemByName('ブルダック炒麺C')).toBe('ready_to_eat');
+  });
+  it('オサカナ プロテインボール → snacks_drinks（不是 personal_care）', () => {
+    expect(classifyItemByName('オサカナ プロテインボール')).toBe('snacks_drinks');
+  });
+  it('サランラップ → household（食品ラップと区別）', () => {
+    expect(classifyItemByName('サランラップ')).toBe('household');
+  });
+  it('ProGlide / カミソリ → household（V1 活跃日用）', () => {
+    expect(classifyItemByName('Gillette ProGlide')).toBe('household');
+    expect(classifyItemByName('カミソリ')).toBe('household');
   });
 });
 
@@ -176,5 +197,30 @@ describe('mapKnownProductCategory / resolveProductCategory', () => {
     // 候选链：learned=null, 分类器=null, OCR=snacks_drinks → 应直接返回 snacks_drinks
     expect(resolveProductCategory('シュガーバター', [null, null, 'snacks_drinks'])).toBe('snacks_drinks');
     expect(normalizeProductCategory('snacks_drinks', 'シュガーバター')).toBe('snacks_drinks');
+  });
+});
+
+describe('V1 active write boundary', () => {
+  it('sanitizeV1ActiveCategoryWrite drops legacy personal_care/pet_care', () => {
+    expect(sanitizeV1ActiveCategoryWrite('personal_care')).toBe('uncategorized');
+    expect(sanitizeV1ActiveCategoryWrite('pet_care')).toBe('uncategorized');
+    expect(sanitizeV1ActiveCategoryWrite('household')).toBe('household');
+  });
+
+  it('runtime: OCR personal_care on protein ball → snacks_drinks via name rule', () => {
+    expect(
+      resolveProductCategoryRuntime({
+        itemName: 'オサカナ プロテインボール',
+        ocrKey: 'personal_care',
+      })
+    ).toBe('snacks_drinks');
+  });
+
+  it('Sample 046 coverage: tissue/razor/meat/deli/drink', () => {
+    expect(classifyItemByName('ティッシュ')).toBe('household');
+    expect(classifyItemByName('ProGlide')).toBe('household');
+    expect(classifyItemByName('豚バラ肉')).toBe('food_ingredients');
+    expect(classifyItemByName('唐揚げ')).toBe('ready_to_eat');
+    expect(classifyItemByName('コーラ')).toBe('snacks_drinks');
   });
 });

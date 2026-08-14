@@ -17,7 +17,7 @@ import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
 import { getCategoryBatchAiTimeoutMs, getCategoryBatchAiMaxItems } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
-import { PRODUCT_CATEGORIES, type ProductCategory } from './productCategory';
+import { V1_ACTIVE_PRODUCT_CATEGORIES, type ProductCategory } from './productCategory';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from './categoryTaxonomyV1';
 
 export const BATCH_AI_APPLY_THRESHOLD = 0.75;
@@ -60,18 +60,18 @@ export type RunBatchAiResult = {
   suggestedCount: number;
 };
 
-const PRODUCT_CATEGORY_SET = new Set<string>(PRODUCT_CATEGORIES as readonly string[]);
+const V1_ACTIVE_WRITE_SET = new Set<string>(
+  (V1_ACTIVE_PRODUCT_CATEGORIES as readonly string[]).filter((c) => c !== 'uncategorized')
+);
 
 /**
- * 严格校验 AI 返回的分类：必须是新 8 类之一，且不接受 'uncategorized' 作为“有效结果”。
- * 旧分类名（meat_seafood / snacks_sweets / prepared_food / beverages / snacks / ingredients 等）
- * 不在新 8 类集合中 → 返回 null（即拒绝），由调用方按 uncategorized 处理。
+ * 严格校验 AI 返回的分类：必须是 V1 ACTIVE 类之一（不含 legacy personal_care/pet_care）。
+ * 旧分类名与 legacy → 返回 null（即拒绝），由调用方按 uncategorized 处理。
  */
 export function sanitizeAiCategory(raw: unknown): ProductCategory | null {
   if (typeof raw !== 'string') return null;
   const v = raw.trim().toLowerCase();
-  if (!PRODUCT_CATEGORY_SET.has(v)) return null;
-  if (v === 'uncategorized') return null;
+  if (!V1_ACTIVE_WRITE_SET.has(v)) return null;
   return v as ProductCategory;
 }
 

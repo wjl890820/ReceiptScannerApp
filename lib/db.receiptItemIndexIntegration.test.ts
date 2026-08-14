@@ -61,6 +61,7 @@ const RECEIPT_COLUMNS = [
   'store_normalized',
   'total',
   'tax',
+  'tax_is_known',
   'currency',
   'analysis_json',
   'recognition_snapshot_json',
@@ -140,6 +141,7 @@ class MemoryReceiptDb {
         storeNormalized,
         total,
         tax,
+        taxIsKnown,
         currency,
         analysisJson,
         recognitionSnapshotJson,
@@ -160,6 +162,7 @@ class MemoryReceiptDb {
           storeNormalized == null ? null : String(storeNormalized),
         total: Number(total),
         tax: Number(tax),
+        tax_is_known: Number(taxIsKnown ?? 0),
         currency: String(currency),
         analysis_json: String(analysisJson),
         recognition_snapshot_json:
@@ -311,6 +314,53 @@ describe('receipt mutation derived-index integration', () => {
       },
     ]);
     expect(mockRebuild).toHaveBeenCalledTimes(1);
+  });
+
+  it('save persists tax_is_known for known vs unknown tax evidence', async () => {
+    const knownId = await saveReceipt({
+      imageUri: 'file://known.jpg',
+      analysis: {
+        merchant: 'Test',
+        total: 4000,
+        tax: 305,
+        currency: 'JPY',
+        items: [],
+      },
+    });
+    const known = await getReceipt(knownId);
+    expect(known?.tax).toBe(305);
+    expect(known?.tax_is_known).toBe(1);
+    expect(JSON.parse(known!.analysis_json).tax_is_known).toBe(true);
+
+    const unknownId = await saveReceipt({
+      imageUri: 'file://unknown.jpg',
+      analysis: {
+        merchant: 'Test',
+        total: 1000,
+        tax: null,
+        currency: 'JPY',
+        items: [],
+      },
+    });
+    const unknown = await getReceipt(unknownId);
+    expect(unknown?.tax).toBe(0);
+    expect(unknown?.tax_is_known).toBe(0);
+    expect(JSON.parse(unknown!.analysis_json).tax_is_known).toBe(false);
+
+    const zeroId = await saveReceipt({
+      imageUri: 'file://zero.jpg',
+      analysis: {
+        merchant: 'Test',
+        total: 1000,
+        tax: 0,
+        tax_is_known: true,
+        currency: 'JPY',
+        items: [],
+      },
+    });
+    const zero = await getReceipt(zeroId);
+    expect(zero?.tax).toBe(0);
+    expect(zero?.tax_is_known).toBe(1);
   });
 
   it('save supports a valid empty item list', async () => {

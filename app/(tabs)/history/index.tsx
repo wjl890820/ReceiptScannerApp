@@ -440,7 +440,9 @@ export default function HistoryScreen() {
                     t('history.detail.taxLabel'),
                     receipt.tax,
                     formatDate,
-                    t('history.list.dateUnknown')
+                    t('history.list.dateUnknown'),
+                    t('common.uncategorizedTag'),
+                    receipt.tax_is_known
                   )}
                 </Text>
                 {topCats.length > 0 && (
@@ -494,7 +496,9 @@ export default function HistoryScreen() {
                         t('history.detail.taxLabel'),
                         item.tax,
                         formatDate,
-                        t('history.list.dateUnknown')
+                        t('history.list.dateUnknown'),
+                        t('common.uncategorizedTag'),
+                        item.tax_is_known
                       )}
                     </Text>
                     {topCats.length > 0 ? (

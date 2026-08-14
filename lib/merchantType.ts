@@ -6,7 +6,7 @@
  */
 
 import { normalizeMerchantName } from './productNormalizer';
-import { isGroceryMerchant } from './groceryDetector';
+import { detectCostcoReceiptSignals, isGroceryMerchant } from './groceryDetector';
 
 export type MerchantType = 'supermarket' | 'convenience' | 'other' | 'unknown';
 
@@ -82,6 +82,26 @@ export function detectMerchantType(
   if (isGroceryMerchant(rawName, normalizedName ?? normalized)) return 'supermarket';
 
   return 'unknown';
+}
+
+/**
+ * Enricher helper: if merchant name alone is unknown but receipt has multiple
+ * strong Costco signals (cropped header), treat as supermarket.
+ */
+export function detectMerchantTypeFromReceipt(analysis: {
+  merchant?: string | null;
+  merchant_normalized?: string | null;
+  items?: Array<{ name?: string | null }> | null;
+}): MerchantType {
+  const base = detectMerchantType(analysis.merchant, analysis.merchant_normalized);
+  if (isV1SupportedMerchantType(base)) return base;
+
+  const costco = detectCostcoReceiptSignals({
+    merchant: analysis.merchant,
+    items: analysis.items,
+  });
+  if (costco.isCostco) return 'supermarket';
+  return base;
 }
 
 export type ReceiptMerchantTypeSource = {

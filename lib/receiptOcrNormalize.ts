@@ -11,8 +11,12 @@
  */
 
 import type { ReceiptAnalysis, ReceiptItem, CategoryKey } from './receiptAnalyzer';
-import { PRODUCT_CATEGORIES, type ProductCategory } from './productCategory';
+import {
+  V1_ACTIVE_PRODUCT_CATEGORIES,
+  type ProductCategory,
+} from './productCategory';
 import { applyReceiptDiscountsToItems } from './receiptDiscountAllocation';
+import { resolvePurchaseQuantity } from './purchaseQuantity';
 
 export type OcrLineKind = 'item' | 'discount' | 'tax' | 'subtotal' | 'unknown';
 
@@ -130,6 +134,7 @@ function includesAny(haystack: string, needles: string[]): boolean {
 
 /**
  * 便利店/常见店铺名归一化。命中则返回归一名，否则原样返回（trim）。
+ * Display 应优先使用 OCR/用户编辑的 merchant_raw；本函数结果用于 merchant_normalized（聚合键）。
  */
 export function normalizeMerchant(raw: string | null | undefined): string {
   const original = (raw ?? '').trim();
@@ -156,7 +161,23 @@ export function normalizeMerchant(raw: string | null | undefined): string {
   if (n.includes('ミニストップ') || n.includes('ministop')) {
     return 'ミニストップ';
   }
+  if (n.includes('イオン') || n.includes('aeon')) {
+    return 'イオン';
+  }
+  if (n.includes('コストコ') || n.includes('costco')) {
+    return 'コストコ';
+  }
   return original;
+}
+
+/**
+ * Canonical chain key for cross-store aggregation. Falls back to trimmed original.
+ */
+export function canonicalizeMerchantChain(raw: string | null | undefined): string {
+  const original = (raw ?? '').trim();
+  if (!original) return '';
+  const chain = normalizeMerchant(original);
+  return chain || original;
 }
 
 /**
@@ -176,14 +197,12 @@ export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
 
 /** 新一级分类（ProductCategory）也是合法 categoryKey；uncategorized 无信息量，丢弃。 */
 const VALID_NEW_CATEGORY_KEYS = new Set<string>(
-  (PRODUCT_CATEGORIES as readonly string[]).filter((c) => c !== 'uncategorized')
+  (V1_ACTIVE_PRODUCT_CATEGORIES as readonly string[]).filter((c) => c !== 'uncategorized')
 );
 
 /**
- * 清洗 OCR categoryKey：允许“旧固定枚举 + 新一级分类(ProductCategory)”；
- * 店铺类型词（コンビニ/スーパー/非超市…）或未知一律返回 undefined。
- * 说明：OCR prompt 现已输出新分类（如 snacks_drinks），若仍只认旧枚举会被整段丢弃，
- *       导致 OCR categoryKey 这一辅助信号丢失。这里同时接受新枚举以保留辅助 fallback。
+ * 清洗 OCR categoryKey：允许“旧固定枚举 + V1 ACTIVE ProductCategory”；
+ * legacy personal_care/pet_care 与店铺类型词一律丢弃（新写入边界）。
  */
 export function sanitizeOcrCategoryKey(
   raw: unknown
@@ -191,9 +210,102 @@ export function sanitizeOcrCategoryKey(
   if (typeof raw !== 'string') return undefined;
   const v = raw.trim().toLowerCase();
   if (!v) return undefined;
+  if (v === 'personal_care' || v === 'pet_care') return undefined;
   if ((VALID_CATEGORY_KEYS as readonly string[]).includes(v)) return v as CategoryKey;
   if (VALID_NEW_CATEGORY_KEYS.has(v)) return v as ProductCategory;
   return undefined;
+}
+
+/**
+ * Resolve printed tax with known/unknown provenance.
+ * - Explicit finite top-level tax (including 0) → known
+ * - Top-level missing + explicit taxBreakdown amounts → sum, known
+ * - No evidence → storage 0 + unknown (never invent from rates/categories)
+ */
+export type ResolvedReceiptTax = {
+  tax: number;
+  taxIsKnown: boolean;
+};
+
+export function resolveReceiptTax(
+  analysis: ReceiptAnalysis & Record<string, unknown>
+): ResolvedReceiptTax {
+  const top = analysis.tax;
+  const priorKnown = (analysis as any).tax_is_known ?? (analysis as any).taxIsKnown;
+
+  // Respect an explicit unknown marker from upstream (e.g. review empty tax field).
+  if (priorKnown === false || priorKnown === 0) {
+    const breakdownUnknown = sumExplicitTaxBreakdown(analysis);
+    if (breakdownUnknown != null) {
+      return { tax: breakdownUnknown, taxIsKnown: true };
+    }
+    return {
+      tax: typeof top === 'number' && Number.isFinite(top) ? Math.round(top) : 0,
+      taxIsKnown: false,
+    };
+  }
+
+  if (typeof top === 'number' && Number.isFinite(top)) {
+    return { tax: Math.round(top), taxIsKnown: true };
+  }
+
+  const fromBreakdown = sumExplicitTaxBreakdown(analysis);
+  if (fromBreakdown != null) {
+    return { tax: fromBreakdown, taxIsKnown: true };
+  }
+
+  return { tax: 0, taxIsKnown: false };
+}
+
+function sumExplicitTaxBreakdown(
+  analysis: ReceiptAnalysis & Record<string, unknown>
+): number | null {
+  const breakdown = (analysis as any).taxBreakdown ?? (analysis as any).tax_breakdown;
+  if (!Array.isArray(breakdown) || breakdown.length === 0) return null;
+  let sum = 0;
+  let any = false;
+  for (const row of breakdown) {
+    const amt =
+      typeof row?.amount === 'number'
+        ? row.amount
+        : typeof row?.tax === 'number'
+          ? row.tax
+          : typeof row?.taxAmount === 'number'
+            ? row.taxAmount
+            : NaN;
+    if (Number.isFinite(amt) && amt >= 0) {
+      // Allow 0 rows but require at least one finite amount entry present.
+      sum += amt;
+      any = true;
+    }
+  }
+  // Only treat as evidence when there is at least one strictly positive tax amount.
+  if (!any || sum <= 0) return null;
+  return Math.round(sum);
+}
+
+/** Persist helper: prefer analysis.tax_is_known; else resolve from evidence. */
+export function persistReceiptTaxFields(analysis: ReceiptAnalysis & Record<string, unknown>): {
+  tax: number;
+  taxIsKnown: 0 | 1;
+} {
+  const prior = (analysis as any).tax_is_known ?? (analysis as any).taxIsKnown;
+  if (prior === true || prior === 1) {
+    const tax =
+      typeof analysis.tax === 'number' && Number.isFinite(analysis.tax)
+        ? Math.round(analysis.tax)
+        : 0;
+    return { tax, taxIsKnown: 1 };
+  }
+  if (prior === false || prior === 0) {
+    const tax =
+      typeof analysis.tax === 'number' && Number.isFinite(analysis.tax)
+        ? Math.round(analysis.tax)
+        : 0;
+    return { tax, taxIsKnown: 0 };
+  }
+  const resolved = resolveReceiptTax(analysis);
+  return { tax: resolved.tax, taxIsKnown: resolved.taxIsKnown ? 1 : 0 };
 }
 
 /**
@@ -237,6 +349,7 @@ export type NormalizedOcrAnalysis = ReceiptAnalysis & {
   discounts?: ReceiptDiscount[];
   reconciliation?: ReceiptReconciliation;
   amount_mismatch?: boolean;
+  tax_is_known?: boolean;
 };
 
 /**
@@ -279,7 +392,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
 
     keptItems.push({
       name,
-      quantity: Number.isFinite(Number(it?.quantity)) && Number(it.quantity) > 0 ? Number(it.quantity) : 1,
+      quantity: resolvePurchaseQuantity(name, it?.quantity),
       unitPrice: Number.isFinite(Number(it?.unitPrice)) ? Number(it.unitPrice) : 0,
       lineTotal,
       categoryKey: sanitizeOcrCategoryKey((it as any)?.categoryKey),
@@ -293,16 +406,19 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     0
   );
   const discountsSum = discounts.reduce((s, d) => s + (d.amount < 0 ? d.amount : -Math.abs(d.amount)), 0);
-  const tax = Number.isFinite(analysis.tax) ? analysis.tax : 0;
+  const resolvedTax = resolveReceiptTax(analysis as ReceiptAnalysis & Record<string, unknown>);
+  const tax = resolvedTax.tax;
   const total = Number.isFinite(analysis.total) ? analysis.total : 0;
   // Validation only — never overwrites analysis.total.
   const reconciliation = reconcileReceiptTotals(itemsPositiveSum, discountsSum, tax, total);
 
-  const merchant_normalized = normalizeMerchant(analysis.merchant);
+  const merchant_normalized = canonicalizeMerchantChain(analysis.merchant);
 
   return {
     ...analysis,
     items: allocated.items,
+    tax: resolvedTax.tax,
+    tax_is_known: resolvedTax.taxIsKnown,
     merchant_normalized,
     // Keep full coupon list (bound + unbound) for audit; binding is on items.
     discounts,

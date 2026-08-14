@@ -10,10 +10,13 @@
 
 import {
   normalizeMerchant,
+  canonicalizeMerchantChain,
   classifyLineKind,
   sanitizeOcrCategoryKey,
   reconcileReceiptTotals,
   normalizeOcrAnalysis,
+  resolveReceiptTax,
+  persistReceiptTaxFields,
 } from './receiptOcrNormalize';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 
@@ -69,8 +72,11 @@ describe('normalizeMerchant: 便利店归一化', () => {
     expect(normalizeMerchant('ミニストップ')).toBe('ミニストップ');
   });
 
-  it('未知店铺保持原样', () => {
-    expect(normalizeMerchant('イオン大森店')).toBe('イオン大森店');
+  it('未知店铺保持原样；AEON 门店 display 与 chain 分离', () => {
+    expect(normalizeMerchant('なぞの店XYZ')).toBe('なぞの店XYZ');
+    expect(normalizeMerchant('イオン大森店')).toBe('イオン');
+    expect(normalizeMerchant('イオン古川店')).toBe('イオン');
+    expect(canonicalizeMerchantChain('イオン古川店')).toBe('イオン');
     expect(normalizeMerchant('')).toBe('');
   });
 });
@@ -173,5 +179,97 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     expect(out.discounts![0].amount).toBe(-600);
     expect(out.items).toHaveLength(1);
     expect(out.amount_mismatch).toBe(false);
+  });
+
+  it('Sample 027: package 4個 in name does not become purchase quantity', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'イオン古川店',
+      items: [{ name: '電池単3 4個', quantity: 4, unitPrice: 393, lineTotal: 393 }],
+      total: 393,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.items[0].quantity).toBe(1);
+    expect(out.merchant_normalized).toBe('イオン');
+  });
+
+  it('rejects legacy personal_care OCR categoryKey on sanitize', () => {
+    expect(sanitizeOcrCategoryKey('personal_care')).toBeUndefined();
+    expect(sanitizeOcrCategoryKey('pet_care')).toBeUndefined();
+    expect(sanitizeOcrCategoryKey('snacks_drinks')).toBe('snacks_drinks');
+  });
+});
+
+describe('resolveReceiptTax', () => {
+  it('explicit tax=305 → known', () => {
+    expect(resolveReceiptTax({ tax: 305, total: 4000, items: [], currency: 'JPY' })).toEqual({
+      tax: 305,
+      taxIsKnown: true,
+    });
+  });
+
+  it('sums explicit taxBreakdown when top-level tax missing', () => {
+    expect(
+      resolveReceiptTax({
+        tax: null as any,
+        taxBreakdown: [
+          { rate: 8, amount: 240 },
+          { rate: 10, amount: 71 },
+        ],
+        total: 3000,
+        items: [],
+        currency: 'JPY',
+      } as any)
+    ).toEqual({ tax: 311, taxIsKnown: true });
+  });
+
+  it('explicit tax=0 → known zero', () => {
+    expect(resolveReceiptTax({ tax: 0, total: 1000, items: [], currency: 'JPY' })).toEqual({
+      tax: 0,
+      taxIsKnown: true,
+    });
+  });
+
+  it('no tax evidence → storage 0 + unknown', () => {
+    expect(resolveReceiptTax({ tax: null as any, total: 1000, items: [], currency: 'JPY' })).toEqual(
+      {
+        tax: 0,
+        taxIsKnown: false,
+      }
+    );
+  });
+
+  it('persistReceiptTaxFields respects tax_is_known=false', () => {
+    expect(
+      persistReceiptTaxFields({
+        tax: 0,
+        tax_is_known: false,
+        total: 100,
+        items: [],
+        currency: 'JPY',
+      } as any)
+    ).toEqual({ tax: 0, taxIsKnown: 0 });
+  });
+
+  it('normalizeOcrAnalysis stores tax_is_known metadata', () => {
+    const known = normalizeOcrAnalysis({
+      merchant: 'イオン',
+      items: [{ name: '牛乳', quantity: 1, unitPrice: 200, lineTotal: 200 }],
+      total: 220,
+      tax: 20,
+      currency: 'JPY',
+    });
+    expect(known.tax).toBe(20);
+    expect(known.tax_is_known).toBe(true);
+
+    const unknown = normalizeOcrAnalysis({
+      merchant: 'イオン',
+      items: [{ name: '牛乳', quantity: 1, unitPrice: 200, lineTotal: 200 }],
+      total: 200,
+      tax: null as any,
+      currency: 'JPY',
+    });
+    expect(unknown.tax).toBe(0);
+    expect(unknown.tax_is_known).toBe(false);
   });
 });

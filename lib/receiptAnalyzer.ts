@@ -49,9 +49,14 @@ export type ReceiptAnalysis = {
   merchant?: string;
   items: ReceiptItem[];
   total: number;
-  tax: number;
+  /** Printed tax amount; null when OCR provided no tax evidence. */
+  tax: number | null;
   currency: string;
   transactionDate?: string; // ISO string or date string from receipt
+  /** Optional 8%/10% printed breakdown — used only when top-level tax is missing. */
+  taxBreakdown?: Array<{ rate?: number; amount?: number; tax?: number; taxAmount?: number }>;
+  /** Set by normalize / review: whether `tax` is known printed evidence. */
+  tax_is_known?: boolean;
   /** 可选：模型/OCR 侧原始文本，供审核页展示（有则填，无则省略） */
   ocr_raw_text?: string;
   /** Optional OCR-edge discount lines (merged again in normalize). */
@@ -300,7 +305,8 @@ async function analyzeReceiptImageViaEdgeFunction(
     merchant: typeof analysis.merchant === 'string' ? analysis.merchant : undefined,
     items: Array.isArray(analysis.items) ? analysis.items : [],
     total: typeof analysis.total === 'number' ? analysis.total : 0,
-    tax: typeof analysis.tax === 'number' ? analysis.tax : 0,
+    tax: typeof analysis.tax === 'number' && Number.isFinite(analysis.tax) ? analysis.tax : null,
+    taxBreakdown: Array.isArray(analysis.taxBreakdown) ? analysis.taxBreakdown : undefined,
     currency:
       typeof analysis.currency === 'string' && analysis.currency.trim()
         ? analysis.currency
@@ -445,7 +451,8 @@ categoryKey 必须从以下枚举中选择一个：
           merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
           items: Array.isArray(parsed.items) ? parsed.items : [],
           total: typeof parsed.total === 'number' ? parsed.total : 0,
-          tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
+          tax: typeof parsed.tax === 'number' && Number.isFinite(parsed.tax) ? parsed.tax : null,
+          taxBreakdown: Array.isArray(parsed.taxBreakdown) ? parsed.taxBreakdown : undefined,
           currency:
             typeof parsed.currency === 'string' && parsed.currency.trim()
               ? parsed.currency

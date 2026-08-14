@@ -42,6 +42,8 @@ export type ReceiptRow = {
 
   total: number;
   tax: number;
+  /** 0 = unknown (compat storage may still be 0); 1 = printed/evidence-backed tax */
+  tax_is_known?: number;
   currency: string;
 
   analysis_json: string; // 保存完整 JSON（items、merchant、你后面加的 categories 等）
@@ -76,9 +78,12 @@ export type SaveReceiptParams = {
   analysis: {
     merchant?: string;
     total: number;
-    tax: number;
-    currency: string;
-    items: any[];
+    tax: number | null;
+    tax_is_known?: boolean | number;
+    taxBreakdown?: unknown;
+    currency?: string;
+    items?: any[];
+    transactionDate?: string;
     // 你后面加什么字段都可以继续塞进 analysis_json
     [k: string]: any;
   };
@@ -338,6 +343,18 @@ async function initIfNeeded() {
       if (!columnNames.has('recognition_snapshot_json')) {
         try {
           await db.runAsync(`ALTER TABLE receipts ADD COLUMN recognition_snapshot_json TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) {
+            throw e;
+          }
+        }
+      }
+      // Additive tax provenance: unknown (0) vs evidence-backed known (1). Default 0 for legacy rows.
+      if (!columnNames.has('tax_is_known')) {
+        try {
+          await db.runAsync(
+            `ALTER TABLE receipts ADD COLUMN tax_is_known INTEGER NOT NULL DEFAULT 0`
+          );
         } catch (e: any) {
           if (!e?.message?.includes('duplicate column')) {
             throw e;
@@ -682,8 +699,15 @@ export async function saveReceipt(
     typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
 
   const merchantRawTrimmed = merchantRaw && merchantRaw.trim() ? merchantRaw.trim() : null;
-  const merchantNormalized =
-    merchantRawTrimmed ? merchantRawTrimmed.replace(/\s+/g, ' ').trim().toLowerCase() : null;
+  // Prefer analysis.merchant_normalized (chain) when present; else canonicalize.
+  const fromAnalysis =
+    typeof (params.analysis as any).merchant_normalized === 'string'
+      ? String((params.analysis as any).merchant_normalized).trim()
+      : '';
+  const { canonicalizeMerchantChain } = await import('./receiptOcrNormalize');
+  const merchantNormalized = merchantRawTrimmed
+    ? fromAnalysis || canonicalizeMerchantChain(merchantRawTrimmed) || merchantRawTrimmed
+    : null;
 
   const merchantType = detectMerchantType(merchantRawTrimmed, merchantNormalized);
 
@@ -694,13 +718,22 @@ export async function saveReceipt(
   const scannedAt = now;
 
   const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
-  const tax = Number.isFinite(params.analysis.tax) ? params.analysis.tax : 0;
+  const { persistReceiptTaxFields } = await import('./receiptOcrNormalize');
+  const persistedTax = persistReceiptTaxFields(
+    params.analysis as import('./receiptAnalyzer').ReceiptAnalysis & Record<string, unknown>
+  );
+  const tax = persistedTax.tax;
+  const taxIsKnown = persistedTax.taxIsKnown;
   const currency =
     typeof params.analysis.currency === 'string' && params.analysis.currency.trim()
       ? params.analysis.currency
       : 'JPY';
 
-  const analysisJson = JSON.stringify(params.analysis);
+  const analysisJson = JSON.stringify({
+    ...params.analysis,
+    tax,
+    tax_is_known: taxIsKnown === 1,
+  });
   const recognitionSnapshotJson =
     params.recognitionSnapshot !== undefined && params.recognitionSnapshot !== null
       ? JSON.stringify(params.recognitionSnapshot)
@@ -740,10 +773,10 @@ export async function saveReceipt(
       merchant_raw, merchant_normalized,
       merchant_type,
       store_raw, store_normalized,
-      total, tax, currency,
+      total, tax, tax_is_known, currency,
       analysis_json,
       recognition_snapshot_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
@@ -759,6 +792,7 @@ export async function saveReceipt(
     storeNormalized,
     total,
     tax,
+    taxIsKnown,
     currency,
     analysisJson,
     recognitionSnapshotJson,
@@ -771,7 +805,7 @@ export async function saveReceipt(
     });
     // eslint-disable-next-line no-console
     console.log('[DB][saveReceipt] insert shape', {
-      insertColumnsCount: 16,
+      insertColumnsCount: 17,
       placeholderCount,
       paramsCount: insertParams.length,
       preview,
@@ -826,7 +860,7 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
       image_uri,
       merchant_raw, merchant_normalized,
       merchant_type,
-      total, tax, currency,
+      total, tax, COALESCE(tax_is_known, 0) as tax_is_known, currency,
       analysis_json,
       COALESCE(user_edited, 0) as user_edited,
       final_total,
@@ -861,7 +895,7 @@ export async function listReceiptsForList(
       transaction_at,
       merchant_raw, merchant_normalized,
       merchant_type,
-      total, tax, currency,
+      total, tax, COALESCE(tax_is_known, 0) as tax_is_known, currency,
       analysis_json,
       COALESCE(user_edited, 0) as user_edited,
       final_total,
@@ -955,7 +989,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       image_uri,
       merchant_raw, merchant_normalized,
       merchant_type,
-      total, tax, currency,
+      total, tax, COALESCE(tax_is_known, 0) as tax_is_known, currency,
       analysis_json,
       recognition_snapshot_json,
       COALESCE(user_edited, 0) as user_edited,
@@ -1040,10 +1074,22 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
   if (params.analysis && typeof params.analysis === 'object') {
     const merchantRaw =
       typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
-    const merchantNormalized = merchantRaw;
+    const fromAnalysis =
+      typeof (params.analysis as any).merchant_normalized === 'string'
+        ? String((params.analysis as any).merchant_normalized).trim()
+        : '';
+    const { canonicalizeMerchantChain } = await import('./receiptOcrNormalize');
+    const merchantNormalized = merchantRaw
+      ? fromAnalysis || canonicalizeMerchantChain(merchantRaw) || merchantRaw
+      : null;
 
     const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
-    const tax = Number.isFinite(params.analysis.tax) ? params.analysis.tax : 0;
+    const { persistReceiptTaxFields } = await import('./receiptOcrNormalize');
+    const persistedTax = persistReceiptTaxFields(
+      params.analysis as import('./receiptAnalyzer').ReceiptAnalysis & Record<string, unknown>
+    );
+    const tax = persistedTax.tax;
+    const taxIsKnown = persistedTax.taxIsKnown;
     const currency =
       typeof params.analysis.currency === 'string' && params.analysis.currency.trim()
         ? params.analysis.currency
@@ -1061,11 +1107,20 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
     sets.push(`tax = ?`);
     values.push(tax);
 
+    sets.push(`tax_is_known = ?`);
+    values.push(taxIsKnown);
+
     sets.push(`currency = ?`);
     values.push(currency);
 
     sets.push(`analysis_json = ?`);
-    values.push(JSON.stringify(params.analysis));
+    values.push(
+      JSON.stringify({
+        ...params.analysis,
+        tax,
+        tax_is_known: taxIsKnown === 1,
+      })
+    );
   }
 
   // 支持用户手动编辑字段

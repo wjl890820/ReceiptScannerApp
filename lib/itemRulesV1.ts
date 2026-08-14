@@ -59,7 +59,7 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
     : null;
 
   // --- High-yield prepared food ---
-  if (hasAny(text, ['ラーメン', 'らーめん', 'ramen', 'カップ麺', 'カップめん', 'ヌードル', 'noodle', 'うどん', 'そば', 'パスタ'])) {
+  if (hasAny(text, ['ラーメン', 'らーめん', 'ramen', 'カップ麺', 'カップめん', 'ヌードル', 'noodle', 'うどん', 'そば', 'パスタ', '炒麺', 'ブルダック', 'buldak'])) {
     return mk('prepared_food', 'instant_food', ['ready_to_eat', 'non_essential_spend'], 0.88, 'Noodles/instant keywords', { brand });
   }
 
@@ -163,8 +163,12 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
     return mk('household', 'cleaning', ['household_essential'], 0.86, 'Cleaning keywords', { brand });
   }
 
-  // --- Health ---
-  if (hasAny(text, ['サプリ', 'supplement', 'ビタミン', 'vitamin', 'プロテイン', 'protein'])) {
+  // --- Health / supplements (not protein snack foods) ---
+  if (
+    hasAny(text, ['サプリ', 'supplement', 'ビタミン', 'vitamin']) ||
+    (hasAny(text, ['プロテイン', 'protein']) &&
+      !hasAny(text, ['ボール', 'バー', '菓子', 'スナック', 'ball', 'bar', 'snack', 'クッキー']))
+  ) {
     return mk('health', 'supplements', ['non_essential_spend'], 0.84, 'Supplements keywords', { brand });
   }
 

@@ -5,10 +5,12 @@ import { resolveProductCategoryRuntime, mapKnownProductCategory, classifyItemByN
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
 import {
-  detectMerchantType,
+  detectMerchantTypeFromReceipt,
   isV1SupportedMerchantType,
   type MerchantType,
 } from './merchantType';
+import { detectCostcoReceiptSignals } from './groceryDetector';
+import { canonicalizeMerchantChain } from './receiptOcrNormalize';
 import {
   classifyItem,
   resetClassificationStats,
@@ -293,9 +295,29 @@ export async function applyCategoriesWithLearning(
   const enrichedItems: ReceiptItem[] = [];
 
   // V1 商户类型：supermarket + convenience 均进入正常分类 pipeline；other/unknown 保守 uncategorized。
-  const merchantRaw = analysis.merchant || '';
-  const merchantNormalized = (analysis as any).merchant_normalized || null;
-  const merchantType: MerchantType = detectMerchantType(merchantRaw, merchantNormalized);
+  // Cropped-header Costco: multi-signal detector can promote unknown → supermarket.
+  let merchantRaw = analysis.merchant || '';
+  let merchantNormalized = (analysis as any).merchant_normalized || null;
+  const costcoHit = detectCostcoReceiptSignals({
+    merchant: merchantRaw,
+    items: items as Array<{ name?: string | null }>,
+  });
+  if (costcoHit.isCostco) {
+    const weakMerchant =
+      !merchantRaw.trim() ||
+      /unknown|未知|biz\s*\/?\s*gold|wholesale/i.test(merchantRaw);
+    if (weakMerchant) {
+      merchantRaw = 'コストコ';
+      merchantNormalized = 'コストコ';
+    } else if (!merchantNormalized) {
+      merchantNormalized = canonicalizeMerchantChain(merchantRaw) || 'コストコ';
+    }
+  }
+  const merchantType: MerchantType = detectMerchantTypeFromReceipt({
+    merchant: merchantRaw,
+    merchant_normalized: merchantNormalized,
+    items: items as Array<{ name?: string | null }>,
+  });
   const isV1Supported = isV1SupportedMerchantType(merchantType);
   // Legacy compatibility：is_grocery 仅表示 supermarket（勿用于 V1 analytics 支持判断）。
   const isGroceryLegacy = merchantType === 'supermarket';
@@ -666,6 +688,11 @@ export async function applyCategoriesWithLearning(
 
   return {
     ...analysis,
+    merchant: merchantRaw || analysis.merchant,
+    merchant_normalized:
+      merchantNormalized ||
+      canonicalizeMerchantChain(merchantRaw || analysis.merchant) ||
+      (analysis as any).merchant_normalized,
     items: enrichedItems as any,
     merchant_type: merchantType,
     is_grocery: isGroceryLegacy, // Legacy：仅 supermarket=true；V1 analytics 用 isV1SupportedReceipt

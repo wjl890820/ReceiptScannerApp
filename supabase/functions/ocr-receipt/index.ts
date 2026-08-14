@@ -279,7 +279,8 @@ function buildOcrPrompt(): string {
     '  "merchant": string|null,            // 店名（例: セブン-イレブン）',
     '  "transactionDate": string|null,     // 例 "YYYY/MM/DD HH:MM"（原文の形式のまま）',
     '  "total": number|null,               // 印刷された最終支払合計（整数 JPY）。自己計算しない',
-    '  "tax": number|null,                 // 印刷された消費税額（整数 JPY、無ければ 0）',
+    '  "tax": number|null,                 // 印刷された消費税額（整数 JPY）。無ければ null（0 で埋めない）',
+    '  "taxBreakdown": [ { "rate": number, "amount": number } ]|null, // 8%/10% 等の内訳があれば amount を転記',
     '  "currency": "JPY",',
     '  "items": [ {',
     '     "name": string, "quantity": number, "unitPrice": number, "lineTotal": number,',
@@ -293,6 +294,8 @@ function buildOcrPrompt(): string {
     '- すべての金額は整数の JPY。小数や通貨記号（¥ 等）を付けない。',
     '- 値引・割引・クーポン・セール・ポイント利用 などの行は商品ではない。kind="discount" とし、discounts にも入れる（amount は負数）。',
     '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
+    '- quantity は「購入点数」のみ。商品名中の包装数（例: 4個 / 10PC / 3PK）は quantity に入れない（購入証拠が無い限り 1）。',
+    '  明示的な購入数量（例: (¥108 × 3個) や数量欄）があるときだけその N を quantity にする。',
     '',
     '【total / tax の厳守ルール】',
     '- total は、レシート上に明確に印刷された最終支払合計行を優先してそのまま転記すること。',
@@ -300,6 +303,8 @@ function buildOcrPrompt(): string {
     '- 最終合計（final printed total）が印刷されている場合、その金額を必ず total に入れる。',
     '  items / 小計 / tax / discounts から total を再計算・再構成してはならない。',
     '- tax は印刷された消費税額を転記する。total に税を足し直してはならない。',
+    '- 税率から税額を推算しない。tax が読めない場合は null（0 で埋めない）。',
+    '- 8%/10% の税額内訳が印刷されていれば taxBreakdown[].amount に転記し、tax にはその合計を入れてよい。',
     '- 日本のレシートは内税（total に税込み）でも外税（小計+税=合計が印刷）でもよい。',
     '  どちらの場合も、印刷された最終合計があれば total はその金額であり、税を二重加算しない。',
     '- 例（内税・正しい）: 合計 8351・消費税 619 → total=8351, tax=619。total=8970（8351+619）は禁止。',
@@ -309,7 +314,8 @@ function buildOcrPrompt(): string {
     '',
     '- 商品分類(categoryKey)は次の固定 enum のみから選ぶ:',
     '  food_ingredients(食材), ready_to_eat(弁当・惣菜・即食), snacks_drinks(飲料・お菓子・酒),',
-    '  household(日用消耗品), personal_care(個人ケア・医薬), pet_care(ペット用品), uncategorized(不明), other(その他)。',
+    '  household(日用消耗品), uncategorized(不明), other(その他)。',
+    '- personal_care / pet_care は出力しない（V1 非アクティブ）。該当しそうでも household か uncategorized。',
     '- 判別できない場合は "uncategorized" を返す（"other" を多用しない、新しい分類を作らない）。',
     '- 中文/日本語などの分類名は返さない（必ず上記の英語 enum キーのみ）。',
     '- 店舗の業態（コンビニ / スーパー / ドラッグストア / 非超市 / store / merchant 等）を商品分類に入れない。',
@@ -317,6 +323,7 @@ function buildOcrPrompt(): string {
     '- 日本のコンビニ（セブン-イレブン / ファミリーマート / ローソン / ミニストップ）のレシートは、',
     '  「商品行 → 小計 → 値引 → 消費税(軽減税率含む) → 合計」の構造を優先して解釈する。',
     '- 店名が 7-Eleven / セブンイレブン / セブンーイレブン の場合は merchant を "セブン-イレブン" に正規化してよい。',
+    '- イオンは店名を短くしない（例: イオン古川店 はそのまま）。',
     '- レシート上に日時があれば transactionDate に原文の形式のまま入れる。',
   ].join('\n');
 }
@@ -461,7 +468,9 @@ async function callGemini(imageBase64: string): Promise<any> {
     items: Array.isArray(parsed.items) ? parsed.items : [],
     discounts: Array.isArray(parsed.discounts) ? parsed.discounts : [],
     total: typeof parsed.total === 'number' ? parsed.total : 0,
-    tax: typeof parsed.tax === 'number' ? parsed.tax : 0,
+    // Prefer explicit number (including 0 only when model sent 0); otherwise null.
+    tax: typeof parsed.tax === 'number' && Number.isFinite(parsed.tax) ? parsed.tax : null,
+    taxBreakdown: Array.isArray(parsed.taxBreakdown) ? parsed.taxBreakdown : undefined,
     currency:
       typeof parsed.currency === 'string' && parsed.currency.trim() ? parsed.currency : 'JPY',
     transactionDate:
@@ -836,6 +845,7 @@ serve(async (req) => {
         discounts: geminiResult.discounts,
         total: geminiResult.total,
         tax: geminiResult.tax,
+        taxBreakdown: geminiResult.taxBreakdown,
         currency: geminiResult.currency,
         transactionDate: geminiResult.transactionDate,
       };

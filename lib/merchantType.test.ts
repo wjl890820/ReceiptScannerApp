@@ -1,11 +1,14 @@
 import {
   detectMerchantType,
+  detectMerchantTypeFromReceipt,
   resolveReceiptMerchantType,
   isV1SupportedMerchantType,
   isV1SupportedReceipt,
   filterV1SupportedReceipts,
 } from './merchantType';
+import { detectCostcoReceiptSignals } from './groceryDetector';
 import { classifyItemByName } from './productCategory';
+import { normalizeReceiptDateTime, parseReceiptDateTime } from './dateParser';
 
 describe('detectMerchantType', () => {
   it('York Benimaru → supermarket', () => {
@@ -130,5 +133,54 @@ describe('isV1SupportedReceipt', () => {
       { merchant_type: 'other' as const, merchant_raw: 'マツキヨ', analysis_json: '{}' },
     ];
     expect(filterV1SupportedReceipts(receipts)).toHaveLength(2);
+  });
+});
+
+describe('Costco cropped-header signals', () => {
+  it('does not treat BIZ/GOLD alone as Costco', () => {
+    expect(detectCostcoReceiptSignals({ merchant: 'BIZ/GOLD', items: [] }).isCostco).toBe(false);
+    expect(detectMerchantType('BIZ/GOLD', null)).toBe('unknown');
+  });
+
+  it('promotes cropped-header Costco with multiple strong signals', () => {
+    const items = [
+      { name: '123456 KIRKLAND WATER E' },
+      { name: '234567 BANANA E' },
+      { name: '345678 CHICKEN T' },
+      { name: '御買上げ点数 3' },
+    ];
+    const hit = detectCostcoReceiptSignals({ merchant: 'BIZ/GOLD', items });
+    expect(hit.isCostco).toBe(true);
+    expect(
+      detectMerchantTypeFromReceipt({ merchant: 'BIZ/GOLD', items })
+    ).toBe('supermarket');
+  });
+
+  it('explicit Costco name remains supermarket', () => {
+    expect(detectMerchantType('コストコ', null)).toBe('supermarket');
+  });
+});
+
+describe('Sample 044 MM/DD/YYYY date fixture', () => {
+  const NOW_MS = new Date('2026-08-11T12:00:00+09:00').getTime();
+  it('12/27/2025 10:32 → 2025-12-27 10:32 Asia/Tokyo (parser OK; OCR misread is upstream)', () => {
+    expect(normalizeReceiptDateTime('12/27/2025 10:32')).toBe('2025-12-27 10:32');
+    const ts = parseReceiptDateTime('12/27/2025 10:32', { nowMs: NOW_MS });
+    expect(ts).not.toBeNull();
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tokyo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(ts!));
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+    expect(get('year')).toBe(2025);
+    expect(get('month')).toBe(12);
+    expect(get('day')).toBe(27);
+    expect(get('hour')).toBe(10);
+    expect(get('minute')).toBe(32);
   });
 });

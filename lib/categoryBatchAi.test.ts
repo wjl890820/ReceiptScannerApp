@@ -73,14 +73,16 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-describe('sanitizeAiCategory: 仅接受新 8 类，拒绝旧分类', () => {
+describe('sanitizeAiCategory: 仅接受 V1 ACTIVE，拒绝 legacy / 旧分类', () => {
   it('接受新核心分类与 other', () => {
     expect(sanitizeAiCategory('snacks_drinks')).toBe('snacks_drinks');
     expect(sanitizeAiCategory('food_ingredients')).toBe('food_ingredients');
     expect(sanitizeAiCategory('other')).toBe('other');
   });
-  it('uncategorized 视为无效（null）', () => {
+  it('uncategorized 与 legacy personal_care/pet_care 视为无效（null）', () => {
     expect(sanitizeAiCategory('uncategorized')).toBeNull();
+    expect(sanitizeAiCategory('personal_care')).toBeNull();
+    expect(sanitizeAiCategory('pet_care')).toBeNull();
   });
   it('拒绝旧分类名 → null', () => {
     for (const old of ['meat_seafood', 'snacks_sweets', 'prepared_food', 'beverages', 'snacks', 'ingredients', 'produce']) {

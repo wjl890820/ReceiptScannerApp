@@ -306,12 +306,13 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
       throw new Error('服务器返回的分析结果格式无效');
     }
 
-    // Convert to ReceiptAnalysis format
+    // Convert to ReceiptAnalysis format — preserve null tax (unknown ≠ 0)
     const receiptAnalysis: ReceiptAnalysis = {
       merchant: typeof analysis.merchant === 'string' ? analysis.merchant : undefined,
       items: Array.isArray(analysis.items) ? analysis.items : [],
       total: typeof analysis.total === 'number' ? analysis.total : 0,
-      tax: typeof analysis.tax === 'number' ? analysis.tax : 0,
+      tax: typeof analysis.tax === 'number' && Number.isFinite(analysis.tax) ? analysis.tax : null,
+      taxBreakdown: Array.isArray(analysis.taxBreakdown) ? analysis.taxBreakdown : undefined,
       currency:
         typeof analysis.currency === 'string' && analysis.currency.trim()
           ? analysis.currency

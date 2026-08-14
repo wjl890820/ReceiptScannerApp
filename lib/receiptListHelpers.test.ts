@@ -27,7 +27,7 @@ describe('buildTopCategories', () => {
 describe('buildHistoryMetaLine', () => {
   it('uses transaction_at when available', () => {
     const ts = 1700000000000;
-    const line = buildHistoryMetaLine(ts, ts - 1000, '税', 10, formatDate);
+    const line = buildHistoryMetaLine(ts, ts - 1000, '税', 10, formatDate, '—', '待确认', 1);
     expect(line).toContain('税 10');
     expect(line).toContain(formatDate(ts));
   });
@@ -40,10 +40,34 @@ describe('buildHistoryMetaLine', () => {
       '税',
       0,
       formatDate,
-      '日期待确认'
+      '日期待确认',
+      '待确认',
+      0
     );
     expect(line).toContain('日期待确认');
     expect(line).not.toContain(formatDate(ts));
+  });
+
+  it('unknown tax_is_known does not display fake 税 0', () => {
+    const ts = 1700000000000;
+    expect(buildHistoryMetaLine(ts, ts, '税', 0, formatDate, '—', '待确认', 0)).toContain(
+      '税 待确认'
+    );
+    expect(buildHistoryMetaLine(ts, ts, '税', null, formatDate, '—', '待确认', 0)).toContain(
+      '税 待确认'
+    );
+  });
+
+  it('known explicit tax=0 displays 税 0', () => {
+    const ts = 1700000000000;
+    expect(buildHistoryMetaLine(ts, ts, '税', 0, formatDate, '—', '待确认', 1)).toContain('税 0');
+  });
+
+  it('known positive tax displays value', () => {
+    const ts = 1700000000000;
+    expect(buildHistoryMetaLine(ts, ts, '税', 195, formatDate, '—', '待确认', 1)).toContain(
+      '税 195'
+    );
   });
 });
 
