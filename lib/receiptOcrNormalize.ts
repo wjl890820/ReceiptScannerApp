@@ -17,10 +17,19 @@ import {
 } from './productCategory';
 import { applyReceiptDiscountsToItems } from './receiptDiscountAllocation';
 import { resolvePurchaseQuantity } from './purchaseQuantity';
+import {
+  isPaymentAllocationLabel,
+  resolveAuthoritativeReceiptTotal,
+} from './receiptTotalResolve';
 
-export type OcrLineKind = 'item' | 'discount' | 'tax' | 'subtotal' | 'unknown';
+export type OcrLineKind = 'item' | 'discount' | 'tax' | 'subtotal' | 'payment' | 'unknown';
 
-export type ReceiptDiscount = { label: string; amount: number };
+export type ReceiptDiscount = {
+  label: string;
+  amount: number;
+  /** OCR order: preceding kept item index for safe まとめ売り allocation. */
+  adjacentPrecedingItemIndex?: number | null;
+};
 
 export type ReceiptReconciliation = {
   ok: boolean;
@@ -80,8 +89,21 @@ export function pushUniqueReceiptDiscount(
     label: typeof next.label === 'string' && next.label.trim() ? next.label.trim() : '値引',
     amount: amount < 0 ? amount : -Math.abs(amount),
   };
+  if (typeof next.adjacentPrecedingItemIndex === 'number') {
+    row.adjacentPrecedingItemIndex = next.adjacentPrecedingItemIndex;
+  }
   const key = discountIdentityKey(row);
-  if (discounts.some((d) => discountIdentityKey(d) === key)) return;
+  const existing = discounts.find((d) => discountIdentityKey(d) === key);
+  if (existing) {
+    // Prefer adjacency captured from OCR item order when discounts[] arrived first.
+    if (
+      existing.adjacentPrecedingItemIndex == null &&
+      typeof row.adjacentPrecedingItemIndex === 'number'
+    ) {
+      existing.adjacentPrecedingItemIndex = row.adjacentPrecedingItemIndex;
+    }
+    return;
+  }
   discounts.push(row);
 }
 
@@ -180,9 +202,27 @@ export function canonicalizeMerchantChain(raw: string | null | undefined): strin
   return chain || original;
 }
 
+function isNonMerchandiseMetaLabel(name: string): boolean {
+  const n = toHalfWidthLower(name);
+  if (!n) return false;
+  // Change / deposit / balance — not merchandise and not settlement tender for total recovery.
+  return (
+    n.includes('おつり') ||
+    n.includes('お釣り') ||
+    n.includes('つり銭') ||
+    n.includes('釣銭') ||
+    (n.includes('預り') && !n.includes('支払')) ||
+    (n.includes('あずかり') && !n.includes('支払')) ||
+    n.includes('残高') ||
+    n.includes('balance') ||
+    (/\bchange\b/.test(n) && !n.includes('exchange'))
+  );
+}
+
 /**
- * 判断 OCR 行类型：item / discount / tax / subtotal。
+ * 判断 OCR 行类型：item / discount / tax / payment / subtotal。
  * 折扣判定：命中折扣关键字，或金额为负。
+ * 支付手段（現金 / プリカ 等）不得当作商品或 total。
  */
 export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
   const n = toHalfWidthLower(name);
@@ -191,6 +231,9 @@ export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
   // 折扣优先：负金额或折扣关键字
   if (amt < 0 || includesAny(n, DISCOUNT_KEYWORDS)) return 'discount';
   if (includesAny(n, TAX_KEYWORDS)) return 'tax';
+  if (isNonMerchandiseMetaLabel(name)) return 'subtotal';
+  // Tender / payment allocation — before bare 合計 subtotal matching.
+  if (isPaymentAllocationLabel(name)) return 'payment';
   if (includesAny(n, SUBTOTAL_KEYWORDS)) return 'subtotal';
   return 'item';
 }
@@ -218,8 +261,10 @@ export function sanitizeOcrCategoryKey(
 
 /**
  * Resolve printed tax with known/unknown provenance.
- * - Explicit finite top-level tax (including 0) → known
- * - Top-level missing + explicit taxBreakdown amounts → sum, known
+ * - Explicit positive top-level tax → known
+ * - Explicit tax=0 only when upstream marks tax_is_known=true (review / clear print)
+ * - Bare OCR tax=0 without known marker → unknown (models often pad missing tax as 0)
+ * - Top-level missing + explicit positive taxBreakdown → sum, known
  * - No evidence → storage 0 + unknown (never invent from rates/categories)
  */
 export type ResolvedReceiptTax = {
@@ -245,7 +290,19 @@ export function resolveReceiptTax(
     };
   }
 
-  if (typeof top === 'number' && Number.isFinite(top)) {
+  // Explicit known marker (review entered 0, or Edge/client asserted known zero).
+  if (priorKnown === true || priorKnown === 1) {
+    if (typeof top === 'number' && Number.isFinite(top)) {
+      return { tax: Math.round(top), taxIsKnown: true };
+    }
+    const fromBreakdownKnown = sumExplicitTaxBreakdown(analysis);
+    if (fromBreakdownKnown != null) {
+      return { tax: fromBreakdownKnown, taxIsKnown: true };
+    }
+    return { tax: 0, taxIsKnown: true };
+  }
+
+  if (typeof top === 'number' && Number.isFinite(top) && top > 0) {
     return { tax: Math.round(top), taxIsKnown: true };
   }
 
@@ -254,6 +311,7 @@ export function resolveReceiptTax(
     return { tax: fromBreakdown, taxIsKnown: true };
   }
 
+  // Missing tax, or bare tax=0 without known provenance → unknown.
   return { tax: 0, taxIsKnown: false };
 }
 
@@ -360,6 +418,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   const rawItems = Array.isArray(analysis.items) ? analysis.items : [];
   const keptItems: ReceiptItem[] = [];
   const discounts: ReceiptDiscount[] = [];
+  const payments: { label: string; amount: number }[] = [];
 
   // Explicit Edge discounts[] first — authoritative labels preferred when both present.
   const incomingDiscounts = Array.isArray((analysis as NormalizedOcrAnalysis).discounts)
@@ -369,6 +428,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     pushUniqueReceiptDiscount(discounts, {
       label: typeof d?.label === 'string' ? d.label : '値引',
       amount: Number(d?.amount),
+      adjacentPrecedingItemIndex: d?.adjacentPrecedingItemIndex,
     });
   }
 
@@ -379,10 +439,18 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
 
     if (kind === 'discount') {
       // Negative coupon lines often duplicate an entry already in discounts[].
+      // Capture OCR adjacency for safe まとめ売り値引 allocation.
       pushUniqueReceiptDiscount(discounts, {
         label: name || '値引',
         amount: lineTotal <= 0 ? lineTotal : -Math.abs(lineTotal),
+        adjacentPrecedingItemIndex: keptItems.length > 0 ? keptItems.length - 1 : null,
       });
+      continue;
+    }
+    if (kind === 'payment') {
+      if (lineTotal > 0) {
+        payments.push({ label: name || '支払', amount: Math.round(lineTotal) });
+      }
       continue;
     }
     if (kind === 'tax' || kind === 'subtotal') {
@@ -408,8 +476,12 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   const discountsSum = discounts.reduce((s, d) => s + (d.amount < 0 ? d.amount : -Math.abs(d.amount)), 0);
   const resolvedTax = resolveReceiptTax(analysis as ReceiptAnalysis & Record<string, unknown>);
   const tax = resolvedTax.tax;
-  const total = Number.isFinite(analysis.total) ? analysis.total : 0;
-  // Validation only — never overwrites analysis.total.
+  const total = resolveAuthoritativeReceiptTotal({
+    ocrTotal: analysis.total,
+    itemsPositiveSum,
+    discountsSum,
+    payments,
+  });
   const reconciliation = reconcileReceiptTotals(itemsPositiveSum, discountsSum, tax, total);
 
   const merchant_normalized = canonicalizeMerchantChain(analysis.merchant);
@@ -417,6 +489,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   return {
     ...analysis,
     items: allocated.items,
+    total,
     tax: resolvedTax.tax,
     tax_is_known: resolvedTax.taxIsKnown,
     merchant_normalized,

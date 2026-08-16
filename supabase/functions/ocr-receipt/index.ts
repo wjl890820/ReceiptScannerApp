@@ -10,7 +10,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 2;
+const OCR_CACHE_VERSION = 3;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -302,6 +302,11 @@ function buildOcrPrompt(): string {
     '  例ラベル: 合計 / お買上計 / お買上げ計 / 支払合計 / 合計金額。',
     '- 最終合計（final printed total）が印刷されている場合、その金額を必ず total に入れる。',
     '  items / 小計 / tax / discounts から total を再計算・再構成してはならない。',
+    '- 支払手段の金額は total ではない。現金 / クレジット / プリカ / リワード / クオ・カード支払 /',
+    '  電子マネー などは tender（支払内訳）であり、分割払いの一部でも total に選ばない。',
+    '  例: お買上計 18229・プリカ/リワード 7002・現金 11227 → total=18229（11227 は禁止）。',
+    '- クオ・カード預り / 残高 / お釣り も total ではない。支払額と合計が一致しても、',
+    '  total は「合計」行を優先（例: 合計 814・クオ支払 814 → total=814）。',
     '- tax は印刷された消費税額を転記する。total に税を足し直してはならない。',
     '- 税率から税額を推算しない。tax が読めない場合は null（0 で埋めない）。',
     '- 8%/10% の税額内訳が印刷されていれば taxBreakdown[].amount に転記し、tax にはその合計を入れてよい。',

@@ -214,6 +214,7 @@ export function classifyItemByName(itemName: string): ProductCategory {
   //       食材规则里的 牛乳 / ごま / 抹茶 等，避免「金のミルク / 抹茶ラテ /
   //       ミルクティー / あんドーナツ / ジャイアントコーン」被误判为食材。
   // プロテインボール/バーは食品スナック（サプリのプロテインより先に判定）。
+  // 成品甜点（エクレア等）必须早于宽泛 ミルク/クリーム 食材规则。
   if (
     has([
       'コーヒー', '珈琲', 'boss', 'ボス', 'クラフトボス', 'ラテ', 'チャイラテ', 'ミルクティー',
@@ -221,19 +222,27 @@ export function classifyItemByName(itemName: string): ProductCategory {
       '緑茶', '水', 'ミネラルウォーター', 'サイダー', '三ツ矢', 'レモネード', 'ジュース', 'コーラ', 'コカゼロ',
       'カフェ', '炭酸', 'ドリンク', 'エナジー', 'チョコ', 'ショコラ', 'カカオ', 'クリスプ', 'アーモンド',
       'グミ', 'クッキー', 'ビス', 'ビスケット', 'アイス', 'あずきバー', 'モナカ', '大福', '黒糖', 'スコーン',
-      'クロッカン', 'ドーナツ', 'あんドーナツ', 'カスタード', 'くちどけ', '白桃', 'ブラックムーン',
+      'クロッカン', 'クロワッサン', 'ドーナツ', 'あんドーナツ', 'カスタード', 'くちどけ', '白桃', 'ブラックムーン',
       'ジャイアントコーン', 'ジャイアントコー',
+      'エクレア', 'クレープ', 'たい焼き', '鯛焼き', 'シュークリーム', '菓子パン', 'ロールケーキ',
       '黒コッペ', 'コッペ', '菓子', 'スナック', 'ポテト', 'ポテチ', 'キャンディ', '飴', 'プリン', 'ゼリー',
       'デザート', 'ケーキ', 'せんべい', '煎餅', 'ビール', '酒', 'ワイン', 'ハイボール', 'チューハイ',
-      '焼酎', '日本酒', '発泡', 'coffee', 'tea', 'juice', 'cola', 'snack', 'chocolate', 'beer', 'wine',
+      '焼酎', '日本酒', '発泡', '発泡酒', 'エール', 'ale', 'ラガー', 'lager', 'ギネス', 'stout', 'ビール',
+      'coffee', 'tea', 'juice', 'cola', 'snack', 'chocolate', 'beer', 'wine',
       'プロテインボール', 'プロテインバー', 'protein ball', 'protein bar', 'プロテインスナック',
     ])
   ) {
     return 'snacks_drinks';
   }
 
+  // 主食型成品面包 / 餐包（甜点零食之后、食材之前；避免 ジャパン 等误伤）
+  if (hasMealBakeryBread(n)) {
+    return 'ready_to_eat';
+  }
+
   // 食材（注意：牛乳 归食材，但 ミルクティー/ミルク抹茶 等已在上面 snacks 命中）
   // 「麺」は即食インスタント語が未命中のときのみ（生麺・乾麺など食材）。
+  // 裸「パン」已上移到成品面包；这里仅保留 パン粉 等原料，避免 ジャパン/フジパン 误伤。
   if (
     has([
       '豆腐', '木綿', '卵', '鶏卵', '玉子', 'たまご', '牛乳', '野菜', 'ヤサイ', '肉', '魚', '米', 'ごはん',
@@ -241,13 +250,40 @@ export function classifyItemByName(itemName: string): ProductCategory {
       'みそ', '醤油', 'しょうゆ', '味ぽん', '砂糖', '塩', '油', 'メークイン', 'じゃがいも', 'いも', '玉ねぎ',
       'たまねぎ', 'キャベツ', 'レタス', 'トマト', 'にんじん', '人参', 'パクチー', 'きのこ', 'えのき', 'えのき茸',
       'エノキ', 'まいたけ', 'とりささみ', 'ささみ', 'とりきも', '砂肝', '豚', '鶏', '牛', 'ハム', 'ベーコン',
-      'パン', 'vegetable', 'fruit', 'meat', 'fish', 'rice', 'egg', 'milk', 'tofu',
+      'vegetable', 'fruit', 'meat', 'fish', 'rice', 'egg', 'milk', 'tofu',
     ])
   ) {
     return 'food_ingredients';
   }
 
   return 'uncategorized';
+}
+
+/**
+ * Meal / staple bakery finished goods → ready_to_eat.
+ * Strips false-positive substrings (ジャパン, パン粉, …) before matching パン.
+ */
+function hasMealBakeryBread(n: string): boolean {
+  if (!n) return false;
+  // Sweet roll cake / paper goods are not meal bread.
+  if (n.includes('ロールケーキ') || n.includes('ケーキロール')) return false;
+  if (n.includes('キッチンロール') || n.includes('ペーパーロール')) return false;
+  if (n.includes('パン粉') || n.includes('フライパン') || n.includes('パンツ')) return false;
+
+  if (
+    n.includes('食パン') ||
+    n.includes('ロールパン') ||
+    n.includes('フランスパン') ||
+    n.includes('コッペパン') ||
+    n.includes('バゲット') ||
+    n.includes('湯こね')
+  ) {
+    return true;
+  }
+
+  // Brand/product names containing パン (フジパン …) after removing ジャパン etc.
+  const probe = n.replace(/ジャパン/g, '').replace(/ヒスパニ/g, '').replace(/スパニッシュ/g, '');
+  return probe.includes('パン');
 }
 
 /**

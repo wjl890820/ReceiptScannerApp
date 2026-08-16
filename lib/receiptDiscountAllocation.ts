@@ -3,7 +3,15 @@
  * Source of truth remains analysis_json items + discounts[].
  */
 
-export type DiscountLine = { label: string; amount: number };
+export type DiscountLine = {
+  label: string;
+  amount: number;
+  /**
+   * Index of the immediately preceding positive item in the kept items list
+   * (OCR order). Used only for safe bundle/まとめ売り allocation.
+   */
+  adjacentPrecedingItemIndex?: number | null;
+};
 
 export type DiscountableItem = {
   name?: string | null;
@@ -62,6 +70,20 @@ function couponSearchTokens(label: string): string[] {
 }
 
 /**
+ * Bundle / まとめ売り値引 labels that may safely attach to the preceding item
+ * when token binding fails. Do NOT broaden to arbitrary receipt-level coupons.
+ */
+export function isBundleSummaryDiscountLabel(label: string): boolean {
+  const raw = String(label || '');
+  const n = normalizeToken(raw);
+  return (
+    /まとめ\s*売り?\s*値?引/.test(raw) ||
+    n.includes('まとめ売り') ||
+    n.includes('まとめ値引')
+  );
+}
+
+/**
  * Bind a discount to an item when the coupon label strongly references it.
  * Example: "ROCHER ORIGINS CPN" → item containing "ROCHER".
  * Never guesses when ambiguous — leaves receipt-level.
@@ -87,6 +109,9 @@ export function findDiscountItemIndex(
 /**
  * Apply product-level coupons onto items as effectiveLineTotal while keeping
  * gross lineTotal. Unbound coupons remain receipt-level.
+ *
+ * Bundle/まとめ売り値引 may bind to the immediately preceding item when
+ * adjacentPrecedingItemIndex is provided and token binding fails.
  */
 export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
   items: T[],
@@ -109,7 +134,18 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
     const amount = Number(discount.amount);
     if (!Number.isFinite(amount) || amount === 0) continue;
     const delta = amount < 0 ? amount : -Math.abs(amount);
-    const idx = findDiscountItemIndex(next, discount);
+    let idx = findDiscountItemIndex(next, discount);
+    if (idx < 0 && isBundleSummaryDiscountLabel(discount.label)) {
+      const adj = discount.adjacentPrecedingItemIndex;
+      if (
+        typeof adj === 'number' &&
+        adj >= 0 &&
+        adj < next.length &&
+        grossOf(next[adj]) > 0
+      ) {
+        idx = adj;
+      }
+    }
     if (idx < 0) {
       unboundDiscounts.push({
         label: discount.label,

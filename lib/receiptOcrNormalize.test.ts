@@ -145,7 +145,9 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     expect(out.items.map((i) => i.name)).toEqual(['おにぎり 鮭', 'コーヒー']);
     // 店铺类型词被清洗为 undefined
     expect(out.items[1].categoryKey).toBeUndefined();
-    expect(out.discounts).toEqual([{ label: '値引', amount: -50 }]);
+    expect(out.discounts).toEqual([
+      { label: '値引', amount: -50, adjacentPrecedingItemIndex: 1 },
+    ]);
     expect(out.merchant_normalized).toBe('セブン-イレブン');
     // items 270 + discount -50 + tax 20 = 240 == total
     expect(out.amount_mismatch).toBe(false);
@@ -223,8 +225,23 @@ describe('resolveReceiptTax', () => {
     ).toEqual({ tax: 311, taxIsKnown: true });
   });
 
-  it('explicit tax=0 → known zero', () => {
+  it('bare tax=0 without known marker → unknown (OCR padding)', () => {
     expect(resolveReceiptTax({ tax: 0, total: 1000, items: [], currency: 'JPY' })).toEqual({
+      tax: 0,
+      taxIsKnown: false,
+    });
+  });
+
+  it('explicit known tax=0 → known zero', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 0,
+        tax_is_known: true,
+        total: 1000,
+        items: [],
+        currency: 'JPY',
+      } as any)
+    ).toEqual({
       tax: 0,
       taxIsKnown: true,
     });

@@ -42,8 +42,8 @@ describe('classifyItemByName: 关键词分类', () => {
   it('惣菜パン → ready_to_eat（早于 パン 食材）', () => {
     expect(classifyItemByName('惣菜パン')).toBe('ready_to_eat');
   });
-  it('食パン → food_ingredients', () => {
-    expect(classifyItemByName('食パン')).toBe('food_ingredients');
+  it('食パン → ready_to_eat（成品主食面包，不是食材）', () => {
+    expect(classifyItemByName('食パン')).toBe('ready_to_eat');
   });
   it('未知商品 → uncategorized', () => {
     expect(classifyItemByName('xyz123')).toBe('uncategorized');
@@ -106,6 +106,29 @@ describe('classifyItemByName: 关键词分类', () => {
   it('ProGlide / カミソリ → household（V1 活跃日用）', () => {
     expect(classifyItemByName('Gillette ProGlide')).toBe('household');
     expect(classifyItemByName('カミソリ')).toBe('household');
+  });
+
+  // Samples 055 / 057 / 060 — finished food & alcohol precedence
+  it('がぶっとエクレアミルククリーム → snacks_drinks（成品甜点优先于 ミルク/クリーム）', () => {
+    expect(classifyItemByName('がぶっとエクレアミルククリーム')).toBe('snacks_drinks');
+  });
+  it('濃厚カスタードエクレア → snacks_drinks', () => {
+    expect(classifyItemByName('濃厚カスタードエクレア')).toBe('snacks_drinks');
+  });
+  it('フジパン 生もっち → ready_to_eat（成品面包，不是食材）', () => {
+    expect(classifyItemByName('フジパン 生もっち')).toBe('ready_to_eat');
+  });
+  it('湯こねロール → ready_to_eat', () => {
+    expect(classifyItemByName('湯こねロール')).toBe('ready_to_eat');
+  });
+  it('普通牛乳 → food_ingredients（原料词仍可命中）', () => {
+    expect(classifyItemByName('明治おいしい牛乳')).toBe('food_ingredients');
+  });
+  it('SVジャパンエール / ラガー / ギネス → snacks_drinks（酒类优先于 ジャパン⊃パン）', () => {
+    expect(classifyItemByName('SVジャパンエール')).toBe('snacks_drinks');
+    expect(classifyItemByName('SV豊潤ラガー')).toBe('snacks_drinks');
+    expect(classifyItemByName('SVシルクエール')).toBe('snacks_drinks');
+    expect(classifyItemByName('ギネス缶330')).toBe('snacks_drinks');
   });
 });
 

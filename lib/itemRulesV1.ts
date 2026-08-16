@@ -79,6 +79,23 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
     return mk('prepared_food', 'deli', ['ready_to_eat', 'non_essential_spend'], 0.86, 'Deli keywords', { brand });
   }
 
+  // --- Snacks / sweets (before dairy: エクレア+ミルククリーム must not become ingredients) ---
+  if (hasAny(text, ['チョコ', 'choco', 'chocolate'])) {
+    return mk('snacks', 'chocolate', ['snack', 'sweet', 'non_essential_spend'], 0.9, 'Chocolate keywords', { brand });
+  }
+  if (hasAny(text, ['ポテトチップ', 'ポテチ', 'chip', 'chips', 'スナック'])) {
+    return mk('snacks', 'chips', ['snack', 'non_essential_spend'], 0.88, 'Chips/snack keywords', { brand });
+  }
+  if (hasAny(text, ['クッキー', 'ビスケット', 'biscuit', 'cookie'])) {
+    return mk('snacks', 'biscuits', ['snack', 'sweet', 'non_essential_spend'], 0.88, 'Biscuits/cookies keywords', { brand });
+  }
+  if (hasAny(text, ['ケーキ', 'cake', 'デザート', 'dessert', 'プリン', 'pudding', 'シュー', 'エクレア', 'クレープ', 'たい焼き', 'ドーナツ'])) {
+    return mk('snacks', 'desserts', ['snack', 'sweet', 'non_essential_spend'], 0.86, 'Dessert keywords', { brand });
+  }
+  if (hasAny(text, ['アイス', 'ice cream'])) {
+    return mk('snacks', 'ice_cream', ['snack', 'sweet', 'non_essential_spend', 'frozen_item'], 0.9, 'Ice cream keywords', { brand });
+  }
+
   // --- Ingredients: vegetables / herbs / mushrooms ---
   if (hasAny(text, ['えのき', 'しめじ', '椎茸', 'しいたけ', '茸', 'きのこ', 'mushroom'])) {
     return mk('ingredients', 'vegetables', ['ingredient', 'cooking_related', 'vegetable_source'], 0.9, 'Mushroom keywords', { brand });
@@ -99,23 +116,6 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
   }
   if (hasAny(text, ['豆腐', 'とうふ', '納豆', 'なっとう', '豆乳', 'soymilk', 'soy', 'tofu'])) {
     return mk('ingredients', 'soy_products', ['ingredient', 'cooking_related', 'protein_source'], 0.9, 'Soy products keywords', { brand });
-  }
-
-  // --- Snacks / sweets ---
-  if (hasAny(text, ['チョコ', 'choco', 'chocolate'])) {
-    return mk('snacks', 'chocolate', ['snack', 'sweet', 'non_essential_spend'], 0.9, 'Chocolate keywords', { brand });
-  }
-  if (hasAny(text, ['ポテトチップ', 'ポテチ', 'chip', 'chips', 'スナック'])) {
-    return mk('snacks', 'chips', ['snack', 'non_essential_spend'], 0.88, 'Chips/snack keywords', { brand });
-  }
-  if (hasAny(text, ['クッキー', 'ビスケット', 'biscuit', 'cookie'])) {
-    return mk('snacks', 'biscuits', ['snack', 'sweet', 'non_essential_spend'], 0.88, 'Biscuits/cookies keywords', { brand });
-  }
-  if (hasAny(text, ['ケーキ', 'cake', 'デザート', 'dessert', 'プリン', 'pudding', 'シュー', 'エクレア'])) {
-    return mk('snacks', 'desserts', ['snack', 'sweet', 'non_essential_spend'], 0.86, 'Dessert keywords', { brand });
-  }
-  if (hasAny(text, ['アイス', 'ice cream'])) {
-    return mk('snacks', 'ice_cream', ['snack', 'sweet', 'non_essential_spend', 'frozen_item'], 0.9, 'Ice cream keywords', { brand });
   }
 
   // --- Beverages ---
@@ -139,7 +139,7 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
   }
 
   // --- Alcohol ---
-  if (hasAny(text, ['ビール', 'beer'])) {
+  if (hasAny(text, ['ビール', 'beer', 'エール', 'ale', 'ラガー', 'lager', 'ギネス', 'stout', '発泡酒'])) {
     return mk('alcohol', 'beer', ['alcoholic', 'non_essential_spend'], 0.9, 'Beer keywords', { brand });
   }
   if (hasAny(text, ['日本酒', 'sake'])) {

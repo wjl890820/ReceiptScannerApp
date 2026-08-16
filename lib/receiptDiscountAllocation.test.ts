@@ -101,6 +101,40 @@ describe('coupon / discount allocation', () => {
     );
     expect(idx).toBe(-1);
   });
+
+  it('Sample 048/058: adjacent まとめ売り値引 allocates to preceding item', () => {
+    const normalized = normalizeOcrAnalysis({
+      merchant: 'ヨークベニマル',
+      currency: 'JPY',
+      total: 2296,
+      tax: null as any,
+      items: [
+        { name: 'その他A', quantity: 1, unitPrice: 2093, lineTotal: 2093 },
+        { name: 'ファンタオレ70', quantity: 1, unitPrice: 210, lineTotal: 210 },
+        { name: '▲まとめ売り値引', quantity: 1, unitPrice: -7, lineTotal: -7 },
+      ],
+    });
+    const fanta = normalized.items.find((i) => String(i.name).includes('ファンタオレ'))!;
+    expect(fanta.lineTotal).toBe(210);
+    expect(fanta.effectiveLineTotal).toBe(203);
+    expect(fanta.discountAllocated).toBe(-7);
+    const analyticsSum = normalized.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0);
+    expect(analyticsSum).toBe(2296);
+    expect(normalized.total).toBe(2296);
+  });
+
+  it('ambiguous Costco-style coupon remains receipt-level (no adjacent force-fit)', () => {
+    const result = applyReceiptDiscountsToItems(
+      [
+        { name: 'ITEM A', lineTotal: 1000 },
+        { name: 'ITEM B', lineTotal: 2000 },
+      ],
+      [{ label: 'メーカークーポン', amount: -100, adjacentPrecedingItemIndex: 1 }]
+    );
+    expect(result.boundCount).toBe(0);
+    expect(result.unboundDiscounts).toEqual([{ label: 'メーカークーポン', amount: -100 }]);
+    expect(itemAmountForAnalytics(result.items[1])).toBe(2000);
+  });
 });
 
 describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
