@@ -75,7 +75,7 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
     return mk('prepared_food', 'sandwiches', ['ready_to_eat', 'non_essential_spend'], 0.86, 'Sandwich keywords', { brand });
   }
 
-  if (hasAny(text, ['惣菜', 'そうざい', '唐揚', 'からあげ', 'コロッケ', 'フライ', '天ぷら', '天', 'さつま揚げ', '竹輪', 'ちくわ', 'おでん'])) {
+  if (hasAny(text, ['惣菜', 'そうざい', '唐揚', 'からあげ', 'コロッケ', 'フライ', '天ぷら', 'さつま揚げ', '竹輪', 'ちくわ', 'おでん', '生煎', '餃子', '焼売'])) {
     return mk('prepared_food', 'deli', ['ready_to_eat', 'non_essential_spend'], 0.86, 'Deli keywords', { brand });
   }
 

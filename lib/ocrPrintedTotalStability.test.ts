@@ -108,7 +108,7 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
   });
 
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*4/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*5/);
     expect(edgeSource).toContain('buildOcrCacheKey');
     expect(edgeSource).toContain('v${OCR_CACHE_VERSION}:${imageContentHash}');
     // Legacy bare image hash must not be the sole cache lookup key after versioning.

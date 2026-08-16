@@ -169,10 +169,33 @@ const SUBTOTAL_KEYWORDS = [
   '総計',
 ];
 
-/** Costco purchase-count / member meta — not merchandise, not a money subtotal. */
-function isCostcoPointsOrMemberMetaLabel(name: string): boolean {
+/** Costco / grocery purchase-count meta — not merchandise. */
+function isPurchaseCountMetaLabel(name: string): boolean {
   const n = toHalfWidthLower(name);
-  return /御買上げ点数|お買上げ点数|お買上点数|会員番号/.test(n);
+  return /御買上げ点数|お買上げ点数|お買上点数|買上点数|商品点数|購入点数|合計点数|会員番号/.test(
+    n
+  );
+}
+
+/** Taxable base / 対象額 — NEVER treat as actual tax. */
+export function isTaxableBaseLabel(name: string): boolean {
+  const n = toHalfWidthLower(name);
+  if (!n) return false;
+  if (/消費税|外税額|内消費税|税額/.test(n) && !/対象/.test(n)) return false;
+  return /対象額|課税対象|税抜対象|税率\s*\d+\s*%\s*対象|内税率.*対象|外税.*対象/.test(n);
+}
+
+/** Printed actual tax amount lines (included or external). */
+export function isActualTaxAmountLabel(name: string): boolean {
+  const n = toHalfWidthLower(name);
+  if (!n) return false;
+  if (isTaxableBaseLabel(n)) return false;
+  return (
+    /消費税等|内消費税等|内消費税|外税額|消費税|税額/.test(n) ||
+    (/外税/.test(n) && !/対象/.test(n)) ||
+    /\(\s*内\s*消費\s*税/.test(n) ||
+    /（\s*内\s*消費\s*税/.test(n)
+  );
 }
 
 function toHalfWidthLower(s: string): string {
@@ -262,8 +285,10 @@ export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
 
   // 折扣优先：负金额或折扣关键字
   if (amt < 0 || includesAny(n, DISCOUNT_KEYWORDS)) return 'discount';
-  if (includesAny(n, TAX_KEYWORDS)) return 'tax';
-  if (isNonMerchandiseMetaLabel(name) || isCostcoPointsOrMemberMetaLabel(name)) return 'subtotal';
+  // Taxable base before generic TAX_KEYWORDS (「税率10%対象」contains 税率).
+  if (isTaxableBaseLabel(name)) return 'subtotal';
+  if (includesAny(n, TAX_KEYWORDS) || isActualTaxAmountLabel(name)) return 'tax';
+  if (isNonMerchandiseMetaLabel(name) || isPurchaseCountMetaLabel(name)) return 'subtotal';
   // Tender / payment allocation — before bare 合計 subtotal matching.
   if (isPaymentAllocationLabel(name)) return 'payment';
   if (includesAny(n, SUBTOTAL_KEYWORDS)) return 'subtotal';
@@ -293,11 +318,11 @@ export function sanitizeOcrCategoryKey(
 
 /**
  * Resolve printed tax with known/unknown provenance.
+ * - Harvested actual tax lines (消費税 / 内消費税等) → known (preferred)
  * - Explicit positive top-level tax → known
- * - Explicit tax=0 only when upstream marks tax_is_known=true (review / clear print)
- * - Bare OCR tax=0 without known marker → unknown (models often pad missing tax as 0)
- * - Top-level missing + explicit positive taxBreakdown → sum, known
- * - No evidence → storage 0 + unknown (never invent from rates/categories)
+ * - taxBreakdown amounts that are NOT taxable bases → sum, known
+ * - Bare OCR tax=0 without known marker → unknown
+ * - Never invent tax from rates × taxable bases
  */
 export type ResolvedReceiptTax = {
   tax: number;
@@ -309,9 +334,17 @@ export function resolveReceiptTax(
 ): ResolvedReceiptTax {
   const top = analysis.tax;
   const priorKnown = (analysis as any).tax_is_known ?? (analysis as any).taxIsKnown;
+  const harvested =
+    typeof (analysis as any)._harvestedActualTax === 'number' &&
+    Number.isFinite((analysis as any)._harvestedActualTax)
+      ? Math.round((analysis as any)._harvestedActualTax)
+      : harvestActualTaxFromItems(analysis.items);
 
   // Respect an explicit unknown marker from upstream (e.g. review empty tax field).
   if (priorKnown === false || priorKnown === 0) {
+    if (harvested != null && harvested > 0) {
+      return { tax: harvested, taxIsKnown: true };
+    }
     const breakdownUnknown = sumExplicitTaxBreakdown(analysis);
     if (breakdownUnknown != null) {
       return { tax: breakdownUnknown, taxIsKnown: true };
@@ -327,6 +360,9 @@ export function resolveReceiptTax(
     if (typeof top === 'number' && Number.isFinite(top)) {
       return { tax: Math.round(top), taxIsKnown: true };
     }
+    if (harvested != null && harvested > 0) {
+      return { tax: harvested, taxIsKnown: true };
+    }
     const fromBreakdownKnown = sumExplicitTaxBreakdown(analysis);
     if (fromBreakdownKnown != null) {
       return { tax: fromBreakdownKnown, taxIsKnown: true };
@@ -334,17 +370,91 @@ export function resolveReceiptTax(
     return { tax: 0, taxIsKnown: true };
   }
 
-  if (typeof top === 'number' && Number.isFinite(top) && top > 0) {
-    return { tax: Math.round(top), taxIsKnown: true };
+  // Printed actual tax line(s) win over Edge top-level / breakdown that may include taxable bases.
+  if (harvested != null && harvested > 0) {
+    return { tax: harvested, taxIsKnown: true };
   }
 
   const fromBreakdown = sumExplicitTaxBreakdown(analysis);
+  if (typeof top === 'number' && Number.isFinite(top) && top > 0) {
+    const topRounded = Math.round(top);
+    // When Edge summed taxable bases into tax, sanitized breakdown is smaller and
+    // the gap equals skipped base-like amounts (Sample 061: 75 = 72 + 3).
+    if (
+      fromBreakdown != null &&
+      topRounded > fromBreakdown &&
+      topRounded - fromBreakdown === skippedTaxableBaseAmounts(analysis)
+    ) {
+      return { tax: fromBreakdown, taxIsKnown: true };
+    }
+    return { tax: topRounded, taxIsKnown: true };
+  }
+
   if (fromBreakdown != null) {
     return { tax: fromBreakdown, taxIsKnown: true };
   }
 
   // Missing tax, or bare tax=0 without known provenance → unknown.
   return { tax: 0, taxIsKnown: false };
+}
+
+/** Sum printed actual-tax amounts from OCR item rows (before they are stripped). */
+export function harvestActualTaxFromItems(
+  items: Array<{ name?: string | null; lineTotal?: number | null }> | null | undefined
+): number | null {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  let sum = 0;
+  let any = false;
+  for (const it of items) {
+    const name = typeof it?.name === 'string' ? it.name : '';
+    if (!isActualTaxAmountLabel(name)) continue;
+    if (isTaxableBaseLabel(name)) continue;
+    const amt = Number(it?.lineTotal);
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    sum += Math.round(amt);
+    any = true;
+  }
+  return any ? sum : null;
+}
+
+function isBreakdownAmountLikelyTaxableBase(rate: number, amount: number): boolean {
+  if (!Number.isFinite(rate) || rate < 8) return false;
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+  // If `amount` were a taxable base at `rate`, tax would round to 0 → not an actual tax line.
+  return Math.round((amount * rate) / 100) === 0;
+}
+
+function skippedTaxableBaseAmounts(
+  analysis: ReceiptAnalysis & Record<string, unknown>
+): number {
+  const breakdown = (analysis as any).taxBreakdown ?? (analysis as any).tax_breakdown;
+  if (!Array.isArray(breakdown) || breakdown.length === 0) return 0;
+  let skipped = 0;
+  for (const row of breakdown) {
+    const label = String(row?.label ?? row?.name ?? row?.description ?? '');
+    const amt =
+      typeof row?.amount === 'number'
+        ? row.amount
+        : typeof row?.tax === 'number'
+          ? row.tax
+          : typeof row?.taxAmount === 'number'
+            ? row.taxAmount
+            : NaN;
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    if (label && isTaxableBaseLabel(label)) {
+      skipped += amt;
+      continue;
+    }
+    if (row?.kind === 'taxable_base' || row?.kind === 'base') {
+      skipped += amt;
+      continue;
+    }
+    const rate = Number(row?.rate);
+    if (isBreakdownAmountLikelyTaxableBase(rate, amt)) {
+      skipped += amt;
+    }
+  }
+  return Math.round(skipped);
 }
 
 function sumExplicitTaxBreakdown(
@@ -355,6 +465,9 @@ function sumExplicitTaxBreakdown(
   let sum = 0;
   let any = false;
   for (const row of breakdown) {
+    const label = String(row?.label ?? row?.name ?? row?.description ?? '');
+    if (label && isTaxableBaseLabel(label)) continue;
+    if (row?.kind === 'taxable_base' || row?.kind === 'base') continue;
     const amt =
       typeof row?.amount === 'number'
         ? row.amount
@@ -363,13 +476,12 @@ function sumExplicitTaxBreakdown(
           : typeof row?.taxAmount === 'number'
             ? row.taxAmount
             : NaN;
-    if (Number.isFinite(amt) && amt >= 0) {
-      // Allow 0 rows but require at least one finite amount entry present.
-      sum += amt;
-      any = true;
-    }
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    const rate = Number(row?.rate);
+    if (isBreakdownAmountLikelyTaxableBase(rate, amt)) continue;
+    sum += amt;
+    any = true;
   }
-  // Only treat as evidence when there is at least one strictly positive tax amount.
   if (!any || sum <= 0) return null;
   return Math.round(sum);
 }

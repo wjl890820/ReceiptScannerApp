@@ -10,7 +10,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 4;
+const OCR_CACHE_VERSION = 5;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -314,11 +314,17 @@ function buildOcrPrompt(): string {
     '  「コストコ」または "WHOLESALE BIZ/GOLD" の両方を含む文字列にしてよい（WHOLESALE 単独不可）。',
     '- tax は印刷された消費税額を転記する。total に税を足し直してはならない。',
     '- 税率から税額を推算しない。tax が読めない場合は null（0 で埋めない）。',
+    '- 【重要】課税対象額 / 対象額 / 税抜対象額 / 「税率10%対象 ¥N」は税額ではない。',
+    '  これらを tax や taxBreakdown[].amount に入れない（N は taxable base）。',
+    '- taxBreakdown[].amount には実際の税額のみ（消費税 / 消費税等 / 外税額 / 内消費税等 / 税額）。',
+    '  例: 8%税額72・10%対象額3・合計985 → tax=72, taxBreakdown=[{rate:8,amount:72}]（amount:3 は禁止）。',
+    '- 内税の「（内消費税等 8%）¥129」なども含め、印刷された税額は必ず tax に入れる（null にしない）。',
     '- 8%/10% の税額内訳が印刷されていれば taxBreakdown[].amount に転記し、tax にはその合計を入れてよい。',
     '- 日本のレシートは内税（total に税込み）でも外税（小計+税=合計が印刷）でもよい。',
     '  どちらの場合も、印刷された最終合計があれば total はその金額であり、税を二重加算しない。',
     '- 例（内税・正しい）: 合計 8351・消費税 619 → total=8351, tax=619。total=8970（8351+619）は禁止。',
     '- 例（外税・正しい）: 小計 2442・税 195・合計 2637 → total=2637, tax=195。',
+    '- 「買上点数 / お買上点数 / 御買上げ点数」は商品ではない（summary metadata）。items に入れない。',
     '- クーポン/値引は discounts に入れる。まとめ売り値引は上述のとおり items(kind=discount) にも残す。',
     '  印刷された最終合計がある限り、items±discounts+tax で total を上書きしない。',
     '',
