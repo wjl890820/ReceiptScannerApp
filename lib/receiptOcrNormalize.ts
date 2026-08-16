@@ -63,12 +63,22 @@ const DISCOUNT_IDENTITY_NOISE = [
 /**
  * Conservative logical-discount identity: normalized content tokens + |amount|.
  * Does NOT dedupe by amount alone (two different -600 coupons stay distinct).
+ *
+ * Strips qty/price annotation tokens so Edge dual representation like
+ * "まとめ売り値引 2個¥203" and "▲まとめ売り値引" share one identity.
  */
 export function normalizeDiscountIdentityLabel(label: string): string {
   let s = toHalfWidthLower(label || '').replace(/[^\p{L}\p{N}]+/gu, ' ');
   for (const noise of DISCOUNT_IDENTITY_NOISE) {
     s = s.replace(new RegExp(noise, 'gi'), ' ');
   }
+  // Drop group-price / pack annotations before tokenization (2個¥203 × 1組).
+  s = s
+    .replace(/\d+\s*個/g, ' ')
+    .replace(/\d+\s*組/g, ' ')
+    .replace(/\d+\s*入/g, ' ')
+    .replace(/\d+\s*点/g, ' ')
+    .replace(/\d+/g, ' ');
   return s
     .split(/\s+/)
     .map((t) => t.trim())

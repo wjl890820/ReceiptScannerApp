@@ -189,6 +189,7 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
     const amount = Number(discount.amount);
     if (!Number.isFinite(amount) || amount === 0) continue;
     const delta = amount < 0 ? amount : -Math.abs(amount);
+    const absDisc = Math.abs(delta);
     let idx = findDiscountItemIndex(next, discount);
     if (idx < 0 && isBundleSummaryDiscountLabel(discount.label)) {
       idx = findBundleDiscountItemIndex(next, discount, evidenceTexts);
@@ -201,6 +202,14 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
       continue;
     }
     const item = next[idx];
+    // Same bundle discount represented twice (discounts[] + item line with richer label)
+    // must not stack onto one line (Build 27 Sample 058: 210→196).
+    if (isBundleSummaryDiscountLabel(discount.label)) {
+      const prevAbs = Math.abs(Number(item.discountAllocated) || 0);
+      if (prevAbs > 0 && prevAbs === absDisc) {
+        continue;
+      }
+    }
     const gross = grossOf(item);
     const prevAllocated = Number(item.discountAllocated) || 0;
     const allocated = prevAllocated + delta;
