@@ -142,6 +142,11 @@ describe('Costco cropped-header signals', () => {
     expect(detectMerchantType('BIZ/GOLD', null)).toBe('unknown');
   });
 
+  it('does not treat WHOLESALE alone as Costco', () => {
+    expect(detectCostcoReceiptSignals({ merchant: 'WHOLESALE', items: [] }).isCostco).toBe(false);
+    expect(detectMerchantType('WHOLESALE', null)).toBe('unknown');
+  });
+
   it('promotes cropped-header Costco with multiple strong signals', () => {
     const items = [
       { name: '123456 KIRKLAND WATER E' },
@@ -154,6 +159,16 @@ describe('Costco cropped-header signals', () => {
     expect(
       detectMerchantTypeFromReceipt({ merchant: 'BIZ/GOLD', items })
     ).toBe('supermarket');
+  });
+
+  it('promotes WHOLESALE + BIZ/GOLD evidence blob', () => {
+    expect(
+      detectCostcoReceiptSignals({
+        merchant: 'WHOLESALE',
+        items: [],
+        rawText: 'BIZ/GOLD',
+      }).isCostco
+    ).toBe(true);
   });
 
   it('explicit Costco name remains supermarket', () => {

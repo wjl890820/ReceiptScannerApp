@@ -123,6 +123,29 @@ describe('coupon / discount allocation', () => {
     expect(normalized.total).toBe(2296);
   });
 
+  it('まとめ売り dual representation (discounts[] + item line) allocates once → effective 203 not 196', () => {
+    const normalized = normalizeOcrAnalysis({
+      merchant: 'ヨークベニマル',
+      currency: 'JPY',
+      total: 2296,
+      tax: null as any,
+      discounts: [{ label: 'まとめ売り値引', amount: -7 }],
+      items: [
+        { name: 'その他A', quantity: 1, unitPrice: 2093, lineTotal: 2093 },
+        { name: 'ファンタオレ70', quantity: 1, unitPrice: 210, lineTotal: 210 },
+        { name: '▲まとめ売り値引', quantity: 1, unitPrice: -7, lineTotal: -7 },
+      ],
+    });
+    expect(normalized.discounts).toHaveLength(1);
+    expect(normalized.discounts![0].amount).toBe(-7);
+    const fanta = normalized.items.find((i) => String(i.name).includes('ファンタオレ'))!;
+    expect(fanta.lineTotal).toBe(210);
+    expect(fanta.discountAllocated).toBe(-7);
+    expect(fanta.effectiveLineTotal).toBe(203);
+    expect(fanta.effectiveLineTotal).not.toBe(196);
+    expect(normalized.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(2296);
+  });
+
   it('ambiguous Costco-style coupon remains receipt-level (no adjacent force-fit)', () => {
     const result = applyReceiptDiscountsToItems(
       [

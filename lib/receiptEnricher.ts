@@ -301,6 +301,7 @@ export async function applyCategoriesWithLearning(
   const costcoHit = detectCostcoReceiptSignals({
     merchant: merchantRaw,
     items: items as Array<{ name?: string | null }>,
+    rawText: (analysis as any).ocr_raw_text ?? (analysis as any).rawText,
   });
   if (costcoHit.isCostco) {
     const weakMerchant =
@@ -317,6 +318,7 @@ export async function applyCategoriesWithLearning(
     merchant: merchantRaw,
     merchant_normalized: merchantNormalized,
     items: items as Array<{ name?: string | null }>,
+    rawText: (analysis as any).ocr_raw_text ?? (analysis as any).rawText,
   });
   const isV1Supported = isV1SupportedMerchantType(merchantType);
   // Legacy compatibility：is_grocery 仅表示 supermarket（勿用于 V1 analytics 支持判断）。

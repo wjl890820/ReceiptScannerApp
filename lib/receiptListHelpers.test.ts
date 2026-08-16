@@ -2,7 +2,7 @@ jest.mock('./i18n', () => ({
   t: (key: string) => key,
 }));
 
-import { buildTopCategories, buildHistoryMetaLine } from './receiptListHelpers';
+import { buildTopCategories, buildHistoryMetaLine, taxFieldPrefillFromSnapshot } from './receiptListHelpers';
 import { formatDate } from './formatDate';
 
 describe('buildTopCategories', () => {
@@ -68,6 +68,23 @@ describe('buildHistoryMetaLine', () => {
     expect(buildHistoryMetaLine(ts, ts, '税', 195, formatDate, '—', '待确认', 1)).toContain(
       '税 195'
     );
+  });
+});
+
+describe('taxFieldPrefillFromSnapshot (Review)', () => {
+  it('unknown tax=0 prefill is empty (not \"0\")', () => {
+    expect(taxFieldPrefillFromSnapshot({ tax: 0, tax_is_known: false })).toBe('');
+    expect(taxFieldPrefillFromSnapshot({ tax: 0, tax_is_known: 0 })).toBe('');
+    expect(taxFieldPrefillFromSnapshot({ tax: 0 })).toBe('');
+  });
+
+  it('known tax=0 prefill is \"0\"', () => {
+    expect(taxFieldPrefillFromSnapshot({ tax: 0, tax_is_known: true })).toBe('0');
+    expect(taxFieldPrefillFromSnapshot({ tax: 0, tax_is_known: 1 })).toBe('0');
+  });
+
+  it('known positive tax prefill is numeric string', () => {
+    expect(taxFieldPrefillFromSnapshot({ tax: 195, tax_is_known: true })).toBe('195');
   });
 });
 

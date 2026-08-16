@@ -107,15 +107,69 @@ export function findDiscountItemIndex(
 }
 
 /**
+ * When Edge places まとめ売り only in discounts[] (no negative item row),
+ * bind using group-price evidence (e.g. label/nearby "2個¥203") or a single
+ * safe preceding index — never arbitrary receipt-level coupons.
+ */
+export function findBundleDiscountItemIndex(
+  items: DiscountableItem[],
+  discount: DiscountLine,
+  evidenceTexts: string[] = []
+): number {
+  if (!isBundleSummaryDiscountLabel(discount.label)) return -1;
+  const amount = Number(discount.amount);
+  if (!Number.isFinite(amount) || amount === 0) return -1;
+  const delta = amount < 0 ? amount : -Math.abs(amount);
+  const absDisc = Math.abs(delta);
+
+  const evidence = [discount.label, ...evidenceTexts].join('\n');
+  const priceHits = Array.from(evidence.matchAll(/[¥￥]?\s*(\d{2,6})/g))
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  const byGroupPrice: number[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const gross = grossOf(items[i]);
+    if (gross <= 0) continue;
+    const effective = gross + delta;
+    if (effective < 0) continue;
+    if (priceHits.includes(effective) || priceHits.includes(gross)) {
+      byGroupPrice.push(i);
+    }
+  }
+  if (byGroupPrice.length === 1) return byGroupPrice[0];
+
+  const adj = discount.adjacentPrecedingItemIndex;
+  if (typeof adj === 'number' && adj >= 0 && adj < items.length && grossOf(items[adj]) > 0) {
+    return adj;
+  }
+
+  // Edge-only single bundle discount: unique item whose gross equals absDisc + a listed price.
+  if (byGroupPrice.length === 0 && priceHits.length > 0) {
+    const matches: number[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const gross = grossOf(items[i]);
+      if (priceHits.some((p) => p + absDisc === gross || p === gross + delta)) {
+        matches.push(i);
+      }
+    }
+    if (matches.length === 1) return matches[0];
+  }
+
+  return -1;
+}
+
+/**
  * Apply product-level coupons onto items as effectiveLineTotal while keeping
  * gross lineTotal. Unbound coupons remain receipt-level.
  *
- * Bundle/まとめ売り値引 may bind to the immediately preceding item when
- * adjacentPrecedingItemIndex is provided and token binding fails.
+ * Bundle/まとめ売り値引 may bind via adjacency, group-price evidence, or
+ * adjacentPrecedingItemIndex when token binding fails.
  */
 export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
   items: T[],
-  discounts: DiscountLine[]
+  discounts: DiscountLine[],
+  options?: { evidenceTexts?: string[] }
 ): DiscountAllocationResult<T> {
   const next = items.map((item) => {
     const gross = grossOf(item);
@@ -129,6 +183,7 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
 
   const unboundDiscounts: DiscountLine[] = [];
   let boundCount = 0;
+  const evidenceTexts = options?.evidenceTexts ?? [];
 
   for (const discount of discounts) {
     const amount = Number(discount.amount);
@@ -136,15 +191,7 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
     const delta = amount < 0 ? amount : -Math.abs(amount);
     let idx = findDiscountItemIndex(next, discount);
     if (idx < 0 && isBundleSummaryDiscountLabel(discount.label)) {
-      const adj = discount.adjacentPrecedingItemIndex;
-      if (
-        typeof adj === 'number' &&
-        adj >= 0 &&
-        adj < next.length &&
-        grossOf(next[adj]) > 0
-      ) {
-        idx = adj;
-      }
+      idx = findBundleDiscountItemIndex(next, discount, evidenceTexts);
     }
     if (idx < 0) {
       unboundDiscounts.push({

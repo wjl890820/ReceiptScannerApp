@@ -92,6 +92,8 @@ export function detectMerchantTypeFromReceipt(analysis: {
   merchant?: string | null;
   merchant_normalized?: string | null;
   items?: Array<{ name?: string | null }> | null;
+  rawText?: string | null;
+  ocr_raw_text?: string | null;
 }): MerchantType {
   const base = detectMerchantType(analysis.merchant, analysis.merchant_normalized);
   if (isV1SupportedMerchantType(base)) return base;
@@ -99,6 +101,7 @@ export function detectMerchantTypeFromReceipt(analysis: {
   const costco = detectCostcoReceiptSignals({
     merchant: analysis.merchant,
     items: analysis.items,
+    rawText: analysis.rawText ?? analysis.ocr_raw_text,
   });
   if (costco.isCostco) return 'supermarket';
   return base;

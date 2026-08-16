@@ -10,7 +10,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 3;
+const OCR_CACHE_VERSION = 4;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -293,7 +293,10 @@ function buildOcrPrompt(): string {
     'ルール:',
     '- すべての金額は整数の JPY。小数や通貨記号（¥ 等）を付けない。',
     '- 値引・割引・クーポン・セール・ポイント利用 などの行は商品ではない。kind="discount" とし、discounts にも入れる（amount は負数）。',
+    '  まとめ売り値引 / まとめ値引 は discounts に入れるだけでなく、items にも kind="discount" の負数行として残す',
+    '  （直前商品への割当に必要）。組価格（例: 2個¥203）が印刷されていれば label か隣接行名に残す。',
     '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
+    '  ただし Costco の「御買上げ点数」行は items に残してよい（合計金額ではない）。',
     '- quantity は「購入点数」のみ。商品名中の包装数（例: 4個 / 10PC / 3PK）は quantity に入れない（購入証拠が無い限り 1）。',
     '  明示的な購入数量（例: (¥108 × 3個) や数量欄）があるときだけその N を quantity にする。',
     '',
@@ -307,6 +310,8 @@ function buildOcrPrompt(): string {
     '  例: お買上計 18229・プリカ/リワード 7002・現金 11227 → total=18229（11227 は禁止）。',
     '- クオ・カード預り / 残高 / お釣り も total ではない。支払額と合計が一致しても、',
     '  total は「合計」行を優先（例: 合計 814・クオ支払 814 → total=814）。',
+    '- ヘッダーが欠けて WHOLESALE / BIZ/GOLD だけ読める Costco レシートは、merchant を',
+    '  「コストコ」または "WHOLESALE BIZ/GOLD" の両方を含む文字列にしてよい（WHOLESALE 単独不可）。',
     '- tax は印刷された消費税額を転記する。total に税を足し直してはならない。',
     '- 税率から税額を推算しない。tax が読めない場合は null（0 で埋めない）。',
     '- 8%/10% の税額内訳が印刷されていれば taxBreakdown[].amount に転記し、tax にはその合計を入れてよい。',
@@ -314,8 +319,8 @@ function buildOcrPrompt(): string {
     '  どちらの場合も、印刷された最終合計があれば total はその金額であり、税を二重加算しない。',
     '- 例（内税・正しい）: 合計 8351・消費税 619 → total=8351, tax=619。total=8970（8351+619）は禁止。',
     '- 例（外税・正しい）: 小計 2442・税 195・合計 2637 → total=2637, tax=195。',
-    '- クーポン/値引は discounts に入れ、items に入れない。印刷された最終合計がある限り、',
-    '  items±discounts+tax で total を上書きしない。',
+    '- クーポン/値引は discounts に入れる。まとめ売り値引は上述のとおり items(kind=discount) にも残す。',
+    '  印刷された最終合計がある限り、items±discounts+tax で total を上書きしない。',
     '',
     '- 商品分類(categoryKey)は次の固定 enum のみから選ぶ:',
     '  food_ingredients(食材), ready_to_eat(弁当・惣菜・即食), snacks_drinks(飲料・お菓子・酒),',

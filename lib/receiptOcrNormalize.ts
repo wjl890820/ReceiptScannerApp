@@ -15,12 +15,16 @@ import {
   V1_ACTIVE_PRODUCT_CATEGORIES,
   type ProductCategory,
 } from './productCategory';
-import { applyReceiptDiscountsToItems } from './receiptDiscountAllocation';
-import { resolvePurchaseQuantity } from './purchaseQuantity';
 import {
   isPaymentAllocationLabel,
   resolveAuthoritativeReceiptTotal,
 } from './receiptTotalResolve';
+import { detectCostcoReceiptSignals } from './groceryDetector';
+import {
+  applyReceiptDiscountsToItems,
+  isBundleSummaryDiscountLabel,
+} from './receiptDiscountAllocation';
+import { resolvePurchaseQuantity } from './purchaseQuantity';
 
 export type OcrLineKind = 'item' | 'discount' | 'tax' | 'subtotal' | 'payment' | 'unknown';
 
@@ -141,7 +145,25 @@ const DISCOUNT_KEYWORDS = [
 
 const TAX_KEYWORDS = ['消費税', '内税', '外税', '軽減税率', '税率', '（税', '(税', 'tax'];
 
-const SUBTOTAL_KEYWORDS = ['小計', '小 計', '合計', '合 計', 'お買上', 'お買い上げ', 'subtotal', 'total', '総計'];
+const SUBTOTAL_KEYWORDS = [
+  '小計',
+  '小 計',
+  '合計',
+  '合 計',
+  'お買上計',
+  'お買上げ計',
+  'お買い上げ計',
+  'お買い上げ金額',
+  'subtotal',
+  'total',
+  '総計',
+];
+
+/** Costco purchase-count / member meta — not merchandise, not a money subtotal. */
+function isCostcoPointsOrMemberMetaLabel(name: string): boolean {
+  const n = toHalfWidthLower(name);
+  return /御買上げ点数|お買上げ点数|お買上点数|会員番号/.test(n);
+}
 
 function toHalfWidthLower(s: string): string {
   return (s || '')
@@ -231,7 +253,7 @@ export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
   // 折扣优先：负金额或折扣关键字
   if (amt < 0 || includesAny(n, DISCOUNT_KEYWORDS)) return 'discount';
   if (includesAny(n, TAX_KEYWORDS)) return 'tax';
-  if (isNonMerchandiseMetaLabel(name)) return 'subtotal';
+  if (isNonMerchandiseMetaLabel(name) || isCostcoPointsOrMemberMetaLabel(name)) return 'subtotal';
   // Tender / payment allocation — before bare 合計 subtotal matching.
   if (isPaymentAllocationLabel(name)) return 'payment';
   if (includesAny(n, SUBTOTAL_KEYWORDS)) return 'subtotal';
@@ -419,6 +441,29 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   const keptItems: ReceiptItem[] = [];
   const discounts: ReceiptDiscount[] = [];
   const payments: { label: string; amount: number }[] = [];
+  const evidenceTexts: string[] = [];
+  const rawText =
+    typeof (analysis as any).ocr_raw_text === 'string'
+      ? (analysis as any).ocr_raw_text
+      : typeof (analysis as any).rawText === 'string'
+        ? (analysis as any).rawText
+        : '';
+
+  // Cropped-header Costco: score on raw OCR rows BEFORE subtotal/meta stripping.
+  let merchantOut = typeof analysis.merchant === 'string' ? analysis.merchant : analysis.merchant;
+  const costcoPre = detectCostcoReceiptSignals({
+    merchant: merchantOut,
+    items: rawItems as Array<{ name?: string | null }>,
+    rawText,
+  });
+  if (costcoPre.isCostco) {
+    const weak =
+      !String(merchantOut || '').trim() ||
+      /unknown|未知|biz\s*\/?\s*gold|wholesale/i.test(String(merchantOut || ''));
+    if (weak) {
+      merchantOut = 'コストコ';
+    }
+  }
 
   // Explicit Edge discounts[] first — authoritative labels preferred when both present.
   const incomingDiscounts = Array.isArray((analysis as NormalizedOcrAnalysis).discounts)
@@ -437,6 +482,11 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     const lineTotal = Number.isFinite(Number(it?.lineTotal)) ? Number(it.lineTotal) : 0;
     const kind = classifyLineKind(name, lineTotal);
 
+    // Keep group-price / bundle annotation text for Edge-only まとめ売り binding.
+    if (/個\s*[¥￥]?\s*\d+|まとめ/.test(name)) {
+      evidenceTexts.push(name);
+    }
+
     if (kind === 'discount') {
       // Negative coupon lines often duplicate an entry already in discounts[].
       // Capture OCR adjacency for safe まとめ売り値引 allocation.
@@ -454,7 +504,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
       continue;
     }
     if (kind === 'tax' || kind === 'subtotal') {
-      // 税/小计/合计行不是商品，剔除（税额走 analysis.tax，合计走 analysis.total）
+      // 税/小计/合计/Costco点数 不是商品；点数文案已进入 evidence / Costco pre-pass。
       continue;
     }
 
@@ -467,8 +517,10 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     });
   }
 
+  if (rawText) evidenceTexts.push(rawText);
+
   // Allocation runs only after discount representations are collapsed.
-  const allocated = applyReceiptDiscountsToItems(keptItems, discounts);
+  const allocated = applyReceiptDiscountsToItems(keptItems, discounts, { evidenceTexts });
   const itemsPositiveSum = allocated.items.reduce(
     (s, it) => s + (it.lineTotal > 0 ? it.lineTotal : 0),
     0
@@ -484,10 +536,11 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   });
   const reconciliation = reconcileReceiptTotals(itemsPositiveSum, discountsSum, tax, total);
 
-  const merchant_normalized = canonicalizeMerchantChain(analysis.merchant);
+  const merchant_normalized = canonicalizeMerchantChain(merchantOut);
 
   return {
     ...analysis,
+    merchant: merchantOut,
     items: allocated.items,
     total,
     tax: resolvedTax.tax,

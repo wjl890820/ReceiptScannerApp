@@ -146,29 +146,37 @@ export function isGroceryMerchant(
 export function detectCostcoReceiptSignals(input: {
   merchant?: string | null;
   items?: Array<{ name?: string | null }> | null;
+  /** Optional OCR raw / full-receipt text (header fragments may only appear here). */
+  rawText?: string | null;
 }): { isCostco: boolean; score: number; reasons: string[] } {
   const merchant = String(input.merchant || '');
   const mNorm = normalizeMerchantName(merchant);
   const itemText = (input.items || [])
     .map((it) => String(it?.name || ''))
     .join('\n');
-  const blob = normalizeMerchantName(`${merchant}\n${itemText}`);
+  const rawText = String(input.rawText || '');
+  const evidenceBlob = `${merchant}\n${itemText}\n${rawText}`;
+  const blobNorm = normalizeMerchantName(evidenceBlob);
   const reasons: string[] = [];
   let score = 0;
 
-  if (/costco|コストコ/.test(mNorm) || /costco|コストコ/.test(blob)) {
+  if (/costco|コストコ/.test(mNorm) || /costco|コストコ/.test(blobNorm)) {
     return { isCostco: true, score: 10, reasons: ['explicit_costco_name'] };
   }
 
-  if (/biz\s*\/?\s*gold|bizgold/.test(mNorm)) {
+  // Header fragments may land in merchant, item rows, or raw OCR text — score each once.
+  if (/biz\s*\/?\s*gold|bizgold/.test(merchant) || /biz\s*\/?\s*gold|bizgold/i.test(evidenceBlob)) {
     score += 1;
-    reasons.push('biz_gold_merchant');
+    reasons.push('biz_gold_signal');
   }
-  if (/wholesale/.test(mNorm)) {
+  if (/wholesale/i.test(merchant) || /wholesale/i.test(evidenceBlob)) {
     score += 1;
-    reasons.push('wholesale_merchant');
+    reasons.push('wholesale_signal');
   }
-  if (/御買上げ点数|お買上げ点数|お買上点数|会員/.test(itemText) || /御買上げ点数|お買上げ点数/.test(merchant)) {
+  if (
+    /御買上げ点数|お買上げ点数|お買上点数|会員番号|membership/i.test(evidenceBlob) ||
+    /御買上げ点数|お買上げ点数|お買上点数/.test(merchant)
+  ) {
     score += 1;
     reasons.push('costco_points_or_member_label');
   }

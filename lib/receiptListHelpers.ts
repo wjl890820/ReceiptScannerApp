@@ -92,3 +92,17 @@ export function isReceiptTaxKnown(
 ): boolean {
   return taxIsKnown === true || taxIsKnown === 1;
 }
+
+/**
+ * Review tax input prefill: unknown storage tax=0 must not become the string "0",
+ * or save would incorrectly mark tax_is_known=1.
+ */
+export function taxFieldPrefillFromSnapshot(snap: {
+  tax?: number | null;
+  tax_is_known?: boolean | number | null;
+} | null | undefined): string {
+  if (!snap) return '';
+  if (!isReceiptTaxKnown(snap.tax_is_known)) return '';
+  if (typeof snap.tax === 'number' && Number.isFinite(snap.tax)) return String(snap.tax);
+  return '';
+}

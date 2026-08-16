@@ -22,6 +22,7 @@ import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
 import { parseReceiptDateTime } from '@/lib/dateParser';
 import { listReceipts, saveReceipt } from '@/lib/db';
 import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } from '@/lib/productCategory';
+import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { getCurrentLocale, t } from '@/lib/i18n';
 import { tryShowNextEasterEgg } from '@/lib/homeEasterEggHelpers';
@@ -114,7 +115,7 @@ export default function ScanReviewScreen() {
     setMerchant(typeof snap?.merchant === 'string' ? snap.merchant : '');
     setDateStr(typeof snap?.transactionDate === 'string' ? snap.transactionDate : '');
     setTotalStr(String(snap?.total ?? ''));
-    setTaxStr(String(snap?.tax ?? ''));
+    setTaxStr(taxFieldPrefillFromSnapshot(snap));
     setCurrency(typeof snap?.currency === 'string' && snap.currency.trim() ? snap.currency : 'JPY');
     setNote('');
     setOcrText(typeof snap?.ocr_raw_text === 'string' ? snap.ocr_raw_text : '');
@@ -168,7 +169,11 @@ export default function ScanReviewScreen() {
         setMerchant(typeof es.merchant === 'string' ? es.merchant : '');
         setDateStr(typeof es.dateStr === 'string' ? es.dateStr : '');
         setTotalStr(typeof es.totalStr === 'string' ? es.totalStr : String(snap?.total ?? ''));
-        setTaxStr(typeof es.taxStr === 'string' ? es.taxStr : String(snap?.tax ?? ''));
+        if (typeof es.taxStr === 'string') {
+          setTaxStr(es.taxStr);
+        } else {
+          setTaxStr(taxFieldPrefillFromSnapshot(snap));
+        }
         setCurrency(typeof es.currency === 'string' && es.currency.trim() ? es.currency : 'JPY');
         setNote(typeof es.note === 'string' ? es.note : '');
         setOcrText(typeof snap?.ocr_raw_text === 'string' ? snap.ocr_raw_text : '');
