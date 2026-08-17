@@ -121,6 +121,114 @@ function toHalfWidthLower(s: string): string {
     .trim();
 }
 
+function nameHasAny(n: string, needles: readonly string[]): boolean {
+  return needles.some((k) => n.includes(toHalfWidthLower(k)));
+}
+
+/** Drink/snack flavor context: peach juice etc. must win over fresh-produce origin. */
+function hasSnackOrDrinkFlavorContext(n: string): boolean {
+  return nameHasAny(n, [
+    'ジュース',
+    'ティー',
+    'ゼリー',
+    'グミ',
+    'ドリンク',
+    'ラテ',
+    'ソーダ',
+    'ネクター',
+    'キャンディ',
+    '飴',
+    'アイス',
+    'チョコ',
+    '菓子',
+    'スナック',
+    'コーラ',
+    'サイダー',
+  ]);
+}
+
+/** Dry / fresh / frozen noodles that still need cooking — not convenience meals. */
+function isCookingNoodleIngredient(n: string): boolean {
+  return nameHasAny(n, [
+    '半生うどん',
+    '半生麺',
+    '生うどん',
+    '生そば',
+    '生麺',
+    '乾うどん',
+    '乾そば',
+    '乾麺',
+    '冷凍うどん',
+    '冷凍そば',
+    '冷凍麺',
+  ]);
+}
+
+/** Raw chicken cuts: must not become ready_to_eat solely because of チキン. */
+function isRawChickenCut(n: string): boolean {
+  return nameHasAny(n, [
+    'チキンもも',
+    '鶏もも',
+    'とりもも',
+    'チキンむね',
+    '鶏むね',
+    'とりむね',
+    'むね肉',
+    'チキンささみ',
+    '鶏ささみ',
+    '若鶏',
+    '鶏肉',
+    '生チキン',
+  ]);
+}
+
+const FRESH_FRUIT_IDENTITY = [
+  'モモ',
+  'もも',
+  '桃',
+  'りんご',
+  'リンゴ',
+  '林檎',
+  'バナナ',
+  'ばなな',
+  'みかん',
+  'ミカン',
+  '蜜柑',
+  'ぶどう',
+  'ブドウ',
+  '葡萄',
+  'いちご',
+  'イチゴ',
+  '梨',
+  'キウイ',
+  'メロン',
+  'すいか',
+  'スイカ',
+  'レモン',
+  'オレンジ',
+] as const;
+
+/**
+ * Origin-labeled fresh produce (豪州産モモ / 国産もも / 県産りんご).
+ * Requires origin marker immediately before the fruit token. Bare モモ is not enough.
+ */
+function isOriginLabeledFreshFruit(n: string): boolean {
+  if (hasSnackOrDrinkFlavorContext(n)) return false;
+  const originBeforeFruit =
+    /(?:国産|[一-龯]{1,4}(?:都|道|府|県)産|[ァ-ヴーA-Za-z]{2,}産|[一-龯]{2,}産)の?$/;
+  for (const fruit of FRESH_FRUIT_IDENTITY) {
+    const f = toHalfWidthLower(fruit);
+    let from = 0;
+    while (from <= n.length) {
+      const idx = n.indexOf(f, from);
+      if (idx < 0) break;
+      if (originBeforeFruit.test(n.slice(0, idx))) return true;
+      from = idx + f.length;
+    }
+  }
+  return false;
+}
+
 /**
  * 关键词分类（覆盖超市/便利店常见商品）。返回核心分类或 uncategorized。
  * 顺序很重要：先匹配更具体/更易误伤的类别（pet/personal_care/household），
@@ -187,14 +295,23 @@ export function classifyItemByName(itemName: string): ProductCategory {
     return 'snacks_drinks';
   }
 
+  // Broad-token collisions that must not wait until snacks_drinks / ready_to_eat.
+  if (has(['水菜', 'みずな', 'ミズナ'])) return 'food_ingredients';
+  if (has(['茶葉', '茶の葉'])) return 'food_ingredients';
+  if (isCookingNoodleIngredient(n)) return 'food_ingredients';
+  if (isRawChickenCut(n)) return 'food_ingredients';
+
   // 即食餐（サンド/丼/ラーメン/さつまあげ/肉まん 等需早于 snacks_drinks 与 food_ingredients）
   // 炒麺/ブルダック等インスタント麺は食材の「麺」より先。サラダラップ等の食品ラップもここ。
+  // 半生/生麺/乾麺/冷凍うどん 已在上方收成食材；此处保留即食うどん（讃岐・焼うどん等）。
+  // 裸「チキン」过宽，只保留明确即食复合词。
   if (
     has([
       '弁当', 'べんとう', 'おにぎり', 'お握り', 'サンド', 'サンドイッチ', 'バーガー', 'ホットスナック',
-      'チキン', 'グリルチキン', 'チキン南蛮', '南蛮', 'からあげ', '唐揚げ', 'カツ', 'コロッケ', 'メンチ',
+      'グリルチキン', 'チキン南蛮', 'フライドチキン', 'ローストチキン', 'ロティサリーチキン', 'ロティサリー', '南蛮', 'からあげ', '唐揚げ', 'カツ', 'コロッケ', 'メンチ',
       '惣菜', '総菜', '惣菜パン', 'サラダ', 'パスタ', 'うどん', 'そば', 'ラーメン', 'ワンタン', 'ワンタン麺',
       '炒麺', 'カップ麺', 'カップめん', 'ヌードル', 'ブルダック', 'buldak', 'インスタント麺',
+      '焼うどん', '焼きうどん', '焼きそば', '焼そば',
       'グラタン', 'ドリア', 'カレー', '寿司', 'すし', 'おでん', '中華まん', '肉まん', 'まん', '丼',
       '生煎', '生煎包', '餃子', '焼売', 'しゅうまい',
       'ぼうとう', 'ほうとう', 'さつまあげ', 'さつま揚げ', '横浜家系', '家系', 'deli', 'bento',
@@ -240,6 +357,11 @@ export function classifyItemByName(itemName: string): ProductCategory {
   // 主食型成品面包 / 餐包（甜点零食之后、食材之前；避免 ジャパン 等误伤）
   if (hasMealBakeryBread(n)) {
     return 'ready_to_eat';
+  }
+
+  // 产地鲜果：必须在零食 白桃 之后，避免 白桃ジュース 被产地规则抢走。
+  if (isOriginLabeledFreshFruit(n)) {
+    return 'food_ingredients';
   }
 
   // 食材（注意：牛乳 归食材，但 ミルクティー/ミルク抹茶 等已在上面 snacks 命中）
@@ -290,12 +412,42 @@ function hasMealBakeryBread(n: string): boolean {
 }
 
 /**
+ * History / Review display: trust an already-persisted semantic ProductCategory.
+ * Does not re-run name rules when stored is uncategorized/other (Scan/History must agree).
+ * Legacy grocery enums still map; store-type / unknown raw still fall back to itemName.
+ */
+export function normalizePersistedProductCategory(
+  rawCategory: unknown,
+  itemName?: string
+): ProductCategory {
+  const raw = typeof rawCategory === 'string' ? rawCategory.trim() : '';
+  const low = toHalfWidthLower(raw);
+
+  if (raw && isProductCategory(low)) return low;
+
+  if (raw) {
+    const mapped = OLD_TO_NEW[low];
+    if (mapped) return mapped;
+  }
+
+  if (itemName) {
+    const byName = classifyItemByName(itemName);
+    if (byName !== 'uncategorized') return byName;
+  }
+
+  return 'uncategorized';
+}
+
+/**
  * 归一化任意来源的分类值到新 enum。顺序：
  * 1. 已是合法新 enum → 直接使用
  * 2. 旧 enum → 映射
  * 3. 店铺类型词 → 忽略 rawCategory，改用 itemName
  * 4. 按 itemName 关键词分类
  * 5. 仍未知 → uncategorized
+ *
+ * Backfill / repair path: uncategorized/other may be reclassified by itemName.
+ * History display should use normalizePersistedProductCategory instead.
  */
 export function normalizeProductCategory(
   rawCategory: unknown,

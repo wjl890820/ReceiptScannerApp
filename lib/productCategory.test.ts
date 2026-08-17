@@ -7,6 +7,7 @@
 import {
   classifyItemByName,
   normalizeProductCategory,
+  normalizePersistedProductCategory,
   mapKnownProductCategory,
   resolveProductCategory,
   resolveProductCategoryRuntime,
@@ -130,6 +131,61 @@ describe('classifyItemByName: 关键词分类', () => {
     expect(classifyItemByName('SVシルクエール')).toBe('snacks_drinks');
     expect(classifyItemByName('ギネス缶330')).toBe('snacks_drinks');
   });
+
+  // Batch Fix A: cooking noodles vs ready-to-eat noodles
+  it('半生うどん / 生うどん / 乾麺 / 冷凍うどん → food_ingredients', () => {
+    expect(classifyItemByName('半生うどん')).toBe('food_ingredients');
+    expect(classifyItemByName('生うどん')).toBe('food_ingredients');
+    expect(classifyItemByName('生麺')).toBe('food_ingredients');
+    expect(classifyItemByName('乾麺')).toBe('food_ingredients');
+    expect(classifyItemByName('乾うどん')).toBe('food_ingredients');
+    expect(classifyItemByName('冷凍うどん')).toBe('food_ingredients');
+  });
+  it('ブルダック炒麺 / 焼うどん / カップ麺 remain ready_to_eat', () => {
+    expect(classifyItemByName('ブルダック炒麺')).toBe('ready_to_eat');
+    expect(classifyItemByName('焼うどん')).toBe('ready_to_eat');
+    expect(classifyItemByName('カップ麺')).toBe('ready_to_eat');
+    expect(classifyItemByName('大盛讃岐うどん')).toBe('ready_to_eat');
+  });
+
+  // Batch Fix A: origin-labeled fresh fruit, not bare モモ
+  it('豪州産モモ / 国産もも / 県産りんご → food_ingredients', () => {
+    expect(classifyItemByName('豪州産モモ')).toBe('food_ingredients');
+    expect(classifyItemByName('国産もも')).toBe('food_ingredients');
+    expect(classifyItemByName('山梨県産桃')).toBe('food_ingredients');
+    expect(classifyItemByName('青森県産りんご')).toBe('food_ingredients');
+    expect(classifyItemByName('フィリピン産バナナ')).toBe('food_ingredients');
+  });
+  it('peach-flavored snacks/drinks stay snacks_drinks', () => {
+    expect(classifyItemByName('白桃ジュース')).toBe('snacks_drinks');
+    expect(classifyItemByName('白桃ティー')).toBe('snacks_drinks');
+    expect(classifyItemByName('白桃ゼリー')).toBe('snacks_drinks');
+    expect(classifyItemByName('白桃グミ')).toBe('snacks_drinks');
+    expect(classifyItemByName('FA白桃700')).toBe('snacks_drinks');
+  });
+  it('bare モモ without origin stays uncategorized', () => {
+    expect(classifyItemByName('モモ')).toBe('uncategorized');
+  });
+
+  // Broad-token negative cases
+  it('水菜 is not a drink because of 水', () => {
+    expect(classifyItemByName('水菜')).toBe('food_ingredients');
+    expect(classifyItemByName('水菜')).not.toBe('snacks_drinks');
+  });
+  it('茶葉 is not a beverage because of 茶', () => {
+    expect(classifyItemByName('茶葉')).toBe('food_ingredients');
+    expect(classifyItemByName('茶葉')).not.toBe('snacks_drinks');
+  });
+  it('raw chicken cuts are not ready_to_eat solely because of チキン', () => {
+    expect(classifyItemByName('チキンもも')).toBe('food_ingredients');
+    expect(classifyItemByName('鶏もも')).toBe('food_ingredients');
+    expect(classifyItemByName('チキンカツサンド')).toBe('ready_to_eat');
+    expect(classifyItemByName('骨付きグリルチキン')).toBe('ready_to_eat');
+    expect(classifyItemByName('ロティサリーチキン')).toBe('ready_to_eat');
+  });
+  it('bare 水 remains a drink', () => {
+    expect(classifyItemByName('水')).toBe('snacks_drinks');
+  });
 });
 
 describe('normalizeProductCategory: 旧→新映射 + 店铺词过滤', () => {
@@ -191,6 +247,31 @@ describe('normalizeProductCategory: 旧→新映射 + 店铺词过滤', () => {
 
   it('rawCategory=uncategorized 且商品名无法识别 → uncategorized', () => {
     expect(normalizeProductCategory('uncategorized', 'xyz123')).toBe('uncategorized');
+  });
+});
+
+describe('normalizePersistedProductCategory: History 信任已落库语义', () => {
+  it('stored core category is kept even if the name could map elsewhere', () => {
+    expect(normalizePersistedProductCategory('food_ingredients', 'チキンカツサンド')).toBe(
+      'food_ingredients'
+    );
+  });
+
+  it('stored uncategorized is not reclassified by item name', () => {
+    expect(normalizePersistedProductCategory('uncategorized', '卵')).toBe('uncategorized');
+    expect(normalizePersistedProductCategory('uncategorized', 'チキンカツサンド')).toBe(
+      'uncategorized'
+    );
+  });
+
+  it('legacy grocery enums still map', () => {
+    expect(normalizePersistedProductCategory('produce', 'xyz')).toBe('food_ingredients');
+    expect(normalizePersistedProductCategory('quick_meals')).toBe('ready_to_eat');
+  });
+
+  it('store-type / unknown raw still falls back to item name', () => {
+    expect(normalizePersistedProductCategory('コンビニ', 'クラフトボス')).toBe('snacks_drinks');
+    expect(normalizePersistedProductCategory('', 'ティッシュ')).toBe('household');
   });
 });
 

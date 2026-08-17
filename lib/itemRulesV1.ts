@@ -58,8 +58,13 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
     : text.includes('7premium') || text.includes('７プレミアム') || text.includes('7 プレミアム') ? '7 Premium'
     : null;
 
+  // Cooking noodles before broad instant/prepared noodle tokens.
+  if (hasAny(text, ['半生うどん', '半生麺', '生うどん', '生そば', '生麺', '乾うどん', '乾そば', '乾麺', '冷凍うどん', '冷凍そば', '冷凍麺'])) {
+    return mk('ingredients', 'staples', ['ingredient', 'cooking_related'], 0.9, 'Cooking noodle keywords', { brand });
+  }
+
   // --- High-yield prepared food ---
-  if (hasAny(text, ['ラーメン', 'らーめん', 'ramen', 'カップ麺', 'カップめん', 'ヌードル', 'noodle', 'うどん', 'そば', 'パスタ', '炒麺', 'ブルダック', 'buldak'])) {
+  if (hasAny(text, ['ラーメン', 'らーめん', 'ramen', 'カップ麺', 'カップめん', 'ヌードル', 'noodle', 'うどん', 'そば', 'パスタ', '炒麺', 'ブルダック', 'buldak', '焼うどん', '焼きうどん'])) {
     return mk('prepared_food', 'instant_food', ['ready_to_eat', 'non_essential_spend'], 0.88, 'Noodles/instant keywords', { brand });
   }
 
@@ -97,6 +102,12 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
   }
 
   // --- Ingredients: vegetables / herbs / mushrooms ---
+  if (hasAny(text, ['水菜', 'みずな', 'ミズナ'])) {
+    return mk('ingredients', 'vegetables', ['ingredient', 'cooking_related', 'vegetable_source'], 0.9, 'Mizuna keywords', { brand });
+  }
+  if (hasAny(text, ['茶葉', '茶の葉'])) {
+    return mk('ingredients', 'dried_goods', ['ingredient', 'cooking_related'], 0.86, 'Tea leaf keywords', { brand });
+  }
   if (hasAny(text, ['えのき', 'しめじ', '椎茸', 'しいたけ', '茸', 'きのこ', 'mushroom'])) {
     return mk('ingredients', 'vegetables', ['ingredient', 'cooking_related', 'vegetable_source'], 0.9, 'Mushroom keywords', { brand });
   }

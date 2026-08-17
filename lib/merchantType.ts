@@ -113,20 +113,48 @@ export type ReceiptMerchantTypeSource = {
   merchant_normalized?: string | null;
 };
 
+function asMerchantType(value: unknown): MerchantType | null {
+  if (
+    value === 'supermarket' ||
+    value === 'convenience' ||
+    value === 'other' ||
+    value === 'unknown'
+  ) {
+    return value;
+  }
+  return null;
+}
+
 /**
  * 读取 receipt 的 merchant_type；DB 列为 null 时 runtime fallback。
  */
 export function resolveReceiptMerchantType(receipt: ReceiptMerchantTypeSource): MerchantType {
-  const stored = receipt.merchant_type;
-  if (
-    stored === 'supermarket' ||
-    stored === 'convenience' ||
-    stored === 'other' ||
-    stored === 'unknown'
-  ) {
-    return stored;
-  }
+  const stored = asMerchantType(receipt.merchant_type);
+  if (stored) return stored;
   return detectMerchantType(receipt.merchant_raw, receipt.merchant_normalized);
+}
+
+/**
+ * Persist the merchant_type already resolved during enrichment.
+ * Never downgrade a valid enriched type by re-detecting from a weak merchant string.
+ * Recompute only when analysis has no authoritative merchant_type.
+ */
+export function persistMerchantTypeFromAnalysis(analysis: {
+  merchant_type?: unknown;
+  merchant?: string | null;
+  merchant_normalized?: string | null;
+  items?: Array<{ name?: string | null }> | null;
+  rawText?: string | null;
+  ocr_raw_text?: string | null;
+}): MerchantType {
+  const authoritative = asMerchantType(analysis.merchant_type);
+  if (authoritative) return authoritative;
+  return detectMerchantTypeFromReceipt({
+    merchant: analysis.merchant,
+    merchant_normalized: analysis.merchant_normalized,
+    items: analysis.items,
+    rawText: analysis.rawText ?? analysis.ocr_raw_text,
+  });
 }
 
 /** V1 正式支持的零售商户类型（supermarket + convenience）。 */

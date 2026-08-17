@@ -62,10 +62,11 @@ jest.mock('./productDictionary', () => ({
   upsertProductDictionary: jest.fn(async () => {}),
 }));
 
-import { resolveProductCategoryRuntime } from './productCategory';
+import { resolveProductCategoryRuntime, normalizePersistedProductCategory } from './productCategory';
 import { applyCategoriesWithLearning } from './receiptEnricher';
 import { runBatchAiFallback } from './categoryBatchAi';
 import { isBatchAiClassificationEnabled } from './env';
+import { isV1SupportedMerchantType, persistMerchantTypeFromAnalysis } from './merchantType';
 
 describe('resolveProductCategoryRuntime: 运行时优先级', () => {
   it('シュガーバター：商品名规则早于宽泛 dictionary(バター→food) 与 OCR', () => {
@@ -246,12 +247,60 @@ describe('Phase 2: convenience merchant support', () => {
     expect((out.items as any[])[0].category).toBe('food_ingredients');
   });
 
-  it('other merchant（药妆）→ 全部 uncategorized，不调用 Batch AI', async () => {
+  it('other merchant（药妆）+ personal_care item → 仍 uncategorized，不调用 Batch AI', async () => {
     const out = await enrichAtMerchant('マツキヨ', 'シャンプー', 'personal_care', 500);
     expect((out as any).merchant_type).toBe('other');
     expect((out.items as any[])[0].category).toBe('uncategorized');
     expect(runBatchAiFallback).not.toHaveBeenCalled();
     expect((out as any).classification_telemetry_v1?.batch_ai_called).toBe(false);
+  });
+
+  it('unknown merchant + egg/milk/tissue → semantic category allowed, merchant stays unsupported', async () => {
+    const analysis: any = {
+      merchant: 'なぞのお店xyz',
+      items: [
+        { name: '卵', quantity: 1, unitPrice: 200, lineTotal: 200 },
+        { name: '明治おいしい牛乳', quantity: 1, unitPrice: 280, lineTotal: 280 },
+        { name: 'ティッシュ', quantity: 1, unitPrice: 150, lineTotal: 150 },
+      ],
+      total: 630,
+      tax: 0,
+      currency: 'JPY',
+    };
+    const out = await applyCategoriesWithLearning(analysis);
+    expect((out as any).merchant_type).toBe('unknown');
+    expect(isV1SupportedMerchantType((out as any).merchant_type)).toBe(false);
+    const cats = (out.items as any[]).map((it) => it.category);
+    expect(cats).toEqual(['food_ingredients', 'food_ingredients', 'household']);
+    expect(runBatchAiFallback).not.toHaveBeenCalled();
+  });
+
+  it('DAISO/unsupported classified products do not become supermarket', async () => {
+    const out = await enrichAtMerchant('ダイソー', '卵', 'fresh', 100);
+    expect((out as any).merchant_type).toBe('unknown');
+    expect(isV1SupportedMerchantType((out as any).merchant_type)).toBe(false);
+    expect((out.items as any[])[0].category).toBe('food_ingredients');
+  });
+
+  it('unknown merchant + 半生うどん / 豪州産モモ use name_rule semantics', async () => {
+    const analysis: any = {
+      merchant: 'cropped-unknown',
+      items: [
+        { name: '半生うどん', quantity: 1, unitPrice: 180, lineTotal: 180 },
+        { name: '豪州産モモ', quantity: 1, unitPrice: 398, lineTotal: 398 },
+        { name: 'ブルダック炒麺', quantity: 1, unitPrice: 250, lineTotal: 250 },
+      ],
+      total: 828,
+      tax: 0,
+      currency: 'JPY',
+    };
+    const out = await applyCategoriesWithLearning(analysis);
+    expect((out as any).merchant_type).toBe('unknown');
+    expect((out.items as any[]).map((it) => it.category)).toEqual([
+      'food_ingredients',
+      'food_ingredients',
+      'ready_to_eat',
+    ]);
   });
 });
 
@@ -334,5 +383,66 @@ describe('Phase 3B: Product Identity annotation', () => {
     expect(item.spec_pack_count).toBe(1);
     expect(item.volume_base_ml).toBe(900);
     expect(item.identity_version).toBe(1);
+  });
+});
+
+describe('Batch Fix A: persist merchant_type and History consistency', () => {
+  beforeEach(() => {
+    setMockLearned(null);
+    (isBatchAiClassificationEnabled as jest.Mock).mockReturnValue(false);
+    (runBatchAiFallback as jest.Mock).mockClear();
+  });
+
+  it('enriched Costco supermarket type is not downgraded by weak merchant string', () => {
+    expect(
+      persistMerchantTypeFromAnalysis({
+        merchant_type: 'supermarket',
+        merchant: 'WHOLESALE',
+        items: [],
+      })
+    ).toBe('supermarket');
+    expect(
+      persistMerchantTypeFromAnalysis({
+        merchant_type: 'supermarket',
+        merchant: 'BIZ/GOLD',
+        items: [],
+      })
+    ).toBe('supermarket');
+  });
+
+  it('BIZ/GOLD or WHOLESALE alone still do not become Costco when type is absent', () => {
+    expect(persistMerchantTypeFromAnalysis({ merchant: 'BIZ/GOLD', items: [] })).toBe('unknown');
+    expect(persistMerchantTypeFromAnalysis({ merchant: 'WHOLESALE', items: [] })).toBe('unknown');
+  });
+
+  it('cropped Costco evidence without stored type still promotes via receipt signals', () => {
+    const items = [
+      { name: '123456 KIRKLAND WATER E' },
+      { name: '234567 BANANA E' },
+      { name: '345678 CHICKEN T' },
+      { name: '御買上げ点数 3' },
+    ];
+    expect(persistMerchantTypeFromAnalysis({ merchant: 'WHOLESALE', items })).toBe('supermarket');
+  });
+
+  it('persisted semantic category and History summary agree', async () => {
+    const analysis: any = {
+      merchant: 'なぞのお店xyz',
+      items: [
+        { name: '卵', quantity: 1, unitPrice: 200, lineTotal: 200, classification_status: 'ok' },
+        { name: 'なぞ商品xyz', quantity: 1, unitPrice: 100, lineTotal: 100, classification_status: 'ok' },
+      ],
+      total: 300,
+      tax: 0,
+      currency: 'JPY',
+    };
+    const out = await applyCategoriesWithLearning(analysis);
+    const egg = (out.items as any[])[0];
+    const unknown = (out.items as any[])[1];
+    expect(egg.category).toBe('food_ingredients');
+    expect(unknown.category).toBe('uncategorized');
+    expect(normalizePersistedProductCategory(egg.category, egg.name)).toBe(egg.category);
+    expect(normalizePersistedProductCategory(unknown.category, unknown.name)).toBe('uncategorized');
+    expect(normalizePersistedProductCategory('uncategorized', '卵')).toBe('uncategorized');
   });
 });

@@ -2,7 +2,7 @@
 import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
 import { listReceiptsForListParams } from './receiptListQuery';
-import { detectMerchantType, type MerchantType } from './merchantType';
+import { persistMerchantTypeFromAnalysis, type MerchantType } from './merchantType';
 import {
   clearReceiptItemIndex,
   deleteReceiptItemIndex,
@@ -709,7 +709,15 @@ export async function saveReceipt(
     ? fromAnalysis || canonicalizeMerchantChain(merchantRawTrimmed) || merchantRawTrimmed
     : null;
 
-  const merchantType = detectMerchantType(merchantRawTrimmed, merchantNormalized);
+  const merchantType = persistMerchantTypeFromAnalysis({
+    merchant_type: (params.analysis as { merchant_type?: unknown }).merchant_type,
+    merchant: merchantRawTrimmed,
+    merchant_normalized: merchantNormalized,
+    items: Array.isArray(params.analysis.items) ? params.analysis.items : null,
+    rawText:
+      (params.analysis as { ocr_raw_text?: string | null; rawText?: string | null }).ocr_raw_text ??
+      (params.analysis as { rawText?: string | null }).rawText,
+  });
 
   // New stable fields
   const source = params.source || 'self';

@@ -279,9 +279,9 @@ function inferGroceryCategory(name: string): Category {
 }
 
 /**
- * Apply categories with learning (grocery-only categorization)
- * Only categorizes items if the receipt is from a grocery store
- * Uses unified categoryClassifier service
+ * Apply semantic product categories.
+ * Merchant type gates V1 analytics eligibility and AI/alias/dictionary permissiveness,
+ * not whether deterministic name_rule may run.
  */
 export async function applyCategoriesWithLearning(
   analysis: ReceiptAnalysis,
@@ -294,7 +294,8 @@ export async function applyCategoriesWithLearning(
   const items = Array.isArray(analysis.items) ? analysis.items : [];
   const enrichedItems: ReceiptItem[] = [];
 
-  // V1 商户类型：supermarket + convenience 均进入正常分类 pipeline；other/unknown 保守 uncategorized。
+  // V1 商户类型：supermarket + convenience 进入完整分类 pipeline（含 alias/AI/dictionary）。
+  // other / unknown 仍可保存，并允许保守的确定性 name_rule；不得因此变成 V1 核心零售。
   // Cropped-header Costco: multi-signal detector can promote unknown → supermarket.
   let merchantRaw = analysis.merchant || '';
   let merchantNormalized = (analysis as any).merchant_normalized || null;
@@ -351,10 +352,11 @@ export async function applyCategoriesWithLearning(
     let classificationOut: any = null;
 
     if (!isV1Supported) {
-      // other / unknown：不支持 V1 核心零售，保守 uncategorized（不进入 V1 analytics）。
-      category = 'uncategorized';
+      // other / unknown：语义分类与 analytics 资格解耦。
+      // 只跑确定性 name_rule + 用户手改学习；不自动放宽 alias / dictionary / OCR / AI。
+      category = null;
       classificationStatus = 'ok';
-      classificationConfidence = 1;
+      classificationConfidence = 0;
     } else {
       // Grocery receipt: alias / canonical layer then unified classifier
       clearLastClassifyError();
@@ -418,27 +420,38 @@ export async function applyCategoriesWithLearning(
 
     // 解析最终展示/存储用的"新一级分类"（item.category）
     let productCategory: ReturnType<typeof resolveProductCategoryRuntime>;
+    const ocrCategoryKey = typeof (it as any)?.categoryKey === 'string' ? (it as any).categoryKey : null;
+    let learnedRaw: string | null = null;
+    let learnedSource: string | null = null;
+    try {
+      const learnedEntry = await getLearnedCategoryEntry(
+        norm.normalized_name,
+        merchantRaw || merchantNormalized || null
+      );
+      learnedSource = learnedEntry?.source ?? null;
+      learnedRaw = learnedEntry && learnedEntry.source === 'user_edit' ? learnedEntry.category : null;
+    } catch {
+      learnedRaw = null;
+      learnedSource = null;
+    }
+
     if (!isV1Supported) {
-      // other / unknown：保守 uncategorized，不得被 OCR key / name rule 覆盖。
-      productCategory = 'uncategorized';
+      productCategory = resolveProductCategoryRuntime({
+        itemName: name,
+        learned: learnedRaw,
+      });
+      const nameHit = classifyItemByName(name);
+      classificationOut = {
+        categoryId: productCategory,
+        confidence: learnedRaw ? 1 : nameHit !== 'uncategorized' ? 0.9 : 0,
+        source: learnedRaw ? 'mapping' : nameHit !== 'uncategorized' ? 'name_rule' : 'fallback',
+        reason: learnedRaw ? 'user_edit on unsupported merchant' : 'name_rule on unsupported merchant',
+      };
+      category = productCategory as Category;
+      classificationConfidence = classificationOut.confidence;
+      classificationStatus = 'ok';
     } else {
       // 优先级：用户学习 → alias → 商品名规则 → rules → dictionary → OCR key → uncategorized
-      const ocrCategoryKey = typeof (it as any)?.categoryKey === 'string' ? (it as any).categoryKey : null;
-      // 仅用户手动修改过的学习(source='user_edit')才作为最高优先 learned；
-      // legacy/auto 脏数据不得高于 name_rule（修复 シュガーバター 被 mapping 提前判成食材）。
-      let learnedRaw: string | null = null;
-      let learnedSource: string | null = null;
-      try {
-        const learnedEntry = await getLearnedCategoryEntry(
-          norm.normalized_name,
-          merchantRaw || merchantNormalized || null
-        );
-        learnedSource = learnedEntry?.source ?? null;
-        learnedRaw = learnedEntry && learnedEntry.source === 'user_edit' ? learnedEntry.category : null;
-      } catch {
-        learnedRaw = null;
-        learnedSource = null;
-      }
       // 按分类器来源拆分候选，保证 dictionary 不抢在具体商品名规则之前。
       const clsSource = classificationOut?.source as string | undefined;
       const aliasOrLearned =

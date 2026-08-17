@@ -22,6 +22,65 @@ describe('buildTopCategories', () => {
     const result = buildTopCategories(JSON.stringify(analysis), 2);
     expect(result.length).toBeGreaterThan(0);
   });
+
+  it('does not invent a category when persisted item is uncategorized', () => {
+    const analysis = {
+      items: [
+        {
+          name: '卵',
+          category: 'uncategorized',
+          lineTotal: 200,
+          classification_status: 'ok',
+        },
+        {
+          name: 'ティッシュ',
+          category: 'household',
+          lineTotal: 150,
+          classification_status: 'ok',
+        },
+      ],
+    };
+    const result = buildTopCategories(JSON.stringify(analysis), 3);
+    expect(result.join(' ')).toContain('150');
+    expect(result.join(' ')).not.toContain('200');
+  });
+
+  it('uses persisted semantic category rather than re-running name rules', () => {
+    const analysis = {
+      items: [
+        {
+          name: 'チキンカツサンド',
+          category: 'food_ingredients',
+          lineTotal: 300,
+          classification_status: 'ok',
+        },
+      ],
+    };
+    const result = buildTopCategories(JSON.stringify(analysis), 1);
+    expect(result.length).toBe(1);
+  });
+
+  it('enriched name_rule category appears in History preview; uncategorized does not', () => {
+    const analysis = {
+      items: [
+        {
+          name: '卵',
+          category: 'food_ingredients',
+          lineTotal: 200,
+          classification_status: 'ok',
+        },
+        {
+          name: 'なぞ商品xyz',
+          category: 'uncategorized',
+          lineTotal: 100,
+          classification_status: 'ok',
+        },
+      ],
+    };
+    const preview = buildTopCategories(JSON.stringify(analysis), 3);
+    expect(preview.some((label) => label.includes('200'))).toBe(true);
+    expect(preview.join(' ')).not.toContain('100');
+  });
 });
 
 describe('buildHistoryMetaLine', () => {

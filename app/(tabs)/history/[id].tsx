@@ -25,7 +25,7 @@ import { t } from '@/lib/i18n';
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { upsertProductDictionary } from '@/lib/productDictionary';
 import { upsertProductNameAlias } from '@/lib/productAlias';
-import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } from '@/lib/productCategory';
+import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
@@ -94,8 +94,8 @@ function itemLineAmountForSummary(it: any): number {
 }
 
 /**
- * 分类汇总：直接用统一的 normalizeProductCategory 归一（兼容新旧 enum、OCR categoryKey）。
- * 只要有商品行就会产出分桶（含"待分类"），仅当完全没有商品行时上层才显示"未找到分类信息"。
+ * 分类汇总：信任已落库的语义分类（兼容旧 enum / 店铺词）。
+ * 不得在 stored=uncategorized 时用商品名再发明一个不同类别。
  */
 function buildCategorySummary(
   analysis: ReceiptAnalysis | { items: ReceiptItem[] } | null,
@@ -111,7 +111,7 @@ function buildCategorySummary(
       (typeof (it as any).category === 'string' && (it as any).category) ||
       (typeof (it as any).categoryKey === 'string' && (it as any).categoryKey) ||
       '';
-    const cat = normalizeProductCategory(rawCat, typeof it.name === 'string' ? it.name : undefined);
+    const cat = normalizePersistedProductCategory(rawCat, typeof it.name === 'string' ? it.name : undefined);
     const amt = itemLineAmountForSummary(it);
     map.set(cat, (map.get(cat) ?? 0) + amt);
   }
@@ -233,7 +233,7 @@ export default function ReceiptDetailScreen() {
     if (index < 0 || index >= displayItems.length) return;
     const item = displayItems[index];
     setEditingItemIndex(index);
-    setDraftCategory(normalizeProductCategory(item.category, item.name));
+    setDraftCategory(normalizePersistedProductCategory(item.category, item.name));
     setDraftQuantity(String(item.quantity || 1));
     setDraftLineTotal(String(item.lineTotal || 0));
     setItemEditOpen(true);

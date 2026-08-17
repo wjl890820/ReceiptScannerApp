@@ -21,7 +21,7 @@ import { ReceiptReviewSaveBar } from '@/components/review/ReceiptReviewSaveBar';
 import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
 import { parseReceiptDateTime } from '@/lib/dateParser';
 import { listReceipts, saveReceipt } from '@/lib/db';
-import { PRODUCT_CATEGORIES, normalizeProductCategory, type ProductCategory } from '@/lib/productCategory';
+import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -125,7 +125,7 @@ export default function ScanReviewScreen() {
         id: makeLineId(),
         sourceIndex: idx,
         name: typeof it?.name === 'string' ? it.name : '',
-        category: normalizeProductCategory(it?.category, typeof it?.name === 'string' ? it.name : undefined),
+        category: normalizePersistedProductCategory(it?.category, typeof it?.name === 'string' ? it.name : undefined),
         quantity: Number.isFinite(Number(it?.quantity)) ? Number(it.quantity) : 1,
         lineTotal: Number.isFinite(Number(it?.lineTotal ?? it?.line_total))
           ? Number(it.lineTotal ?? it.line_total)
@@ -192,7 +192,7 @@ export default function ScanReviewScreen() {
               id: typeof rawId === 'string' && rawId ? rawId : makeLineId(),
               sourceIndex,
               name: typeof li.name === 'string' ? li.name : '',
-              category: normalizeProductCategory(li.category, typeof li.name === 'string' ? li.name : undefined),
+              category: normalizePersistedProductCategory(li.category, typeof li.name === 'string' ? li.name : undefined),
               quantity: Number.isFinite(Number(li.quantity)) ? Number(li.quantity) : 1,
               lineTotal: Number.isFinite(Number(li.lineTotal)) ? Number(li.lineTotal) : 0,
             };

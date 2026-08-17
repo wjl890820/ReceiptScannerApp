@@ -5,7 +5,7 @@
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { getCategoryLabel } from './categoryPalette';
 import { itemAmountForAnalytics } from './receiptDiscountAllocation';
-import { normalizeProductCategory } from './productCategory';
+import { normalizePersistedProductCategory } from './productCategory';
 
 function safeNumber(v: unknown): number {
   const n = Number(v);
@@ -37,7 +37,7 @@ export function buildTopCategories(
   for (const it of items) {
     const status = (it as any).classification_status as string | undefined;
     if (status !== undefined && status !== 'ok' && status !== 'fallback') continue;
-    const key = normalizeProductCategory(
+    const key = normalizePersistedProductCategory(
       it?.category ?? it?.categoryKey,
       typeof it?.name === 'string' ? it.name : undefined
     );

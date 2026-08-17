@@ -2,6 +2,7 @@ import {
   detectMerchantType,
   detectMerchantTypeFromReceipt,
   resolveReceiptMerchantType,
+  persistMerchantTypeFromAnalysis,
   isV1SupportedMerchantType,
   isV1SupportedReceipt,
   filterV1SupportedReceipts,
@@ -173,6 +174,21 @@ describe('Costco cropped-header signals', () => {
 
   it('explicit Costco name remains supermarket', () => {
     expect(detectMerchantType('コストコ', null)).toBe('supermarket');
+  });
+
+  it('persistMerchantTypeFromAnalysis keeps enriched supermarket on weak Costco header', () => {
+    expect(
+      persistMerchantTypeFromAnalysis({
+        merchant_type: 'supermarket',
+        merchant: 'WHOLESALE',
+        items: [{ name: 'BIZ/GOLD' }],
+      })
+    ).toBe('supermarket');
+  });
+
+  it('persistMerchantTypeFromAnalysis does not treat BIZ/GOLD or WHOLESALE alone as Costco', () => {
+    expect(persistMerchantTypeFromAnalysis({ merchant: 'BIZ/GOLD' })).toBe('unknown');
+    expect(persistMerchantTypeFromAnalysis({ merchant: 'WHOLESALE' })).toBe('unknown');
   });
 });
 
