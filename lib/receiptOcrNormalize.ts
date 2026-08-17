@@ -92,6 +92,14 @@ function discountIdentityKey(d: ReceiptDiscount): string {
   return `${normalizeDiscountIdentityLabel(d.label)}|${amt}`;
 }
 
+function discountDedupKey(d: ReceiptDiscount): string {
+  const base = discountIdentityKey(d);
+  if (typeof d.adjacentPrecedingItemIndex === 'number') {
+    return `${base}|adj:${d.adjacentPrecedingItemIndex}`;
+  }
+  return base;
+}
+
 /** Append discount unless the same logical coupon is already present. */
 export function pushUniqueReceiptDiscount(
   discounts: ReceiptDiscount[],
@@ -106,8 +114,17 @@ export function pushUniqueReceiptDiscount(
   if (typeof next.adjacentPrecedingItemIndex === 'number') {
     row.adjacentPrecedingItemIndex = next.adjacentPrecedingItemIndex;
   }
-  const key = discountIdentityKey(row);
-  const existing = discounts.find((d) => discountIdentityKey(d) === key);
+  const key = discountDedupKey(row);
+  const logicalKey = discountIdentityKey(row);
+  let existing =
+    discounts.find((d) => discountDedupKey(d) === key) ??
+    discounts.find((d) => {
+      if (discountIdentityKey(d) !== logicalKey) return false;
+      const adjA = d.adjacentPrecedingItemIndex;
+      const adjB = row.adjacentPrecedingItemIndex;
+      if (adjA == null || adjB == null) return true;
+      return adjA === adjB;
+    });
   if (existing) {
     // Prefer adjacency captured from OCR item order when discounts[] arrived first.
     if (
@@ -271,6 +288,17 @@ function isNonMerchandiseMetaLabel(name: string): boolean {
     n.includes('残高') ||
     n.includes('balance') ||
     (/\bchange\b/.test(n) && !n.includes('exchange'))
+  );
+}
+
+/** Costco Connection publication / membership lines — not purchased merchandise. */
+export function isCostcoConnectionNonMerchandiseLine(name: string): boolean {
+  const n = toHalfWidthLower(name).replace(/\s+/g, ' ').trim();
+  if (n === 'コストコ コネクション' || n === 'コストココネクション') return true;
+  return (
+    n === 'コストコ コネクション ムリョウ' ||
+    n === 'コストココネクション ムリョウ' ||
+    n === 'コストココネクションムリョウ'
   );
 }
 
@@ -627,6 +655,9 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     }
     if (kind === 'tax' || kind === 'subtotal') {
       // 税/小计/合计/Costco点数 不是商品；点数文案已进入 evidence / Costco pre-pass。
+      continue;
+    }
+    if (costcoPre.isCostco && isCostcoConnectionNonMerchandiseLine(name)) {
       continue;
     }
 

@@ -83,6 +83,62 @@ export function isBundleSummaryDiscountLabel(label: string): boolean {
   );
 }
 
+const RECEIPT_LEVEL_DISCOUNT_LABEL =
+  /合計|総(?:額|計)?|total|subtotal|値引合計|割引合計|クーポン合計/i;
+
+/**
+ * Conservative adjacent product discount labels (値引 / N%割引 / 値下げ).
+ * Excludes bundle/まとめ売り and receipt-level summaries.
+ */
+export function isOrdinaryAdjacentProductDiscountLabel(label: string): boolean {
+  if (isBundleSummaryDiscountLabel(label)) return false;
+  const raw = String(label || '').trim();
+  if (!raw) return false;
+  const n = normalizeToken(raw);
+  if (!n || RECEIPT_LEVEL_DISCOUNT_LABEL.test(n)) return false;
+  if (n.includes('クーポン') || n.includes('coupon') || n.includes('cpn')) return false;
+  if (/^\d{1,2}%?\s*割引$/.test(n) || /^\d{1,2}%\s*引$/.test(n)) return true;
+  if (n === '値引' || n === '値引き' || n === '割引' || n === 'わりびき') return true;
+  if (n === '値下' || n === '値下げ') return true;
+  return false;
+}
+
+function parseDiscountPercentFromLabel(label: string): number | null {
+  const m = String(label || '').match(/(\d{1,2})\s*%\s*(?:割引|引)/);
+  if (!m) return null;
+  const pct = Number(m[1]);
+  if (!Number.isFinite(pct) || pct <= 0 || pct > 100) return null;
+  return pct;
+}
+
+/**
+ * Bind ordinary adjacent product discounts (値引 / N%割引) to the immediately
+ * preceding merchandise line when OCR order + amount evidence is strong.
+ */
+export function findAdjacentProductDiscountItemIndex(
+  items: DiscountableItem[],
+  discount: DiscountLine
+): number {
+  if (!isOrdinaryAdjacentProductDiscountLabel(discount.label)) return -1;
+  const amount = Number(discount.amount);
+  if (!Number.isFinite(amount) || amount === 0) return -1;
+  const delta = amount < 0 ? amount : -Math.abs(amount);
+  const absDisc = Math.abs(delta);
+
+  const adj = discount.adjacentPrecedingItemIndex;
+  if (typeof adj !== 'number' || adj < 0 || adj >= items.length) return -1;
+  const gross = grossOf(items[adj]);
+  if (gross <= 0 || absDisc > gross) return -1;
+
+  const pct = parseDiscountPercentFromLabel(discount.label);
+  if (pct != null) {
+    const expected = Math.round((gross * pct) / 100);
+    if (Math.abs(expected - absDisc) > 1) return -1;
+  }
+
+  return adj;
+}
+
 /**
  * Bind a discount to an item when the coupon label strongly references it.
  * Example: "ROCHER ORIGINS CPN" → item containing "ROCHER".
@@ -195,6 +251,9 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
       idx = findBundleDiscountItemIndex(next, discount, evidenceTexts);
     }
     if (idx < 0) {
+      idx = findAdjacentProductDiscountItemIndex(next, discount);
+    }
+    if (idx < 0) {
       unboundDiscounts.push({
         label: discount.label,
         amount: delta,
@@ -202,9 +261,12 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
       continue;
     }
     const item = next[idx];
-    // Same bundle discount represented twice (discounts[] + item line with richer label)
-    // must not stack onto one line (Build 27 Sample 058: 210→196).
-    if (isBundleSummaryDiscountLabel(discount.label)) {
+    // Same discount represented twice (discounts[] + item line) must not stack
+    // onto one line (Build 27 Sample 058: 210→196).
+    if (
+      isBundleSummaryDiscountLabel(discount.label) ||
+      isOrdinaryAdjacentProductDiscountLabel(discount.label)
+    ) {
       const prevAbs = Math.abs(Number(item.discountAllocated) || 0);
       if (prevAbs > 0 && prevAbs === absDisc) {
         continue;

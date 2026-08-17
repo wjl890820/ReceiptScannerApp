@@ -158,6 +158,99 @@ describe('coupon / discount allocation', () => {
     expect(result.unboundDiscounts).toEqual([{ label: 'メーカークーポン', amount: -100 }]);
     expect(itemAmountForAnalytics(result.items[1])).toBe(2000);
   });
+
+  describe('Batch B1 adjacent product discounts', () => {
+    it('Sample 073: チキンカツサンド 390 + adjacent 値引 -50 → effective 340', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: 'イオン',
+        currency: 'JPY',
+        total: 1262,
+        tax: 93,
+        items: [
+          { name: 'その他A', quantity: 1, unitPrice: 829, lineTotal: 829 },
+          { name: 'チキンカツサンド', quantity: 1, unitPrice: 390, lineTotal: 390 },
+          { name: '値引', quantity: 1, unitPrice: -50, lineTotal: -50 },
+        ],
+      });
+      const sand = out.items.find((i) => String(i.name).includes('チキンカツサンド'))!;
+      expect(sand.lineTotal).toBe(390);
+      expect(sand.discountAllocated).toBe(-50);
+      expect(sand.effectiveLineTotal).toBe(340);
+      expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(1169);
+    });
+
+    it('Sample 076: two adjacent 10%割引 -38 on 380 lines → effective 342 each', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: 'イオン',
+        currency: 'JPY',
+        total: 3393,
+        tax: 251,
+        items: [
+          { name: 'ITEM A', quantity: 1, unitPrice: 2458, lineTotal: 2458 },
+          { name: '鶏A', quantity: 1, unitPrice: 380, lineTotal: 380 },
+          { name: '10%割引', quantity: 1, unitPrice: -38, lineTotal: -38 },
+          { name: '鶏B', quantity: 1, unitPrice: 380, lineTotal: 380 },
+          { name: '10%割引', quantity: 1, unitPrice: -38, lineTotal: -38 },
+        ],
+      });
+      const chickens = out.items.filter((i) => String(i.name).startsWith('鶏'));
+      expect(chickens).toHaveLength(2);
+      for (const row of chickens) {
+        expect(row.lineTotal).toBe(380);
+        expect(row.discountAllocated).toBe(-38);
+        expect(row.effectiveLineTotal).toBe(342);
+      }
+      expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(3142);
+    });
+
+    it('Sample 085: パン 280 + adjacent 10%割引 -28 → effective 252', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: 'イオン',
+        currency: 'JPY',
+        total: 1921,
+        tax: 142,
+        items: [
+          { name: 'その他A', quantity: 1, unitPrice: 1527, lineTotal: 1527 },
+          { name: 'パン', quantity: 1, unitPrice: 280, lineTotal: 280 },
+          { name: '10%割引', quantity: 1, unitPrice: -28, lineTotal: -28 },
+        ],
+      });
+      const bread = out.items.find((i) => i.name === 'パン')!;
+      expect(bread.effectiveLineTotal).toBe(252);
+      expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(1779);
+    });
+
+    it('Sample 095: 鶏肉 398 + adjacent 50%割引 -199 → effective 199', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: 'イオン',
+        currency: 'JPY',
+        total: 3040,
+        tax: 225,
+        items: [
+          { name: 'その他A', quantity: 1, unitPrice: 2616, lineTotal: 2616 },
+          { name: '鶏肉', quantity: 1, unitPrice: 398, lineTotal: 398 },
+          { name: '50%割引', quantity: 1, unitPrice: -199, lineTotal: -199 },
+        ],
+      });
+      const meat = out.items.find((i) => i.name === '鶏肉')!;
+      expect(meat.effectiveLineTotal).toBe(199);
+      expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(2815);
+    });
+
+    it('receipt-level 値引合計 without safe adjacency stays receipt-level', () => {
+      const result = applyReceiptDiscountsToItems(
+        [
+          { name: 'ITEM A', lineTotal: 500 },
+          { name: 'ITEM B', lineTotal: 700 },
+        ],
+        [{ label: '値引合計', amount: -100 }]
+      );
+      expect(result.boundCount).toBe(0);
+      expect(result.unboundDiscounts).toEqual([{ label: '値引合計', amount: -100 }]);
+      expect(itemAmountForAnalytics(result.items[0])).toBe(500);
+      expect(itemAmountForAnalytics(result.items[1])).toBe(700);
+    });
+  });
 });
 
 describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {

@@ -759,7 +759,14 @@ export async function saveReceipt(
   if (txDateStr && typeof txDateStr === 'string' && txDateStr.trim()) {
     try {
       const { parseReceiptDateTime } = await import('./dateParser');
-      transactionAt = parseReceiptDateTime(txDateStr.trim(), false);
+      const merchantHint =
+        params.analysis.merchant ||
+        (params.analysis as any).merchant_normalized ||
+        (params.analysis as any).merchantNormalized;
+      transactionAt = parseReceiptDateTime(txDateStr.trim(), {
+        fallbackToNow: false,
+        merchant: typeof merchantHint === 'string' ? merchantHint : null,
+      });
       if (transactionAt == null && __DEV__) {
         console.warn('[DB] Unrecognized transactionDate (stored null):', txDateStr);
       }

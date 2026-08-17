@@ -17,6 +17,7 @@ import {
   normalizeOcrAnalysis,
   resolveReceiptTax,
   persistReceiptTaxFields,
+  isCostcoConnectionNonMerchandiseLine,
 } from './receiptOcrNormalize';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 
@@ -193,6 +194,39 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     });
     expect(out.items[0].quantity).toBe(1);
     expect(out.merchant_normalized).toBe('イオン');
+  });
+
+  it('Sample 076: explicit 4個 × @439 in name → purchase quantity 4', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'イオン',
+      items: [{ name: '正宗生煎包 4個 × @439', quantity: 1, unitPrice: 439, lineTotal: 1756 }],
+      total: 1756,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.items[0].quantity).toBe(4);
+  });
+
+  it('Sample 081: Costco Connection lines are not merchandise items', () => {
+    expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション ムリョウ')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('コストコ 無料試食')).toBe(false);
+
+    const out = normalizeOcrAnalysis({
+      merchant: 'コストコ',
+      currency: 'JPY',
+      total: 9534,
+      tax: 706,
+      items: [
+        { name: 'ITEM A', quantity: 1, unitPrice: 5000, lineTotal: 5000 },
+        { name: 'ITEM B', quantity: 1, unitPrice: 4532, lineTotal: 4532 },
+        { name: 'コストコ コネクション', quantity: 1, unitPrice: 1, lineTotal: 1 },
+        { name: 'コストコ コネクション ムリョウ', quantity: 1, unitPrice: 1, lineTotal: 1 },
+      ],
+    });
+    expect(out.items.map((i) => i.name)).toEqual(['ITEM A', 'ITEM B']);
+    expect(out.items.reduce((s, i) => s + i.lineTotal, 0)).toBe(9532);
+    expect(out.tax).toBe(706);
   });
 
   it('rejects legacy personal_care OCR categoryKey on sanitize', () => {

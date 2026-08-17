@@ -30,6 +30,18 @@ describe('Sample 027 package count ≠ purchase quantity', () => {
     expect(resolvePurchaseQuantity(name, 3)).toBe(3);
   });
 
+  it('Sample 076: 正宗生煎包 4個 × @439 → purchase qty 4 (not package count)', () => {
+    const name = '正宗生煎包 4個 × @439';
+    expect(extractExplicitPurchaseQuantity(name)).toBe(4);
+    expect(resolvePurchaseQuantity(name, 1)).toBe(4);
+    expect(resolvePurchaseQuantity(name, 4)).toBe(4);
+  });
+
+  it('Sample 076 alt: @439 × 4個 → purchase qty 4', () => {
+    expect(extractExplicitPurchaseQuantity('正宗生煎包 @439 × 4個')).toBe(4);
+    expect(resolvePurchaseQuantity('正宗生煎包 @439 × 4個', 1)).toBe(4);
+  });
+
   it('structured OCR qty unrelated to package count is preserved', () => {
     expect(resolvePurchaseQuantity('牛乳 900ml', 2)).toBe(2);
   });

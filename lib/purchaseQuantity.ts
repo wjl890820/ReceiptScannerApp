@@ -11,9 +11,12 @@ import { normalizeIdentityText } from './productSpecification';
 const PACKAGE_COUNT_RE =
   /(\d+)\s*(?:個|本|枚|袋|パック|pc|pcs|pk|pack)\s*(?:入)?/gi;
 
-/** Explicit purchase qty: (¥108 × 3個) / ¥393×2 / (108 x 3) */
-const EXPLICIT_PURCHASE_RE =
-  /[¥￥]?\s*\d[\d,]*\s*[×xX*]\s*(\d+)\s*(?:個|本|枚|袋|パック|pc|pcs|pk|pack)?/i;
+/** Explicit purchase qty: (¥108 × 3個) / @439 × 4 / 4個 × @439 / 数量4 × 単価439 */
+const EXPLICIT_PURCHASE_RES: RegExp[] = [
+  /(\d+)\s*(?:個|本|枚|袋|パック|pc|pcs|pk|pack)\s*[×xX*]\s*[@¥￥]?\s*\d[\d,]*/i,
+  /[(（]?\s*[@¥￥]?\s*\d[\d,]*\s*[×xX*]\s*(\d+)\s*(?:個|本|枚|袋|パック|pc|pcs|pk|pack)?/i,
+  /数量\s*(\d+)\s*[×xX*]\s*単価\s*\d[\d,]*/i,
+];
 
 export function extractPackageCountFromName(rawName: string): number | null {
   const text = normalizeIdentityText(rawName);
@@ -31,11 +34,13 @@ export function extractPackageCountFromName(rawName: string): number | null {
 export function extractExplicitPurchaseQuantity(rawName: string): number | null {
   const text = normalizeIdentityText(rawName);
   if (!text) return null;
-  const m = text.match(EXPLICIT_PURCHASE_RE);
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isInteger(n) || n < 1 || n > 1000) return null;
-  return n;
+  for (const re of EXPLICIT_PURCHASE_RES) {
+    const m = text.match(re);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n >= 1 && n <= 1000) return n;
+  }
+  return null;
 }
 
 /**

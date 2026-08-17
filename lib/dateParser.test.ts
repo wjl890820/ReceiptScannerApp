@@ -52,7 +52,7 @@ describe('receipt datetime parsing', () => {
     expectLocalParts(ts!, 2025, 12, 20, 18, 17);
   });
 
-  it('parses MM/DD/YYYY HH:mm:ss (Costco)', () => {
+  it('parses MM/DD/YYYY HH:mm:ss (Costco unambiguous day>12)', () => {
     const ts = parseReceiptDateTime('01/16/2026 18:49:34', {
       nowMs: NOW_MS,
     });
@@ -60,12 +60,32 @@ describe('receipt datetime parsing', () => {
     expectLocalParts(ts!, 2026, 1, 16, 18, 49, 34);
   });
 
-  it('parses MM/DD/YYYY HH:mm:ss for early January', () => {
+  it('parses MM/DD/YYYY HH:mm:ss for early January when Costco merchant', () => {
     const ts = parseReceiptDateTime('01/04/2026 15:31:31', {
       nowMs: NOW_MS,
+      merchant: 'コストコ',
     });
     expect(ts).not.toBeNull();
     expectLocalParts(ts!, 2026, 1, 4, 15, 31, 31);
+  });
+
+  it('Sample 077: Costco ambiguous 06/10/2026 → 2026-06-10', () => {
+    expect(
+      normalizeReceiptDateTime('06/10/2026 10:50:58', { allowAmbiguousMdy: true })
+    ).toBe('2026-06-10 10:50:58');
+    const ts = parseReceiptDateTime('06/10/2026 10:50:58', {
+      nowMs: NOW_MS,
+      merchant: 'コストコ',
+    });
+    expect(ts).not.toBeNull();
+    expectLocalParts(ts!, 2026, 6, 10, 10, 50, 58);
+  });
+
+  it('unknown merchant + ambiguous 06/10/2026 does not assume MDY', () => {
+    expect(normalizeReceiptDateTime('06/10/2026 10:50:58')).toBe('');
+    expect(
+      parseReceiptDateTime('06/10/2026 10:50:58', { nowMs: NOW_MS, merchant: 'イオン' })
+    ).toBeNull();
   });
 
   it('does not fall back to current/scan time on invalid or empty input', () => {
@@ -141,7 +161,8 @@ describe('receipt datetime parsing', () => {
     expect(parserSource).toMatch(/new Date\(iso\)/);
     expect(parserSource).toMatch(/new Date\(value\)/);
 
-    expect(dbSource).toContain('parseReceiptDateTime(txDateStr.trim(), false)');
+    expect(dbSource).toContain('parseReceiptDateTime(txDateStr.trim()');
+    expect(dbSource).toContain('fallbackToNow: false');
     expect(dbSource).not.toMatch(/new Date\(\s*txDateStr/);
     expect(dbSource).not.toMatch(/new Date\(\s*txDate/);
   });

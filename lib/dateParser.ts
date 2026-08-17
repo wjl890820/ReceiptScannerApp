@@ -8,7 +8,28 @@ export type ParseReceiptDateTimeOptions = {
   fallbackToNow?: boolean;
   /** Injected clock for tests — defaults to Date.now(). */
   nowMs?: number;
+  /** Merchant hint for merchant-aware ambiguous slash-date parsing. */
+  merchant?: string | null;
 };
+
+export type NormalizeReceiptDateTimeOptions = {
+  /** Costco / high-confidence MM/DD/YYYY when month and day are both ≤ 12. */
+  allowAmbiguousMdy?: boolean;
+};
+
+function isCostcoMerchantHint(merchant?: string | null): boolean {
+  if (!merchant || typeof merchant !== 'string') return false;
+  const n = merchant
+    .trim()
+    .replace(/[\s　]/g, '')
+    .toLowerCase()
+    .replace(/[－—–−ー]/g, '-');
+  return n.includes('costco') || n.includes('コストコ');
+}
+
+function isAmbiguousSlashMonthDay(month: number, day: number): boolean {
+  return month >= 1 && month <= 12 && day >= 1 && day <= 12;
+}
 
 /**
  * Strip weekday markers / full-width spaces and normalize JP / slash / dash forms
@@ -18,7 +39,10 @@ export type ParseReceiptDateTimeOptions = {
  * JP weekday annotations between date and time ((土) / （土）). Those are
  * normalized deterministically — no fuzzy guessing.
  */
-export function normalizeReceiptDateTime(input: string): string {
+export function normalizeReceiptDateTime(
+  input: string,
+  options?: NormalizeReceiptDateTimeOptions
+): string {
   if (!input || typeof input !== 'string') return '';
   let s = input.trim().replace(/\u3000/g, ' ');
   // Remove recognized JP weekday markers only; leave a space so date|time stay split.
@@ -60,6 +84,11 @@ export function normalizeReceiptDateTime(input: string): string {
     /^(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
   );
   if (mdy) {
+    const month = Number(mdy[1]);
+    const day = Number(mdy[2]);
+    if (isAmbiguousSlashMonthDay(month, day) && !options?.allowAmbiguousMdy) {
+      return '';
+    }
     return formatNormalized(
       mdy[3],
       mdy[1],
@@ -157,6 +186,7 @@ export function parseReceiptDateTime(
 
   const fallback = Boolean(options.fallbackToNow);
   const nowMs = options.nowMs ?? Date.now();
+  const allowAmbiguousMdy = isCostcoMerchantHint(options.merchant);
 
   if (!dateTimeStr || typeof dateTimeStr !== 'string') {
     return fallback ? nowMs : null;
@@ -167,7 +197,7 @@ export function parseReceiptDateTime(
   }
 
   // 1) Deterministic receipt formats → Tokyo wall-clock components → +09:00 ISO.
-  const normalized = normalizeReceiptDateTime(trimmed);
+  const normalized = normalizeReceiptDateTime(trimmed, { allowAmbiguousMdy });
   const workStr =
     normalized ||
     trimmed.replace(/[（(][月火水木金土日][)）]/g, ' ').replace(/\s+/g, ' ').trim();

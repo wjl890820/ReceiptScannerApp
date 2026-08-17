@@ -41,6 +41,7 @@ import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
 import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
+import { resolveInitialReviewDateStr } from '@/lib/scanReviewDateIsolation';
 import {
   shouldShowLegacyPostSaveEasterEggAlert,
   shouldShowReviewDevDetails,
@@ -111,9 +112,15 @@ export default function ScanReviewScreen() {
     };
   }, []);
 
-  const applySnapshotDefaults = useCallback((snap: any) => {
+  const applySnapshotDefaults = useCallback((snap: any, editorState?: ScanReviewEditorStateV1) => {
     setMerchant(typeof snap?.merchant === 'string' ? snap.merchant : '');
-    setDateStr(typeof snap?.transactionDate === 'string' ? snap.transactionDate : '');
+    setDateStr(
+      resolveInitialReviewDateStr({
+        editorState,
+        snapshotTransactionDate:
+          typeof snap?.transactionDate === 'string' ? snap.transactionDate : null,
+      })
+    );
     setTotalStr(String(snap?.total ?? ''));
     setTaxStr(taxFieldPrefillFromSnapshot(snap));
     setCurrency(typeof snap?.currency === 'string' && snap.currency.trim() ? snap.currency : 'JPY');
@@ -137,18 +144,30 @@ export default function ScanReviewScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const id = String(draftId || '');
+    // Clear stale editor state immediately when switching drafts (Sample 087).
+    setLoading(true);
+    setMissing(false);
+    setSnapshot(null);
+    setMerchant('');
+    setDateStr('');
+    setTotalStr('');
+    setTaxStr('');
+    setCurrency('JPY');
+    setNote('');
+    setLineItems([]);
+    setErrorTags(new Set());
+    setOcrText('');
+    setImageUri('');
+    setTraceId('');
+
     (async () => {
-      const id = String(draftId || '');
       if (!id) {
         if (!cancelled) {
           setMissing(true);
           setLoading(false);
         }
         return;
-      }
-      if (!cancelled) {
-        setMissing(false);
-        setLoading(true);
       }
       const draft = await getScanReviewDraft(id);
       if (cancelled) return;
@@ -167,7 +186,7 @@ export default function ScanReviewScreen() {
       // 仅要求 version 与数组结构正确即可恢复（含全部删空的空数组）。
       if (es?.version === 1 && Array.isArray(es.lineItems)) {
         setMerchant(typeof es.merchant === 'string' ? es.merchant : '');
-        setDateStr(typeof es.dateStr === 'string' ? es.dateStr : '');
+        setDateStr(resolveInitialReviewDateStr({ editorState: es, snapshotTransactionDate: snap?.transactionDate }));
         setTotalStr(typeof es.totalStr === 'string' ? es.totalStr : String(snap?.total ?? ''));
         if (typeof es.taxStr === 'string') {
           setTaxStr(es.taxStr);
