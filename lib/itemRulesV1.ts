@@ -84,6 +84,30 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
     return mk('prepared_food', 'deli', ['ready_to_eat', 'non_essential_spend'], 0.86, 'Deli keywords', { brand });
   }
 
+  // --- High-yield prepared dishes with strong semantic tokens ---
+  // Must appear before snacks/sweets, to avoid substring collisions like チャーシュー -> シュー.
+  if (hasAny(text, ['チャーシュー', '牛すき煮', 'すき煮'])) {
+    return mk(
+      'prepared_food',
+      'deli',
+      ['ready_to_eat', 'non_essential_spend'],
+      0.9,
+      'Prepared meat/stew keywords',
+      { brand }
+    );
+  }
+
+  if (hasAny(text, ['冷やし中華', '担々麺', 'たんたんめん'])) {
+    return mk(
+      'prepared_food',
+      'instant_food',
+      ['ready_to_eat', 'non_essential_spend'],
+      0.9,
+      'Chilled noodles/umami noodles keywords',
+      { brand }
+    );
+  }
+
   // --- Snacks / sweets (before dairy: エクレア+ミルククリーム must not become ingredients) ---
   if (hasAny(text, ['チョコ', 'choco', 'chocolate'])) {
     return mk('snacks', 'chocolate', ['snack', 'sweet', 'non_essential_spend'], 0.9, 'Chocolate keywords', { brand });
@@ -94,11 +118,34 @@ export function matchItemRule(input: RuleInput): RuleMatch | null {
   if (hasAny(text, ['クッキー', 'ビスケット', 'biscuit', 'cookie'])) {
     return mk('snacks', 'biscuits', ['snack', 'sweet', 'non_essential_spend'], 0.88, 'Biscuits/cookies keywords', { brand });
   }
-  if (hasAny(text, ['ケーキ', 'cake', 'デザート', 'dessert', 'プリン', 'pudding', 'シュー', 'エクレア', 'クレープ', 'たい焼き', 'ドーナツ'])) {
+  if (hasAny(text, ['ケーキ', 'cake', 'デザート', 'dessert', 'プリン', 'pudding', 'シュー', 'エクレア', 'エクレール', 'クレープ', 'たい焼き', 'ドーナツ', 'ティラミス', '杏仁豆腐バー'])) {
     return mk('snacks', 'desserts', ['snack', 'sweet', 'non_essential_spend'], 0.86, 'Dessert keywords', { brand });
   }
   if (hasAny(text, ['アイス', 'ice cream'])) {
     return mk('snacks', 'ice_cream', ['snack', 'sweet', 'non_essential_spend', 'frozen_item'], 0.9, 'Ice cream keywords', { brand });
+  }
+
+  // --- Squid snacks vs raw squid ---
+  // Snack-style squid (smoked/dried) must become snacks, while raw squid should be ingredients.
+  if (hasAny(text, ['いか', 'イカ']) && hasAny(text, ['くんちぎりいか', '燻製', '珍味'])) {
+    return mk(
+      'snacks',
+      'chips',
+      ['snack', 'non_essential_spend'],
+      0.85,
+      'Smoked/dried squid snack keywords',
+      { brand }
+    );
+  }
+  if (hasAny(text, ['いか', 'イカ'])) {
+    return mk(
+      'ingredients',
+      'seafood',
+      ['ingredient', 'cooking_related', 'protein_source'],
+      0.78,
+      'Squid ingredient keywords',
+      { brand }
+    );
   }
 
   // --- Ingredients: vegetables / herbs / mushrooms ---

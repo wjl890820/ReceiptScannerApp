@@ -199,6 +199,45 @@ describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () =
     const cats = (out.items as any[]).map((it) => it.category);
     expect(cats).toEqual(['snacks_drinks', 'snacks_drinks', 'food_ingredients', 'food_ingredients']);
   });
+
+  // Batch B2: classification semantics only (substring collision, cooking base, prepared foods, desserts/snacks)
+  it('チャーシュー vs シュークリーム substring collision → ready_to_eat / snacks_drinks', async () => {
+    const charSiU = await enrichOne('チャーシュー', 'uncategorized', 500);
+    expect(charSiU.category).toBe('ready_to_eat');
+
+    const shuuCream = await enrichOne('シュークリーム', 'uncategorized', 300);
+    expect(shuuCream.category).toBe('snacks_drinks');
+  });
+
+  it('カレーの素 / ペースト → food_ingredients; real curry dish stays ready_to_eat', async () => {
+    expect((await enrichOne('グリーンカレーペースト', 'uncategorized', 200)).category).toBe('food_ingredients');
+    expect((await enrichOne('インドネシア風煮込みカレーの素', 'uncategorized', 200)).category).toBe('food_ingredients');
+    expect((await enrichOne('インドネシア風スープカレーの素', 'uncategorized', 200)).category).toBe('food_ingredients');
+
+    expect((await enrichOne('カレー弁当', 'uncategorized', 200)).category).toBe('ready_to_eat');
+  });
+
+  it('prepared foods: 若鶏唐揚 / 牛すき煮 / 冷やし中華茹で卵 / 担々麺 → ready_to_eat', async () => {
+    expect((await enrichOne('若鶏唐揚', 'uncategorized', 200)).category).toBe('ready_to_eat');
+    expect((await enrichOne('牛すき煮', 'uncategorized', 200)).category).toBe('ready_to_eat');
+    expect((await enrichOne('冷やし中華茹で卵', 'uncategorized', 200)).category).toBe('ready_to_eat');
+    expect((await enrichOne('担々麺', 'uncategorized', 200)).category).toBe('ready_to_eat');
+  });
+
+  it('ライ麦ロール → ready_to_eat', async () => {
+    expect((await enrichOne('ライ麦ロール', 'uncategorized', 200)).category).toBe('ready_to_eat');
+  });
+
+  it('desserts/snacks: ティラミス / エクレール / 杏仁豆腐バー → snacks_drinks', async () => {
+    expect((await enrichOne('ティラミス', 'uncategorized', 200)).category).toBe('snacks_drinks');
+    expect((await enrichOne('エクレール', 'uncategorized', 200)).category).toBe('snacks_drinks');
+    expect((await enrichOne('杏仁豆腐バー', 'uncategorized', 200)).category).toBe('snacks_drinks');
+  });
+
+  it('squid snack boundary: くんちぎりいか → snacks_drinks; 生いか → food_ingredients', async () => {
+    expect((await enrichOne('くんちぎりいか', 'uncategorized', 200)).category).toBe('snacks_drinks');
+    expect((await enrichOne('生いか', 'uncategorized', 200)).category).toBe('food_ingredients');
+  });
 });
 
 describe('Phase 2: convenience merchant support', () => {

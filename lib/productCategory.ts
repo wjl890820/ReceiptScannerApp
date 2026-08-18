@@ -166,6 +166,9 @@ function isCookingNoodleIngredient(n: string): boolean {
 
 /** Raw chicken cuts: must not become ready_to_eat solely because of チキン. */
 function isRawChickenCut(n: string): boolean {
+  // Prepared chicken dishes like "若鶏唐揚" must be ready-to-eat,
+  // even though they contain raw chicken tokens such as 若鶏/鶏/もも.
+  if (nameHasAny(n, ['唐揚', 'からあげ', '唐揚げ'])) return false;
   return nameHasAny(n, [
     'チキンもも',
     '鶏もも',
@@ -301,6 +304,12 @@ export function classifyItemByName(itemName: string): ProductCategory {
   if (isCookingNoodleIngredient(n)) return 'food_ingredients';
   if (isRawChickenCut(n)) return 'food_ingredients';
 
+  // Cooking base / curry seasoning:
+  // "○○の素" / "ペースト" must be ingredients, even though broad "カレー" normally maps to ready_to_eat.
+  if (n.includes('カレー') && (n.includes('の素') || n.includes('ペースト'))) {
+    return 'food_ingredients';
+  }
+
   // 即食餐（サンド/丼/ラーメン/さつまあげ/肉まん 等需早于 snacks_drinks 与 food_ingredients）
   // 炒麺/ブルダック等インスタント麺は食材の「麺」より先。サラダラップ等の食品ラップもここ。
   // 半生/生麺/乾麺/冷凍うどん 已在上方收成食材；此处保留即食うどん（讃岐・焼うどん等）。
@@ -308,10 +317,12 @@ export function classifyItemByName(itemName: string): ProductCategory {
   if (
     has([
       '弁当', 'べんとう', 'おにぎり', 'お握り', 'サンド', 'サンドイッチ', 'バーガー', 'ホットスナック',
-      'グリルチキン', 'チキン南蛮', 'フライドチキン', 'ローストチキン', 'ロティサリーチキン', 'ロティサリー', '南蛮', 'からあげ', '唐揚げ', 'カツ', 'コロッケ', 'メンチ',
+      'グリルチキン', 'チキン南蛮', 'フライドチキン', 'ローストチキン', 'ロティサリーチキン', 'ロティサリー', '南蛮', 'からあげ',
+      '唐揚', '唐揚げ', '牛すき煮', 'カツ', 'コロッケ', 'メンチ',
       '惣菜', '総菜', '惣菜パン', 'サラダ', 'パスタ', 'うどん', 'そば', 'ラーメン', 'ワンタン', 'ワンタン麺',
       '炒麺', 'カップ麺', 'カップめん', 'ヌードル', 'ブルダック', 'buldak', 'インスタント麺',
       '焼うどん', '焼きうどん', '焼きそば', '焼そば',
+      '冷やし中華', '担々麺', 'たんたんめん',
       'グラタン', 'ドリア', 'カレー', '寿司', 'すし', 'おでん', '中華まん', '肉まん', 'まん', '丼',
       '生煎', '生煎包', '餃子', '焼売', 'しゅうまい',
       'ぼうとう', 'ほうとう', 'さつまあげ', 'さつま揚げ', '横浜家系', '家系', 'deli', 'bento',
@@ -344,6 +355,7 @@ export function classifyItemByName(itemName: string): ProductCategory {
       'クロッカン', 'クロワッサン', 'ドーナツ', 'あんドーナツ', 'カスタード', 'くちどけ', '白桃', 'ブラックムーン',
       'ジャイアントコーン', 'ジャイアントコー',
       'エクレア', 'クレープ', 'たい焼き', '鯛焼き', 'シュークリーム', '菓子パン', 'ロールケーキ',
+      'ティラミス', 'エクレール', '杏仁豆腐バー',
       '黒コッペ', 'コッペ', '菓子', 'スナック', 'ポテト', 'ポテチ', 'キャンディ', '飴', 'プリン', 'ゼリー',
       'デザート', 'ケーキ', 'せんべい', '煎餅', 'ビール', '酒', 'ワイン', 'ハイボール', 'チューハイ',
       '焼酎', '日本酒', '発泡', '発泡酒', 'エール', 'ale', 'ラガー', 'lager', 'ギネス', 'stout', 'ビール',
@@ -390,6 +402,7 @@ export function classifyItemByName(itemName: string): ProductCategory {
  */
 function hasMealBakeryBread(n: string): boolean {
   if (!n) return false;
+  if (n.includes('ライ麦ロール')) return true;
   // Sweet roll cake / paper goods are not meal bread.
   if (n.includes('ロールケーキ') || n.includes('ケーキロール')) return false;
   if (n.includes('キッチンロール') || n.includes('ペーパーロール')) return false;

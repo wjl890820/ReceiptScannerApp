@@ -167,6 +167,28 @@ describe('classifyItemByName: 关键词分类', () => {
     expect(classifyItemByName('モモ')).toBe('uncategorized');
   });
 
+  // Batch B2: curry base/seasoning vs ready-to-eat curry dish
+  it('グリーンカレーペースト / カレーの素 → food_ingredients (not ready_to_eat)', () => {
+    expect(classifyItemByName('グリーンカレーペースト')).toBe('food_ingredients');
+    expect(classifyItemByName('インドネシア風煮込みカレーの素')).toBe('food_ingredients');
+    expect(classifyItemByName('インドネシア風スープカレーの素')).toBe('food_ingredients');
+
+    // Negative: real prepared curry dish stays ready_to_eat
+    expect(classifyItemByName('カレー弁当')).toBe('ready_to_eat');
+  });
+
+  // Batch B2: bread / bakery
+  it('ライ麦ロール → ready_to_eat', () => {
+    expect(classifyItemByName('ライ麦ロール')).toBe('ready_to_eat');
+  });
+
+  // Batch B2: desserts/snacks (must beat generic 豆腐食材 rule)
+  it('ティラミス / エクレール / 杏仁豆腐バー → snacks_drinks', () => {
+    expect(classifyItemByName('ティラミス')).toBe('snacks_drinks');
+    expect(classifyItemByName('エクレール')).toBe('snacks_drinks');
+    expect(classifyItemByName('杏仁豆腐バー')).toBe('snacks_drinks');
+  });
+
   // Broad-token negative cases
   it('水菜 is not a drink because of 水', () => {
     expect(classifyItemByName('水菜')).toBe('food_ingredients');
@@ -183,6 +205,15 @@ describe('classifyItemByName: 关键词分类', () => {
     expect(classifyItemByName('骨付きグリルチキン')).toBe('ready_to_eat');
     expect(classifyItemByName('ロティサリーチキン')).toBe('ready_to_eat');
   });
+
+  // Batch B2: prepared food vs raw ingredient precedence
+  it('若鶏唐揚 / 牛すき煮 / 冷やし中華 / 担々麺 → ready_to_eat', () => {
+    expect(classifyItemByName('若鶏唐揚')).toBe('ready_to_eat');
+    expect(classifyItemByName('牛すき煮')).toBe('ready_to_eat');
+    expect(classifyItemByName('冷やし中華茹で卵')).toBe('ready_to_eat');
+    expect(classifyItemByName('担々麺')).toBe('ready_to_eat');
+  });
+
   it('bare 水 remains a drink', () => {
     expect(classifyItemByName('水')).toBe('snacks_drinks');
   });
