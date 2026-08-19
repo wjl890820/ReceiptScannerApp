@@ -294,11 +294,13 @@ function isNonMerchandiseMetaLabel(name: string): boolean {
 /** Costco Connection publication / membership lines — not purchased merchandise. */
 export function isCostcoConnectionNonMerchandiseLine(name: string): boolean {
   const n = toHalfWidthLower(name).replace(/\s+/g, ' ').trim();
-  if (n === 'コストコ コネクション' || n === 'コストココネクション') return true;
+  // Register/dept codes OCR'd as MR/MP immediately before the magazine line.
+  const core = n.replace(/^(?:mr|mp)(?:\s+|(?=コストコ|costco))/, '').trim();
+  if (core === 'コストコ コネクション' || core === 'コストココネクション') return true;
   return (
-    n === 'コストコ コネクション ムリョウ' ||
-    n === 'コストココネクション ムリョウ' ||
-    n === 'コストココネクションムリョウ'
+    core === 'コストコ コネクション ムリョウ' ||
+    core === 'コストココネクション ムリョウ' ||
+    core === 'コストココネクションムリョウ'
   );
 }
 

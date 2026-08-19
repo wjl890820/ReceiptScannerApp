@@ -108,8 +108,8 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
   });
 
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*7/);
-    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*6[^\d]/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*8/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*7[^\d]/);
     expect(edgeSource).toContain('buildOcrCacheKey');
     expect(edgeSource).toContain('v${OCR_CACHE_VERSION}:${imageContentHash}');
     // Legacy bare image hash must not be the sole cache lookup key after versioning.
@@ -138,6 +138,12 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
     expect(edgeSource).toMatch(/推測・捏造は禁止/);
     expect(edgeSource).toMatch(/スキャン日時・現在日時・ファイル日時で埋めない/);
     expect(edgeSource).toMatch(/DD\/MM と MM\/DD の解釈はしない/);
+    // Must not bake Sample 077/081 literals into the prompt.
+    expect(edgeSource).toMatch(/年は4桁を1桁ずつ独立して読む/);
+    expect(edgeSource).toMatch(/年の数字を補正・正規化しない/);
+    expect(edgeSource).toMatch(/年の桁が1つでも不確かな場合は transactionDate を null/);
+    expect(edgeSource).not.toContain('[OCR_081_DIAG]');
+    expect(edgeSource).not.toContain('logOcr081Diag');
     // Must not bake Sample 077/081 literals into the prompt.
     expect(edgeSource).not.toContain('06/10/2026 10:50:58');
     expect(edgeSource).not.toContain('07/06/2023 11:44:46');

@@ -210,22 +210,29 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
   it('Sample 081: Costco Connection lines are not merchandise items', () => {
     expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション')).toBe(true);
     expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション ムリョウ')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('MR コストコ コネクション')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('MP コストコ コネクション ムリョウ')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('mrコストコ コネクション')).toBe(true);
+    // Must not drop ordinary Costco merchandise merely containing コストコ.
     expect(isCostcoConnectionNonMerchandiseLine('コストコ 無料試食')).toBe(false);
+    expect(isCostcoConnectionNonMerchandiseLine('コストコホットドッグ')).toBe(false);
+    expect(isCostcoConnectionNonMerchandiseLine('MR カークランド')).toBe(false);
 
     const out = normalizeOcrAnalysis({
-      merchant: 'コストコ',
+      merchant: 'COSTCO WHOLESALE',
       currency: 'JPY',
       total: 9534,
       tax: 706,
       items: [
         { name: 'ITEM A', quantity: 1, unitPrice: 5000, lineTotal: 5000 },
-        { name: 'ITEM B', quantity: 1, unitPrice: 4532, lineTotal: 4532 },
-        { name: 'コストコ コネクション', quantity: 1, unitPrice: 1, lineTotal: 1 },
-        { name: 'コストコ コネクション ムリョウ', quantity: 1, unitPrice: 1, lineTotal: 1 },
+        { name: 'ITEM B', quantity: 1, unitPrice: 4534, lineTotal: 4534 },
+        { name: 'MR コストコ コネクション', quantity: 1, unitPrice: 1, lineTotal: 1 },
+        { name: 'MP コストコ コネクション ムリョウ', quantity: 1, unitPrice: 1, lineTotal: 1 },
       ],
     });
     expect(out.items.map((i) => i.name)).toEqual(['ITEM A', 'ITEM B']);
-    expect(out.items.reduce((s, i) => s + i.lineTotal, 0)).toBe(9532);
+    expect(out.items.reduce((s, i) => s + i.lineTotal, 0)).toBe(9534);
+    expect(out.total).toBe(9534);
     expect(out.tax).toBe(706);
   });
 

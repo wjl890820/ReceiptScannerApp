@@ -286,7 +286,8 @@ describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () =
           { name: '卵', quantity: 1, unitPrice: 3028, lineTotal: 3028 },
           { name: '若鶏唐揚', quantity: 1, unitPrice: 899, lineTotal: 899 },
           { name: 'クラフトボス', quantity: 1, unitPrice: 2123, lineTotal: 2123 },
-          { name: 'コストコ コネクション', quantity: 1, unitPrice: 1, lineTotal: 1 },
+          { name: 'MR コストコ コネクション', quantity: 1, unitPrice: 1, lineTotal: 1 },
+          { name: 'MP コストコ コネクション ムリョウ', quantity: 1, unitPrice: 1, lineTotal: 1 },
         ],
         total: 9534,
         tax: 706,
@@ -296,6 +297,10 @@ describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () =
       expect(out.tax).toBe(706);
       expect(persistMerchantTypeFromAnalysis(out)).toBe('supermarket');
       expect((out.items as any[]).map((it: any) => it.name)).not.toContain('コストコ コネクション');
+      expect((out.items as any[]).map((it: any) => it.name)).not.toContain('MR コストコ コネクション');
+      expect((out.items as any[]).map((it: any) => it.name)).not.toContain(
+        'MP コストコ コネクション ムリョウ'
+      );
 
       const byName = Object.fromEntries((out.items as any[]).map((it: any) => [it.name, it.category]));
       expect(byName['豪州産モモカツリ']).toBe('food_ingredients');
