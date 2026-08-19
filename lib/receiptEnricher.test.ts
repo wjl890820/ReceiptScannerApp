@@ -240,6 +240,168 @@ describe('applyCategoriesWithLearning: 端到端真实 scan review 路径', () =
     expect((await enrichOne('くんちぎりいか', 'uncategorized', 200)).category).toBe('snacks_drinks');
     expect((await enrichOne('生いか', 'uncategorized', 200)).category).toBe('food_ingredients');
   });
+
+  describe('Final Cleanup C: real-context category sums', () => {
+    beforeEach(() => {
+      (isBatchAiClassificationEnabled as jest.Mock).mockReturnValue(false);
+      (runBatchAiFallback as jest.Mock).mockClear();
+    });
+
+    function categoryAmounts(items: any[]): Map<string, number> {
+      const map = new Map<string, number>();
+      for (const it of items) {
+        const cat = normalizePersistedProductCategory(it.category, it.name);
+        map.set(cat, (map.get(cat) ?? 0) + itemAmountForAnalytics(it));
+      }
+      return map;
+    }
+
+    async function enrichScanPath(raw: any) {
+      const normalized = normalizeOcrAnalysis(raw);
+      const out = await applyCategoriesWithLearning(normalized);
+      for (const it of out.items as any[]) {
+        expect(normalizePersistedProductCategory(it.category, it.name)).toBe(it.category);
+      }
+      return out;
+    }
+
+    it('Sample 081: moving 豪州産モモカツリ 3484 yields FI 6512 / RTE 899 / SD 2123 / total 9534', async () => {
+      const current = {
+        ready_to_eat: 4383,
+        food_ingredients: 3028,
+        snacks_drinks: 2123,
+      };
+      const moved = 3484;
+      expect(current.ready_to_eat - moved).toBe(899);
+      expect(current.food_ingredients + moved).toBe(6512);
+      expect(
+        current.ready_to_eat + current.food_ingredients + current.snacks_drinks
+      ).toBe(9534);
+
+      // After: RTE 899 / FI 6512 / SD 2123. Total 9534 unchanged.
+      const out = await enrichScanPath({
+        merchant: 'コストコ',
+        items: [
+          { name: '豪州産モモカツリ', quantity: 1, unitPrice: 3484, lineTotal: 3484 },
+          { name: '卵', quantity: 1, unitPrice: 3028, lineTotal: 3028 },
+          { name: '若鶏唐揚', quantity: 1, unitPrice: 899, lineTotal: 899 },
+          { name: 'クラフトボス', quantity: 1, unitPrice: 2123, lineTotal: 2123 },
+          { name: 'コストコ コネクション', quantity: 1, unitPrice: 1, lineTotal: 1 },
+        ],
+        total: 9534,
+        tax: 706,
+        currency: 'JPY',
+      });
+      expect(out.total).toBe(9534);
+      expect(out.tax).toBe(706);
+      expect(persistMerchantTypeFromAnalysis(out)).toBe('supermarket');
+      expect((out.items as any[]).map((it: any) => it.name)).not.toContain('コストコ コネクション');
+
+      const byName = Object.fromEntries((out.items as any[]).map((it: any) => [it.name, it.category]));
+      expect(byName['豪州産モモカツリ']).toBe('food_ingredients');
+      expect(byName['豪州産モモカツリ']).not.toBe('ready_to_eat');
+      expect(byName['卵']).toBe('food_ingredients');
+      expect(byName['若鶏唐揚']).toBe('ready_to_eat');
+      expect(byName['クラフトボス']).toBe('snacks_drinks');
+
+      const map = categoryAmounts(out.items as any[]);
+      expect(map.get('food_ingredients')).toBe(6512);
+      expect(map.get('ready_to_eat')).toBe(899);
+      expect(map.get('snacks_drinks')).toBe(2123);
+      expect([...map.values()].reduce((s, n) => s + n, 0)).toBe(9534);
+    });
+
+    it('Sample 077: moving サラダ油 498 yields FI 15034 / RTE 3066 / SD 5742 / HH 780 / total 24622', async () => {
+      const current = {
+        food_ingredients: 14536,
+        ready_to_eat: 3564,
+        snacks_drinks: 5742,
+        household: 780,
+      };
+      const moved = 498;
+      expect(current.food_ingredients + moved).toBe(15034);
+      expect(current.ready_to_eat - moved).toBe(3066);
+      expect(
+        current.food_ingredients +
+          current.ready_to_eat +
+          current.snacks_drinks +
+          current.household
+      ).toBe(24622);
+
+      // After: FI 15034 / RTE 3066 / SD 5742 / HH 780. Total 24622 unchanged.
+      const out = await enrichScanPath({
+        merchant: 'コストコ',
+        items: [
+          { name: 'リノールサラダ油 1500G', quantity: 1, unitPrice: 498, lineTotal: 498 },
+          { name: '牛乳', quantity: 1, unitPrice: 14536, lineTotal: 14536 },
+          { name: 'ポテトサラダ', quantity: 1, unitPrice: 3066, lineTotal: 3066 },
+          { name: 'クラフトボス', quantity: 1, unitPrice: 5742, lineTotal: 5742 },
+          { name: 'ティッシュ', quantity: 1, unitPrice: 780, lineTotal: 780 },
+        ],
+        total: 24622,
+        tax: 0,
+        currency: 'JPY',
+      });
+      expect(out.total).toBe(24622);
+      expect(persistMerchantTypeFromAnalysis(out)).toBe('supermarket');
+
+      const byName = Object.fromEntries((out.items as any[]).map((it: any) => [it.name, it.category]));
+      expect(byName['リノールサラダ油 1500G']).toBe('food_ingredients');
+      expect(byName['リノールサラダ油 1500G']).not.toBe('ready_to_eat');
+      expect(byName['ポテトサラダ']).toBe('ready_to_eat');
+      expect(byName['ポテトサラダ']).not.toBe('food_ingredients');
+      expect(byName['牛乳']).toBe('food_ingredients');
+      expect(byName['クラフトボス']).toBe('snacks_drinks');
+      expect(byName['ティッシュ']).toBe('household');
+
+      const map = categoryAmounts(out.items as any[]);
+      expect(map.get('food_ingredients')).toBe(15034);
+      expect(map.get('ready_to_eat')).toBe(3066);
+      expect(map.get('snacks_drinks')).toBe(5742);
+      expect(map.get('household')).toBe(780);
+      expect([...map.values()].reduce((s, n) => s + n, 0)).toBe(24622);
+    });
+
+    it('Sample 093: moving すいかスムージー 192 yields SD 1343 / FI 0 / RTE 116 / total 1459', async () => {
+      const current = {
+        snacks_drinks: 1151,
+        food_ingredients: 192,
+        ready_to_eat: 116,
+      };
+      const moved = 192;
+      expect(current.snacks_drinks + moved).toBe(1343);
+      expect(current.food_ingredients - moved).toBe(0);
+      expect(
+        current.snacks_drinks + current.food_ingredients + current.ready_to_eat
+      ).toBe(1459);
+
+      // After: SD 1343 / FI 0 / RTE 116. Total 1459 unchanged.
+      const out = await enrichScanPath({
+        merchant: 'イオン古川店',
+        items: [
+          { name: 'すいかスムージー', quantity: 1, unitPrice: 192, lineTotal: 192 },
+          { name: 'コカゼロ', quantity: 1, unitPrice: 1151, lineTotal: 1151 },
+          { name: 'おにぎり', quantity: 1, unitPrice: 116, lineTotal: 116 },
+        ],
+        total: 1459,
+        tax: 0,
+        currency: 'JPY',
+      });
+      expect(out.total).toBe(1459);
+
+      const byName = Object.fromEntries((out.items as any[]).map((it: any) => [it.name, it.category]));
+      expect(byName['すいかスムージー']).toBe('snacks_drinks');
+      expect(byName['すいかスムージー']).not.toBe('food_ingredients');
+      expect(byName['コカゼロ']).toBe('snacks_drinks');
+      expect(byName['おにぎり']).toBe('ready_to_eat');
+
+      const map = categoryAmounts(out.items as any[]);
+      expect(map.get('snacks_drinks')).toBe(1343);
+      expect(map.get('food_ingredients') ?? 0).toBe(0);
+      expect(map.get('ready_to_eat')).toBe(116);
+      expect([...map.values()].reduce((s, n) => s + n, 0)).toBe(1459);
+    });
+  });
 });
 
 describe('Phase 2: convenience merchant support', () => {

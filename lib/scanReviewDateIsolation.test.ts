@@ -1,6 +1,7 @@
 import {
   isReviewDateUnknown,
   resolveInitialReviewDateStr,
+  reviewDateNeedsConfirm,
 } from './scanReviewDateIsolation';
 
 describe('Sample 087 review date isolation', () => {
@@ -61,5 +62,27 @@ describe('Sample 087 review date isolation', () => {
     });
     expect(nextDraftDate).toBe('');
     expect(nextDraftDate).not.toBe(priorReceiptDate);
+  });
+});
+
+describe('reviewDateNeedsConfirm: CASE 1 Costco merchant context', () => {
+  it('Costco + 06/10/2026 10:50:58 does not need confirm', () => {
+    expect(reviewDateNeedsConfirm('06/10/2026 10:50:58', 'コストコ')).toBe(false);
+    expect(reviewDateNeedsConfirm('06/10/2026 10:50:58', 'Costco')).toBe(false);
+  });
+
+  it('Costco + 07/06/2023 11:44:46 does not need confirm', () => {
+    expect(reviewDateNeedsConfirm('07/06/2023 11:44:46', 'コストコ')).toBe(false);
+    expect(reviewDateNeedsConfirm('07/06/2023 11:44:46', 'Costco')).toBe(false);
+  });
+
+  it('same MDY without merchant still needs confirm', () => {
+    expect(reviewDateNeedsConfirm('06/10/2026 10:50:58', '')).toBe(true);
+    expect(reviewDateNeedsConfirm('07/06/2023 11:44:46', 'イオン')).toBe(true);
+  });
+
+  it('empty date still needs confirm even with Costco merchant', () => {
+    expect(reviewDateNeedsConfirm('', 'コストコ')).toBe(true);
+    expect(reviewDateNeedsConfirm(null, 'コストコ')).toBe(true);
   });
 });

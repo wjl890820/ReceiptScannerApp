@@ -167,6 +167,47 @@ describe('classifyItemByName: 关键词分类', () => {
     expect(classifyItemByName('モモ')).toBe('uncategorized');
   });
 
+  // Sample 081: raw meat cut — origin/meat-part + カツリ must not become ready_to_eat
+  it('豪州産モモカツリ → food_ingredients (raw meat cut, not prepared dish)', () => {
+    expect(classifyItemByName('豪州産モモカツリ')).toBe('food_ingredients');
+    expect(classifyItemByName('豪州産モモカツリ')).not.toBe('ready_to_eat');
+    expect(classifyItemByName('豚モモカツリ')).toBe('food_ingredients');
+    expect(classifyItemByName('国産モモ肉カツ用')).toBe('food_ingredients');
+  });
+  it('prepared カツ dishes remain ready_to_eat (negative vs カツリ meat cut)', () => {
+    expect(classifyItemByName('チキンカツサンド')).toBe('ready_to_eat');
+    expect(classifyItemByName('チキンカツサンド')).not.toBe('food_ingredients');
+    expect(classifyItemByName('カツカレー')).toBe('ready_to_eat');
+    expect(classifyItemByName('カツ丼')).toBe('ready_to_eat');
+    expect(classifyItemByName('コロッケ')).toBe('ready_to_eat');
+  });
+  it('peach beverages/snacks stay snacks_drinks (negative vs モモカツリ meat rule)', () => {
+    expect(classifyItemByName('白桃ジュース')).toBe('snacks_drinks');
+    expect(classifyItemByName('白桃ジュース')).not.toBe('food_ingredients');
+    expect(classifyItemByName('FA白桃700')).toBe('snacks_drinks');
+    expect(classifyItemByName('FA白桃700')).not.toBe('food_ingredients');
+    expect(classifyItemByName('モモ')).not.toBe('food_ingredients');
+  });
+
+  // Sample 077: cooking oil must not be captured by サラダ → ready_to_eat
+  it('サラダ油 / キャノーラ油 / 食用油 → food_ingredients (not ready_to_eat)', () => {
+    expect(classifyItemByName('サラダ油')).toBe('food_ingredients');
+    expect(classifyItemByName('サラダ油')).not.toBe('ready_to_eat');
+    expect(classifyItemByName('リノールサラダ油 1500G')).toBe('food_ingredients');
+    expect(classifyItemByName('リノールサラダ油 1500G')).not.toBe('ready_to_eat');
+    expect(classifyItemByName('キャノーラ油')).toBe('food_ingredients');
+    expect(classifyItemByName('食用油')).toBe('food_ingredients');
+    expect(classifyItemByName('料理用油')).toBe('food_ingredients');
+  });
+  it('prepared salads remain ready_to_eat (negative vs cooking-oil rule)', () => {
+    expect(classifyItemByName('ポテトサラダ')).toBe('ready_to_eat');
+    expect(classifyItemByName('ポテトサラダ')).not.toBe('food_ingredients');
+    expect(classifyItemByName('マカロニサラダ')).toBe('ready_to_eat');
+    expect(classifyItemByName('マカロニサラダ')).not.toBe('food_ingredients');
+    expect(classifyItemByName('メキシカンサラダラップ')).toBe('ready_to_eat');
+    expect(classifyItemByName('メキシカンサラダラップ')).not.toBe('food_ingredients');
+  });
+
   // Batch B2: curry base/seasoning vs ready-to-eat curry dish
   it('グリーンカレーペースト / カレーの素 → food_ingredients (not ready_to_eat)', () => {
     expect(classifyItemByName('グリーンカレーペースト')).toBe('food_ingredients');
@@ -216,6 +257,30 @@ describe('classifyItemByName: 关键词分类', () => {
 
   it('bare 水 remains a drink', () => {
     expect(classifyItemByName('水')).toBe('snacks_drinks');
+  });
+
+  it('スムージー beverage token outranks fruit identity', () => {
+    expect(classifyItemByName('スムージー')).toBe('snacks_drinks');
+    expect(classifyItemByName('イチゴバナナスムージー')).toBe('snacks_drinks');
+    expect(classifyItemByName('バナナスムージー')).toBe('snacks_drinks');
+    expect(classifyItemByName('すいかスムージー')).toBe('snacks_drinks');
+    expect(classifyItemByName('すいかスムージー')).not.toBe('food_ingredients');
+  });
+
+  it('すいか / カットすいか / 国産すいか / 生すいか remain fruits', () => {
+    expect(classifyItemByName('すいか')).toBe('food_ingredients');
+    expect(classifyItemByName('すいか')).not.toBe('snacks_drinks');
+    expect(classifyItemByName('カットすいか')).toBe('food_ingredients');
+    expect(classifyItemByName('国産すいか')).toBe('food_ingredients');
+    expect(classifyItemByName('生すいか')).toBe('food_ingredients');
+    expect(classifyItemByName('生すいか')).not.toBe('snacks_drinks');
+  });
+
+  it('does not globally convert fruit words to drinks', () => {
+    expect(classifyItemByName('バナナ')).not.toBe('snacks_drinks');
+    expect(classifyItemByName('りんご')).not.toBe('snacks_drinks');
+    expect(classifyItemByName('イチゴ')).not.toBe('snacks_drinks');
+    expect(classifyItemByName('モモ')).not.toBe('snacks_drinks');
   });
 });
 

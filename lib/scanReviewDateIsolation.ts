@@ -3,6 +3,7 @@
  */
 
 import type { ScanReviewEditorStateV1 } from './scanReviewDraftStore';
+import { parseReceiptDateTime } from './dateParser';
 
 export function resolveInitialReviewDateStr(params: {
   editorState?: ScanReviewEditorStateV1 | null;
@@ -19,4 +20,21 @@ export function resolveInitialReviewDateStr(params: {
 /** True when OCR/snapshot provides no usable purchase date for a new draft. */
 export function isReviewDateUnknown(dateStr: string | null | undefined): boolean {
   return !dateStr || !String(dateStr).trim();
+}
+
+/**
+ * Review "date needs confirm" banner.
+ * Must pass merchant so Costco ambiguous MDY can parse the same way save does.
+ * Empty / unparsable → confirm. Never invents a date.
+ */
+export function reviewDateNeedsConfirm(
+  dateStr: string | null | undefined,
+  merchant?: string | null
+): boolean {
+  return (
+    parseReceiptDateTime(dateStr?.trim() || null, {
+      fallbackToNow: false,
+      merchant: merchant ?? null,
+    }) == null
+  );
 }

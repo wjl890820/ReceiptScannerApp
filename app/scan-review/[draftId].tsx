@@ -19,7 +19,6 @@ import { ReceiptItemCard } from '@/components/review/ReceiptItemCard';
 import { ReceiptReviewDetails } from '@/components/review/ReceiptReviewDetails';
 import { ReceiptReviewSaveBar } from '@/components/review/ReceiptReviewSaveBar';
 import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
-import { parseReceiptDateTime } from '@/lib/dateParser';
 import { listReceipts, saveReceipt } from '@/lib/db';
 import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
@@ -41,7 +40,7 @@ import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
 import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
-import { resolveInitialReviewDateStr } from '@/lib/scanReviewDateIsolation';
+import { resolveInitialReviewDateStr, reviewDateNeedsConfirm } from '@/lib/scanReviewDateIsolation';
 import {
   shouldShowLegacyPostSaveEasterEggAlert,
   shouldShowReviewDevDetails,
@@ -657,7 +656,7 @@ export default function ScanReviewScreen() {
           currency={currency}
           note={note}
           amountMismatch={Boolean(snapshot?.amount_mismatch)}
-          dateNeedsConfirm={parseReceiptDateTime(dateStr.trim() || null, false) == null}
+          dateNeedsConfirm={reviewDateNeedsConfirm(dateStr, merchant)}
           editable={!saving}
           onMerchantChange={setMerchant}
           onDateChange={setDateStr}

@@ -144,6 +144,7 @@ function hasSnackOrDrinkFlavorContext(n: string): boolean {
     'スナック',
     'コーラ',
     'サイダー',
+    'スムージー',
   ]);
 }
 
@@ -183,6 +184,35 @@ function isRawChickenCut(n: string): boolean {
     '鶏肉',
     '生チキン',
   ]);
+}
+
+/**
+ * Cooking oil: サラダ油 / キャノーラ油 / 食用油 / 料理用油 etc. are ingredients.
+ * Must fire before the ready_to_eat block where 「サラダ」 would otherwise win.
+ * Protects prepared salads (ポテトサラダ / マカロニサラダ) — those do NOT contain 「油」
+ * so this guard leaves them in the ready_to_eat path.
+ */
+function isCookingOil(n: string): boolean {
+  return nameHasAny(n, [
+    'サラダ油', 'キャノーラ油', '食用油', '料理用油', 'てんぷら油', '天ぷら油',
+    'オリーブ油', 'ごま油', 'こめ油', 'こめ油', '大豆油', 'なたね油', 'ひまわり油',
+    'vegetable oil', 'canola oil', 'olive oil',
+  ]);
+}
+
+/**
+ * Raw meat cut where カツリ / カツ follows a meat-part or origin prefix.
+ * Examples: 豪州産モモカツリ, 豚モモカツリ, 国産モモ肉カツ用.
+ * Prepared dishes (チキンカツサンド / カツカレー / カツ丼) have their own tokens
+ * (サンド / カレー / 丼) that will match the ready_to_eat block, so they are safe.
+ * Guard: カツ token must be preceded by a meat-part (モモ/ロース/ヒレ/肩) or origin marker.
+ */
+function isRawMeatCutKatsu(n: string): boolean {
+  // カツリ is always a raw Costco-style thin-cut designation (not a dish)
+  if (n.includes('カツリ') || n.includes('かつり')) return true;
+  // カツ preceded by meat-body-part token → raw cut, not a prepared dish
+  const meatPartBeforeKatsu = /(?:もも|モモ|ロース|ひれ|ヒレ|肩|かた|バラ|ばら)(?:肉)?(?:カツ|かつ)/;
+  return meatPartBeforeKatsu.test(n);
 }
 
 const FRESH_FRUIT_IDENTITY = [
@@ -228,6 +258,24 @@ function isOriginLabeledFreshFruit(n: string): boolean {
       if (originBeforeFruit.test(n.slice(0, idx))) return true;
       from = idx + f.length;
     }
+  }
+  return false;
+}
+
+/**
+ * Unambiguous bare-fruit match that does NOT require an origin prefix:
+ *   - すいか / スイカ (watermelon — no body-part ambiguity unlike モモ)
+ *   - カット + any FRESH_FRUIT_IDENTITY token (cut-fruit tray, clearly fresh produce)
+ * Beverage/snack form tokens (スムージー, ジュース, …) prevent matching via
+ * hasSnackOrDrinkFlavorContext. Other bare fruit words (モモ, バナナ, …) still
+ * require an origin prefix through isOriginLabeledFreshFruit.
+ */
+function isBareOrCutFreshFruit(n: string): boolean {
+  if (hasSnackOrDrinkFlavorContext(n)) return false;
+  // n is already toHalfWidthLower'd by the caller
+  if (n.includes('すいか') || n.includes('スイカ')) return true;
+  if (n.includes('カット') || n.includes('かっと') || n.includes('cut')) {
+    return FRESH_FRUIT_IDENTITY.some((fruit) => n.includes(toHalfWidthLower(fruit)));
   }
   return false;
 }
@@ -304,6 +352,14 @@ export function classifyItemByName(itemName: string): ProductCategory {
   if (isCookingNoodleIngredient(n)) return 'food_ingredients';
   if (isRawChickenCut(n)) return 'food_ingredients';
 
+  // 料理用油: サラダ油 / キャノーラ油 / 食用油 etc. must be ingredients even though
+  // 「サラダ」alone maps to ready_to_eat. Match before the ready_to_eat block.
+  if (isCookingOil(n)) return 'food_ingredients';
+
+  // Raw meat cut: 豪州産モモカツリ / 豚モモカツリ — origin or meat-part before カツリ/カツ.
+  // Keeps prepared dishes (チキンカツサンド / カツカレー) safely in ready_to_eat.
+  if (isRawMeatCutKatsu(n)) return 'food_ingredients';
+
   // Cooking base / curry seasoning:
   // "○○の素" / "ペースト" must be ingredients, even though broad "カレー" normally maps to ready_to_eat.
   if (n.includes('カレー') && (n.includes('の素') || n.includes('ペースト'))) {
@@ -347,7 +403,7 @@ export function classifyItemByName(itemName: string): ProductCategory {
   // 成品甜点（エクレア等）必须早于宽泛 ミルク/クリーム 食材规则。
   if (
     has([
-      'コーヒー', '珈琲', 'georgia', 'ジョージア', 'boss', 'ボス', 'クラフトボス', 'ラテ', 'チャイラテ', 'ミルクティー',
+      'コーヒー', '珈琲', 'georgia', 'ジョージア', 'boss', 'ボス', 'クラフトボス', 'ラテ', 'チャイラテ', 'ミルクティー', 'スムージー',
       '抹茶ラテ', '抹茶ミルク', '金のミルク', 'ミルクチョコ', 'お茶', '茶',
       '緑茶', '水', 'ノミズ', 'ミネラルウォーター', 'サイダー', '三ツ矢', 'レモネード', 'ジュース', 'コーラ', 'コカゼロ',
       'カフェ', '炭酸', 'ドリンク', 'エナジー', 'チョコ', 'ショコラ', 'カカオ', 'クリスプ', 'アーモンド',
@@ -371,8 +427,13 @@ export function classifyItemByName(itemName: string): ProductCategory {
     return 'ready_to_eat';
   }
 
-  // 产地鲜果：必须在零食 白桃 之后，避免 白桃ジュース 被产地规则抢走。
+  // 産地ラベル付き鮮果（白桃ジュース等のスナック語が先に命中した後）。
   if (isOriginLabeledFreshFruit(n)) {
+    return 'food_ingredients';
+  }
+
+  // 裸鮮果（カット/国産 等の接頭辞を含む）：飲料形態語（スムージー等）がなければ食材。
+  if (isBareOrCutFreshFruit(n)) {
     return 'food_ingredients';
   }
 

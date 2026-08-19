@@ -79,12 +79,38 @@ describe('receipt datetime parsing', () => {
     });
     expect(ts).not.toBeNull();
     expectLocalParts(ts!, 2026, 6, 10, 10, 50, 58);
+
+    const tsEn = parseReceiptDateTime('06/10/2026 10:50:58', {
+      nowMs: NOW_MS,
+      merchant: 'Costco Wholesale',
+    });
+    expect(tsEn).not.toBeNull();
+    expectLocalParts(tsEn!, 2026, 6, 10, 10, 50, 58);
+  });
+
+  it('Sample 081: Costco ambiguous 07/06/2023 → 2023-07-06 (MDY)', () => {
+    expect(
+      normalizeReceiptDateTime('07/06/2023 11:44:46', { allowAmbiguousMdy: true })
+    ).toBe('2023-07-06 11:44:46');
+    const ts = parseReceiptDateTime('07/06/2023 11:44:46', {
+      nowMs: NOW_MS,
+      merchant: 'コストコ',
+    });
+    expect(ts).not.toBeNull();
+    expectLocalParts(ts!, 2023, 7, 6, 11, 44, 46);
   });
 
   it('unknown merchant + ambiguous 06/10/2026 does not assume MDY', () => {
     expect(normalizeReceiptDateTime('06/10/2026 10:50:58')).toBe('');
     expect(
       parseReceiptDateTime('06/10/2026 10:50:58', { nowMs: NOW_MS, merchant: 'イオン' })
+    ).toBeNull();
+  });
+
+  it('unknown merchant + ambiguous 07/06/2023 does not assume MDY', () => {
+    expect(normalizeReceiptDateTime('07/06/2023 11:44:46')).toBe('');
+    expect(
+      parseReceiptDateTime('07/06/2023 11:44:46', { nowMs: NOW_MS })
     ).toBeNull();
   });
 
@@ -143,6 +169,67 @@ describe('receipt datetime parsing', () => {
     expect(
       parseReceiptDateTime('2026-01-16T18:49:34', { nowMs: NOW_MS })
     ).toBeNull();
+  });
+
+  describe('DATE TEST MATRIX', () => {
+    it('Costco 06/10/2026 10:50:58 → 2026-06-10', () => {
+      const ts = parseReceiptDateTime('06/10/2026 10:50:58', {
+        nowMs: NOW_MS,
+        merchant: 'コストコ',
+      });
+      expect(ts).not.toBeNull();
+      expectLocalParts(ts!, 2026, 6, 10, 10, 50, 58);
+    });
+
+    it('Costco 07/06/2023 11:44:46 → 2023-07-06', () => {
+      const ts = parseReceiptDateTime('07/06/2023 11:44:46', {
+        nowMs: NOW_MS,
+        merchant: 'コストコ',
+      });
+      expect(ts).not.toBeNull();
+      expectLocalParts(ts!, 2023, 7, 6, 11, 44, 46);
+
+      const tsEn = parseReceiptDateTime('07/06/2023 11:44:46', {
+        nowMs: NOW_MS,
+        merchant: 'Costco',
+      });
+      expect(tsEn).not.toBeNull();
+      expectLocalParts(tsEn!, 2023, 7, 6, 11, 44, 46);
+    });
+
+    it('unknown merchant 06/10/2026 remains ambiguous', () => {
+      expect(parseReceiptDateTime('06/10/2026', { nowMs: NOW_MS })).toBeNull();
+      expect(
+        parseReceiptDateTime('06/10/2026 10:50:58', { nowMs: NOW_MS, merchant: 'イオン' })
+      ).toBeNull();
+    });
+
+    it('unknown merchant 07/06/2023 remains ambiguous', () => {
+      expect(parseReceiptDateTime('07/06/2023', { nowMs: NOW_MS })).toBeNull();
+      expect(parseReceiptDateTime('07/06/2023 11:44:46', { nowMs: NOW_MS })).toBeNull();
+    });
+
+    it('unambiguous 01/16/2026 is valid without Costco', () => {
+      const ts = parseReceiptDateTime('01/16/2026', { nowMs: NOW_MS });
+      expect(ts).not.toBeNull();
+      expect(normalizeReceiptDateTime('01/16/2026')).toBe('2026-01-16 00:00');
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(new Date(ts!));
+      const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+      expect(get('year')).toBe(2026);
+      expect(get('month')).toBe(1);
+      expect(get('day')).toBe(16);
+    });
+
+    it('AEON 2026/ 2/21(土) 12:28 still PASS', () => {
+      const ts = parseReceiptDateTime('2026/ 2/21(土) 12:28', { nowMs: NOW_MS });
+      expect(ts).not.toBeNull();
+      expectLocalParts(ts!, 2026, 2, 21, 12, 28);
+    });
   });
 
   it('never feeds raw receipt strings to new Date in parser or save path', () => {
