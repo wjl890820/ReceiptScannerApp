@@ -108,7 +108,8 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
   });
 
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*6/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*7/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*6[^\d]/);
     expect(edgeSource).toContain('buildOcrCacheKey');
     expect(edgeSource).toContain('v${OCR_CACHE_VERSION}:${imageContentHash}');
     // Legacy bare image hash must not be the sole cache lookup key after versioning.
@@ -128,5 +129,17 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
     expect(edgeSource).toMatch(/まとめ売り値引 \/ まとめ値引 は従来どおり discounts に入れるだけでなく/);
     expect(edgeSource).toMatch(/Costco の CPN|全体クーポンは discounts/);
     expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*5[^\d]/);
+  });
+
+  it('Case 8 — footer/bottom transactionDate extraction; printed string only; no guess', () => {
+    expect(edgeSource).toMatch(/底部・フッターまで見る/);
+    expect(edgeSource).toMatch(/買上げ点数/);
+    expect(edgeSource).toMatch(/transactionDate に区切り・順序・空白を原文のまま転記/);
+    expect(edgeSource).toMatch(/推測・捏造は禁止/);
+    expect(edgeSource).toMatch(/スキャン日時・現在日時・ファイル日時で埋めない/);
+    expect(edgeSource).toMatch(/DD\/MM と MM\/DD の解釈はしない/);
+    // Must not bake Sample 077/081 literals into the prompt.
+    expect(edgeSource).not.toContain('06/10/2026 10:50:58');
+    expect(edgeSource).not.toContain('07/06/2023 11:44:46');
   });
 });

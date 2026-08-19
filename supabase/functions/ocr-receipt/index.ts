@@ -10,7 +10,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 6;
+const OCR_CACHE_VERSION = 7;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -349,6 +349,11 @@ function buildOcrPrompt(): string {
     '- 店名が 7-Eleven / セブンイレブン / セブンーイレブン の場合は merchant を "セブン-イレブン" に正規化してよい。',
     '- イオンは店名を短くしない（例: イオン古川店 はそのまま）。',
     '- レシート上に日時があれば transactionDate に原文の形式のまま入れる。',
+    '  【日時・画像全体】レシート画像は上端から底部・フッターまで見る。長い Costco レシートでは、',
+    '  取引日時が買上げ点数 / 御買上げ点数 の付近またはその下に印刷されていることが多い。',
+    '  印刷された日時が見える場合のみ transactionDate に区切り・順序・空白を原文のまま転記する。',
+    '  形式を YYYY/MM/DD に直さない。読めない・無い場合は null。推測・捏造は禁止。',
+    '  スキャン日時・現在日時・ファイル日時で埋めない。DD/MM と MM/DD の解釈はしない（クライアント側）。',
   ].join('\n');
 }
 
