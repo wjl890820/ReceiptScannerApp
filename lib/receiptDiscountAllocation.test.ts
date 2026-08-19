@@ -1,10 +1,12 @@
 import {
   applyReceiptDiscountsToItems,
   findDiscountItemIndex,
+  isOrdinaryAdjacentProductDiscountLabel,
   itemAmountForAnalytics,
+  parseDiscountPercentFromLabel,
   receiptLevelUnallocatedDiscountSum,
 } from './receiptDiscountAllocation';
-import { normalizeOcrAnalysis } from './receiptOcrNormalize';
+import { normalizeOcrAnalysis, type ReceiptDiscount } from './receiptOcrNormalize';
 import { buildReceiptAnalysisV1 } from './growthAnalysisEngineV1';
 import { authoritativeReceiptTotal } from './scanReviewPresentation';
 
@@ -179,28 +181,108 @@ describe('coupon / discount allocation', () => {
       expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(1169);
     });
 
-    it('Sample 076: two adjacent 10%割引 -38 on 380 lines → effective 342 each', () => {
+    it('Sample 076: two adjacent 割引 10% -38 on real 372/378 lines → 334 and 340', () => {
       const out = normalizeOcrAnalysis({
-        merchant: 'イオン',
+        merchant: '業務スーパー古川店',
         currency: 'JPY',
         total: 3393,
         tax: 251,
         items: [
-          { name: 'ITEM A', quantity: 1, unitPrice: 2458, lineTotal: 2458 },
-          { name: '鶏A', quantity: 1, unitPrice: 380, lineTotal: 380 },
+          { name: '鶏肉', quantity: 1, unitPrice: 372, lineTotal: 372 },
+          { name: '割引 10%', quantity: 1, unitPrice: -38, lineTotal: -38, kind: 'discount' } as any,
+          { name: '鶏肉', quantity: 1, unitPrice: 378, lineTotal: 378 },
+          { name: '割引 10%', quantity: 1, unitPrice: -38, lineTotal: -38, kind: 'discount' } as any,
+          { name: 'ロッテモナ王クランキー', quantity: 1, unitPrice: 108, lineTotal: 108 },
+          { name: '鎮江香醋（ちんこうこう）', quantity: 1, unitPrice: 313, lineTotal: 313 },
+          { name: 'むき甘栗', quantity: 1, unitPrice: 100, lineTotal: 100 },
+          { name: 'うす皮付落花生（無塩）', quantity: 1, unitPrice: 103, lineTotal: 103 },
+          { name: 'ココアピーナッツ', quantity: 1, unitPrice: 88, lineTotal: 88 },
+          { name: '正宗生煎包 4個 × @439', quantity: 1, unitPrice: 439, lineTotal: 1756 },
+        ],
+      });
+      const chickens = out.items.filter((i) => i.name === '鶏肉');
+      expect(chickens).toHaveLength(2);
+      expect(chickens[0].lineTotal).toBe(372);
+      expect(chickens[0].discountAllocated).toBe(-38);
+      expect(chickens[0].effectiveLineTotal).toBe(334);
+      expect(chickens[1].lineTotal).toBe(378);
+      expect(chickens[1].discountAllocated).toBe(-38);
+      expect(chickens[1].effectiveLineTotal).toBe(340);
+      expect(out.discounts).toHaveLength(2);
+      expect((out.discounts as ReceiptDiscount[]).map((d) => d.adjacentPrecedingItemIndex)).toEqual([
+        0, 1,
+      ]);
+      const bao = out.items.find((i) => String(i.name).includes('正宗生煎包'))!;
+      expect(bao.quantity).toBe(4);
+      expect(out.tax).toBe(251);
+      expect(out.total).toBe(3393);
+      expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(3142);
+    });
+
+    it('Sample 076: 10%割引 label still binds when ordered item evidence exists', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: '業務スーパー古川店',
+        currency: 'JPY',
+        total: 3393,
+        tax: 251,
+        items: [
+          { name: '鶏肉', quantity: 1, unitPrice: 372, lineTotal: 372 },
           { name: '10%割引', quantity: 1, unitPrice: -38, lineTotal: -38 },
-          { name: '鶏B', quantity: 1, unitPrice: 380, lineTotal: 380 },
+          { name: '鶏肉', quantity: 1, unitPrice: 378, lineTotal: 378 },
           { name: '10%割引', quantity: 1, unitPrice: -38, lineTotal: -38 },
         ],
       });
-      const chickens = out.items.filter((i) => String(i.name).startsWith('鶏'));
-      expect(chickens).toHaveLength(2);
-      for (const row of chickens) {
-        expect(row.lineTotal).toBe(380);
-        expect(row.discountAllocated).toBe(-38);
-        expect(row.effectiveLineTotal).toBe(342);
-      }
-      expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(3142);
+      const chickens = out.items.filter((i) => i.name === '鶏肉');
+      expect(chickens[0].effectiveLineTotal).toBe(334);
+      expect(chickens[1].effectiveLineTotal).toBe(340);
+    });
+
+    it('Sample 076 dual representation: unlinked discounts[] copies must not double-count', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: '業務スーパー古川店',
+        currency: 'JPY',
+        total: 3393,
+        tax: 251,
+        discounts: [
+          { label: '割引 10%', amount: -38 },
+          { label: '割引 10%', amount: -38 },
+        ],
+        items: [
+          { name: '鶏肉', quantity: 1, unitPrice: 372, lineTotal: 372 },
+          { name: '割引 10%', quantity: 1, unitPrice: -38, lineTotal: -38 },
+          { name: '鶏肉', quantity: 1, unitPrice: 378, lineTotal: 378 },
+          { name: '割引 10%', quantity: 1, unitPrice: -38, lineTotal: -38 },
+        ],
+      });
+      expect(out.discounts).toHaveLength(2);
+      const chickens = out.items.filter((i) => i.name === '鶏肉');
+      expect(chickens[0].discountAllocated).toBe(-38);
+      expect(chickens[0].effectiveLineTotal).toBe(334);
+      expect(chickens[1].discountAllocated).toBe(-38);
+      expect(chickens[1].effectiveLineTotal).toBe(340);
+    });
+
+    it('legacy discounts[]-only 076 shape stays receipt-level (no zip-by-count)', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: '業務スーパー古川店',
+        currency: 'JPY',
+        total: 3393,
+        tax: 251,
+        discounts: [
+          { label: '割引 10%', amount: -38 },
+          { label: '割引 10%', amount: -38 },
+        ],
+        items: [
+          { name: '鶏肉', quantity: 1, unitPrice: 372, lineTotal: 372 },
+          { name: '鶏肉', quantity: 1, unitPrice: 378, lineTotal: 378 },
+        ],
+      });
+      const chickens = out.items.filter((i) => i.name === '鶏肉');
+      expect(chickens[0].effectiveLineTotal).toBe(372);
+      expect(chickens[1].effectiveLineTotal).toBe(378);
+      expect(chickens[0].discountAllocated).toBe(0);
+      expect(chickens[1].discountAllocated).toBe(0);
+      expect(out.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0)).toBe(750);
     });
 
     it('Sample 085: パン 280 + adjacent 10%割引 -28 → effective 252', () => {
@@ -249,6 +331,39 @@ describe('coupon / discount allocation', () => {
       expect(result.unboundDiscounts).toEqual([{ label: '値引合計', amount: -100 }]);
       expect(itemAmountForAnalytics(result.items[0])).toBe(500);
       expect(itemAmountForAnalytics(result.items[1])).toBe(700);
+    });
+
+    it('ordinary adjacent label matrix: printed orders and percent extraction', () => {
+      const accepted = ['10%割引', '割引 10%', '50%割引', '割引 50%', '値引', '割引', '20％割引', '割引１０％'];
+      for (const label of accepted) {
+        expect(isOrdinaryAdjacentProductDiscountLabel(label)).toBe(true);
+      }
+      expect(parseDiscountPercentFromLabel('10%割引')).toBe(10);
+      expect(parseDiscountPercentFromLabel('割引 10%')).toBe(10);
+      expect(parseDiscountPercentFromLabel('50%割引')).toBe(50);
+      expect(parseDiscountPercentFromLabel('割引 50%')).toBe(50);
+      expect(parseDiscountPercentFromLabel('割引１０％')).toBe(10);
+      expect(parseDiscountPercentFromLabel('値引')).toBeNull();
+
+      const rejected = ['値引合計', '割引合計', 'メーカークーポン', 'ROCHER ORIGINS CPN'];
+      for (const label of rejected) {
+        expect(isOrdinaryAdjacentProductDiscountLabel(label)).toBe(false);
+      }
+    });
+
+    it('Sample 095: 割引 50% printed order also binds with adjacency', () => {
+      const out = normalizeOcrAnalysis({
+        merchant: 'イオン',
+        currency: 'JPY',
+        total: 3040,
+        tax: 225,
+        items: [
+          { name: 'その他A', quantity: 1, unitPrice: 2616, lineTotal: 2616 },
+          { name: '鶏肉', quantity: 1, unitPrice: 398, lineTotal: 398 },
+          { name: '割引 50%', quantity: 1, unitPrice: -199, lineTotal: -199 },
+        ],
+      });
+      expect(out.items.find((i) => i.name === '鶏肉')!.effectiveLineTotal).toBe(199);
     });
   });
 });

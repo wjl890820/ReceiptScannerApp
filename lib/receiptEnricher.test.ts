@@ -67,6 +67,8 @@ import { applyCategoriesWithLearning } from './receiptEnricher';
 import { runBatchAiFallback } from './categoryBatchAi';
 import { isBatchAiClassificationEnabled } from './env';
 import { isV1SupportedMerchantType, persistMerchantTypeFromAnalysis } from './merchantType';
+import { normalizeOcrAnalysis } from './receiptOcrNormalize';
+import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 
 describe('resolveProductCategoryRuntime: 运行时优先级', () => {
   it('シュガーバター：商品名规则早于宽泛 dictionary(バター→food) 与 OCR', () => {
@@ -483,5 +485,41 @@ describe('Batch Fix A: persist merchant_type and History consistency', () => {
     expect(normalizePersistedProductCategory(egg.category, egg.name)).toBe(egg.category);
     expect(normalizePersistedProductCategory(unknown.category, unknown.name)).toBe('uncategorized');
     expect(normalizePersistedProductCategory('uncategorized', '卵')).toBe('uncategorized');
+  });
+
+  it('Sample 076 Edge-like ordered 割引 10% → enricher keeps effective totals; category sum 3142', async () => {
+    const normalized = normalizeOcrAnalysis({
+      merchant: '業務スーパー古川店',
+      currency: 'JPY',
+      total: 3393,
+      tax: 251,
+      items: [
+        { name: '鶏肉', quantity: 1, unitPrice: 372, lineTotal: 372, categoryKey: 'food_ingredients' },
+        { name: '割引 10%', quantity: 1, unitPrice: -38, lineTotal: -38 },
+        { name: '鶏肉', quantity: 1, unitPrice: 378, lineTotal: 378, categoryKey: 'food_ingredients' },
+        { name: '割引 10%', quantity: 1, unitPrice: -38, lineTotal: -38 },
+        { name: 'ロッテモナ王クランキー', quantity: 1, unitPrice: 108, lineTotal: 108, categoryKey: 'snacks_drinks' },
+        { name: '鎮江香醋（ちんこうこう）', quantity: 1, unitPrice: 313, lineTotal: 313, categoryKey: 'food_ingredients' },
+        { name: 'むき甘栗', quantity: 1, unitPrice: 100, lineTotal: 100, categoryKey: 'snacks_drinks' },
+        { name: 'うす皮付落花生（無塩）', quantity: 1, unitPrice: 103, lineTotal: 103, categoryKey: 'food_ingredients' },
+        { name: 'ココアピーナッツ', quantity: 1, unitPrice: 88, lineTotal: 88, categoryKey: 'snacks_drinks' },
+        { name: '正宗生煎包 4個 × @439', quantity: 1, unitPrice: 439, lineTotal: 1756, categoryKey: 'ready_to_eat' },
+      ],
+    } as any);
+    const out = await applyCategoriesWithLearning(normalized);
+    const chickens = (out.items as any[]).filter((i) => i.name === '鶏肉');
+    expect(chickens[0].effectiveLineTotal).toBe(334);
+    expect(chickens[1].effectiveLineTotal).toBe(340);
+    expect((out.items as any[]).find((i) => String(i.name).includes('正宗生煎包'))?.quantity).toBe(4);
+
+    const map = new Map<string, number>();
+    for (const it of out.items as any[]) {
+      const cat = normalizePersistedProductCategory(it.category, it.name);
+      map.set(cat, (map.get(cat) ?? 0) + itemAmountForAnalytics(it));
+    }
+    expect(map.get('food_ingredients')).toBe(1090);
+    expect(map.get('snacks_drinks')).toBe(296);
+    expect(map.get('ready_to_eat')).toBe(1756);
+    expect([...map.values()].reduce((s, n) => s + n, 0)).toBe(3142);
   });
 });

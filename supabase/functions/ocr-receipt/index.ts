@@ -10,7 +10,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 5;
+const OCR_CACHE_VERSION = 6;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -292,9 +292,16 @@ function buildOcrPrompt(): string {
     '',
     'ルール:',
     '- すべての金額は整数の JPY。小数や通貨記号（¥ 等）を付けない。',
-    '- 値引・割引・クーポン・セール・ポイント利用 などの行は商品ではない。kind="discount" とし、discounts にも入れる（amount は負数）。',
-    '  まとめ売り値引 / まとめ値引 は discounts に入れるだけでなく、items にも kind="discount" の負数行として残す',
+    '- 値引・割引・クーポン・セール・ポイント利用 などの行は商品ではない。kind="discount"。amount は負数。',
+    '  【商品直下の値引・印刷順を保持】商品行の直後に印刷された商品値引は、items 配列内に kind="discount" の負数行として、',
+    '  印刷された順序のまま残すこと。クライアントが直前商品へ割当する（adjacent index は計算しない）。',
+    '  対象ラベル例: 値引 / 割引 / 10%割引 / 割引 10% / 20%割引 / 割引 20% / 50%割引 / 割引 50% / ○%引 / 値下 / 値下げ。',
+    '  例: {name:"鶏肉",lineTotal:372} の次に {name:"割引 10%",lineTotal:-38,kind:"discount"}。',
+    '  同じ文言・同じ金額の値引が2行印刷されていれば items にも2行残す（1行にまとめない）。',
+    '  これらの直近商品値引は discounts[] に重複して入れない（未紐付けの discounts[] だけだと割当できない）。',
+    '  まとめ売り値引 / まとめ値引 は従来どおり discounts に入れるだけでなく、items にも kind="discount" の負数行として残す',
     '  （直前商品への割当に必要）。組価格（例: 2個¥203）が印刷されていれば label か隣接行名に残す。',
+    '  Costco の CPN 等、どの商品に付くか不明なレシート全体クーポンは discounts[] のみ（items に商品として入れない）。',
     '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
     '  ただし Costco の「御買上げ点数」行は items に残してよい（合計金額ではない）。',
     '- quantity は「購入点数」のみ。商品名中の包装数（例: 4個 / 10PC / 3PK）は quantity に入れない（購入証拠が無い限り 1）。',
@@ -325,7 +332,8 @@ function buildOcrPrompt(): string {
     '- 例（内税・正しい）: 合計 8351・消費税 619 → total=8351, tax=619。total=8970（8351+619）は禁止。',
     '- 例（外税・正しい）: 小計 2442・税 195・合計 2637 → total=2637, tax=195。',
     '- 「買上点数 / お買上点数 / 御買上げ点数」は商品ではない（summary metadata）。items に入れない。',
-    '- クーポン/値引は discounts に入れる。まとめ売り値引は上述のとおり items(kind=discount) にも残す。',
+    '- 直近の商品値引は上述のとおり items(kind=discount) に印刷順で残し、discounts[] へ重複させない。',
+    '  まとめ売り値引は discounts と items(kind=discount) の両方。曖昧な全体クーポンは discounts[] のみ。',
     '  印刷された最終合計がある限り、items±discounts+tax で total を上書きしない。',
     '',
     '- 商品分類(categoryKey)は次の固定 enum のみから選ぶ:',
@@ -460,7 +468,9 @@ async function callGemini(imageBase64: string): Promise<any> {
             'total は印刷された最終合計の転記であり、items/小計/tax/discounts から再計算しないこと。' +
             '印刷済み total に tax を足し直さないこと。\n' +
             'スキーマ: {merchant, transactionDate, total, tax, currency, ' +
-            'items:[{name,quantity,unitPrice,lineTotal,categoryKey,kind}], discounts:[{label,amount}]}\n\n' +
+            'items:[{name,quantity,unitPrice,lineTotal,categoryKey,kind}], discounts:[{label,amount}]}。' +
+            '商品直下の値引（割引 10% 等）は印刷順で items に kind=discount 負数行として残し、discounts に重複させない。' +
+            'Costco CPN 等の全体クーポンは discounts のみ。まとめ売り値引は両方。\n\n' +
             '--- 元の内容 ---\n' +
             modelReplyText.slice(0, 6000),
         },

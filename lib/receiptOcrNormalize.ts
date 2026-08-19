@@ -639,7 +639,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
 
     if (kind === 'discount') {
       // Negative coupon lines often duplicate an entry already in discounts[].
-      // Capture OCR adjacency for safe まとめ売り値引 allocation.
+      // Capture OCR adjacency from printed order (ordinary 値引/割引 and まとめ売り).
       pushUniqueReceiptDiscount(discounts, {
         label: name || '値引',
         amount: lineTotal <= 0 ? lineTotal : -Math.abs(lineTotal),

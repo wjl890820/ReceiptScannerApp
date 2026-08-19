@@ -108,7 +108,7 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
   });
 
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*5/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*6/);
     expect(edgeSource).toContain('buildOcrCacheKey');
     expect(edgeSource).toContain('v${OCR_CACHE_VERSION}:${imageContentHash}');
     // Legacy bare image hash must not be the sole cache lookup key after versioning.
@@ -118,5 +118,15 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
     const v2Key = `v2:deadbeef`;
     expect(v2Key).not.toBe('deadbeef');
     expect(v2Key.startsWith('v2:')).toBe(true);
+  });
+
+  it('Case 7 — adjacent product discounts stay in ordered items[]; not unlinked discounts[] only', () => {
+    expect(edgeSource).toContain('割引 10%');
+    expect(edgeSource).toContain('10%割引');
+    expect(edgeSource).toMatch(/kind="discount" の負数行/);
+    expect(edgeSource).toMatch(/discounts\[\] に重複して入れない/);
+    expect(edgeSource).toMatch(/まとめ売り値引 \/ まとめ値引 は従来どおり discounts に入れるだけでなく/);
+    expect(edgeSource).toMatch(/Costco の CPN|全体クーポンは discounts/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*5[^\d]/);
   });
 });

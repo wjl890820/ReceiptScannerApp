@@ -87,7 +87,7 @@ const RECEIPT_LEVEL_DISCOUNT_LABEL =
   /合計|総(?:額|計)?|total|subtotal|値引合計|割引合計|クーポン合計/i;
 
 /**
- * Conservative adjacent product discount labels (値引 / N%割引 / 値下げ).
+ * Conservative adjacent product discount labels (値引 / N%割引 / 割引 N% / 値下げ).
  * Excludes bundle/まとめ売り and receipt-level summaries.
  */
 export function isOrdinaryAdjacentProductDiscountLabel(label: string): boolean {
@@ -97,14 +97,20 @@ export function isOrdinaryAdjacentProductDiscountLabel(label: string): boolean {
   const n = normalizeToken(raw);
   if (!n || RECEIPT_LEVEL_DISCOUNT_LABEL.test(n)) return false;
   if (n.includes('クーポン') || n.includes('coupon') || n.includes('cpn')) return false;
-  if (/^\d{1,2}%?\s*割引$/.test(n) || /^\d{1,2}%\s*引$/.test(n)) return true;
+  // After normalizeToken, % is whitespace, so "10%割引" → "10 割引" and "割引 10%" → "割引 10".
+  if (/^\d{1,2}\s*割引$/.test(n) || /^割引\s*\d{1,2}$/.test(n)) return true;
+  if (/^\d{1,2}\s*引$/.test(n) || /^引\s*\d{1,2}$/.test(n)) return true;
   if (n === '値引' || n === '値引き' || n === '割引' || n === 'わりびき') return true;
   if (n === '値下' || n === '値下げ') return true;
   return false;
 }
 
-function parseDiscountPercentFromLabel(label: string): number | null {
-  const m = String(label || '').match(/(\d{1,2})\s*%\s*(?:割引|引)/);
+/** Parse N from both "10%割引" and "割引 10%" (full-width digits/% accepted). */
+export function parseDiscountPercentFromLabel(label: string): number | null {
+  const raw = String(label || '')
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/％/g, '%');
+  const m = raw.match(/(\d{1,2})\s*%\s*(?:割引|引)/) || raw.match(/(?:割引|引)\s*(\d{1,2})\s*%/);
   if (!m) return null;
   const pct = Number(m[1]);
   if (!Number.isFinite(pct) || pct <= 0 || pct > 100) return null;
