@@ -12,7 +12,12 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "ENABLE_ANON_AUTH": "true",
+        "ENABLE_CLOUD_BACKUP": "true",
+        "ENABLE_APPLE_LINK": "true"
+      }
     }
   },
   "submit": {
