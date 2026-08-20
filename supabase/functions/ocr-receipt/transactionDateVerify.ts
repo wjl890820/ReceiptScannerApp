@@ -229,18 +229,52 @@ export function requiresTransactionDateVerification(
   return primaryDateTriggersVerification(primaryDate, merchant, nowMs);
 }
 
+/** Why a verifier candidate was accepted or rejected (diagnostic + cache policy). */
+export type VerifierAcceptOutcome =
+  | 'accepted'
+  | 'empty_or_null'
+  | 'missing_four_digit_year'
+  | 'unparseable'
+  | 'out_of_window'
+  | 'api_failure';
+
+export type ClassifyVerifierAcceptResult = {
+  accepted: string | null;
+  outcome: VerifierAcceptOutcome;
+};
+
+/**
+ * Classify verifier candidate without changing acceptance semantics.
+ * Rejection order matches historical acceptVerifierTransactionDate checks.
+ */
+export function classifyVerifierAcceptOutcome(
+  verifierDate: string | null | undefined,
+  merchant?: string | null,
+  nowMs: number = Date.now()
+): ClassifyVerifierAcceptResult {
+  if (!verifierDate || typeof verifierDate !== 'string' || !verifierDate.trim()) {
+    return { accepted: null, outcome: 'empty_or_null' };
+  }
+  const trimmed = verifierDate.trim();
+  if (!hasReliableFourDigitYear(trimmed)) {
+    return { accepted: null, outcome: 'missing_four_digit_year' };
+  }
+  if (!isTransactionDateSyntacticallyParseable(trimmed, merchant)) {
+    return { accepted: null, outcome: 'unparseable' };
+  }
+  if (parseReceiptDateTimeForVerify(trimmed, merchant, nowMs) == null) {
+    return { accepted: null, outcome: 'out_of_window' };
+  }
+  return { accepted: trimmed, outcome: 'accepted' };
+}
+
 /** Verifier output accepted only when parseable, has year, and in window. */
 export function acceptVerifierTransactionDate(
   verifierDate: string | null | undefined,
   merchant?: string | null,
   nowMs: number = Date.now()
 ): string | null {
-  if (!verifierDate || typeof verifierDate !== 'string' || !verifierDate.trim()) return null;
-  const trimmed = verifierDate.trim();
-  if (!hasReliableFourDigitYear(trimmed)) return null;
-  if (!isTransactionDateSyntacticallyParseable(trimmed, merchant)) return null;
-  if (parseReceiptDateTimeForVerify(trimmed, merchant, nowMs) == null) return null;
-  return trimmed;
+  return classifyVerifierAcceptOutcome(verifierDate, merchant, nowMs).accepted;
 }
 
 export type ResolveFinalTransactionDateParams = {
@@ -255,11 +289,14 @@ export type ResolveFinalTransactionDateParams = {
 export type ResolveFinalTransactionDateResult = {
   finalTransactionDate: string | null | undefined;
   shouldCache: boolean;
+  acceptOutcome: VerifierAcceptOutcome;
 };
 
 /**
  * When verification is required, verifier is authoritative if valid; else null.
- * Never fall back to suspicious primary. Transient verifier failure => no cache.
+ * Never fall back to suspicious primary.
+ * Transient verifier API failure => no cache.
+ * Verifier API success but no accepted date => no cache (avoid durable negative cache).
  */
 export function resolveFinalTransactionDate(
   params: ResolveFinalTransactionDateParams
@@ -271,19 +308,62 @@ export function resolveFinalTransactionDate(
       typeof params.primaryDate === 'string' && params.primaryDate.trim()
         ? params.primaryDate.trim()
         : undefined;
-    return { finalTransactionDate: primary, shouldCache: true };
+    return {
+      finalTransactionDate: primary,
+      shouldCache: true,
+      acceptOutcome: primary ? 'accepted' : 'empty_or_null',
+    };
   }
 
   if (!params.verifierCallSucceeded) {
-    return { finalTransactionDate: null, shouldCache: false };
+    return {
+      finalTransactionDate: null,
+      shouldCache: false,
+      acceptOutcome: 'api_failure',
+    };
   }
 
-  const accepted = acceptVerifierTransactionDate(
+  const classified = classifyVerifierAcceptOutcome(
     params.verifierDate,
     params.merchant,
     nowMs
   );
-  return { finalTransactionDate: accepted, shouldCache: true };
+  return {
+    finalTransactionDate: classified.accepted,
+    // Do not durable-cache uncertain/rejected verifier success (negative cache).
+    shouldCache: classified.accepted != null,
+    acceptOutcome: classified.outcome,
+  };
+}
+
+/** True when cached analysis.transactionDate cannot be used as a verified date. */
+export function isUnusableCachedTransactionDate(value: unknown): boolean {
+  return typeof value !== 'string' || !String(value).trim();
+}
+
+/**
+ * Required-verification rows that stored a null/empty date must not short-circuit
+ * future OCR+verifier attempts (negative cache bypass).
+ */
+export function shouldBypassNegativeDateVerificationCache(
+  analysis:
+    | {
+        merchant?: string | null;
+        transactionDate?: string | null;
+        items?: DateVerifyItem[] | null;
+      }
+    | null
+    | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  if (!analysis || typeof analysis !== 'object') return false;
+  if (!isUnusableCachedTransactionDate(analysis.transactionDate)) return false;
+  return requiresTransactionDateVerification(
+    analysis.merchant,
+    analysis.transactionDate ?? null,
+    analysis.items,
+    nowMs
+  );
 }
 
 export type DateVerifyCallResult = {

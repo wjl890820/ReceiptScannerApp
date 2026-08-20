@@ -4,6 +4,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   requiresTransactionDateVerification,
   resolveFinalTransactionDate,
+  shouldBypassNegativeDateVerificationCache,
+  type VerifierAcceptOutcome,
 } from './transactionDateVerify.ts';
 import {
   buildCacheHitProvenance,
@@ -592,10 +594,19 @@ async function callGemini(imageBase64: string): Promise<any> {
   };
 }
 
+/** Distinguishes how verifier JSON was parsed (external date semantics unchanged). */
+type VerifierParseKind =
+  | 'string'
+  | 'json_null'
+  | 'non_string'
+  | 'missing'
+  | 'empty_string';
+
 async function callDateVerifier(
   imageBase64: string
 ): Promise<{
   transactionDate: string | null;
+  parseKind: VerifierParseKind;
   _usageMetadata: {
     inputTokens: number | null;
     outputTokens: number | null;
@@ -621,12 +632,27 @@ async function callDateVerifier(
   }
 
   const parsed = extractJsonFromText(modelReplyText);
-  const transactionDate =
-    typeof parsed?.transactionDate === 'string' && parsed.transactionDate.trim()
-      ? parsed.transactionDate.trim()
-      : parsed?.transactionDate === null
-        ? null
-        : null;
+  let parseKind: VerifierParseKind;
+  let transactionDate: string | null;
+  if (!parsed || typeof parsed !== 'object' || !('transactionDate' in parsed)) {
+    parseKind = 'missing';
+    transactionDate = null;
+  } else if (parsed.transactionDate === null) {
+    parseKind = 'json_null';
+    transactionDate = null;
+  } else if (typeof parsed.transactionDate === 'string') {
+    const trimmed = parsed.transactionDate.trim();
+    if (!trimmed) {
+      parseKind = 'empty_string';
+      transactionDate = null;
+    } else {
+      parseKind = 'string';
+      transactionDate = trimmed;
+    }
+  } else {
+    parseKind = 'non_string';
+    transactionDate = null;
+  }
 
   const inputTokens = usage?.promptTokenCount || null;
   const outputTokens = usage?.candidatesTokenCount || null;
@@ -634,12 +660,40 @@ async function callDateVerifier(
 
   return {
     transactionDate,
+    parseKind,
     _usageMetadata: {
       inputTokens,
       outputTokens,
       totalTokens,
     },
   };
+}
+
+function logDateVerifyDiagnostic(fields: {
+  request_id: string;
+  merchant: string;
+  primaryTransactionDate: string | null | undefined;
+  verifierCandidate: string | null | undefined;
+  verifierParseKind?: VerifierParseKind | 'api_failure' | 'not_called';
+  acceptOutcome: VerifierAcceptOutcome;
+  finalTransactionDate: string | null | undefined;
+  negative_cache_bypassed?: boolean;
+}): void {
+  const merchant =
+    typeof fields.merchant === 'string' ? fields.merchant.slice(0, 40) : '';
+  console.log(
+    JSON.stringify({
+      tag: 'ocr_date_verify',
+      request_id: fields.request_id,
+      merchant,
+      primaryTransactionDate: fields.primaryTransactionDate ?? null,
+      verifierCandidate: fields.verifierCandidate ?? null,
+      verifierParseKind: fields.verifierParseKind ?? 'not_called',
+      acceptOutcome: fields.acceptOutcome,
+      finalTransactionDate: fields.finalTransactionDate ?? null,
+      ...(fields.negative_cache_bypassed ? { negative_cache_bypassed: true } : {}),
+    })
+  );
 }
 
 /**
@@ -953,7 +1007,22 @@ serve(async (req) => {
 
     // Check cache
     const cacheResult = await checkCache(supabase, cacheKey);
+    let negativeCacheBypassed = false;
     if (cacheResult.cached && cacheResult.analysis) {
+      if (shouldBypassNegativeDateVerificationCache(cacheResult.analysis)) {
+        // Required-verification null/empty date must not permanently short-circuit retries.
+        negativeCacheBypassed = true;
+        console.log(
+          JSON.stringify({
+            tag: 'ocr_date_verify',
+            request_id: requestId,
+            merchant: String(cacheResult.analysis?.merchant || '').slice(0, 40),
+            negative_cache_bypassed: true,
+            cachedTransactionDate: null,
+          })
+        );
+        // Fall through to fresh OCR + verifier (do not return cached=true).
+      } else {
       const responseTime = Date.now() - startTime;
       const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
       
@@ -1004,6 +1073,7 @@ serve(async (req) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         }
       );
+      }
     }
 
     // Call Gemini (primary OCR)
@@ -1019,6 +1089,8 @@ serve(async (req) => {
     let verifierCalled = false;
     let verifierCallSucceeded = false;
     let verifierDate: string | null | undefined;
+    let verifierParseKind: VerifierParseKind | 'api_failure' | 'not_called' = 'not_called';
+    let acceptOutcome: VerifierAcceptOutcome = 'empty_or_null';
     let primaryDateFromGemini: string | null | undefined;
     {
       console.log(`[${requestId}] Calling Gemini model=${GEMINI_MODEL}`);
@@ -1051,6 +1123,7 @@ serve(async (req) => {
           const verifierResult = await callDateVerifier(requestData.imageBase64);
           verifierCallSucceeded = true;
           verifierDate = verifierResult.transactionDate;
+          verifierParseKind = verifierResult.parseKind;
           dateVerifierUsageMetadata = verifierResult._usageMetadata || null;
         } catch (verifyErr: any) {
           console.warn(
@@ -1058,6 +1131,7 @@ serve(async (req) => {
             String(verifyErr?.message || verifyErr).slice(0, 200)
           );
           verifierCallSucceeded = false;
+          verifierParseKind = 'api_failure';
         }
 
         const resolved = resolveFinalTransactionDate({
@@ -1072,7 +1146,24 @@ serve(async (req) => {
             ? null
             : resolved.finalTransactionDate;
         shouldCache = resolved.shouldCache;
+        acceptOutcome = resolved.acceptOutcome;
+      } else {
+        acceptOutcome =
+          typeof analysis.transactionDate === 'string' && analysis.transactionDate.trim()
+            ? 'accepted'
+            : 'empty_or_null';
       }
+
+      logDateVerifyDiagnostic({
+        request_id: requestId,
+        merchant: String(analysis.merchant || ''),
+        primaryTransactionDate: primaryDateFromGemini,
+        verifierCandidate: verifierDate,
+        verifierParseKind,
+        acceptOutcome,
+        finalTransactionDate: analysis.transactionDate,
+        negative_cache_bypassed: negativeCacheBypassed,
+      });
     }
 
     // Save to cache (final post-verification analysis only when safe)
@@ -1080,7 +1171,7 @@ serve(async (req) => {
       await saveToCache(supabase, cacheKey, analysis, deviceId);
     } else {
       console.log(
-        `[${requestId}] Skipping cache: date verifier transient failure on verification-required receipt`
+        `[${requestId}] Skipping cache: date verification required but no accepted transactionDate (acceptOutcome=${acceptOutcome})`
       );
     }
 

@@ -49,7 +49,7 @@ describe('B3 transactionDate verification', () => {
     expect(out.shouldCache).toBe(true);
   });
 
-  it('C — Costco primary plausible, verifier null => final null (no primary fallback)', async () => {
+  it('C — Costco primary plausible, verifier null => final null, do not cache', async () => {
     const out = await resolveFinalTransactionDate({
       verificationRequired: true,
       primaryDate: '07/06/2026 11:44:46',
@@ -59,10 +59,11 @@ describe('B3 transactionDate verification', () => {
       nowMs: NOW_MS,
     });
     expect(out.finalTransactionDate).toBe(null);
-    expect(out.shouldCache).toBe(true);
+    expect(out.shouldCache).toBe(false);
+    expect(out.acceptOutcome).toBe('empty_or_null');
   });
 
-  it('D — Costco verifier malformed/out-of-window => final null', () => {
+  it('D — Costco verifier malformed/out-of-window => final null, do not cache', () => {
     expect(
       acceptVerifierTransactionDate('not-a-date', 'Costco', NOW_MS)
     ).toBe(null);
@@ -78,6 +79,8 @@ describe('B3 transactionDate verification', () => {
       nowMs: NOW_MS,
     });
     expect(out.finalTransactionDate).toBe(null);
+    expect(out.shouldCache).toBe(false);
+    expect(out.acceptOutcome).toBe('out_of_window');
   });
 
   it('E — AEON 029: plausible date => no verifier', async () => {
@@ -195,7 +198,10 @@ describe('B3 Edge contract (source)', () => {
     expect(edgeSource).toContain('callDateVerifier');
     expect(edgeSource).toContain('resolveFinalTransactionDate');
     expect(edgeSource).toMatch(/if \(shouldCache\)/);
-    expect(edgeSource).toContain('Skipping cache: date verifier transient failure');
+    expect(edgeSource).toContain('Skipping cache: date verification required but no accepted transactionDate');
+    expect(edgeSource).toContain('shouldBypassNegativeDateVerificationCache');
+    expect(edgeSource).toContain('negative_cache_bypassed');
+    expect(edgeSource).toContain('ocr_date_verify');
     expect(edgeSource).not.toContain('07/06/2023');
     expect(edgeSource).not.toContain('07/06/2020');
     expect(edgeSource).toContain('#date-verify');
