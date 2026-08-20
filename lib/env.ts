@@ -182,6 +182,49 @@ export function isBatchAiClassificationEnabled(): boolean {
 }
 
 /**
+ * P0 Anonymous Auth + installation identity (ENABLE_ANON_AUTH).
+ * Default OFF — Build 34-like behavior until explicitly enabled.
+ */
+export function isAnonAuthEnabled(): boolean {
+  const fromEnv =
+    _envVar('ENABLE_ANON_AUTH') ||
+    _envVar('EXPO_PUBLIC_ENABLE_ANON_AUTH');
+  if (fromEnv) return parseEnvBool(fromEnv, false);
+  const fromExtra = getExtraValue('ENABLE_ANON_AUTH', '');
+  if (fromExtra) return parseEnvBool(fromExtra, false);
+  return false;
+}
+
+/**
+ * P0 cloud receipt backup worker flush (ENABLE_CLOUD_BACKUP).
+ * Default OFF. Outbox intents are still written when schema is present;
+ * this flag only gates network flush.
+ */
+export function isCloudBackupEnabled(): boolean {
+  const fromEnv =
+    _envVar('ENABLE_CLOUD_BACKUP') ||
+    _envVar('EXPO_PUBLIC_ENABLE_CLOUD_BACKUP');
+  if (fromEnv) return parseEnvBool(fromEnv, false);
+  const fromExtra = getExtraValue('ENABLE_CLOUD_BACKUP', '');
+  if (fromExtra) return parseEnvBool(fromExtra, false);
+  return false;
+}
+
+/**
+ * P0 Sign in with Apple protect/restore UI + flows (ENABLE_APPLE_LINK).
+ * Default OFF until internal validation.
+ */
+export function isAppleLinkEnabled(): boolean {
+  const fromEnv =
+    _envVar('ENABLE_APPLE_LINK') ||
+    _envVar('EXPO_PUBLIC_ENABLE_APPLE_LINK');
+  if (fromEnv) return parseEnvBool(fromEnv, false);
+  const fromExtra = getExtraValue('ENABLE_APPLE_LINK', '');
+  if (fromExtra) return parseEnvBool(fromExtra, false);
+  return false;
+}
+
+/**
  * 获取备用反馈邮箱（用于 send-feedback 不可用时的兜底渠道）。
  */
 export function getSupportEmail(): string {

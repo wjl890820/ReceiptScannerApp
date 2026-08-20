@@ -15,6 +15,26 @@ jest.mock('./productAlias', () => ({
   seedBuiltinProductAliases: jest.fn(async () => undefined),
 }));
 
+jest.mock('./receiptOwnershipContext', () => ({
+  TRANSACTION_SOURCE_RECEIPT_OCR: 'receipt_ocr',
+  resolveOwnershipStamp: jest.fn(async () => ({
+    userId: null,
+    installationId: 'install-test',
+    transactionSource: 'receipt_ocr',
+  })),
+  __setOwnershipStampProviderForTests: jest.fn(),
+}));
+
+jest.mock('./cloudBackupWorker', () => ({
+  requestCloudBackupFlush: jest.fn(async () => ({
+    ran: false,
+    processed: 0,
+    succeeded: 0,
+    failed: 0,
+    skipped: 0,
+  })),
+}));
+
 jest.mock('./receiptItemIndex', () => {
   const actual = jest.requireActual('./receiptItemIndex');
   return {
@@ -70,6 +90,11 @@ const RECEIPT_COLUMNS = [
   'final_category',
   'note',
   'user_items_json',
+  'user_id',
+  'installation_id',
+  'transaction_source',
+  'ocr_request_id',
+  'client_updated_at',
   'merchant_hint',
   'confidence',
   'category_id',
@@ -98,9 +123,22 @@ class MemoryReceiptDb {
 
   async closeAsync(): Promise<void> {}
 
-  async getAllAsync<T>(source: string): Promise<T[]> {
+  async withTransactionAsync(task: () => Promise<void>): Promise<void> {
+    await task();
+  }
+
+  async getAllAsync<T>(
+    source: string,
+    params?: SQLite.SQLiteBindParams
+  ): Promise<T[]> {
     if (/PRAGMA table_info/i.test(source)) {
       return RECEIPT_COLUMNS.map((name) => ({ name, type: 'TEXT' })) as T[];
+    }
+    if (/SELECT id, user_id FROM receipts WHERE id IN/i.test(source)) {
+      const ids = bindValues(params).map(String);
+      return [...this.rows.values()]
+        .filter((r) => ids.includes(String(r.id)))
+        .map((r) => ({ id: r.id, user_id: (r as any).user_id ?? null })) as T[];
     }
     return [];
   }
@@ -109,6 +147,11 @@ class MemoryReceiptDb {
     source: string,
     params?: SQLite.SQLiteBindParams
   ): Promise<T | null> {
+    if (/SELECT user_id FROM receipts/i.test(source)) {
+      const [id] = bindValues(params);
+      const row = this.rows.get(String(id));
+      return (row ? { user_id: (row as any).user_id ?? null } : null) as T | null;
+    }
     if (/FROM receipts/i.test(source)) {
       const [id] = bindValues(params);
       const row = this.rows.get(String(id));
@@ -145,6 +188,11 @@ class MemoryReceiptDb {
         currency,
         analysisJson,
         recognitionSnapshotJson,
+        userId,
+        installationId,
+        transactionSource,
+        ocrRequestId,
+        clientUpdatedAt,
       ] = values;
       this.rows.set(String(id), {
         id: String(id),
@@ -172,7 +220,18 @@ class MemoryReceiptDb {
         final_category: null,
         note: null,
         user_items_json: null,
+        user_id: userId == null ? null : String(userId),
+        installation_id: installationId == null ? null : String(installationId),
+        transaction_source:
+          transactionSource == null ? 'receipt_ocr' : String(transactionSource),
+        ocr_request_id: ocrRequestId == null ? null : String(ocrRequestId),
+        client_updated_at:
+          clientUpdatedAt == null ? Number(createdAt) : Number(clientUpdatedAt),
       });
+      return { changes: 1 };
+    }
+
+    if (/INSERT OR REPLACE INTO sync_outbox/i.test(source)) {
       return { changes: 1 };
     }
 
@@ -543,7 +602,7 @@ describe('receipt mutation derived-index integration', () => {
     await saveReceipt(saveParams([{ name: 'A' }]));
     await saveReceipt(saveParams([{ name: 'B' }]));
 
-    await clearReceipts();
+    await clearReceipts({ allowTestOnly: true });
 
     expect(mockDatabase.rows.size).toBe(0);
     expect(indexedRows.size).toBe(0);
@@ -553,7 +612,7 @@ describe('receipt mutation derived-index integration', () => {
     const id = await saveReceipt(saveParams([{ name: 'A' }]));
     mockClear.mockRejectedValueOnce(new Error('index unavailable'));
 
-    await expect(clearReceipts()).resolves.toBeUndefined();
+    await expect(clearReceipts({ allowTestOnly: true })).resolves.toBeUndefined();
 
     expect(mockDatabase.rows.size).toBe(0);
     expect(indexedRows.has(id)).toBe(true);

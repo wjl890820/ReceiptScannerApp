@@ -7,6 +7,7 @@ import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
+import { resolveOcrAuthorizationBearer } from './ocrAuthHeaders';
 
 /**
  * Compress and encode image to base64
@@ -139,11 +140,12 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
   }
 
   try {
+    const authorization = await resolveOcrAuthorizationBearer(supabaseAnonKey);
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${supabaseAnonKey}`,
+        Authorization: `Bearer ${authorization}`,
         apikey: supabaseAnonKey,
         'x-device-id': deviceId,
       },
@@ -235,11 +237,12 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
   };
 
   try {
+    const authorization = await resolveOcrAuthorizationBearer(supabaseAnonKey);
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${supabaseAnonKey}`,
+        Authorization: `Bearer ${authorization}`,
         apikey: supabaseAnonKey,
         'x-device-id': deviceId,
       },

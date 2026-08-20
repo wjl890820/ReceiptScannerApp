@@ -528,6 +528,7 @@ export default function ScanReviewScreen() {
         recognitionSnapshot: draft.recognitionSnapshot,
         reviewedSave: true,
         note: note.trim() || null,
+        ocrRequestId: draft.ocrRequestId ?? null,
       });
 
       // 保存成功即视为不可重复：立刻清理 draft 并推进队列，

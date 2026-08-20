@@ -5,6 +5,15 @@ import {
   requiresTransactionDateVerification,
   resolveFinalTransactionDate,
 } from './transactionDateVerify.ts';
+import {
+  buildCacheHitProvenance,
+  buildFreshRunProvenance,
+  parseProvenanceFeatureFlags,
+  persistOcrRun,
+  provenanceToOcrRunRow,
+  type OcrProvenance,
+} from './ocrProvenance.ts';
+import { resolveVerifiedUserId } from './verifyAuthUser.ts';
 
 const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3.5-flash-lite';
 const DATE_VERIFY_MODEL =
@@ -28,9 +37,14 @@ const GEMINI_PRICE_INPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_INPUT_PE
 const GEMINI_PRICE_OUTPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_OUTPUT_PER_1K') || '0.0'); // USD per 1K output tokens
 const SERVER_SALT = Deno.env.get('SERVER_SALT') || ''; // Salt for hashing actor IDs (privacy)
 
+const PROVENANCE_FLAGS = parseProvenanceFeatureFlags({
+  OCR_PROVENANCE_RESPONSE: Deno.env.get('OCR_PROVENANCE_RESPONSE'),
+  OCR_PROVENANCE_WRITE: Deno.env.get('OCR_PROVENANCE_WRITE'),
+});
+
 // Log OCR model at cold start (no secrets)
 console.log(
-  `[ocr-receipt] boot model=${GEMINI_MODEL} dateVerifyModel=${DATE_VERIFY_MODEL} cacheVersion=${OCR_CACHE_VERSION}`
+  `[ocr-receipt] boot model=${GEMINI_MODEL} dateVerifyModel=${DATE_VERIFY_MODEL} cacheVersion=${OCR_CACHE_VERSION} provenanceResponse=${PROVENANCE_FLAGS.responseEnabled} provenanceWrite=${PROVENANCE_FLAGS.writeEnabled}`
 );
 
 /** Cache lookup key: prompt/parser version + image content hash (not image hash alone). */
@@ -73,6 +87,9 @@ interface OCRResponse {
     code: string;
     message: string;
   };
+  provenance?: OcrProvenance;
+  /** Non-product diagnostic: cloud ocr_runs write outcome (authenticated requests only). */
+  provenancePersisted?: boolean;
 }
 
 // CORS headers
@@ -117,6 +134,34 @@ function calculateCost(inputTokens: number | null, outputTokens: number | null):
  * Record OCR usage event (for cost tracking and abuse prevention)
  * Privacy: Only stores metrics, NO images, NO receipt content
  */
+async function attachProvenanceToResponse(
+  supabase: any,
+  userId: string | null,
+  provenance: OcrProvenance
+): Promise<{ provenance?: OcrProvenance; provenancePersisted?: boolean }> {
+  let provenancePersisted: boolean | undefined;
+
+  if (userId) {
+    const persistResult = await persistOcrRun(
+      supabase,
+      provenanceToOcrRunRow(provenance, userId),
+      PROVENANCE_FLAGS.writeEnabled
+    );
+    if (persistResult.attempted) {
+      provenancePersisted = persistResult.persisted;
+    }
+  }
+
+  if (!PROVENANCE_FLAGS.responseEnabled) {
+    return provenancePersisted !== undefined ? { provenancePersisted } : {};
+  }
+
+  return {
+    provenance,
+    ...(provenancePersisted !== undefined ? { provenancePersisted } : {}),
+  };
+}
+
 async function recordUsageEvent(
   supabase: any,
   params: {
@@ -649,35 +694,39 @@ serve(async (req) => {
     // Get anon key from env or fallback to apikey header
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') || apiKey;
 
-    // Determine authentication mode
+    // Determine authentication mode (OPTIONAL — Build 34 clients need no user JWT).
+    // user_id for ocr_runs MUST come from authoritative Auth verification only.
     let userId: string | null = null;
     let deviceId: string = '';
 
-    // If bearer token is a JWT, try to resolve user
     if (bearer && isJwt(bearer)) {
       try {
-        // Create client with anon key but use bearer token for auth
         const authClient = createClient(supabaseUrl, supabaseAnonKey, {
           auth: {
             persistSession: false,
           },
-          global: {
-            headers: {
-              Authorization: `Bearer ${bearer}`,
-            },
+        });
+
+        userId = await resolveVerifiedUserId({
+          bearerToken: bearer,
+          verifyWithSupabaseAuth: async (jwt) => {
+            const result = await authClient.auth.getUser(jwt);
+            return {
+              data: { user: result.data?.user ? { id: result.data.user.id } : null },
+              error: result.error,
+            };
           },
         });
 
-        const { data: { user }, error: authError } = await authClient.auth.getUser(bearer);
-        if (!authError && user) {
-          userId = user.id;
-          deviceId = user.id; // Use user ID as device ID for logged-in users
+        if (userId) {
+          deviceId = userId; // Use user ID as device ID for logged-in users
           actorType = 'user';
-          actorId = user.id;
+          actorId = userId;
         }
       } catch (e) {
         // If JWT validation fails, don't throw - just proceed as anonymous
         console.log(`[${requestId}] JWT validation failed, proceeding as anonymous:`, e);
+        userId = null;
       }
     }
 
@@ -929,12 +978,26 @@ serve(async (req) => {
         edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
       });
 
+      const cacheProvenance = buildCacheHitProvenance({
+        requestId,
+        primaryModel: GEMINI_MODEL,
+        cacheVersion: OCR_CACHE_VERSION,
+        imageContentHash,
+        cachedAnalysis: cacheResult.analysis,
+      });
+      const provenanceFields = await attachProvenanceToResponse(
+        supabase,
+        userId,
+        cacheProvenance
+      );
+
       return new Response(
         JSON.stringify({
           success: true,
           analysis: cacheResult.analysis,
           cached: true,
           hash: imageContentHash,
+          ...provenanceFields,
         } as OCRResponse),
         {
           status: 200,
@@ -952,9 +1015,15 @@ serve(async (req) => {
       totalTokens: number | null;
     } | null = null;
     let shouldCache = true;
+    let verificationRequired = false;
+    let verifierCalled = false;
+    let verifierCallSucceeded = false;
+    let verifierDate: string | null | undefined;
+    let primaryDateFromGemini: string | null | undefined;
     {
       console.log(`[${requestId}] Calling Gemini model=${GEMINI_MODEL}`);
       const geminiResult = await callGemini(requestData.imageBase64);
+      primaryDateFromGemini = geminiResult.transactionDate;
       analysis = {
         merchant: geminiResult.merchant,
         items: geminiResult.items,
@@ -967,7 +1036,7 @@ serve(async (req) => {
       };
       usageMetadata = geminiResult._usageMetadata || null;
 
-      const verificationRequired = requiresTransactionDateVerification(
+      verificationRequired = requiresTransactionDateVerification(
         analysis.merchant,
         analysis.transactionDate,
         analysis.items
@@ -977,8 +1046,7 @@ serve(async (req) => {
         console.log(
           `[${requestId}] Date verification required merchant=${String(analysis.merchant || '').slice(0, 40)} model=${DATE_VERIFY_MODEL}`
         );
-        let verifierCallSucceeded = false;
-        let verifierDate: string | null | undefined;
+        verifierCalled = true;
         try {
           const verifierResult = await callDateVerifier(requestData.imageBase64);
           verifierCallSucceeded = true;
@@ -1068,12 +1136,32 @@ serve(async (req) => {
       });
     }
 
+    const freshProvenance = buildFreshRunProvenance({
+      requestId,
+      primaryModel: GEMINI_MODEL,
+      dateVerifyModel: DATE_VERIFY_MODEL,
+      cacheVersion: OCR_CACHE_VERSION,
+      imageContentHash,
+      verificationRequired,
+      verifierCalled,
+      verifierCallSucceeded,
+      primaryDate: primaryDateFromGemini,
+      verifierDate,
+      finalTransactionDate: analysis.transactionDate,
+    });
+    const provenanceFields = await attachProvenanceToResponse(
+      supabase,
+      userId,
+      freshProvenance
+    );
+
     return new Response(
       JSON.stringify({
         success: true,
         analysis,
         cached: false,
         hash: imageContentHash,
+        ...provenanceFields,
       } as OCRResponse),
       {
         status: 200,

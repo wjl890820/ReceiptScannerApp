@@ -21,7 +21,24 @@ export type ScanReviewDraftPersistRow = {
   editor_state_json: string;
   created_at: number;
   updated_at: number;
+  /** Edge provenance.requestId — nullable for legacy drafts */
+  ocr_request_id?: string | null;
 };
+
+/** Ensure durable draft column for OCR request linkage (cold-start safe). */
+export async function ensureScanReviewDraftOcrRequestIdColumn(
+  db: SQLite.SQLiteDatabase
+): Promise<void> {
+  const info = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(scan_review_draft)`);
+  const names = new Set((info ?? []).map((c) => c.name));
+  if (!names.has('ocr_request_id')) {
+    try {
+      await db.runAsync(`ALTER TABLE scan_review_draft ADD COLUMN ocr_request_id TEXT`);
+    } catch (e: any) {
+      if (!e?.message?.includes('duplicate column')) throw e;
+    }
+  }
+}
 
 export async function insertScanReviewDraft(row: {
   id: string;
@@ -30,13 +47,20 @@ export async function insertScanReviewDraft(row: {
   traceId: string;
   createdAt: number;
   updatedAt: number;
+  ocrRequestId?: string | null;
 }): Promise<void> {
   const db = await openDb();
+  await ensureScanReviewDraftOcrRequestIdColumn(db);
+  const ocrRequestId =
+    typeof row.ocrRequestId === 'string' && row.ocrRequestId.trim()
+      ? row.ocrRequestId.trim()
+      : null;
   await db.runAsync(
     `
     INSERT INTO scan_review_draft (
-      id, image_uri, recognition_snapshot_json, trace_id, editor_state_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, '{}', ?, ?)
+      id, image_uri, recognition_snapshot_json, trace_id, editor_state_json,
+      created_at, updated_at, ocr_request_id
+    ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?)
     `,
     [
       row.id,
@@ -45,14 +69,17 @@ export async function insertScanReviewDraft(row: {
       row.traceId,
       row.createdAt,
       row.updatedAt,
+      ocrRequestId,
     ]
   );
 }
 
 export async function loadScanReviewDraft(id: string): Promise<ScanReviewDraftPersistRow | null> {
   const db = await openDb();
+  await ensureScanReviewDraftOcrRequestIdColumn(db);
   const row = await db.getFirstAsync<ScanReviewDraftPersistRow>(
-    `SELECT id, image_uri, recognition_snapshot_json, trace_id, editor_state_json, created_at, updated_at
+    `SELECT id, image_uri, recognition_snapshot_json, trace_id, editor_state_json,
+            created_at, updated_at, ocr_request_id
      FROM scan_review_draft WHERE id = ? LIMIT 1`,
     [id]
   );

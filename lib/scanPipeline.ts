@@ -4,11 +4,13 @@
  * 调用方：首页编排层（选图后调用本模块，再根据结果刷新列表与展示提示）。
  */
 
-import { analyzeReceiptImage } from './receiptAnalyzer';
+import { analyzeReceiptImageWithProvenance } from './receiptAnalyzer';
 import { applyCategoriesWithLearning } from './receiptEnricher';
 import { saveReceipt } from './db';
 import { toScanAppError, toScanResult, isRecoverableScanCode, type ScanAppError } from './appError';
 import { logger } from './logger';
+import { getDefaultReceiptSource } from './receiptSourceSettings';
+import { putScanReviewDraft } from './scanReviewDraftStore';
 
 /**
  * 可恢复的扫描错误（超时/限流/解析/上游等）记录为 warn，避免 RN dev redbox；
@@ -18,8 +20,6 @@ function logScanFailure(tag: string, message: string, appErr: ScanAppError): voi
   const level = isRecoverableScanCode(appErr.code) ? 'warn' : 'error';
   logger[level](tag, message, { code: appErr.code, message: appErr.message });
 }
-import { getDefaultReceiptSource } from './receiptSourceSettings';
-import { putScanReviewDraft } from './scanReviewDraftStore';
 
 /** 直扫落库成功（测试/兼容保留） */
 export type ScanSaveSuccess = { ok: true; kind: 'saved'; id: string };
@@ -76,12 +76,15 @@ export async function runScanPipeline(uri: string): Promise<ScanOneResult> {
     console.log('[ScanTiming] start', { id: trace.id });
   }
   try {
-    const raw = await analyzeReceiptImage(uri, trace);
+    const { analysis: raw, ocrRequestId } = await analyzeReceiptImageWithProvenance(uri, trace);
     try {
       const enriched = await applyCategoriesWithLearning(raw, trace);
       try {
         const source = await getDefaultReceiptSource();
-        const id = await saveReceipt({ imageUri: uri, analysis: enriched, source }, trace);
+        const id = await saveReceipt(
+          { imageUri: uri, analysis: enriched, source, ocrRequestId },
+          trace
+        );
         if (__DEV__) {
           // eslint-disable-next-line no-console
           console.log('[ScanTiming] total_ms', { id: trace.id, ms: msSince(trace.t0) });
@@ -126,7 +129,7 @@ export async function runScanPipelineToReview(uri: string): Promise<ScanOneResul
     console.log('[ScanTiming] review_draft_start', { id: trace.id });
   }
   try {
-    const raw = await analyzeReceiptImage(uri, trace);
+    const { analysis: raw, ocrRequestId } = await analyzeReceiptImageWithProvenance(uri, trace);
     try {
       const enriched = await applyCategoriesWithLearning(raw, trace);
       const snapshot = JSON.parse(JSON.stringify(enriched)) as unknown;
@@ -134,6 +137,7 @@ export async function runScanPipelineToReview(uri: string): Promise<ScanOneResul
         imageUri: uri,
         recognitionSnapshot: snapshot,
         traceId: trace.id,
+        ocrRequestId,
       });
       if (__DEV__) {
         // eslint-disable-next-line no-console

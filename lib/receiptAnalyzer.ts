@@ -14,8 +14,15 @@ import {
   getOcrGeminiModel,
   isDevDirectGeminiEnabled,
 } from './env';
+import { resolveOcrAuthorizationBearer } from './ocrAuthHeaders';
+import { extractOcrRequestIdFromEdgeResponse } from './ocrRequestId';
 
 const DEFAULT_OCR_MODEL = 'gemini-3.5-flash-lite';
+
+export type AnalyzeReceiptOutcome = {
+  analysis: ReceiptAnalysis;
+  ocrRequestId: string | null;
+};
 
 // 商品分类 key（用于统计）
 export type CategoryKey =
@@ -118,7 +125,7 @@ async function analyzeReceiptImageViaEdgeFunction(
   uri: string,
   functionName: 'ocr-receipt' | 'ocr',
   trace?: ScanTrace
-): Promise<ReceiptAnalysis> {
+): Promise<AnalyzeReceiptOutcome> {
   const supabaseUrl = getSupabaseUrl();
   const supabaseAnonKey = getSupabaseAnonKey();
 
@@ -163,9 +170,10 @@ async function analyzeReceiptImageViaEdgeFunction(
     language,
   };
 
+  const authorization = await resolveOcrAuthorizationBearer(supabaseAnonKey);
   const headers = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${supabaseAnonKey}`,
+    Authorization: `Bearer ${authorization}`,
     apikey: supabaseAnonKey,
     'x-device-id': deviceId,
   } as const;
@@ -316,7 +324,11 @@ async function analyzeReceiptImageViaEdgeFunction(
   };
 
   // 确定性后处理：剔除折扣/税/小计行、清洗分类、归一化店铺名、金额对账
-  return normalizeOcrAnalysis(receiptAnalysis);
+  const normalized = normalizeOcrAnalysis(receiptAnalysis);
+  return {
+    analysis: normalized,
+    ocrRequestId: extractOcrRequestIdFromEdgeResponse(responseData),
+  };
 }
 
 /**
@@ -475,36 +487,39 @@ categoryKey 必须从以下枚举中选择一个：
   throw new Error(`识别失败（HTTP ${lastStatus}）：${lastText}`);
 }
 
-export async function analyzeReceiptImage(uri: string, trace?: ScanTrace): Promise<ReceiptAnalysis> {
-  // 检查是否启用开发模式直连 Gemini fallback
+export async function analyzeReceiptImageWithProvenance(
+  uri: string,
+  trace?: ScanTrace
+): Promise<AnalyzeReceiptOutcome> {
   const useDirectGemini = isDevDirectGeminiEnabled();
-  
+
   if (useDirectGemini) {
-    // 开发调试模式：直连 Gemini
     try {
-      return await analyzeReceiptImageDirectGemini(uri);
+      const analysis = await analyzeReceiptImageDirectGemini(uri);
+      return { analysis, ocrRequestId: null };
     } catch (error: any) {
       console.warn('[ReceiptAnalyzer] [DEV] Direct Gemini fallback failed:', error.message);
-      // fallback 失败时，继续尝试 Edge Function
     }
   }
 
-  // 主路径：调用 Supabase Edge Function
-  // 优先尝试 ocr-receipt，如果 404 则回退到 ocr
   try {
     return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr-receipt', trace);
   } catch (error: any) {
-    // 如果是 404（function 不存在），尝试回退到 ocr
     if (error.message === 'FUNCTION_NOT_FOUND') {
       console.log('[ReceiptAnalyzer] ocr-receipt not found, falling back to ocr');
       try {
         return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr', trace);
       } catch (fallbackError: any) {
-        throw new Error(`Edge Function 调用失败（ocr-receipt 404，ocr 也失败）: ${fallbackError.message}`);
+        throw new Error(
+          `Edge Function 调用失败（ocr-receipt 404，ocr 也失败）: ${fallbackError.message}`
+        );
       }
     }
-    
-    // 其他错误直接抛出
     throw error;
   }
+}
+
+export async function analyzeReceiptImage(uri: string, trace?: ScanTrace): Promise<ReceiptAnalysis> {
+  const outcome = await analyzeReceiptImageWithProvenance(uri, trace);
+  return outcome.analysis;
 }

@@ -16,6 +16,13 @@ import {
   type ReceiptItemIndexBackfillBatchResult,
 } from './receiptItemIndexBackfill';
 import { logger } from './logger';
+import { resolveOwnershipStamp, TRANSACTION_SOURCE_RECEIPT_OCR } from './receiptOwnershipContext';
+import {
+  ensureSyncOutboxSchema,
+  generateSyncIntentId,
+  replaceSyncOutboxIntent,
+} from './syncOutbox';
+import { requestCloudBackupFlush } from './cloudBackupWorker';
 
 /**
  * 说明：
@@ -56,6 +63,17 @@ export type ReceiptRow = {
   final_category: string | null;
   note: string | null;
   user_items_json: string | null; // 用户编辑后的商品列表 JSON
+
+  /** P0 ownership: auth.uid() when known; NULL while offline/unowned */
+  user_id?: string | null;
+  /** P0: install-scoped id at write/adoption time (≠ social source) */
+  installation_id?: string | null;
+  /** P0: input channel — existing rows backfilled to receipt_ocr; ≠ social `source` */
+  transaction_source?: string | null;
+  /** P0: Edge provenance.requestId linkage when available */
+  ocr_request_id?: string | null;
+  /** P0 Phase 5: local backup-version/audit timestamp (ms) */
+  client_updated_at?: number | null;
 };
 
 /** 列表用：不含 image_uri，减少内存/IO（历史列表不展示缩略图） */
@@ -92,6 +110,8 @@ export type SaveReceiptParams = {
   /** 审核页保存：标记 user_edited=1 */
   reviewedSave?: boolean;
   note?: string | null;
+  /** Edge provenance.requestId — stored separately; never merged into analysis_json */
+  ocrRequestId?: string | null;
 };
 
 export type UpdateReceiptParams = {
@@ -116,6 +136,12 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_db) return _db;
   _db = await SQLite.openDatabaseAsync(DB_NAME);
   return _db;
+}
+
+/** Initialized DB handle for P0 ownership adoption (avoids exporting private getDb). */
+export async function getReceiptsDatabase(): Promise<SQLite.SQLiteDatabase> {
+  await initIfNeeded();
+  return getDb();
 }
 
 // receiptsHasTransactionAt 函数已删除
@@ -361,6 +387,87 @@ async function initIfNeeded() {
           }
         }
       }
+
+      // P0 Phase 4: local ownership / provenance (additive only; no JSON rewrite).
+      if (!columnNames.has('user_id')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN user_id TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('installation_id')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN installation_id TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('transaction_source')) {
+        try {
+          // SQLite ADD COLUMN DEFAULT backfills existing rows.
+          await db.runAsync(
+            `ALTER TABLE receipts ADD COLUMN transaction_source TEXT NOT NULL DEFAULT 'receipt_ocr'`
+          );
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('ocr_request_id')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN ocr_request_id TEXT`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      // P0 Phase 5/6: client_updated_at = local mutation audit time.
+      // Legacy rows have no trustworthy edit timestamp; do NOT use transaction_at
+      // (purchase/business time). Prefer migration_now.
+      if (!columnNames.has('client_updated_at')) {
+        try {
+          await db.runAsync(`ALTER TABLE receipts ADD COLUMN client_updated_at INTEGER`);
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+        try {
+          const migrationNow = Date.now();
+          await db.runAsync(
+            `
+            UPDATE receipts
+            SET client_updated_at = ?
+            WHERE client_updated_at IS NULL
+            `,
+            [migrationNow]
+          );
+        } catch (e) {
+          console.warn('[DB] client_updated_at backfill failed (nonfatal):', e);
+        }
+      }
+      try {
+        await db.execAsync(
+          `CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id)`
+        );
+      } catch {
+        // nonfatal
+      }
+
+      await ensureSyncOutboxSchema(db);
+
+      // Persist OCR request id on review drafts (cold-start recovery).
+      try {
+        const draftInfo = await db.getAllAsync<{ name: string }>(
+          `PRAGMA table_info(scan_review_draft)`
+        );
+        const draftCols = new Set((draftInfo ?? []).map((c) => c.name));
+        if (!draftCols.has('ocr_request_id')) {
+          await db.runAsync(`ALTER TABLE scan_review_draft ADD COLUMN ocr_request_id TEXT`);
+        }
+      } catch (e: any) {
+        if (!e?.message?.includes('duplicate column')) {
+          console.warn('[DB] scan_review_draft ocr_request_id migration failed:', e);
+        }
+      }
+
       // 新数据库 receipts_v2.db 已包含 transaction_at 列，无需迁移
 
       // 迁移 item_category_mapping 表结构（如果存在旧表）
@@ -779,6 +886,16 @@ export async function saveReceipt(
   }
 
   // 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
+  const ownership = await resolveOwnershipStamp();
+  let ocrRequestId: string | null = null;
+  try {
+    if (typeof params.ocrRequestId === 'string' && params.ocrRequestId.trim()) {
+      ocrRequestId = params.ocrRequestId.trim();
+    }
+  } catch {
+    ocrRequestId = null;
+  }
+
   const insertSql = `
     INSERT INTO receipts (
       id, created_at, transaction_at,
@@ -790,8 +907,13 @@ export async function saveReceipt(
       store_raw, store_normalized,
       total, tax, tax_is_known, currency,
       analysis_json,
-      recognition_snapshot_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      recognition_snapshot_json,
+      user_id,
+      installation_id,
+      transaction_source,
+      ocr_request_id,
+      client_updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
@@ -811,6 +933,11 @@ export async function saveReceipt(
     currency,
     analysisJson,
     recognitionSnapshotJson,
+    ownership.userId,
+    ownership.installationId,
+    ownership.transactionSource || TRANSACTION_SOURCE_RECEIPT_OCR,
+    ocrRequestId,
+    now,
   ];
   const placeholderCount = (insertSql.match(/\?/g) ?? []).length;
   if (__DEV__ && trace) {
@@ -820,32 +947,53 @@ export async function saveReceipt(
     });
     // eslint-disable-next-line no-console
     console.log('[DB][saveReceipt] insert shape', {
-      insertColumnsCount: 17,
+      insertColumnsCount: 22,
       placeholderCount,
       paramsCount: insertParams.length,
       preview,
     });
   }
-  await db.runAsync(insertSql, insertParams);
 
-  if (params.reviewedSave || params.note !== undefined) {
-    const sets: string[] = [];
-    const vals: SQLite.SQLiteBindValue[] = [];
-    if (params.reviewedSave) {
-      sets.push('user_edited = 1');
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(insertSql, insertParams);
+
+    if (params.reviewedSave || params.note !== undefined) {
+      const sets: string[] = [];
+      const vals: SQLite.SQLiteBindValue[] = [];
+      if (params.reviewedSave) {
+        sets.push('user_edited = 1');
+      }
+      if (params.note !== undefined) {
+        sets.push('note = ?');
+        vals.push(
+          params.note !== null && typeof params.note === 'string'
+            ? params.note.trim() || null
+            : null
+        );
+      }
+      if (sets.length > 0) {
+        vals.push(id);
+        await db.runAsync(`UPDATE receipts SET ${sets.join(', ')} WHERE id = ?`, vals);
+      }
     }
-    if (params.note !== undefined) {
-      sets.push('note = ?');
-      vals.push(params.note !== null && typeof params.note === 'string' ? params.note.trim() || null : null);
+
+    if (ownership.userId) {
+      await replaceSyncOutboxIntent(db, {
+        receiptId: id,
+        userId: ownership.userId,
+        operation: 'upsert',
+        intentId: generateSyncIntentId(),
+        nowMs: now,
+      });
     }
-    if (sets.length > 0) {
-      vals.push(id);
-      await db.runAsync(`UPDATE receipts SET ${sets.join(', ')} WHERE id = ?`, vals);
-    }
-  }
+  });
 
   // Receipt is already durable; derived-index failure must not change save success.
   await bestEffortRebuildReceiptItemIndex(db, id);
+
+  if (ownership.userId) {
+    void requestCloudBackupFlush();
+  }
 
   if (__DEV__) {
     // eslint-disable-next-line no-console
@@ -1024,20 +1172,43 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
 
 /**
  * 批量删除（事务内一次性执行）。关联数据：仅 receipts 表；item_category_mapping 为全局学习表不删。
- * 用于单条删除、批量删除；priceRadar / Analysis 无持久缓存，删后重拉即可。
+ * P0：owned 行在硬删前写入 sync_outbox delete tombstone（同事务）。
  */
 export async function deleteReceipts(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   await initIfNeeded();
   const db = await getDb();
-  const placeholders = ids.map(() => '?').join(',');
-  await db.runAsync(
-    `DELETE FROM receipts WHERE id IN (${placeholders})`,
-    ids
-  );
-  for (const id of new Set(ids)) {
+  const uniqueIds = [...new Set(ids)];
+  const now = Date.now();
+
+  await db.withTransactionAsync(async () => {
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const owners = await db.getAllAsync<{ id: string; user_id: string | null }>(
+      `SELECT id, user_id FROM receipts WHERE id IN (${placeholders})`,
+      uniqueIds
+    );
+
+    for (const row of owners ?? []) {
+      const uid = row.user_id && String(row.user_id).trim() ? String(row.user_id).trim() : null;
+      if (!uid) continue;
+      await replaceSyncOutboxIntent(db, {
+        receiptId: row.id,
+        userId: uid,
+        operation: 'delete',
+        intentId: generateSyncIntentId(),
+        deletedAt: now,
+        nowMs: now,
+      });
+    }
+
+    await db.runAsync(`DELETE FROM receipts WHERE id IN (${placeholders})`, uniqueIds);
+  });
+
+  for (const id of uniqueIds) {
     await bestEffortDeleteReceiptItemIndex(db, id);
   }
+
+  void requestCloudBackupFlush();
 }
 
 /**
@@ -1048,9 +1219,21 @@ export async function deleteReceipt(id: string): Promise<void> {
 }
 
 /**
- * 清空（可选）
+ * TEST/DEV ONLY — hard-deletes ALL local receipts WITHOUT sync_outbox delete intents.
+ *
+ * Production / user-facing deletion MUST use deleteReceipt / deleteReceipts so cloud
+ * tombstones are enqueued. Call sites must pass `{ allowTestOnly: true }`.
+ *
+ * Audit (Phase 6): only referenced from integration tests; no app UI path.
  */
-export async function clearReceipts(): Promise<void> {
+export async function clearReceipts(options: {
+  allowTestOnly: true;
+}): Promise<void> {
+  if (!options?.allowTestOnly) {
+    throw new Error(
+      'clearReceipts is test/dev-only; use deleteReceipts for durable cloud deletion'
+    );
+  }
   await initIfNeeded();
   const db = await getDb();
   await db.runAsync(`DELETE FROM receipts`);
@@ -1182,16 +1365,41 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
 
   if (sets.length === 0) return;
 
+  const now = Date.now();
+  sets.push(`client_updated_at = ?`);
+  values.push(now);
   values.push(params.id);
 
-  await db.runAsync(
-    `
-    UPDATE receipts
-    SET ${sets.join(', ')}
-    WHERE id = ?
-    `,
-    values
-  );
+  let ownedUserId: string | null = null;
+  await db.withTransactionAsync(async () => {
+    const existing = await db.getFirstAsync<{ user_id: string | null }>(
+      `SELECT user_id FROM receipts WHERE id = ? LIMIT 1`,
+      [params.id]
+    );
+    ownedUserId =
+      existing?.user_id && String(existing.user_id).trim()
+        ? String(existing.user_id).trim()
+        : null;
+
+    await db.runAsync(
+      `
+      UPDATE receipts
+      SET ${sets.join(', ')}
+      WHERE id = ?
+      `,
+      values
+    );
+
+    if (ownedUserId) {
+      await replaceSyncOutboxIntent(db, {
+        receiptId: params.id,
+        userId: ownedUserId,
+        operation: 'upsert',
+        intentId: generateSyncIntentId(),
+        nowMs: now,
+      });
+    }
+  });
 
   if (mayChangeReceiptItems) {
     await bestEffortRebuildReceiptItemIndexIfChanged(
@@ -1199,5 +1407,9 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
       params.id,
       previousItemsSignature
     );
+  }
+
+  if (ownedUserId) {
+    void requestCloudBackupFlush();
   }
 }

@@ -13,7 +13,7 @@ import {
 } from './scanPipeline';
 
 jest.mock('./receiptAnalyzer', () => ({
-  analyzeReceiptImage: jest.fn(),
+  analyzeReceiptImageWithProvenance: jest.fn(),
 }));
 jest.mock('./receiptEnricher', () => ({
   applyCategoriesWithLearning: jest.fn(),
@@ -25,7 +25,8 @@ jest.mock('./scanReviewDraftStore', () => ({
   putScanReviewDraft: jest.fn(async () => 'draft-mock-1'),
 }));
 
-const mockAnalyze = jest.requireMock('./receiptAnalyzer').analyzeReceiptImage as jest.Mock;
+const mockAnalyze = jest.requireMock('./receiptAnalyzer')
+  .analyzeReceiptImageWithProvenance as jest.Mock;
 const mockEnrich = jest.requireMock('./receiptEnricher').applyCategoriesWithLearning as jest.Mock;
 const mockSave = jest.requireMock('./db').saveReceipt as jest.Mock;
 const mockPutDraft = jest.requireMock('./scanReviewDraftStore').putScanReviewDraft as jest.Mock;
@@ -91,7 +92,7 @@ describe('runScanPipeline', () => {
   it('success path: analyze -> enrich -> save, returns ok saved', async () => {
     const raw = { items: [], total: 0, currency: 'JPY' };
     const enriched = { ...raw, items: [] };
-    mockAnalyze.mockResolvedValue(raw);
+    mockAnalyze.mockResolvedValue({ analysis: raw, ocrRequestId: 'req-1' });
     mockEnrich.mockResolvedValue(enriched);
     mockSave.mockResolvedValue('rid-1');
 
@@ -101,7 +102,11 @@ describe('runScanPipeline', () => {
     expect(mockAnalyze).toHaveBeenCalledWith(uri, expect.any(Object));
     expect(mockEnrich).toHaveBeenCalledWith(raw, expect.any(Object));
     expect(mockSave).toHaveBeenCalledWith(
-      expect.objectContaining({ imageUri: uri, analysis: enriched }),
+      expect.objectContaining({
+        imageUri: uri,
+        analysis: enriched,
+        ocrRequestId: 'req-1',
+      }),
       expect.any(Object)
     );
   });
@@ -128,7 +133,7 @@ describe('runScanPipeline', () => {
 
   it('enrich or save failure: returns ok: false with code when present', async () => {
     const raw = { items: [], total: 0, currency: 'JPY' };
-    mockAnalyze.mockResolvedValue(raw);
+    mockAnalyze.mockResolvedValue({ analysis: raw, ocrRequestId: null });
     mockEnrich.mockRejectedValue(Object.assign(new Error('server'), { code: 'SERVER_ERROR' }));
 
     const result = await runScanPipeline(uri);
@@ -139,7 +144,7 @@ describe('runScanPipeline', () => {
 
   it('save failure: no code on error maps to FAILED', async () => {
     const raw = { items: [], total: 0, currency: 'JPY' };
-    mockAnalyze.mockResolvedValue(raw);
+    mockAnalyze.mockResolvedValue({ analysis: raw, ocrRequestId: null });
     mockEnrich.mockResolvedValue(raw);
     mockSave.mockRejectedValue(new Error('db'));
 
@@ -156,7 +161,7 @@ describe('runScanPipelineToReview', () => {
   it('returns draftId on success without saving', async () => {
     const raw = { items: [], total: 0, currency: 'JPY' };
     const enriched = { ...raw, items: [{ name: 'a' }] };
-    mockAnalyze.mockResolvedValue(raw);
+    mockAnalyze.mockResolvedValue({ analysis: raw, ocrRequestId: 'req-review' });
     mockEnrich.mockResolvedValue(enriched);
 
     const result = await runScanPipelineToReview(uri);
@@ -168,6 +173,7 @@ describe('runScanPipelineToReview', () => {
         imageUri: uri,
         traceId: expect.any(String),
         recognitionSnapshot: enriched,
+        ocrRequestId: 'req-review',
       })
     );
   });

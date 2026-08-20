@@ -519,6 +519,29 @@
       "title": "について",
       "version": "バージョン"
     },
+    "account": {
+      "title": "アカウントとデータ保護",
+      "anonymousBody": "購入履歴はまだアカウントに紐づいていません。匿名のみの利用では、アンインストール後の復元は保証できません。",
+      "protectAction": "Apple で履歴を保護",
+      "linkedPendingTitle": "Apple アカウント連携済み",
+      "linkedPendingBody": "一部の記録はクラウドバックアップ待ちです。元のレシート画像はアップロード／復元されません。",
+      "protectedTitle": "購入履歴は保護されています",
+      "protectedBody": "構造化済みの購入データは Apple アカウントに紐づき、新しい端末で復元できます（画像は含みません）。",
+      "emptyBody": "この端末に購入記録はありません。",
+      "restoreAction": "既存の記録を復元",
+      "busy": "処理中…",
+      "alertProtectOk": "現在のアカウントを Apple で保護しました。",
+      "alertProtectConflict": "この Apple ID は別のアカウントに既に連携されています。このバージョンでは 2 つの購入履歴を自動統合できません。端末のデータは変更されていません。",
+      "alertProtectUidChanged": "連携中にユーザー ID が変化しました。データ移行は行っていません。",
+      "alertProtectFailed": "連携に失敗しました。後でもう一度お試しください。",
+      "alertCanceled": "キャンセルしました。",
+      "alertRestoreBlockedLocal": "この端末に既に購入記録があるため、別アカウントの復元はできません。",
+      "alertRestoreBlockedOutbox": "未完了のバックアップ変更があるため、復元を開始できません。",
+      "alertRestoreOk": "{count} 件の記録を復元しました。",
+      "alertRestoreEmpty": "復元できるクラウドバックアップが見つかりませんでした。",
+      "alertRestoreFailed": "Apple アカウントにはサインインしましたが、復元に失敗しました。後で再試行できます。端末のデータは安全です。",
+      "alertSignInFailed": "Apple サインインに失敗しました。後でもう一度お試しください。"
+    },
     "devTools": {
       "unlocked": "開発者ツールを有効にしました"
     }

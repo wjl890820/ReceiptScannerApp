@@ -519,6 +519,29 @@
       "title": "About",
       "version": "Version"
     },
+    "account": {
+      "title": "Account & data protection",
+      "anonymousBody": "Purchase history is not linked to an account. With anonymous-only use, recovery after uninstall cannot be guaranteed.",
+      "protectAction": "Protect with Apple",
+      "linkedPendingTitle": "Apple account linked",
+      "linkedPendingBody": "Some records are waiting for cloud backup. Original receipt images are not uploaded or restored.",
+      "protectedTitle": "Purchase history protected",
+      "protectedBody": "Structured purchase data is linked to your Apple account and can be restored on a new device (images excluded).",
+      "emptyBody": "No local purchase records on this device.",
+      "restoreAction": "Restore existing records",
+      "busy": "Working…",
+      "alertProtectOk": "This account is now protected with Apple.",
+      "alertProtectConflict": "This Apple ID is already linked to another account. This version cannot automatically merge two purchase histories. Your local data was not changed.",
+      "alertProtectUidChanged": "Linking failed unexpectedly (user identity changed). No data migration was performed.",
+      "alertProtectFailed": "Linking failed. Please try again later.",
+      "alertCanceled": "Canceled.",
+      "alertRestoreBlockedLocal": "This device already has purchase records, so another account cannot be restored here.",
+      "alertRestoreBlockedOutbox": "Pending local backup changes block restore.",
+      "alertRestoreOk": "Restored {count} records.",
+      "alertRestoreEmpty": "No cloud backup was found.",
+      "alertRestoreFailed": "Signed in with Apple, but restore failed. You can retry later. Local data remains safe.",
+      "alertSignInFailed": "Apple sign-in failed. Please try again later."
+    },
     "devTools": {
       "unlocked": "Developer Tools enabled"
     }

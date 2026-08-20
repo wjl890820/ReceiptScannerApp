@@ -6,6 +6,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,9 +15,13 @@ import {
 } from 'react-native';
 
 import { PRIVACY_POLICY_URL } from '@/constants/privacy';
+import { getAccountProtectionStatus } from '@/lib/accountProtectionStatus';
+import { protectCurrentAccountWithApple } from '@/lib/appleAccountProtect';
+import { restoreExistingAppleAccount } from '@/lib/appleAccountRestore';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { listReceipts } from '@/lib/db';
 import { DEV_TOOLS_ENABLED_KEY } from '@/lib/devToolsAccess';
+import { isAppleLinkEnabled } from '@/lib/env';
 import {
   getCurrentLocalePreference,
   setLocalePreference,
@@ -127,12 +132,41 @@ export default function SettingsScreen() {
     useState<ReceiptSource>('self');
   const [localePreference, setLocalePreferenceState] =
     useState<LocalePreference>(getCurrentLocalePreference());
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountUi, setAccountUi] = useState<{
+    uiState: string;
+    pendingOutboxCount: number;
+  } | null>(null);
   const tapCountRef = useRef(0);
   const lastTapAtRef = useRef(0);
 
   const showDevTools = shouldShowSettingsDevTools(devToolsEnabled, __DEV__);
   const showPro = shouldShowSettingsProEntry({ comingSoon: true });
+  const showAppleAccount =
+    isAppleLinkEnabled() && Platform.OS === 'ios';
   const aboutVersionLine = formatAboutVersionLine(currentVersion, currentBuild);
+
+  const refreshAccountStatus = useMemo(() => {
+    return async () => {
+      if (!showAppleAccount) {
+        setAccountUi(null);
+        return;
+      }
+      try {
+        const s = await getAccountProtectionStatus();
+        setAccountUi({
+          uiState: s.uiState,
+          pendingOutboxCount: s.pendingOutboxCount,
+        });
+      } catch {
+        setAccountUi(null);
+      }
+    };
+  }, [showAppleAccount]);
+
+  useEffect(() => {
+    void refreshAccountStatus();
+  }, [refreshAccountStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -173,6 +207,69 @@ export default function SettingsScreen() {
       cancelled = true;
     };
   }, []);
+
+  const onPressProtectWithApple = useMemo(() => {
+    return async () => {
+      if (accountBusy) return;
+      setAccountBusy(true);
+      try {
+        const result = await protectCurrentAccountWithApple();
+        if (result.status === 'ok' || result.status === 'already_protected') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertProtectOk'));
+        } else if (result.status === 'canceled') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertCanceled'));
+        } else if (result.status === 'apple_identity_in_use') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertProtectConflict'));
+        } else if (result.status === 'uid_changed') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertProtectUidChanged'));
+        } else if (result.status !== 'flag_off') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertProtectFailed'));
+        }
+        await refreshAccountStatus();
+      } finally {
+        setAccountBusy(false);
+      }
+    };
+  }, [accountBusy, refreshAccountStatus]);
+
+  const onPressRestoreExisting = useMemo(() => {
+    return async () => {
+      if (accountBusy) return;
+      setAccountBusy(true);
+      try {
+        const result = await restoreExistingAppleAccount();
+        if (result.status === 'ok') {
+          Alert.alert(
+            t('settings.account.title'),
+            t('settings.account.alertRestoreOk', {
+              count: String(result.restoredCount ?? 0),
+            })
+          );
+        } else if (result.status === 'ok_empty') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertRestoreEmpty'));
+        } else if (result.status === 'canceled') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertCanceled'));
+        } else if (result.status === 'blocked_local_data_present') {
+          Alert.alert(
+            t('settings.account.title'),
+            t('settings.account.alertRestoreBlockedLocal')
+          );
+        } else if (result.status === 'blocked_pending_local_changes') {
+          Alert.alert(
+            t('settings.account.title'),
+            t('settings.account.alertRestoreBlockedOutbox')
+          );
+        } else if (result.status === 'restore_failed') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertRestoreFailed'));
+        } else if (result.status === 'sign_in_failed' || result.status === 'apple_unavailable') {
+          Alert.alert(t('settings.account.title'), t('settings.account.alertSignInFailed'));
+        }
+        await refreshAccountStatus();
+      } finally {
+        setAccountBusy(false);
+      }
+    };
+  }, [accountBusy, refreshAccountStatus]);
 
   const onPressLanguage = useMemo(() => {
     return () => {
@@ -595,6 +692,65 @@ export default function SettingsScreen() {
     >
       <Text style={styles.title}>{t('settings.title')}</Text>
 
+      {showAppleAccount ? (
+        <View style={styles.group}>
+          <Text style={styles.sectionLabel}>{t('settings.account.title')}</Text>
+          {accountBusy ? (
+            <Text style={styles.accountBody}>{t('settings.account.busy')}</Text>
+          ) : null}
+          {accountUi?.uiState === 'anonymous' ? (
+            <>
+              <Text style={styles.accountBody}>{t('settings.account.anonymousBody')}</Text>
+              <SettingsRow
+                title={t('settings.account.protectAction')}
+                onPress={onPressProtectWithApple}
+                accessibilityLabel={t('settings.account.protectAction')}
+              />
+            </>
+          ) : null}
+          {accountUi?.uiState === 'apple_linked_backup_pending' ? (
+            <>
+              <Text style={styles.accountBody}>
+                {t('settings.account.linkedPendingTitle')}
+                {'\n'}
+                {t('settings.account.linkedPendingBody')}
+              </Text>
+            </>
+          ) : null}
+          {accountUi?.uiState === 'apple_linked_protected' ? (
+            <>
+              <Text style={styles.accountBody}>
+                {t('settings.account.protectedTitle')}
+                {'\n'}
+                {t('settings.account.protectedBody')}
+              </Text>
+            </>
+          ) : null}
+          {accountUi?.uiState === 'empty_install' ||
+          accountUi?.uiState === 'auth_unavailable' ||
+          accountUi == null ? (
+            <>
+              <Text style={styles.accountBody}>{t('settings.account.emptyBody')}</Text>
+              <SettingsRow
+                title={t('settings.account.restoreAction')}
+                onPress={onPressRestoreExisting}
+                accessibilityLabel={t('settings.account.restoreAction')}
+              />
+            </>
+          ) : null}
+          {accountUi?.uiState === 'anonymous' ? (
+            <>
+              <View style={styles.separator} />
+              <SettingsRow
+                title={t('settings.account.restoreAction')}
+                onPress={onPressRestoreExisting}
+                accessibilityLabel={t('settings.account.restoreAction')}
+              />
+            </>
+          ) : null}
+        </View>
+      ) : null}
+
       <View style={styles.group}>
         <SettingsRow
           title={t('settings.language.title')}
@@ -770,12 +926,28 @@ const styles = StyleSheet.create({
     color: '#15181c',
     marginBottom: 22,
   },
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#68707a',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  accountBody: {
+    fontSize: 13,
+    color: '#68707a',
+    lineHeight: 18,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
   group: {
     backgroundColor: '#fff',
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
     overflow: 'hidden',
+    marginBottom: 16,
   },
   row: {
     minHeight: 64,

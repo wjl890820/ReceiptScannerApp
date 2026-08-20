@@ -74,6 +74,11 @@ export type ReceiptItemIndexDatabase = {
 export type BuildReceiptItemIndexOptions = {
   /** Index-row timestamp supplied by the persistence layer; defaults to 0 for pure deterministic builds. */
   indexedAt?: number;
+  /**
+   * When true, do not open a nested SQLite transaction (caller already holds one).
+   * Used by cloud restore for all-or-nothing materialization.
+   */
+  skipTransaction?: boolean;
 };
 
 const IDENTITY_SOURCES = new Set<ProductIdentitySource>([
@@ -464,7 +469,7 @@ export async function rebuildReceiptItemIndex(
   await ensureReceiptItemsSchema(db);
   const indexedAt = options.indexedAt ?? Date.now();
 
-  await db.withTransactionAsync(async () => {
+  const run = async () => {
     await db.runAsync(
       `DELETE FROM receipt_items WHERE receipt_id = ?`,
       [receipt.id]
@@ -473,7 +478,13 @@ export async function rebuildReceiptItemIndex(
     for (const row of rows) {
       await db.runAsync(INSERT_SQL, toInsertParams(row));
     }
-  });
+  };
+
+  if (options.skipTransaction) {
+    await run();
+  } else {
+    await db.withTransactionAsync(run);
+  }
 }
 
 export async function deleteReceiptItemIndex(

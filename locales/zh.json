@@ -519,6 +519,29 @@
       "title": "关于",
       "version": "版本"
     },
+    "account": {
+      "title": "账户与数据保护",
+      "anonymousBody": "消费记录尚未绑定账户。仅匿名使用时，卸载后无法保证恢复。",
+      "protectAction": "使用 Apple 保护记录",
+      "linkedPendingTitle": "Apple 账户已绑定",
+      "linkedPendingBody": "部分记录等待云端备份。原始收据图片不会上传或恢复。",
+      "protectedTitle": "消费记录已保护",
+      "protectedBody": "结构化消费数据已绑定 Apple 账户，可在新设备上恢复（不含原始图片）。",
+      "emptyBody": "本机暂无消费记录。",
+      "restoreAction": "恢复已有记录",
+      "busy": "处理中…",
+      "alertProtectOk": "已使用 Apple 保护当前账户。",
+      "alertProtectConflict": "此 Apple 账户已关联其他账户。当前版本无法自动合并两套消费记录。你的本机数据未改动。",
+      "alertProtectUidChanged": "账户绑定异常（用户身份发生变化）。未执行数据迁移。",
+      "alertProtectFailed": "绑定失败，请稍后重试。",
+      "alertCanceled": "已取消。",
+      "alertRestoreBlockedLocal": "本机已有消费记录，无法在此设备上恢复其他账户。",
+      "alertRestoreBlockedOutbox": "本机有未完成的备份变更，无法开始恢复。",
+      "alertRestoreOk": "已恢复 {count} 条记录。",
+      "alertRestoreEmpty": "未找到可恢复的云端备份。",
+      "alertRestoreFailed": "已登录 Apple 账户，但恢复失败。可稍后重试。本机数据未被破坏。",
+      "alertSignInFailed": "Apple 登录失败，请稍后重试。"
+    },
     "devTools": {
       "unlocked": "开发者工具已开启"
     }

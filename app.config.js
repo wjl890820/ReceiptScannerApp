@@ -52,9 +52,18 @@ export default ({ config }) => {
       plugin === 'expo-localization' ||
       (Array.isArray(plugin) && plugin[0] === 'expo-localization')
   );
-  const finalPlugins = hasLocalization
+  const finalPluginsAfterLocalization = hasLocalization
     ? finalPluginsAfterFont
     : [...finalPluginsAfterFont, 'expo-localization'];
+
+  const hasAppleAuth = finalPluginsAfterLocalization.some(
+    (plugin) =>
+      plugin === 'expo-apple-authentication' ||
+      (Array.isArray(plugin) && plugin[0] === 'expo-apple-authentication')
+  );
+  const finalPlugins = hasAppleAuth
+    ? finalPluginsAfterLocalization
+    : [...finalPluginsAfterLocalization, 'expo-apple-authentication'];
 
   return {
     ...config,
@@ -65,6 +74,7 @@ export default ({ config }) => {
     ios: {
       ...(config.ios ?? {}),
       bundleIdentifier: 'com.receiptscannerapp.app',
+      usesAppleSignIn: true,
     },
     android: {
       ...(config.android ?? {}),
@@ -77,6 +87,14 @@ export default ({ config }) => {
       // GEMINI_API_KEY 已移除：客户端不再需要，OCR 通过 Supabase Edge Function 处理
       // 仅开发调试时可通过 DEV_DIRECT_GEMINI=true 启用直连 Gemini fallback
       DEV_DIRECT_GEMINI: process.env.DEV_DIRECT_GEMINI || 'false',
+      // P0 Phase 3: anonymous auth + installation identity (default OFF)
+      ENABLE_ANON_AUTH: process.env.ENABLE_ANON_AUTH || process.env.EXPO_PUBLIC_ENABLE_ANON_AUTH || 'false',
+      // P0 Phase 5: cloud backup worker flush (default OFF); outbox still written locally
+      ENABLE_CLOUD_BACKUP:
+        process.env.ENABLE_CLOUD_BACKUP || process.env.EXPO_PUBLIC_ENABLE_CLOUD_BACKUP || 'false',
+      // P0 Phase 7: Apple protect/restore flows (default OFF)
+      ENABLE_APPLE_LINK:
+        process.env.ENABLE_APPLE_LINK || process.env.EXPO_PUBLIC_ENABLE_APPLE_LINK || 'false',
     },
   };
 };

@@ -35,6 +35,8 @@ export type ScanReviewDraft = {
   createdAt: number;
   /** 从磁盘恢复的编辑态；未持久化过则为 undefined */
   editorState?: ScanReviewEditorStateV1;
+  /** Edge provenance.requestId — persisted on draft row for cold-start recovery */
+  ocrRequestId?: string | null;
 };
 
 const mem = new Map<string, ScanReviewDraft>();
@@ -57,12 +59,17 @@ function rowToDraft(row: P.ScanReviewDraftPersistRow): ScanReviewDraft {
   } catch {
     snap = {};
   }
+  const ocrRequestId =
+    typeof row.ocr_request_id === 'string' && row.ocr_request_id.trim()
+      ? row.ocr_request_id.trim()
+      : null;
   return {
     imageUri: row.image_uri,
     recognitionSnapshot: snap,
     traceId: row.trace_id,
     createdAt: row.created_at,
     editorState: parseEditorStateJson(row.editor_state_json),
+    ocrRequestId,
   };
 }
 
@@ -79,12 +86,14 @@ export async function putScanReviewDraft(
     traceId: draft.traceId,
     createdAt: now,
     updatedAt: now,
+    ocrRequestId: draft.ocrRequestId ?? null,
   });
   const full: ScanReviewDraft = {
     imageUri: draft.imageUri,
     recognitionSnapshot: draft.recognitionSnapshot,
     traceId: draft.traceId,
     createdAt: now,
+    ocrRequestId: draft.ocrRequestId ?? null,
   };
   mem.set(id, full);
   return id;
