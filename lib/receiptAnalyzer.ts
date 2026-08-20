@@ -15,7 +15,7 @@ import {
   isDevDirectGeminiEnabled,
 } from './env';
 
-const DEFAULT_OCR_MODEL = 'gemini-3-flash-preview';
+const DEFAULT_OCR_MODEL = 'gemini-3.5-flash-lite';
 
 // 商品分类 key（用于统计）
 export type CategoryKey =

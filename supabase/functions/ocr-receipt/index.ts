@@ -2,7 +2,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3-flash-preview';
+const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3.5-flash-lite';
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 // Configuration from secrets (set in Supabase dashboard)
@@ -10,7 +10,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 8;
+const OCR_CACHE_VERSION = 9;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -365,12 +365,8 @@ function buildOcrPrompt(): string {
 async function requestGeminiText(
   parts: any[]
 ): Promise<{ text: string; usage: any }> {
-  // Low temperature for structured OCR extraction (not guaranteed absolute determinism).
   const body = {
     contents: [{ parts }],
-    generationConfig: {
-      temperature: 0,
-    },
   };
   const maxRetry = 1;
   let lastError: any = null;

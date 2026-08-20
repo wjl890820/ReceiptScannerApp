@@ -104,12 +104,15 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
     expect(edgeSource).toContain('total=8970');
     expect(edgeSource).toContain('禁止');
     expect(edgeSource).toContain('total=2637, tax=195');
-    expect(edgeSource).toMatch(/generationConfig[\s\S]*temperature:\s*0/);
+    expect(edgeSource).not.toMatch(/generationConfig[\s\S]*temperature/);
+    expect(edgeSource).not.toMatch(/top_p|top_k/);
   });
 
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*8/);
-    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*7[^\d]/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*9/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*8[^\d]/);
+    expect(edgeSource).toContain("gemini-3.5-flash-lite");
+    expect(edgeSource).not.toContain('gemini-3-flash-preview');
     expect(edgeSource).toContain('buildOcrCacheKey');
     expect(edgeSource).toContain('v${OCR_CACHE_VERSION}:${imageContentHash}');
     // Legacy bare image hash must not be the sole cache lookup key after versioning.
@@ -148,4 +151,5 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
     expect(edgeSource).not.toContain('06/10/2026 10:50:58');
     expect(edgeSource).not.toContain('07/06/2023 11:44:46');
   });
+
 });

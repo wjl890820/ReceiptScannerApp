@@ -121,7 +121,7 @@ export function getGeminiApiKey(): string {
  * Prefer OCR_GEMINI_MODEL (to avoid conflicting with other modules like classify-item).
  */
 export function getOcrGeminiModel(): string {
-  return getExtraValue('OCR_GEMINI_MODEL') || getExtraValue('ocrGeminiModel') || 'gemini-3-flash-preview';
+  return getExtraValue('OCR_GEMINI_MODEL') || getExtraValue('ocrGeminiModel') || 'gemini-3.5-flash-lite';
 }
 
 export function getCategoryAiItemCap(): number {

@@ -7,7 +7,7 @@ import * as response from './_shared/response.ts';
 import * as idempotency from './_shared/idempotency.ts';
 import * as ratelimit from './_shared/ratelimit.ts';
 
-const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3-flash-preview';
+const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3.5-flash-lite';
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const PARSER_VERSION = '2026-01-18';
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
