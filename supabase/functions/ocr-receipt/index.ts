@@ -1,16 +1,25 @@
 // supabase/functions/ocr-receipt/index.ts
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  requiresTransactionDateVerification,
+  resolveFinalTransactionDate,
+} from './transactionDateVerify.ts';
 
 const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3.5-flash-lite';
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const DATE_VERIFY_MODEL =
+  Deno.env.get('OCR_DATE_VERIFY_MODEL') || 'gemini-3.5-flash';
+
+function geminiGenerateContentUrl(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+}
 
 // Configuration from secrets (set in Supabase dashboard)
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 9;
+const OCR_CACHE_VERSION = 10;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -20,7 +29,9 @@ const GEMINI_PRICE_OUTPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_OUTPUT_
 const SERVER_SALT = Deno.env.get('SERVER_SALT') || ''; // Salt for hashing actor IDs (privacy)
 
 // Log OCR model at cold start (no secrets)
-console.log(`[ocr-receipt] boot model=${GEMINI_MODEL} cacheVersion=${OCR_CACHE_VERSION}`);
+console.log(
+  `[ocr-receipt] boot model=${GEMINI_MODEL} dateVerifyModel=${DATE_VERIFY_MODEL} cacheVersion=${OCR_CACHE_VERSION}`
+);
 
 /** Cache lookup key: prompt/parser version + image content hash (not image hash alone). */
 function buildOcrCacheKey(imageContentHash: string): string {
@@ -359,11 +370,33 @@ function buildOcrPrompt(): string {
   ].join('\n');
 }
 
+function buildDateVerifyPrompt(): string {
+  return [
+    'あなたは日本のレシート画像から、印刷された購入取引日時だけを読み取る専用 OCR です。',
+    '出力は有効な JSON のみ。Markdown・コードフェンス・説明文は一切出力しないこと。',
+    '',
+    'スキーマ:',
+    '{ "transactionDate": string|null }',
+    '',
+    'ルール:',
+    '- 印刷された購入取引日時のみを抽出する。merchant / items / total / tax / 割引 / 数量 / 分類は出力しない。',
+    '- レシート画像全体を見る。長い倉庫店 / Costco 形式のレシートでは、',
+    '  下部・フッター付近、買上げ点数 / 御買上げ点数 の周辺を特に注意深く確認する。',
+    '- 画像から数字を直接読む。年の4桁は1桁ずつ独立して読む。',
+    '- 印刷された生の日時形式をそのまま保持する（YYYY/MM/DD 等へ正規化しない）。',
+    '- 現在日時・スキャン日時・ファイル日時から年を推測しない。',
+    '- 年を補正・正規化・修復しない。',
+    '- 店舗履歴や他のレシート情報から推測しない。',
+    '- 必須の日付桁が本当に読めない場合のみ transactionDate を null にする。',
+  ].join('\n');
+}
+
 /**
  * 调用 Gemini 并返回纯文本（含 usage）。上游错误/超时附带明确 error.code。
  */
 async function requestGeminiText(
-  parts: any[]
+  parts: any[],
+  model: string = GEMINI_MODEL
 ): Promise<{ text: string; usage: any }> {
   const body = {
     contents: [{ parts }],
@@ -375,7 +408,7 @@ async function requestGeminiText(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch(GEMINI_API_URL, {
+      const response = await fetch(geminiGenerateContentUrl(model), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -389,7 +422,7 @@ async function requestGeminiText(
       if (!response.ok) {
         const errorText = await response.text();
         console.error(
-          `[Gemini] Upstream non-OK status=${response.status} model=${GEMINI_MODEL} body=${errorText.substring(0, 500)}`
+          `[Gemini] Upstream non-OK status=${response.status} model=${model} body=${errorText.substring(0, 500)}`
         );
         if ((response.status === 429 || response.status === 503) && attempt < maxRetry) {
           await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
@@ -506,6 +539,56 @@ async function callGemini(imageBase64: string): Promise<any> {
       typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()
         ? parsed.transactionDate.trim()
         : undefined,
+    _usageMetadata: {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+    },
+  };
+}
+
+async function callDateVerifier(
+  imageBase64: string
+): Promise<{
+  transactionDate: string | null;
+  _usageMetadata: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+  };
+}> {
+  if (!GEMINI_API_KEY) {
+    const e = new Error('GEMINI_API_KEY not configured') as Error & { code?: string };
+    e.code = 'SERVER_ERROR';
+    throw e;
+  }
+
+  const { text: modelReplyText, usage } = await requestGeminiText(
+    [
+      { text: buildDateVerifyPrompt() },
+      { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+    ],
+    DATE_VERIFY_MODEL
+  );
+
+  if (!modelReplyText) {
+    throw new Error('Date verifier returned no text content');
+  }
+
+  const parsed = extractJsonFromText(modelReplyText);
+  const transactionDate =
+    typeof parsed?.transactionDate === 'string' && parsed.transactionDate.trim()
+      ? parsed.transactionDate.trim()
+      : parsed?.transactionDate === null
+        ? null
+        : null;
+
+  const inputTokens = usage?.promptTokenCount || null;
+  const outputTokens = usage?.candidatesTokenCount || null;
+  const totalTokens = usage?.totalTokenCount || null;
+
+  return {
+    transactionDate,
     _usageMetadata: {
       inputTokens,
       outputTokens,
@@ -860,13 +943,17 @@ serve(async (req) => {
       );
     }
 
-    // Call Gemini
+    // Call Gemini (primary OCR)
     let analysis: any;
     let usageMetadata: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null } | null = null;
+    let dateVerifierUsageMetadata: {
+      inputTokens: number | null;
+      outputTokens: number | null;
+      totalTokens: number | null;
+    } | null = null;
+    let shouldCache = true;
     {
       console.log(`[${requestId}] Calling Gemini model=${GEMINI_MODEL}`);
-      // callGemini 抛出的错误会带 code（GEMINI_UPSTREAM_ERROR / OCR_TIMEOUT / OCR_PARSE_ERROR / RATE_LIMIT），
-      // 由外层 catch 统一映射为稳定 JSON。
       const geminiResult = await callGemini(requestData.imageBase64);
       analysis = {
         merchant: geminiResult.merchant,
@@ -879,25 +966,70 @@ serve(async (req) => {
         transactionDate: geminiResult.transactionDate,
       };
       usageMetadata = geminiResult._usageMetadata || null;
+
+      const verificationRequired = requiresTransactionDateVerification(
+        analysis.merchant,
+        analysis.transactionDate,
+        analysis.items
+      );
+
+      if (verificationRequired) {
+        console.log(
+          `[${requestId}] Date verification required merchant=${String(analysis.merchant || '').slice(0, 40)} model=${DATE_VERIFY_MODEL}`
+        );
+        let verifierCallSucceeded = false;
+        let verifierDate: string | null | undefined;
+        try {
+          const verifierResult = await callDateVerifier(requestData.imageBase64);
+          verifierCallSucceeded = true;
+          verifierDate = verifierResult.transactionDate;
+          dateVerifierUsageMetadata = verifierResult._usageMetadata || null;
+        } catch (verifyErr: any) {
+          console.warn(
+            `[${requestId}] Date verifier failed (non-fatal):`,
+            String(verifyErr?.message || verifyErr).slice(0, 200)
+          );
+          verifierCallSucceeded = false;
+        }
+
+        const resolved = resolveFinalTransactionDate({
+          verificationRequired: true,
+          primaryDate: geminiResult.transactionDate,
+          verifierDate,
+          verifierCallSucceeded,
+          merchant: analysis.merchant,
+        });
+        analysis.transactionDate =
+          resolved.finalTransactionDate === null || resolved.finalTransactionDate === undefined
+            ? null
+            : resolved.finalTransactionDate;
+        shouldCache = resolved.shouldCache;
+      }
     }
 
-    // Save to cache
-    await saveToCache(supabase, cacheKey, analysis, deviceId);
+    // Save to cache (final post-verification analysis only when safe)
+    if (shouldCache) {
+      await saveToCache(supabase, cacheKey, analysis, deviceId);
+    } else {
+      console.log(
+        `[${requestId}] Skipping cache: date verifier transient failure on verification-required receipt`
+      );
+    }
 
     const responseTime = Date.now() - startTime;
     const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
-    
-    // Calculate cost
+
+    // Calculate cost (primary)
     const inputTokens = usageMetadata?.inputTokens || null;
     const outputTokens = usageMetadata?.outputTokens || null;
     const totalTokens = usageMetadata?.totalTokens || null;
     const estimatedCostUsd = calculateCost(inputTokens, outputTokens);
 
     console.log(
-      `[${requestId}] Cache miss: deviceId=${deviceId.substring(0, 8)} userId=${userId || 'none'} hash=${hashPrefix} time=${responseTime}ms tokens=${totalTokens || 'N/A'} cost=$${estimatedCostUsd?.toFixed(6) || 'N/A'}`
+      `[${requestId}] Cache miss: deviceId=${deviceId.substring(0, 8)} userId=${userId || 'none'} hash=${hashPrefix} time=${responseTime}ms tokens=${totalTokens || 'N/A'} cost=$${estimatedCostUsd?.toFixed(6) || 'N/A'} dateVerified=${dateVerifierUsageMetadata != null}`
     );
 
-    // Record usage event for successful OCR
+    // Record usage event for successful primary OCR
     await recordUsageEvent(supabase, {
       requestId,
       actorType,
@@ -913,6 +1045,28 @@ serve(async (req) => {
       errorCode: null,
       edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
     });
+
+    // Separate usage row for date verifier (request_id suffix — table UNIQUE on request_id)
+    if (dateVerifierUsageMetadata) {
+      const vIn = dateVerifierUsageMetadata.inputTokens;
+      const vOut = dateVerifierUsageMetadata.outputTokens;
+      const vTotal = dateVerifierUsageMetadata.totalTokens;
+      await recordUsageEvent(supabase, {
+        requestId: `${requestId}#date-verify`,
+        actorType,
+        actorHash,
+        model: DATE_VERIFY_MODEL,
+        inputTokens: vIn,
+        outputTokens: vOut,
+        totalTokens: vTotal,
+        estimatedCostUsd: calculateCost(vIn, vOut),
+        payloadBytes,
+        durationMs: responseTime,
+        success: true,
+        errorCode: null,
+        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+      });
+    }
 
     return new Response(
       JSON.stringify({
