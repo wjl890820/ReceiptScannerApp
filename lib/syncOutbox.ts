@@ -172,6 +172,30 @@ export async function listDueSyncOutboxForUser(
   return rows ?? [];
 }
 
+/**
+ * Earliest next_retry_at strictly in the future for this user, or null.
+ * Used to schedule a single bounded wakeup (no polling).
+ */
+export async function getEarliestFutureSyncOutboxRetryAt(
+  db: SQLite.SQLiteDatabase,
+  userId: string,
+  nowMs: number
+): Promise<number | null> {
+  const row = await db.getFirstAsync<{ next_retry_at: number }>(
+    `
+    SELECT next_retry_at
+    FROM sync_outbox
+    WHERE user_id = ? AND next_retry_at > ?
+    ORDER BY next_retry_at ASC
+    LIMIT 1
+    `,
+    [userId, nowMs]
+  );
+  if (!row || row.next_retry_at == null) return null;
+  const n = Number(row.next_retry_at);
+  return Number.isFinite(n) ? n : null;
+}
+
 export async function getSyncOutboxRow(
   db: SQLite.SQLiteDatabase,
   receiptId: string

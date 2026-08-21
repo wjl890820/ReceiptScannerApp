@@ -263,8 +263,18 @@ export function getAccessTokenIfReady(): string | null {
   return _state.accessToken;
 }
 
+/**
+ * Subscribe to auth state changes.
+ * Immediately notifies with the current state (so restored-session cold start
+ * is not missed if authentication completed before the subscriber attached).
+ */
 export function subscribeAuthState(listener: Listener): () => void {
   _listeners.add(listener);
+  try {
+    listener(_state);
+  } catch {
+    // ignore listener errors on sync notify
+  }
   return () => {
     _listeners.delete(listener);
   };

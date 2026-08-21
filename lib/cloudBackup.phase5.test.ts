@@ -17,18 +17,39 @@ jest.mock('expo-constants', () => ({
   },
 }));
 
-jest.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
-  AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
-}));
+jest.mock('react-native', () => {
+  const listeners: Array<(s: string) => void> = [];
+  return {
+    Platform: { OS: 'ios' },
+    AppState: {
+      currentState: 'active',
+      addEventListener: jest.fn((_type: string, cb: (s: string) => void) => {
+        listeners.push(cb);
+        return {
+          remove: jest.fn(() => {
+            const i = listeners.indexOf(cb);
+            if (i >= 0) listeners.splice(i, 1);
+          }),
+        };
+      }),
+      __listeners: listeners,
+      __emit(state: string) {
+        for (const cb of [...listeners]) cb(state);
+      },
+    },
+  };
+});
 
 const authState = {
-  status: 'authenticated' as 'authenticated' | 'unauthenticated' | 'unknown',
+  status: 'authenticated' as 'authenticated' | 'unauthenticated' | 'unknown' | 'initializing',
   userId: 'user-a' as string | null,
   isAnonymous: true as boolean | null,
+  hasAppleIdentity: null as boolean | null,
   accessToken: 'tok' as string | null,
   error: null as string | null,
 };
+
+const authListeners = new Set<(s: typeof authState) => void>();
 
 jest.mock('./env', () => {
   const actual = jest.requireActual('./env');
@@ -40,8 +61,28 @@ jest.mock('./env', () => {
 
 jest.mock('./anonAuth', () => ({
   getAuthState: jest.fn(() => ({ ...authState })),
-  subscribeAuthState: jest.fn(() => jest.fn()),
+  subscribeAuthState: jest.fn((listener: (s: typeof authState) => void) => {
+    authListeners.add(listener);
+    try {
+      listener({ ...authState });
+    } catch {
+      // ignore
+    }
+    return () => {
+      authListeners.delete(listener);
+    };
+  }),
 }));
+
+function emitAuthState(): void {
+  for (const l of [...authListeners]) {
+    try {
+      l({ ...authState });
+    } catch {
+      // ignore
+    }
+  }
+}
 
 const upsertMock = jest.fn(async (): Promise<{ error: unknown }> => ({ error: null }));
 const updateSecondEq = jest.fn(async (): Promise<{ error: unknown; count: number }> => ({
@@ -75,10 +116,14 @@ import {
   buildCloudUserReceiptUpsertPayload,
 } from './cloudBackupPayload';
 import {
+  __getRetryTimerPendingForTests,
+  __handleAppStateForTests,
   __resetCloudBackupWorkerForTests,
   __runCloudBackupFlushForTests,
   requestCloudBackupFlush,
+  startCloudBackupWorker,
 } from './cloudBackupWorker';
+import { isCloudBackupEnabled } from './env';
 import { shouldAutoAdoptUnownedReceipts } from './legacyReceiptAdoption';
 import { normalizeOcrAnalysis } from './receiptOcrNormalize';
 import {
@@ -165,6 +210,20 @@ function createPhase5Db(seed: ReceiptSeed[] = []) {
       if (/FROM sync_outbox WHERE receipt_id = \?/i.test(sql)) {
         const id = String(params?.[0]);
         return (outbox.get(id) as T) ?? null;
+      }
+      if (
+        /SELECT next_retry_at[\s\S]*FROM sync_outbox[\s\S]*next_retry_at > \?/i.test(
+          sql
+        )
+      ) {
+        const uid = String(params?.[0]);
+        const now = Number(params?.[1]);
+        const future = [...outbox.values()]
+          .filter((r) => r.user_id === uid && r.next_retry_at > now)
+          .sort((a, b) => a.next_retry_at - b.next_retry_at);
+        return future.length
+          ? ({ next_retry_at: future[0].next_retry_at } as T)
+          : null;
       }
       if (/FROM receipts WHERE id = \?/i.test(sql)) {
         const id = String(params?.[0]);
@@ -837,6 +896,8 @@ describe('worker upsert onConflict target', () => {
     );
     expect(src).toContain("onConflict: 'user_id,id'");
     expect(src).toContain('isCloudBackupEnabled');
+    expect(src).toContain('CLOUD_BACKUP_MAX_BATCHES_PER_FLUSH');
+    expect(src).toContain('scheduleRetryWakeup');
   });
 
   it('flag gates flush only; outbox still written in db mutations', () => {
@@ -845,5 +906,203 @@ describe('worker upsert onConflict target', () => {
     expect(env).toContain('isCloudBackupEnabled');
     expect(db).toContain('replaceSyncOutboxIntent');
     expect(db).toContain('requestCloudBackupFlush');
+  });
+});
+
+describe('K. sync reliability — drain / cold-start / foreground / retry', () => {
+  beforeEach(() => {
+    jest.useRealTimers();
+    __resetCloudBackupWorkerForTests();
+    upsertMock.mockReset();
+    upsertMock.mockResolvedValue({ error: null });
+    authListeners.clear();
+    authState.status = 'authenticated';
+    authState.userId = 'user-a';
+    authState.accessToken = 'tok';
+    (isCloudBackupEnabled as jest.Mock).mockReturnValue(true);
+    const RN = require('react-native') as {
+      AppState: { __listeners: Array<(s: string) => void>; currentState: string };
+    };
+    RN.AppState.__listeners.length = 0;
+    RN.AppState.currentState = 'active';
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    __resetCloudBackupWorkerForTests();
+  });
+
+  it('A — backlog >20: one flush drains all 41 due intents', async () => {
+    const seeds = Array.from({ length: 41 }, (_, i) =>
+      sampleReceipt({ id: `r${i}`, user_id: 'user-a' })
+    );
+    const db = createPhase5Db(seeds);
+    for (let i = 0; i < 41; i++) {
+      await replaceSyncOutboxIntent(db as any, {
+        receiptId: `r${i}`,
+        userId: 'user-a',
+        operation: 'upsert',
+        intentId: `intent-${i}`,
+        nowMs: i + 1,
+      });
+    }
+    const result = await __runCloudBackupFlushForTests(async () => db as any);
+    expect(result.ran).toBe(true);
+    expect(result.succeeded).toBe(41);
+    expect(result.batches).toBeGreaterThanOrEqual(3);
+    expect(db.outbox.size).toBe(0);
+    expect(upsertMock).toHaveBeenCalledTimes(41);
+  });
+
+  it('B — new receipt behind 40 older due rows is eventually uploaded', async () => {
+    const seeds = [
+      ...Array.from({ length: 40 }, (_, i) =>
+        sampleReceipt({ id: `old${i}`, user_id: 'user-a' })
+      ),
+      sampleReceipt({
+        id: 'new-york',
+        user_id: 'user-a',
+        merchant_raw: 'ヨークベニマル',
+        total: 1382,
+      }),
+    ];
+    const db = createPhase5Db(seeds);
+    for (let i = 0; i < 40; i++) {
+      await replaceSyncOutboxIntent(db as any, {
+        receiptId: `old${i}`,
+        userId: 'user-a',
+        operation: 'upsert',
+        intentId: `old-intent-${i}`,
+        nowMs: i + 1,
+      });
+    }
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'new-york',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'new-intent',
+      nowMs: 10_000,
+    });
+
+    const result = await __runCloudBackupFlushForTests(async () => db as any);
+    expect(result.succeeded).toBe(41);
+    expect(db.outbox.has('new-york')).toBe(false);
+    const payloads = upsertMock.mock.calls.map((c) => (c as unknown[])[0]);
+    expect(payloads.some((p: any) => p?.id === 'new-york')).toBe(true);
+  });
+
+  it('C — restored authenticated session on worker start requests flush', async () => {
+    const db = createPhase5Db([sampleReceipt({ id: 'restored' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'restored',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-restored',
+      nowMs: 1,
+    });
+    // Simulate cold start: auth already authenticated before worker starts.
+    authState.status = 'authenticated';
+    authState.userId = 'user-a';
+    authState.accessToken = 'tok';
+
+    startCloudBackupWorker(async () => db as any);
+    // Allow single-flight flush started by subscribe sync-notify / onAuthState.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    // If still inflight, await a flush request.
+    await requestCloudBackupFlush();
+
+    expect(db.outbox.has('restored')).toBe(false);
+    expect(upsertMock).toHaveBeenCalled();
+  });
+
+  it('D — foreground active transition requests flush once; listener not multiplied', async () => {
+    const RN = require('react-native') as {
+      AppState: {
+        addEventListener: jest.Mock;
+        __listeners: Array<(s: string) => void>;
+        __emit: (s: string) => void;
+      };
+    };
+    const db = createPhase5Db([sampleReceipt({ id: 'fg1' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'fg1',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-fg',
+      nowMs: 1,
+    });
+
+    startCloudBackupWorker(async () => db as any);
+    await requestCloudBackupFlush();
+    expect(db.outbox.has('fg1')).toBe(false);
+
+    // Remount should not add a second AppState listener.
+    const listenerCount = RN.AppState.__listeners.length;
+    startCloudBackupWorker(async () => db as any);
+    expect(RN.AppState.__listeners.length).toBe(listenerCount);
+
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'fg2',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-fg2',
+      nowMs: 2,
+    });
+    db.receipts.set('fg2', sampleReceipt({ id: 'fg2' }));
+
+    __handleAppStateForTests('background');
+    __handleAppStateForTests('active');
+    await requestCloudBackupFlush();
+    expect(db.outbox.has('fg2')).toBe(false);
+  });
+
+  it('E — failed intent retries after next_retry_at via scheduled wakeup', async () => {
+    jest.useFakeTimers();
+    const db = createPhase5Db([sampleReceipt({ id: 'retry-me' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'retry-me',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-retry',
+      nowMs: 1,
+    });
+    upsertMock.mockImplementationOnce(async () => ({
+      error: { message: 'temp fail' },
+    }));
+
+    const first = await __runCloudBackupFlushForTests(async () => db as any);
+    expect(first.failed).toBe(1);
+    expect(db.outbox.has('retry-me')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+
+    upsertMock.mockResolvedValue({ error: null });
+    await jest.advanceTimersByTimeAsync(6_000);
+    await Promise.resolve();
+    await requestCloudBackupFlush();
+
+    expect(db.outbox.has('retry-me')).toBe(false);
+  });
+
+  it('H — feature flag OFF: no cloud writes and no retry timer', async () => {
+    (isCloudBackupEnabled as jest.Mock).mockReturnValue(false);
+    const db = createPhase5Db([sampleReceipt({ id: 'off' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'off',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-off',
+      nowMs: 1,
+    });
+    const r = await __runCloudBackupFlushForTests(async () => db as any);
+    expect(r.ran).toBe(false);
+    expect(r.reason).toBe('flag_off');
+    expect(upsertMock).not.toHaveBeenCalled();
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    expect(db.outbox.has('off')).toBe(true);
+
+    __handleAppStateForTests('background');
+    __handleAppStateForTests('active');
+    expect(upsertMock).not.toHaveBeenCalled();
   });
 });

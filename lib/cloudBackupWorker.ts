@@ -1,6 +1,12 @@
 /**
  * Single-flight cloud backup flush worker.
  * Race-safe: only clears/updates outbox when intent_id still matches.
+ *
+ * Reliability:
+ * - One flush request drains due intents in batches (bounded).
+ * - Restored authenticated session triggers flush on worker start + auth emit.
+ * - AppState active resumes flush.
+ * - Future next_retry_at schedules a single wakeup timer.
  */
 import type * as SQLite from 'expo-sqlite';
 
@@ -16,6 +22,7 @@ import { getSupabaseClient } from './supabaseClient';
 import {
   clearSyncOutboxIntentIfCurrent,
   computeBackoffMs,
+  getEarliestFutureSyncOutboxRetryAt,
   listDueSyncOutboxForUser,
   type SyncOutboxRow,
   updateSyncOutboxRetryIfCurrent,
@@ -28,14 +35,25 @@ export type CloudBackupFlushResult = {
   succeeded: number;
   failed: number;
   skipped: number;
+  batches?: number;
 };
 
 type GetDbFn = () => Promise<SQLite.SQLiteDatabase>;
 
+/** Per-batch due-intent page size (matches historical LIMIT 20). */
+export const CLOUD_BACKUP_BATCH_SIZE = 20;
+/** Safety: max batches per flush request (20 * 100 = 2000 intents). */
+export const CLOUD_BACKUP_MAX_BATCHES_PER_FLUSH = 100;
+/** Safety: wall-clock budget per flush request. */
+export const CLOUD_BACKUP_MAX_FLUSH_MS = 90_000;
+
 let _getDb: GetDbFn | null = null;
 let _inflight: Promise<CloudBackupFlushResult> | null = null;
 let _started = false;
-let _unsubscribe: (() => void) | null = null;
+let _unsubscribeAuth: (() => void) | null = null;
+let _appStateSub: { remove: () => void } | null = null;
+let _retryTimer: ReturnType<typeof setTimeout> | null = null;
+let _lastAppState: string | null = null;
 
 const BACKUP_SELECT_COLUMNS = `
   id, user_id, installation_id, transaction_source, source,
@@ -122,8 +140,43 @@ async function processDelete(
   return 'ok';
 }
 
+function clearRetryTimer(): void {
+  if (_retryTimer != null) {
+    clearTimeout(_retryTimer);
+    _retryTimer = null;
+  }
+}
+
+/**
+ * Schedule at most one wakeup for the earliest future next_retry_at.
+ * No polling loop; cancelled when disabled / unauthenticated / reset.
+ */
+async function scheduleRetryWakeup(
+  db: SQLite.SQLiteDatabase,
+  userId: string,
+  nowMs: number = Date.now()
+): Promise<void> {
+  clearRetryTimer();
+  if (!isCloudBackupEnabled()) return;
+  const auth = getAuthState();
+  if (auth.status !== 'authenticated' || auth.userId !== userId) return;
+
+  const earliest = await getEarliestFutureSyncOutboxRetryAt(db, userId, nowMs);
+  if (earliest == null) return;
+
+  const delay = Math.max(250, Math.min(earliest - nowMs, 60 * 60 * 1000));
+  _retryTimer = setTimeout(() => {
+    _retryTimer = null;
+    if (!isCloudBackupEnabled()) return;
+    const s = getAuthState();
+    if (s.status !== 'authenticated' || !s.userId) return;
+    void requestCloudBackupFlush();
+  }, delay);
+}
+
 async function runFlushOnce(): Promise<CloudBackupFlushResult> {
   if (!isCloudBackupEnabled()) {
+    clearRetryTimer();
     return { ran: false, reason: 'flag_off', processed: 0, succeeded: 0, failed: 0, skipped: 0 };
   }
   if (!_getDb) {
@@ -144,55 +197,91 @@ async function runFlushOnce(): Promise<CloudBackupFlushResult> {
 
   const currentUserId = auth.userId;
   const db = await _getDb();
-  const now = Date.now();
+  const flushStartedAt = Date.now();
 
   try {
-    await bootstrapOwnedReceiptBackupIntents(db, currentUserId, now);
+    await bootstrapOwnedReceiptBackupIntents(db, currentUserId, flushStartedAt);
   } catch (e) {
     console.warn('[CloudBackup] bootstrap failed (nonfatal):', e);
   }
 
-  const due = await listDueSyncOutboxForUser(db, currentUserId, now);
   let succeeded = 0;
   let failed = 0;
   let skipped = 0;
+  let processed = 0;
+  let batches = 0;
 
-  for (const intent of due) {
-    // Ownership gate (client-side; RLS is second boundary)
-    if (!intent.user_id || intent.user_id !== currentUserId) {
-      skipped += 1;
-      continue;
+  while (
+    batches < CLOUD_BACKUP_MAX_BATCHES_PER_FLUSH &&
+    Date.now() - flushStartedAt < CLOUD_BACKUP_MAX_FLUSH_MS
+  ) {
+    const now = Date.now();
+    const due = await listDueSyncOutboxForUser(
+      db,
+      currentUserId,
+      now,
+      CLOUD_BACKUP_BATCH_SIZE
+    );
+    if (due.length === 0) break;
+
+    batches += 1;
+    let batchSucceeded = 0;
+
+    for (const intent of due) {
+      processed += 1;
+      // Ownership gate (client-side; RLS is second boundary)
+      if (!intent.user_id || intent.user_id !== currentUserId) {
+        skipped += 1;
+        continue;
+      }
+
+      try {
+        const outcome =
+          intent.operation === 'delete'
+            ? await processDelete(db, intent, currentUserId)
+            : await processUpsert(db, intent, currentUserId);
+
+        if (outcome === 'ok') {
+          succeeded += 1;
+          batchSucceeded += 1;
+        } else if (outcome === 'skip') {
+          skipped += 1;
+        } else {
+          failed += 1;
+        }
+      } catch (e: any) {
+        failed += 1;
+        const nextAttempt = (intent.attempt_count || 0) + 1;
+        const delay = computeBackoffMs(nextAttempt);
+        await updateSyncOutboxRetryIfCurrent(db, {
+          receiptId: intent.receipt_id,
+          intentId: intent.intent_id,
+          attemptCount: nextAttempt,
+          lastError: String(e?.message || e || 'backup_failed'),
+          nextRetryAt: Date.now() + delay,
+        });
+      }
     }
 
-    try {
-      const outcome =
-        intent.operation === 'delete'
-          ? await processDelete(db, intent, currentUserId)
-          : await processUpsert(db, intent, currentUserId);
+    // No successful clears this batch → stop drain to avoid skip hot-loops.
+    if (batchSucceeded === 0) break;
+    // Partial page means no more due rows right now.
+    if (due.length < CLOUD_BACKUP_BATCH_SIZE) break;
+  }
 
-      if (outcome === 'ok') succeeded += 1;
-      else if (outcome === 'skip') skipped += 1;
-      else failed += 1;
-    } catch (e: any) {
-      failed += 1;
-      const nextAttempt = (intent.attempt_count || 0) + 1;
-      const delay = computeBackoffMs(nextAttempt);
-      await updateSyncOutboxRetryIfCurrent(db, {
-        receiptId: intent.receipt_id,
-        intentId: intent.intent_id,
-        attemptCount: nextAttempt,
-        lastError: String(e?.message || e || 'backup_failed'),
-        nextRetryAt: Date.now() + delay,
-      });
-    }
+  try {
+    await scheduleRetryWakeup(db, currentUserId, Date.now());
+  } catch (e) {
+    console.warn('[CloudBackup] retry schedule failed (nonfatal):', e);
   }
 
   return {
     ran: true,
-    processed: due.length,
+    processed,
     succeeded,
     failed,
     skipped,
+    batches,
   };
 }
 
@@ -209,31 +298,76 @@ export function requestCloudBackupFlush(): Promise<CloudBackupFlushResult> {
 }
 
 function onAuthState(state: AuthState): void {
-  if (!isCloudBackupEnabled()) return;
-  if (state.status !== 'authenticated' || !state.userId) return;
+  if (!isCloudBackupEnabled()) {
+    clearRetryTimer();
+    return;
+  }
+  if (state.status !== 'authenticated' || !state.userId) {
+    clearRetryTimer();
+    return;
+  }
   void requestCloudBackupFlush();
+}
+
+function onAppStateChange(next: string): void {
+  const prev = _lastAppState;
+  _lastAppState = next;
+  if (!isCloudBackupEnabled()) return;
+  // background/inactive → active
+  if (next === 'active' && prev != null && prev !== 'active') {
+    void requestCloudBackupFlush();
+  }
+}
+
+function ensureAppStateListener(): void {
+  if (_appStateSub) return;
+  try {
+    // Lazy require so Jest can mock react-native.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { AppState } = require('react-native') as typeof import('react-native');
+    _lastAppState = AppState.currentState ?? null;
+    _appStateSub = AppState.addEventListener('change', (state) => {
+      onAppStateChange(String(state));
+    });
+  } catch {
+    // Non-RN environments (unit tests without AppState) — ignore.
+  }
 }
 
 export function startCloudBackupWorker(getDb: GetDbFn): void {
   _getDb = getDb;
+  ensureAppStateListener();
+
   if (_started) {
+    // Re-entry: still flush if already authenticated (restored session / remount).
     onAuthState(getAuthState());
     return;
   }
   _started = true;
-  _unsubscribe = subscribeAuthState(onAuthState);
+  _unsubscribeAuth = subscribeAuthState(onAuthState);
+  // subscribeAuthState immediately notifies current state; also call once for clarity.
   onAuthState(getAuthState());
 }
 
 /** Test helpers */
 export function __resetCloudBackupWorkerForTests(): void {
-  if (_unsubscribe) {
-    _unsubscribe();
-    _unsubscribe = null;
+  clearRetryTimer();
+  if (_unsubscribeAuth) {
+    _unsubscribeAuth();
+    _unsubscribeAuth = null;
+  }
+  if (_appStateSub) {
+    try {
+      _appStateSub.remove();
+    } catch {
+      // ignore
+    }
+    _appStateSub = null;
   }
   _started = false;
   _inflight = null;
   _getDb = null;
+  _lastAppState = null;
 }
 
 export function __runCloudBackupFlushForTests(
@@ -241,4 +375,13 @@ export function __runCloudBackupFlushForTests(
 ): Promise<CloudBackupFlushResult> {
   _getDb = getDb;
   return requestCloudBackupFlush();
+}
+
+/** Test-only: simulate AppState transitions without RN. */
+export function __handleAppStateForTests(next: string): void {
+  onAppStateChange(next);
+}
+
+export function __getRetryTimerPendingForTests(): boolean {
+  return _retryTimer != null;
 }
