@@ -5,11 +5,14 @@
  * - AppleAuthentication.signInAsync({ nonce: hashedNonce })
  * - supabase linkIdentity / signInWithIdToken({ nonce: rawNonce })
  *
- * hashedNonce = SHA-256(rawNonce) as lowercase hex (expo-crypto default HEX).
+ * hashedNonce = SHA-256(rawNonce) as lowercase hex (expo-crypto HEX).
  *
  * Do NOT pass the same raw string to both sides.
  * Do NOT treat GOTRUE_*SKIP_NONCE_CHECK as normal production setup.
+ * Do NOT use Node built-in `crypto` here — Metro / RN cannot resolve it.
  */
+import * as ExpoCrypto from 'expo-crypto';
+
 export type AppleNoncePair = {
   rawNonce: string;
   hashedNonce: string;
@@ -41,22 +44,15 @@ export function generateAppleRawNonce(): string {
 }
 
 /**
- * SHA-256 hex digest of `data`.
- * Prefers expo-crypto; falls back to Node crypto (Jest) when native module is unavailable.
+ * SHA-256 hex digest of `data` via expo-crypto (native / RN runtime).
+ * Always returns lowercase hex (64 chars for SHA-256).
  */
 export async function sha256Hex(data: string): Promise<string> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Crypto = require('expo-crypto') as typeof import('expo-crypto');
-    return await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      data
-    );
-  } catch {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createHash } = require('crypto') as typeof import('crypto');
-    return createHash('sha256').update(data, 'utf8').digest('hex');
-  }
+  const digest = await ExpoCrypto.digestStringAsync(
+    ExpoCrypto.CryptoDigestAlgorithm.SHA256,
+    data
+  );
+  return String(digest).toLowerCase();
 }
 
 /** Create a one-shot raw/hashed nonce pair for a single Apple authorization attempt. */

@@ -118,10 +118,18 @@ describe('API capability (installed SDK source)', () => {
 
   it('nonce hashing: hashedNonce = SHA256(raw) hex; pairs are unique', async () => {
     const { createAppleNoncePair, sha256Hex } = require('./appleNonce') as typeof import('./appleNonce');
+    const { createHash } = require('crypto') as typeof import('crypto');
+    const expected = (raw: string) =>
+      createHash('sha256').update(raw, 'utf8').digest('hex');
+
     const a = await createAppleNoncePair({ generateRaw: () => 'fixed-raw-1' });
     const b = await createAppleNoncePair({ generateRaw: () => 'fixed-raw-2' });
     expect(a.hashedNonce).toBe(await sha256Hex('fixed-raw-1'));
+    expect(a.hashedNonce).toBe(expected('fixed-raw-1'));
     expect(b.hashedNonce).toBe(await sha256Hex('fixed-raw-2'));
+    expect(b.hashedNonce).toBe(expected('fixed-raw-2'));
+    expect(a.hashedNonce).toMatch(/^[0-9a-f]{64}$/);
+    expect(b.hashedNonce).toMatch(/^[0-9a-f]{64}$/);
     expect(a.hashedNonce).not.toBe(a.rawNonce);
     expect(a.hashedNonce).not.toBe(b.hashedNonce);
     expect(a.rawNonce).not.toBe(b.rawNonce);
@@ -130,6 +138,16 @@ describe('API capability (installed SDK source)', () => {
     const d = await createAppleNoncePair();
     expect(c.rawNonce).not.toBe(d.rawNonce);
     expect(c.hashedNonce).not.toBe(d.hashedNonce);
+    expect(c.hashedNonce).toMatch(/^[0-9a-f]{64}$/);
+    expect(d.hashedNonce).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('production appleNonce source never requires Node crypto', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, './appleNonce.ts'), 'utf8');
+    expect(src).toContain("from 'expo-crypto'");
+    expect(src).not.toMatch(/require\(['"]crypto['"]\)/);
+    expect(src).not.toMatch(/from ['"]crypto['"]/);
+    expect(src).not.toMatch(/from ['"]node:crypto['"]/);
   });
 
   it('cancel/error does not return or persist nonce material', async () => {
