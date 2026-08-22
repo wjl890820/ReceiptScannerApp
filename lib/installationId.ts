@@ -9,8 +9,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const INSTALLATION_ID_STORAGE_KEY = 'p0_installation_id_v1';
 
 let _memoryInstallationId: string | null = null;
+/** In-process single-flight: concurrent callers share one resolve/generate/persist. */
+let _inflight: Promise<string> | null = null;
+
+/** Test-only generator override (null = production generateInstallationId). */
+let _generateForTests: (() => string) | null = null;
 
 function generateInstallationId(): string {
+  if (_generateForTests) {
+    return _generateForTests();
+  }
   try {
     if (typeof globalThis.crypto?.randomUUID === 'function') {
       return globalThis.crypto.randomUUID();
@@ -31,17 +39,7 @@ export type InstallationIdStorage = {
   setItem: (key: string, value: string) => Promise<void>;
 };
 
-/**
- * Get or create a stable installation_id for this app install.
- * Same install → same ID; uninstall/reinstall → new ID (AsyncStorage wiped).
- */
-export async function getOrCreateInstallationId(
-  storage: InstallationIdStorage = AsyncStorage
-): Promise<string> {
-  if (_memoryInstallationId) {
-    return _memoryInstallationId;
-  }
-
+async function resolveInstallationId(storage: InstallationIdStorage): Promise<string> {
   try {
     const existing = await storage.getItem(INSTALLATION_ID_STORAGE_KEY);
     if (existing && typeof existing === 'string' && existing.trim().length > 0) {
@@ -64,7 +62,37 @@ export async function getOrCreateInstallationId(
   return id;
 }
 
-/** Test-only memory reset. */
+/**
+ * Get or create a stable installation_id for this app install.
+ * Same install → same ID; uninstall/reinstall → new ID (AsyncStorage wiped).
+ *
+ * Concurrent callers while storage is empty share one in-flight Promise so only
+ * one UUID is generated/persisted (in-process single-flight).
+ */
+export async function getOrCreateInstallationId(
+  storage: InstallationIdStorage = AsyncStorage
+): Promise<string> {
+  if (_memoryInstallationId) {
+    return _memoryInstallationId;
+  }
+
+  if (!_inflight) {
+    _inflight = resolveInstallationId(storage).finally(() => {
+      _inflight = null;
+    });
+  }
+
+  return _inflight;
+}
+
+/** Test-only memory + in-flight reset. */
 export function __resetInstallationIdMemoryForTests(): void {
   _memoryInstallationId = null;
+  _inflight = null;
+  _generateForTests = null;
+}
+
+/** Test-only UUID generator override. */
+export function __setInstallationIdGeneratorForTests(fn: (() => string) | null): void {
+  _generateForTests = fn;
 }
