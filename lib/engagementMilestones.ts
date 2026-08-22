@@ -84,7 +84,7 @@ export type FrequentProductPriceSummary = {
 };
 
 export type MilestoneFrequentProduct = {
-  groupingType: 'canonical' | 'family';
+  groupingType: 'canonical' | 'family' | 'sku';
   key: string;
   displayLabel: string;
   displayLabelKey: string | null;
@@ -199,6 +199,8 @@ export type EngagementProductRow = ProductPriceHistoryRow &
   V1SupportedReceiptSource & {
     canonicalProductName: string | null;
     productFamilyKey: string | null;
+    /** Existing receipt_items.sku_key only — never derived from bare normalized_name. */
+    skuKey: string | null;
   };
 
 export type EngagementMilestoneDatabase = {
@@ -214,7 +216,8 @@ export type MilestoneProductInsightContext = {
   priceHistoryBuilder?: (
     target:
       | { type: 'canonical'; key: string }
-      | { type: 'family'; key: string },
+      | { type: 'family'; key: string }
+      | { type: 'sku'; key: string },
     rows: ProductPriceHistoryRow[]
   ) => ProductPriceHistoryResult;
 };
@@ -590,6 +593,59 @@ export function buildThreeReceiptMilestone(
   };
 }
 
+/**
+ * Deterministic display label for SKU frequent groups.
+ * Never surfaces the raw sku_key hash.
+ */
+function pickSkuGroupDisplayLabel(rows: EngagementProductRow[]): string {
+  type Acc = {
+    count: number;
+    earliestOccurredAt: number;
+    earliestReceiptId: string;
+  };
+  const byLabel = new Map<string, Acc>();
+  for (const row of rows) {
+    const label = row.displayName?.trim();
+    if (!label) continue;
+    const existing = byLabel.get(label);
+    if (!existing) {
+      byLabel.set(label, {
+        count: 1,
+        earliestOccurredAt: row.occurredAt,
+        earliestReceiptId: row.receiptId,
+      });
+      continue;
+    }
+    existing.count += 1;
+    if (
+      row.occurredAt < existing.earliestOccurredAt ||
+      (row.occurredAt === existing.earliestOccurredAt &&
+        row.receiptId.localeCompare(existing.earliestReceiptId) < 0)
+    ) {
+      existing.earliestOccurredAt = row.occurredAt;
+      existing.earliestReceiptId = row.receiptId;
+    }
+  }
+  const ranked = [...byLabel.entries()].sort(
+    (left, right) =>
+      right[1].count - left[1].count ||
+      left[1].earliestOccurredAt - right[1].earliestOccurredAt ||
+      left[1].earliestReceiptId.localeCompare(right[1].earliestReceiptId) ||
+      left[0].localeCompare(right[0])
+  );
+  if (ranked[0]) return ranked[0][0];
+  const fallback = [...rows]
+    .sort(
+      (left, right) =>
+        left.occurredAt - right.occurredAt ||
+        left.receiptId.localeCompare(right.receiptId) ||
+        left.sourceIndex - right.sourceIndex
+    )
+    .map((row) => row.displayName?.trim())
+    .find((label) => !!label);
+  return fallback || 'product';
+}
+
 export function frequentProductGroups(
   receipts: EngagementReceipt[],
   context: MilestoneProductInsightContext
@@ -613,7 +669,7 @@ export function frequentProductGroups(
   const groups = new Map<
     string,
     {
-      groupingType: 'canonical' | 'family';
+      groupingType: 'canonical' | 'family' | 'sku';
       key: string;
       rows: EngagementProductRow[];
     }
@@ -622,15 +678,17 @@ export function frequentProductGroups(
   for (const row of rows) {
     const canonical = row.canonicalProductName?.trim();
     const family = row.productFamilyKey?.trim();
-    // Frequent list only aggregates strong identities (canonical/family).
-    // Unresolved names remain independently usable via product occurrence detail,
-    // and must not be fuzzy-merged into 常购.
-    const groupingType: 'canonical' | 'family' | null = canonical
+    const sku = row.skuKey?.trim();
+    // Hierarchy: canonical > family > existing sku_key only.
+    // Never fuzzy-merge bare normalized names into 常购.
+    const groupingType: 'canonical' | 'family' | 'sku' | null = canonical
       ? 'canonical'
       : family
         ? 'family'
-        : null;
-    const key = canonical || family;
+        : sku
+          ? 'sku'
+          : null;
+    const key = canonical || family || sku;
     if (!groupingType || !key) continue;
     const mapKey = `${groupingType}:${key}`;
     const existing = groups.get(mapKey);
@@ -670,11 +728,15 @@ export function frequentProductGroups(
       return {
         groupingType: group.groupingType,
         key: group.key,
-        displayLabel: group.key,
+        displayLabel:
+          group.groupingType === 'sku'
+            ? pickSkuGroupDisplayLabel(sortedRows)
+            : group.key,
         displayLabelKey:
           group.groupingType === 'family'
             ? `productDetail.family.${group.key}`
             : null,
+        // Occurrence = row count (not quantity). Quantity summed separately.
         purchaseOccurrenceCount: group.rows.length,
         totalPurchaseQuantity: group.rows.reduce(
           (sum, row) => sum + (finitePositive(row.purchaseQuantity) ?? 0),
@@ -922,6 +984,7 @@ async function readProductRows(
        receipt_items.purchase_quantity AS purchaseQuantity,
        receipt_items.canonical_product_name AS canonicalProductName,
        receipt_items.product_family_key AS productFamilyKey,
+       receipt_items.sku_key AS skuKey,
        receipt_items.volume_base_ml AS volumeBaseMl,
        receipt_items.weight_base_g AS weightBaseG,
        receipt_items.count_base AS countBase

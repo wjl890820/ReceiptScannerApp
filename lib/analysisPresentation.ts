@@ -32,6 +32,16 @@ export type AnalysisCategoryShare = {
   share: number;
 };
 
+/** Spending-only conservation check for Analysis category composition. */
+export type AnalysisCategoryConservation = {
+  categoryCompositionTotal: number;
+  activeSpendingCategoryAmountSum: number;
+  /** Uncategorized review bucket — not part of spending composition. */
+  unresolvedOrSystemAmount: number;
+  gap: number;
+  conserved: boolean;
+};
+
 export type AnalysisInsightPresentation = {
   kind: 'story' | 'top_category' | 'low_data';
   titleKey: string;
@@ -143,15 +153,42 @@ export function categoryCompositionPercent(
   return Math.round((100 * amount) / compositionTotal);
 }
 
+/**
+ * Resolve the full eligible category breakdown for Analysis UI / diagnostics.
+ * Prefers `categoryBreakdown`; falls back to `topCategories` for older fixtures.
+ */
+export function resolveAnalysisCategoryBreakdown(
+  stats: WeeklyMonthlyStats
+): Array<{ category: string; amount: number }> {
+  if (
+    Array.isArray(stats.categoryBreakdown) &&
+    stats.categoryBreakdown.length > 0
+  ) {
+    return stats.categoryBreakdown;
+  }
+  return stats.topCategories;
+}
+
+/**
+ * Category bars: all V1 spending categories with amount > 0 from the full
+ * breakdown (not top-3), sorted by amount descending. Denominator remains
+ * `categoryCompositionTotal` (authoritative — never redefined as visible sum).
+ */
 export function buildAnalysisCategoryShares(
   stats: WeeklyMonthlyStats
 ): AnalysisCategoryShare[] {
+  const breakdown = resolveAnalysisCategoryBreakdown(stats);
   const compositionTotal =
     stats.categoryCompositionTotal > 0
       ? stats.categoryCompositionTotal
-      : stats.topCategories.reduce((sum, row) => sum + row.amount, 0);
-  return stats.topCategories
-    .filter((row) => ACTIVE_CATEGORY_SET.has(row.category) || row.category === 'other')
+      : breakdown.reduce((sum, row) => sum + row.amount, 0);
+  return breakdown
+    .filter(
+      (row) =>
+        row.amount > 0 &&
+        (ACTIVE_CATEGORY_SET.has(row.category) || row.category === 'other')
+    )
+    .sort((a, b) => b.amount - a.amount)
     .map((row) => {
       const pct = categoryCompositionPercent(row.amount, compositionTotal);
       return {
@@ -160,6 +197,51 @@ export function buildAnalysisCategoryShares(
         share: pct == null ? 0 : pct / 100,
       };
     });
+}
+
+/**
+ * Full 7-bucket spending amounts for diagnostics / conservation.
+ * Includes zero-amount V1 spending categories so windows always enumerate
+ * the taxonomy; sum of amounts must equal categoryCompositionTotal when
+ * breakdown only contains V1 spending categories.
+ */
+export function buildAnalysisCategoryBucketAmounts(
+  stats: WeeklyMonthlyStats
+): Array<{ category: string; amount: number }> {
+  const breakdown = resolveAnalysisCategoryBreakdown(stats);
+  const amountByCategory = new Map<string, number>();
+  for (const row of breakdown) {
+    if (!ACTIVE_CATEGORY_SET.has(row.category) && row.category !== 'other') {
+      continue;
+    }
+    amountByCategory.set(
+      row.category,
+      (amountByCategory.get(row.category) ?? 0) + row.amount
+    );
+  }
+  return V1_SPENDING_PRODUCT_CATEGORIES.map((category) => ({
+    category,
+    amount: amountByCategory.get(category) ?? 0,
+  }));
+}
+
+export function buildAnalysisCategoryConservation(
+  stats: WeeklyMonthlyStats
+): AnalysisCategoryConservation {
+  const buckets = buildAnalysisCategoryBucketAmounts(stats);
+  const activeSpendingCategoryAmountSum = buckets.reduce(
+    (sum, row) => sum + row.amount,
+    0
+  );
+  const categoryCompositionTotal = stats.categoryCompositionTotal;
+  const gap = categoryCompositionTotal - activeSpendingCategoryAmountSum;
+  return {
+    categoryCompositionTotal,
+    activeSpendingCategoryAmountSum,
+    unresolvedOrSystemAmount: stats.uncategorizedTotal,
+    gap,
+    conserved: gap === 0,
+  };
 }
 
 export function buildAnalysisInsightPresentation(

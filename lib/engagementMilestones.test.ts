@@ -96,6 +96,7 @@ function productRow(
     purchaseQuantity: 1,
     canonicalProductName: null,
     productFamilyKey: null,
+    skuKey: null,
     volumeBaseMl: null,
     weightBaseG: null,
     countBase: null,

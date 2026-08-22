@@ -180,11 +180,17 @@ describe('analysisDReport (D0 fixtures A–N)', () => {
     expect(allWindow!.categories.map((c) => c.category)).toEqual([
       ...V1_SPENDING_CATEGORIES,
     ]);
-    // Production shares helper only surfaces topCategories (≤3); composition total
-    // still includes every classified grocery bucket.
+    // D2-B: diagnostic 7-buckets conserve against categoryCompositionTotal.
     expect(allWindow!.categoryCompositionTotal).toBe(classifiedSum);
     expect(allWindow!.stats.categoryCompositionTotal).toBe(classifiedSum);
-    expect(allWindow!.stats.topCategories.length).toBeGreaterThan(0);
+    expect(allWindow!.stats.categoryBreakdown.length).toBe(
+      V1_SPENDING_CATEGORIES.length
+    );
+    expect(allWindow!.stats.topCategories.length).toBe(3);
+    const bucketSum = allWindow!.categories.reduce((sum, c) => sum + c.amount, 0);
+    expect(bucketSum).toBe(classifiedSum);
+    expect(allWindow!.conservation.conserved).toBe(true);
+    expect(allWindow!.conservation.gap).toBe(0);
     expect(
       allWindow!.stats.topCategories.every((row) =>
         (V1_SPENDING_CATEGORIES as readonly string[]).includes(row.category)

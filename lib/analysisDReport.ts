@@ -13,7 +13,8 @@ import {
   type WeeklyMonthlyStats,
 } from './statsCalculator';
 import {
-  buildAnalysisCategoryShares,
+  buildAnalysisCategoryBucketAmounts,
+  buildAnalysisCategoryConservation,
   categoryCompositionPercent,
 } from './analysisPresentation';
 import {
@@ -36,7 +37,7 @@ import {
   filterByRollingWindowDays,
   rollingDaysForAnalysisRange,
 } from './rollingTimeWindow';
-import { resolveProductIdentity } from './productIdentity';
+import { buildSkuKey, resolveProductIdentity } from './productIdentity';
 import {
   isReliableComparableSpec,
   parseProductSpecification,
@@ -108,6 +109,13 @@ export type AnalysisDCategoryValueWindow = {
     sharePercent: number | null;
   } | null;
   stats: WeeklyMonthlyStats;
+  conservation: {
+    categoryCompositionTotal: number;
+    activeSpendingCategoryAmountSum: number;
+    unresolvedOrSystemAmount: number;
+    gap: number;
+    conserved: boolean;
+  };
 };
 
 export type AnalysisDMerchantWindow = {
@@ -131,6 +139,12 @@ export type AnalysisDFrequentProductWindow = {
   unresolvedIdentityItemRows: number;
   eligibleItemRows: number;
   unresolvedIdentityRate: number | null;
+  /** Rows with existing sku_key but no canonical/family (SKU fallback available). */
+  skuIdentityAvailable: number;
+  canonicalIdentityAvailable: number;
+  familyIdentityAvailable: number;
+  /** No canonical/family — may still have sku_key. */
+  higherSemanticIdentityUnresolved: number;
   dataCoverageIncomplete: boolean;
 };
 
@@ -139,11 +153,14 @@ export type AnalysisDIdentityCoverage = {
   withNormalizedName: number;
   withCanonical: number;
   withFamily: number;
+  withSku: number;
   withBrand: number;
   withSpecEvidence: number;
   specReliability: Record<ProductSpecReliability, number>;
   subcategoryPresent: number;
   productTypePresent: number;
+  /** Rows lacking canonical+family (sku may still be present). */
+  higherSemanticIdentityUnresolved: number;
   note: string;
 };
 
@@ -168,7 +185,7 @@ export type AnalysisDPriceCoverage = {
 };
 
 export type AnalysisDPriceHistoryExample = {
-  groupingType: 'canonical' | 'family';
+  groupingType: 'canonical' | 'family' | 'sku';
   key: string;
   observationCount: number;
   status: ProductPriceHistoryStatus;
@@ -364,6 +381,7 @@ function deriveProductRows(receipts: ReceiptRow[]): EngagementProductRow[] {
         weightBaseG: row.weight_base_g,
         countBase: row.count_base,
         canonicalProductName: row.canonical_product_name,
+        skuKey: row.sku_key,
         merchant_raw: receipt.merchant_raw ?? null,
         merchant_normalized: receipt.merchant_normalized ?? null,
         merchant_type: receipt.merchant_type ?? null,
@@ -474,21 +492,16 @@ function buildCategoryValueWindows(
   return WINDOWS.map((window) => {
     const filtered = filterReceiptsForWindow(receipts, window, nowMs);
     const stats = calculateStats(filtered, 'all');
-    const shares = buildAnalysisCategoryShares(stats);
-    const amountByCategory = new Map(
-      shares.map((row) => [row.category, row.amount] as const)
-    );
-    const categories = V1_SPENDING_CATEGORIES.map((category) => {
-      const amount = amountByCategory.get(category) ?? 0;
-      return {
-        category,
-        amount,
-        sharePercent: categoryCompositionPercent(
-          amount,
-          stats.categoryCompositionTotal
-        ),
-      };
-    });
+    const buckets = buildAnalysisCategoryBucketAmounts(stats);
+    const conservation = buildAnalysisCategoryConservation(stats);
+    const categories = buckets.map((row) => ({
+      category: row.category as V1SpendingCategory,
+      amount: row.amount,
+      sharePercent: categoryCompositionPercent(
+        row.amount,
+        stats.categoryCompositionTotal
+      ),
+    }));
     const top = stats.topCategories[0];
     return {
       window,
@@ -505,6 +518,7 @@ function buildCategoryValueWindows(
           }
         : null,
       stats,
+      conservation,
     };
   });
 }
@@ -563,12 +577,23 @@ function buildFrequentProductWindows(
     });
     let eligibleItemRows = 0;
     let unresolvedIdentityItemRows = 0;
+    let skuIdentityAvailable = 0;
+    let canonicalIdentityAvailable = 0;
+    let familyIdentityAvailable = 0;
+    let higherSemanticIdentityUnresolved = 0;
     for (const row of rows) {
       if (!isV1SupportedReceipt(row)) continue;
       eligibleItemRows += 1;
       const canonical = row.canonicalProductName?.trim();
       const family = row.productFamilyKey?.trim();
-      if (!canonical && !family) unresolvedIdentityItemRows += 1;
+      const sku = row.skuKey?.trim();
+      if (canonical) canonicalIdentityAvailable += 1;
+      if (family) familyIdentityAvailable += 1;
+      if (sku) skuIdentityAvailable += 1;
+      if (!canonical && !family) {
+        higherSemanticIdentityUnresolved += 1;
+        if (!sku) unresolvedIdentityItemRows += 1;
+      }
     }
     return {
       window,
@@ -579,6 +604,10 @@ function buildFrequentProductWindows(
         unresolvedIdentityItemRows,
         eligibleItemRows
       ),
+      skuIdentityAvailable,
+      canonicalIdentityAvailable,
+      familyIdentityAvailable,
+      higherSemanticIdentityUnresolved,
       dataCoverageIncomplete: result.dataCoverageIncomplete,
     };
   });
@@ -592,7 +621,9 @@ function buildIdentityAndSpecCoverage(receipts: ReceiptRow[]): {
   let withNormalizedName = 0;
   let withCanonical = 0;
   let withFamily = 0;
+  let withSku = 0;
   let withBrand = 0;
+  let higherSemanticIdentityUnresolved = 0;
   let withSpecEvidence = 0;
   const specReliability: Record<ProductSpecReliability, number> = {
     exact: 0,
@@ -619,7 +650,11 @@ function buildIdentityAndSpecCoverage(receipts: ReceiptRow[]): {
     if (identity.normalizedName) withNormalizedName += 1;
     if (identity.canonicalProductName) withCanonical += 1;
     if (identity.productFamilyKey) withFamily += 1;
+    if (buildSkuKey(identity)) withSku += 1;
     if (identity.brand) withBrand += 1;
+    if (!identity.canonicalProductName && !identity.productFamilyKey) {
+      higherSemanticIdentityUnresolved += 1;
+    }
     if (item.subcategory != null && String(item.subcategory).trim()) {
       subcategoryPresent += 1;
     }
@@ -655,13 +690,15 @@ function buildIdentityAndSpecCoverage(receipts: ReceiptRow[]): {
       withNormalizedName,
       withCanonical,
       withFamily,
+      withSku,
       withBrand,
       withSpecEvidence,
       specReliability,
       subcategoryPresent,
       productTypePresent,
+      higherSemanticIdentityUnresolved,
       note:
-        'subcategory/productType slots are currently unset in V1; absence is expected.',
+        'subcategory/productType slots are currently unset in V1; absence is expected. withSku uses existing buildSkuKey only.',
     },
     specCoverage: {
       volumeExactCount,
@@ -1027,12 +1064,22 @@ function buildDataQualityFlags(
       rawName: itemName(item),
       category: typeof item.category === 'string' ? item.category : null,
     });
-    if (!identity.canonicalProductName && !identity.productFamilyKey) {
+    const skuFromIdentity = buildSkuKey(identity);
+    const skuFromIndex = productRows.find(
+      (row) =>
+        row.receiptId === receipt.id && row.sourceIndex === sourceIndex
+    )?.skuKey?.trim();
+    if (
+      !identity.canonicalProductName &&
+      !identity.productFamilyKey &&
+      !skuFromIdentity &&
+      !skuFromIndex
+    ) {
       flags.push({
         code: 'unresolved_identity',
         receiptId: receipt.id,
         itemSourceIndex: sourceIndex,
-        detail: 'no canonical or family',
+        detail: 'no canonical, family, or sku_key',
       });
     }
     if (identity.specification.reliability !== 'exact') {

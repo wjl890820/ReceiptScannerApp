@@ -22,7 +22,9 @@ export type WeeklyMonthlyStats = {
   /** V1：supermarket + convenience 小票合计 */
   supportedSpend: number;
   supportedReceiptCount: number;
-  topCategories: Array<{ category: string; amount: number }>; // V1 supported receipts only
+  /** All eligible categorized rows (same universe as categoryCompositionTotal). */
+  categoryBreakdown: Array<{ category: string; amount: number }>;
+  topCategories: Array<{ category: string; amount: number }>; // V1 supported receipts only (top 3)
   /**
    * Sum of ALL eligible categorized merchandise amounts (before top-N truncation).
    * Used as the shared denominator for category bars + category-share insights.
@@ -129,7 +131,8 @@ export function calculateStats(
     (sum, row) => sum + row.amount,
     0
   );
-  const topCategories = allCategoryRows.slice(0, 3);
+  const categoryBreakdown = allCategoryRows;
+  const topCategories = categoryBreakdown.slice(0, 3);
 
   // Merchant analytics (V1 supported receipts only — same universe as overview).
   // Spend uses authoritative receipt.total; grouping prefers merchant_normalized.
@@ -193,6 +196,7 @@ export function calculateStats(
     grocerySpend,
     supportedSpend,
     supportedReceiptCount,
+    categoryBreakdown,
     topCategories,
     categoryCompositionTotal,
     topMerchants,

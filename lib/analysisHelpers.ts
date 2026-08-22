@@ -26,6 +26,7 @@ export function createEmptyStats(): WeeklyMonthlyStats {
     grocerySpend: 0,
     supportedSpend: 0,
     supportedReceiptCount: 0,
+    categoryBreakdown: [],
     topCategories: [],
     categoryCompositionTotal: 0,
     topMerchants: [],

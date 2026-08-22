@@ -133,6 +133,11 @@ describe('M1-A taxonomy contract', () => {
       grocerySpend: 1000,
       supportedSpend: 1000,
       supportedReceiptCount: 3,
+      categoryBreakdown: [
+        { category: 'food_ingredients', amount: 400 },
+        { category: 'personal_care', amount: 300 },
+        { category: 'pet_care', amount: 200 },
+      ],
       topCategories: [
         { category: 'food_ingredients', amount: 400 },
         { category: 'personal_care', amount: 300 },

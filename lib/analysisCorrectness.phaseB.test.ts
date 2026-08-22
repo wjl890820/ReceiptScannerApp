@@ -219,13 +219,19 @@ describe('Phase B P0-B — category denominator unification', () => {
     );
   });
 
-  it('3 — top-N display still uses full compositionTotal denominator', () => {
+  it('3 — full breakdown surfaces ranks 4+ while keeping compositionTotal denominator', () => {
     const stats = {
       ...createEmptyStats(),
       supportedSpend: 5000,
       supportedReceiptCount: 4,
-      // Full universe includes a 4th category not in topCategories slice
+      // Full universe includes a 4th category — must be visible in shares (D2-B)
       categoryCompositionTotal: 1000,
+      categoryBreakdown: [
+        { category: 'snacks_drinks', amount: 400 },
+        { category: 'food_ingredients', amount: 300 },
+        { category: 'ready_to_eat', amount: 200 },
+        { category: 'household', amount: 100 },
+      ],
       topCategories: [
         { category: 'snacks_drinks', amount: 400 },
         { category: 'food_ingredients', amount: 300 },
@@ -233,8 +239,15 @@ describe('Phase B P0-B — category denominator unification', () => {
       ],
     };
     const shares = buildAnalysisCategoryShares(stats);
+    expect(shares.map((s) => s.category)).toEqual([
+      'snacks_drinks',
+      'food_ingredients',
+      'ready_to_eat',
+      'household',
+    ]);
     const top = shares[0];
     expect(Math.round(top.share * 100)).toBe(40); // 400/1000, not 400/900
+    expect(Math.round(shares[3].share * 100)).toBe(10); // 100/1000 — no invisible leakage
     const insight = buildAnalysisInsightPresentation('ready', stats, null);
     expect(insight?.bodyParams?.pct).toBe(40);
   });
