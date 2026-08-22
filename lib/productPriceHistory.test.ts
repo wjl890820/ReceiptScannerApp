@@ -394,3 +394,50 @@ describe('Price History query safety', () => {
     expect(result.points.map((point) => point.lineTotal)).toEqual([238, 248]);
   });
 });
+
+
+describe('M1-B multipack unit price contract', () => {
+  it('500ml×6 ¥600 → ¥200/L (M)', () => {
+    const result = buildProductPriceHistory(
+      { type: 'family', key: 'water' },
+      [
+        row('1', {
+          lineTotal: 600,
+          purchaseQuantity: 1,
+          volumeBaseMl: 3000,
+          productFamilyKey: 'water',
+        }),
+        row('2', {
+          lineTotal: 600,
+          purchaseQuantity: 1,
+          volumeBaseMl: 3000,
+          productFamilyKey: 'water',
+        }),
+      ]
+    );
+    expect(result.status).toBe('ready');
+    expect(result.points.map((point) => point.priceValue)).toEqual([200, 200]);
+  });
+
+  it('qty=2 with lineTotal for both units is not double-divided (L)', () => {
+    // 500ml × purchaseQuantity 2, lineTotal 200 → 1000ml total → ¥200/L
+    const result = buildProductPriceHistory(
+      { type: 'family', key: 'water' },
+      [
+        row('1', {
+          lineTotal: 200,
+          purchaseQuantity: 2,
+          volumeBaseMl: 500,
+          productFamilyKey: 'water',
+        }),
+        row('2', {
+          lineTotal: 100,
+          purchaseQuantity: 1,
+          volumeBaseMl: 500,
+          productFamilyKey: 'water',
+        }),
+      ]
+    );
+    expect(result.points.map((point) => point.priceValue)).toEqual([200, 200]);
+  });
+});

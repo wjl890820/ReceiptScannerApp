@@ -22,6 +22,10 @@ export type PersistedReceiptItemIdentity = {
   count_base: number | null;
   spec_source_text: string | null;
   spec_confidence: number;
+  /** Full raw name evidence used for the parse (additive). */
+  spec_raw_text: string | null;
+  spec_reliability: 'exact' | 'partial' | 'unknown' | null;
+  spec_parser_version: string | null;
 };
 
 export type ApplyProductIdentityOptions = {
@@ -63,6 +67,9 @@ function conservativeIdentityFields(
     count_base: null,
     spec_source_text: null,
     spec_confidence: 0,
+    spec_raw_text: null,
+    spec_reliability: null,
+    spec_parser_version: null,
   };
 }
 
@@ -126,6 +133,9 @@ export function applyProductIdentityToItem<T extends Record<string, unknown>>(
       count_base: spec.countBase,
       spec_source_text: spec.sourceText,
       spec_confidence: spec.confidence,
+      spec_raw_text: spec.rawText,
+      spec_reliability: spec.reliability,
+      spec_parser_version: spec.parserVersion,
     };
   } catch {
     return {

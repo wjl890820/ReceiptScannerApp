@@ -106,6 +106,7 @@ export function isSpecificationCompatibleWithFamily(
   family: ProductFamilyKey | null
 ): boolean {
   if (!family || specification.dimension === 'unknown') return false;
+  if (specification.reliability !== 'exact') return false;
 
   if (
     family === 'milk' ||

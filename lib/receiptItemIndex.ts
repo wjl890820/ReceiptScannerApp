@@ -15,10 +15,12 @@ import {
   PRODUCT_FAMILY_KEYS,
   type ProductFamilyKey,
 } from './productFamily';
-import type {
-  ProductSpecDimension,
-  ProductSpecification,
-  ProductSpecUnit,
+import {
+  LEGACY_SPEC_PARSER_VERSION,
+  SPEC_PARSER_VERSION,
+  type ProductSpecDimension,
+  type ProductSpecification,
+  type ProductSpecUnit,
 } from './productSpecification';
 
 export type ReceiptItemSourceKind = 'ocr' | 'user_added' | 'legacy' | 'unknown';
@@ -200,17 +202,31 @@ function buildSpecification(
   weightBaseG: number | null,
   countBase: number | null,
   sourceText: string | null,
-  confidence: number
+  confidence: number,
+  options?: {
+    rawText?: string | null;
+    reliability?: ProductSpecification['reliability'];
+    parserVersion?: string | null;
+  }
 ): ProductSpecification {
+  const dimension = dimensionForSpecUnit(sizeUnit);
+  const reliability =
+    options?.reliability ??
+    (dimension === 'unknown' || confidence <= 0 ? 'unknown' : 'exact');
   return {
-    dimension: dimensionForSpecUnit(sizeUnit),
+    rawText: options?.rawText ?? null,
+    sourceText,
+    dimension,
     sizeValue,
     sizeUnit,
     packCount,
     volumeBaseMl,
     weightBaseG,
     countBase,
-    sourceText,
+    reliability,
+    parserVersion:
+      options?.parserVersion?.trim() ||
+      (dimension === 'unknown' ? LEGACY_SPEC_PARSER_VERSION : SPEC_PARSER_VERSION),
     confidence,
   };
 }
@@ -412,7 +428,20 @@ export function buildReceiptItemIndexRows(
       weightBaseG,
       countBase,
       specSourceText,
-      specConfidence
+      specConfidence,
+      {
+        rawText:
+          stringOrNull(item.spec_raw_text) ??
+          stringOrNull(item.raw_name) ??
+          stringOrNull(item.name),
+        reliability:
+          item.spec_reliability === 'exact' ||
+          item.spec_reliability === 'partial' ||
+          item.spec_reliability === 'unknown'
+            ? item.spec_reliability
+            : undefined,
+        parserVersion: stringOrNull(item.spec_parser_version),
+      }
     );
     const identityForSku: ProductIdentity = {
       rawName: finalName,

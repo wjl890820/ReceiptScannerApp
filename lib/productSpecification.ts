@@ -1,24 +1,62 @@
+/**
+ * MERUNO product specification contract (M1-B).
+ *
+ * Distinguishes:
+ * - purchase_quantity (sale-line units purchased; owned by receipt/index layer)
+ * - per-pack content (sizeValue + sizeUnit)
+ * - packCount (internal units inside one sale unit)
+ * - total packaged content for one sale unit (volumeBaseMl / weightBaseG / countBase)
+ *
+ * Raw evidence is preserved. Unknown beats fabricated precision.
+ */
+
+export const SPEC_PARSER_VERSION = 'meruno-spec-parser-v1' as const;
+
+/** Historical derived rows with no stamped parser version. */
+export const LEGACY_SPEC_PARSER_VERSION = 'legacy_unknown' as const;
+
 export type ProductSpecDimension = 'volume' | 'weight' | 'count' | 'unknown';
 
 export type ProductSpecUnit = 'ml' | 'l' | 'g' | 'kg' | 'count';
 
+/** Deterministic comparison safety (not a confidence score). */
+export type ProductSpecReliability = 'exact' | 'partial' | 'unknown';
+
+/**
+ * Spec result for one sale unit (one purchase-unit of the product).
+ *
+ * purchase_quantity is intentionally NOT part of this object — it lives on the
+ * receipt line and must never be conflated with packCount.
+ */
 export type ProductSpecification = {
+  /** Full raw input retained for re-parse / audit. */
+  rawText: string | null;
+  /** Matched evidence fragment when a pattern hit; otherwise null. */
+  sourceText: string | null;
   dimension: ProductSpecDimension;
+  /** Per-pack content value (e.g. 500 in 500ml×6). */
   sizeValue: number | null;
   sizeUnit: ProductSpecUnit | null;
-  /** Number of internal units in one purchase unit. */
+  /** Internal pack multiplicity inside one sale unit (e.g. 6 in 500ml×6). */
   packCount: number | null;
-  /** Total volume represented by one purchase unit. */
+  /** Total volume for one sale unit (ml). */
   volumeBaseMl: number | null;
-  /** Total weight represented by one purchase unit. */
+  /** Total weight for one sale unit (g). */
   weightBaseG: number | null;
-  /** Total count represented by one purchase unit. */
+  /** Total count for one sale unit. */
   countBase: number | null;
-  sourceText: string | null;
+  reliability: ProductSpecReliability;
+  parserVersion: string;
+  /**
+   * Legacy numeric confidence kept for existing callers.
+   * Prefer `reliability` for comparison gates.
+   */
   confidence: number;
 };
 
 const UNKNOWN_SPECIFICATION: ProductSpecification = {
+  rawText: null,
+  sourceText: null,
   dimension: 'unknown',
   sizeValue: null,
   sizeUnit: null,
@@ -26,7 +64,8 @@ const UNKNOWN_SPECIFICATION: ProductSpecification = {
   volumeBaseMl: null,
   weightBaseG: null,
   countBase: null,
-  sourceText: null,
+  reliability: 'unknown',
+  parserVersion: SPEC_PARSER_VERSION,
   confidence: 0,
 };
 
@@ -47,16 +86,20 @@ export function normalizeIdentityText(rawText: string): string {
   normalized = normalized.replace(/\s+/g, ' ');
   // Normalize multiplication markers only in numeric/multipack contexts.
   normalized = normalized.replace(
-    /(\d+(?:\.\d+)?\s*(?:ml|l|g|kg))\s*[×xX]\s*(?=\d)/gi,
+    /(\d+(?:\.\d+)?\s*(?:ml|l|g|kg))\s*[×xX*]\s*(?=\d)/gi,
     '$1×'
   );
-  normalized = normalized.replace(/(\d)\s*[×xX]\s*(?=\d)/g, '$1×');
+  normalized = normalized.replace(/(\d)\s*[×xX*]\s*(?=\d)/g, '$1×');
   // Units and Latin brand text are case-insensitive in identity matching.
   return normalized.toLowerCase();
 }
 
-function unknownSpecification(): ProductSpecification {
-  return { ...UNKNOWN_SPECIFICATION };
+function unknownSpecification(rawText: string | null = null, sourceText: string | null = null): ProductSpecification {
+  return {
+    ...UNKNOWN_SPECIFICATION,
+    rawText,
+    sourceText,
+  };
 }
 
 function dimensionForUnit(unit: ProductSpecUnit): Exclude<ProductSpecDimension, 'unknown'> {
@@ -69,12 +112,19 @@ function isValidPositive(value: number): boolean {
   return Number.isFinite(value) && value > 0;
 }
 
+function confidenceForReliability(reliability: ProductSpecReliability): number {
+  if (reliability === 'exact') return 0.99;
+  if (reliability === 'partial') return 0.7;
+  return 0;
+}
+
 function buildMeasuredSpecification(
+  rawText: string,
   sizeValue: number,
   sizeUnit: Exclude<ProductSpecUnit, 'count'>,
   packCount: number,
   sourceText: string,
-  confidence: number
+  reliability: ProductSpecReliability = 'exact'
 ): ProductSpecification {
   if (
     !isValidPositive(sizeValue) ||
@@ -82,7 +132,7 @@ function buildMeasuredSpecification(
     packCount < 1 ||
     packCount > MAX_PACK_COUNT
   ) {
-    return unknownSpecification();
+    return unknownSpecification(rawText, sourceText);
   }
 
   const dimension = dimensionForUnit(sizeUnit);
@@ -97,10 +147,12 @@ function buildMeasuredSpecification(
     (dimension === 'volume' && singleBase > MAX_SINGLE_VOLUME_ML) ||
     (dimension === 'weight' && singleBase > MAX_SINGLE_WEIGHT_G)
   ) {
-    return unknownSpecification();
+    return unknownSpecification(rawText, sourceText);
   }
 
   return {
+    rawText,
+    sourceText,
     dimension,
     sizeValue,
     sizeUnit,
@@ -108,65 +160,147 @@ function buildMeasuredSpecification(
     volumeBaseMl: dimension === 'volume' ? singleBase * packCount : null,
     weightBaseG: dimension === 'weight' ? singleBase * packCount : null,
     countBase: null,
-    sourceText,
-    confidence,
+    reliability,
+    parserVersion: SPEC_PARSER_VERSION,
+    confidence: confidenceForReliability(reliability),
   };
+}
+
+function buildCountSpecification(
+  rawText: string,
+  perPackCount: number,
+  packCount: number,
+  sourceText: string,
+  reliability: ProductSpecReliability = 'exact'
+): ProductSpecification {
+  if (
+    !Number.isInteger(perPackCount) ||
+    !Number.isInteger(packCount) ||
+    perPackCount < 1 ||
+    packCount < 1 ||
+    perPackCount > MAX_PACK_COUNT ||
+    packCount > MAX_PACK_COUNT
+  ) {
+    return unknownSpecification(rawText, sourceText);
+  }
+
+  return {
+    rawText,
+    sourceText,
+    dimension: 'count',
+    sizeValue: perPackCount,
+    sizeUnit: 'count',
+    packCount,
+    volumeBaseMl: null,
+    weightBaseG: null,
+    countBase: perPackCount * packCount,
+    reliability,
+    parserVersion: SPEC_PARSER_VERSION,
+    confidence: confidenceForReliability(reliability),
+  };
+}
+
+/** True when the spec is safe for family-level unit-price normalization. */
+export function isReliableComparableSpec(spec: ProductSpecification): boolean {
+  if (spec.reliability !== 'exact' || spec.dimension === 'unknown') return false;
+  if (spec.dimension === 'volume') return isValidPositive(spec.volumeBaseMl ?? NaN);
+  if (spec.dimension === 'weight') return isValidPositive(spec.weightBaseG ?? NaN);
+  if (spec.dimension === 'count') return isValidPositive(spec.countBase ?? NaN);
+  return false;
 }
 
 /**
  * Parse a specification from the raw product name.
  *
- * Only explicit units are accepted. Unitless numbers, product model numbers,
- * years, JAN/EAN values, and store item numbers remain unknown.
+ * Only explicit physical units (or safe countable markers 個/枚/pc) are accepted.
+ * Packaging vocabulary alone (本/袋/パック/箱/ケース/入) remains unknown.
  */
 export function parseProductSpecification(rawName: string): ProductSpecification {
-  const text = normalizeIdentityText(rawName);
-  if (!text) return unknownSpecification();
+  const rawText = typeof rawName === 'string' ? rawName : '';
+  const text = normalizeIdentityText(rawText);
+  if (!text) return unknownSpecification(rawText || null);
 
-  // Multipack must be resolved before count-only patterns: in 500ml×6本,
-  // "6本" describes the number of internal bottles, not a count dimension.
-  const multipack = text.match(
+  // 1) content × pack  (500ml×6 / 500ml x 6 / 500ml*6)
+  const contentPack = text.match(
     /(\d+(?:\.\d+)?)\s*(ml|l|g|kg)\s*×\s*(\d+)\s*(?:本|個|枚|袋|パック)?(?:入)?/i
   );
-  if (multipack) {
+  if (contentPack) {
     return buildMeasuredSpecification(
-      Number(multipack[1]),
-      multipack[2].toLowerCase() as Exclude<ProductSpecUnit, 'count'>,
-      Number(multipack[3]),
-      multipack[0],
-      0.99
+      rawText,
+      Number(contentPack[1]),
+      contentPack[2].toLowerCase() as Exclude<ProductSpecUnit, 'count'>,
+      Number(contentPack[3]),
+      contentPack[0]
     );
   }
 
+  // 2) pack × content  (6×500ml / 6 x 500ml)
+  const packContent = text.match(
+    /(\d+)\s*×\s*(\d+(?:\.\d+)?)\s*(ml|l|g|kg)(?:\s*(?:本|個|枚|袋|パック)?(?:入)?)?/i
+  );
+  if (packContent) {
+    return buildMeasuredSpecification(
+      rawText,
+      Number(packContent[2]),
+      packContent[3].toLowerCase() as Exclude<ProductSpecUnit, 'count'>,
+      Number(packContent[1]),
+      packContent[0]
+    );
+  }
+
+  // 3) count × pack  (10個×2)
+  const countPack = text.match(/(\d+)\s*(個|枚|pc|pcs)\s*×\s*(\d+)/i);
+  if (countPack) {
+    return buildCountSpecification(
+      rawText,
+      Number(countPack[1]),
+      Number(countPack[3]),
+      countPack[0]
+    );
+  }
+
+  // 4) pack × count  (2×10個)
+  const packCountOnly = text.match(/(\d+)\s*×\s*(\d+)\s*(個|枚|pc|pcs)/i);
+  if (packCountOnly) {
+    return buildCountSpecification(
+      rawText,
+      Number(packCountOnly[2]),
+      Number(packCountOnly[1]),
+      packCountOnly[0]
+    );
+  }
+
+  // 5) Ambiguous packaging multipacks — keep evidence, do not invent dimension.
+  const ambiguousMultipack = text.match(
+    /(\d+)\s*(?:本|袋|パック|箱|ケース|p)\s*×\s*(\d+)|(\d+)\s*×\s*(\d+)\s*(?:本|袋|パック|箱|ケース)|ケース\s*(\d+)|(\d+)\s*p\b|(\d+)\s*入/i
+  );
+  if (ambiguousMultipack) {
+    return unknownSpecification(rawText, ambiguousMultipack[0]);
+  }
+
+  // 6) Simple measured content
   const measured = text.match(/(\d+(?:\.\d+)?)\s*(ml|l|g|kg)/i);
   if (measured) {
     return buildMeasuredSpecification(
+      rawText,
       Number(measured[1]),
       measured[2].toLowerCase() as Exclude<ProductSpecUnit, 'count'>,
       1,
-      measured[0],
-      0.98
+      measured[0]
     );
   }
 
-  const count = text.match(/(\d+)\s*(個|本|枚|袋|パック|pc|pcs|pk|pack)\s*(?:入)?/i);
+  // 7) Safe countable markers only (個/枚/pc). Packaging words alone are unknown.
+  const count = text.match(/(\d+)\s*(個|枚|pc|pcs|pk|pack)\s*(?:入)?/i);
   if (count) {
-    const countValue = Number(count[1]);
-    if (!Number.isInteger(countValue) || countValue < 1 || countValue > MAX_PACK_COUNT) {
-      return unknownSpecification();
-    }
-    return {
-      dimension: 'count',
-      sizeValue: countValue,
-      sizeUnit: 'count',
-      packCount: 1,
-      volumeBaseMl: null,
-      weightBaseG: null,
-      countBase: countValue,
-      sourceText: count[0],
-      confidence: 0.94,
-    };
+    return buildCountSpecification(rawText, Number(count[1]), 1, count[0]);
   }
 
-  return unknownSpecification();
+  // 8) Packaging vocabulary without physical content → unknown
+  const packagingOnly = text.match(/(\d+)\s*(?:本|袋|パック|箱|ケース)\s*(?:入)?/i);
+  if (packagingOnly) {
+    return unknownSpecification(rawText, packagingOnly[0]);
+  }
+
+  return unknownSpecification(rawText);
 }
