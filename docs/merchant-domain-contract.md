@@ -1,9 +1,9 @@
-# Merchant Domain Contract (R1-B1 freeze)
+# Merchant Domain Contract (R1-B1 freeze + R1-B2 derived retailer identity)
 
-**Status:** Frozen for R1-B1.  
-**Scope:** Documentation + regression locks only. No new retailer/store tables, migrations, or normalization-rule expansion.
+**Status:** R1-B1 frozen; R1-B2 adds recomputable `DerivedRetailerIdentity` only.
+**Scope:** No retailer/store DB tables, migrations, backfill, receipt rewrite, or analytics wiring of `retailerKey`.
 
-Analysis D production universe and duplicate fingerprints remain frozen unless a future change proves byte-identical merchant-key outputs.
+Analysis D production universe and duplicate fingerprints remain frozen. `merchantAnalyticsKey` outputs must stay byte-identical for existing fixtures.
 
 ---
 
@@ -13,9 +13,22 @@ Analysis D production universe and duplicate fingerprints remain frozen unless a
 | --- | --- | --- |
 | Observation | `merchant_raw` | Receipt / OCR / user-reviewed merchant evidence |
 | Retailer-ish derived | `merchant_normalized` | Current chain-ish normalization (not a DB retailer id) |
+| **Derived retailer identity** | `deriveRetailerIdentity(...)` → `DerivedRetailerIdentity` | Stable chain key + optional `storeHint` (recomputable; **not** persisted) |
 | Business format | `merchant_type` | `supermarket` \| `convenience` \| `other` \| `unknown` |
-| Analytics identity | `merchantAnalyticsKey(receipt)` | **Single** V1 merchant aggregation key |
+| Analytics identity | `merchantAnalyticsKey(receipt)` | **Single** V1 merchant aggregation key (**unchanged** by R1-B2) |
 | Legacy mirror | `store_raw` / `store_normalized` | Placeholder copies of merchant fields — **not** verified branch identity |
+
+Pipeline (additive):
+
+```
+merchant_raw
+    ↓
+merchant_normalized          (existing; do not repurpose)
+    ↓
+DerivedRetailerIdentity      (R1-B2 — deriveRetailerIdentity)
+    ↓
+future optional verified Store   (not implemented)
+```
 
 ---
 
@@ -96,6 +109,42 @@ Do **not**:
 - rename/delete/migrate them in R1-B1
 - invent branch extraction here
 
+### F. `DerivedRetailerIdentity` — R1-B2 recomputable metadata
+
+SSOT: `lib/retailerIdentity.ts` → `deriveRetailerIdentity`.
+
+```ts
+type DerivedRetailerIdentity = {
+  retailerKey: string | null;
+  retailerDisplayName: string | null;
+  storeHint: string | null; // optional parse residue only
+  source: 'known_retailer_rule' | 'existing_normalized' | 'unresolved';
+  confidence: 'exact' | 'derived' | 'unknown';
+};
+```
+
+It **is**:
+
+- deterministic, rebuildable from `merchant_raw` / `merchant_normalized`
+- derived from an explicit registry + reuse of existing `canonicalizeMerchantChain` / `normalizeMerchant` evidence
+- independent of UI language for `retailerKey` where practical (`costco`, `gyomu_super`, …)
+
+It is **NOT**:
+
+- receipt Source of Truth
+- a replacement for `merchantAnalyticsKey`
+- a persisted retailer DB ID / UUID
+- physical store proof
+- wired into Home / Analysis / duplicates / price history / Product Detail / ShoppingIntent (R1-B2)
+
+`storeHint`:
+
+- optional residue after removing a known chain prefix (e.g. `業務スーパー古川` → `古川`)
+- **not** `storeKey`, **not** verified branch identity
+- must **not** be persisted, geocoded, or merged across receipts in R1-B2
+
+Unknown / independent merchants may remain `retailerKey: null` (`source: 'unresolved'`). Do not force `normalizeMerchantName(any merchant)` into a retailer key.
+
 ---
 
 ## 3. UI display vs analytics identity
@@ -109,40 +158,42 @@ Display identity and analytics identity are **intentionally different**. Do not 
 
 ---
 
-## 4. Known follow-up (do not fix in R1-B1)
+## 4. Known follow-up
 
 **Product Detail / price-history grouping** may still use SQL `COALESCE(merchant_normalized, merchant_raw)` without `merchantAnalyticsKey` / `normalizeMerchantName`.
 
-→ Tracked for **R1-B3** after retailer normalization (R1-B2) is stable. Do not change Product Detail results in B1.
+→ Tracked for **R1-B3** (RetailerProfile / consumption). Do not change Product Detail or analytics aggregation in B2.
 
 ---
 
-## 5. Intended future layers (not implemented in B1)
+## 5. Future layers
 
 ```
 merchant_raw
     ↓
-derived retailer identity   (chain / business — R1-B2+)
+merchant_normalized
     ↓
-optional derived store identity  (branch — later)
+DerivedRetailerIdentity   (R1-B2 — implemented, not persisted, not analytics-wired)
+    ↓
+optional verified Store   (later; storeHint is only parse evidence)
 ```
 
-- **Retailer identity ≠ store identity**  
-  Example (semantic only, not implemented):  
-  `業務スーパー古川` → retailer `業務スーパー` → possible store `古川`
-- **RetailerProfile** (future) = small objective metadata attached to retailer identity  
-  (display name, format, membership/warehouse flags, etc.)  
+- **Retailer identity ≠ store identity**
+  Example: `業務スーパー古川` → `retailerKey=gyomu_super` → optional `storeHint=古川`
+- **RetailerProfile** (R1-B3+) = objective metadata on retailer identity
   It does **not** replace `merchant_type` or V1 eligibility.
 
 ---
 
 ## 6. Invariants (must not regress)
 
-- Raw observation preserved.
-- Derived values recomputable.
+- Raw observation preserved (`merchant_raw` not mutated by derive).
+- `merchant_normalized` semantics / outputs unchanged by R1-B2 (no rewrite of existing helpers).
+- `merchantAnalyticsKey` unchanged for existing fixtures.
+- Derived retailer identity recomputable; no persistence / backfill.
 - User override > machine-derived observation when reviewed.
-- No destructive receipt rewrite / no B1 schema or sync payload change.
+- No destructive receipt rewrite / no schema or sync payload change in B1/B2.
 - History remains historical/raw-first for display.
-- Analytics receipt selection / Analysis D universe / duplicate fingerprints unchanged by this contract freeze.
-- Unsupported merchants still save.
-- R1-B1 does not add/remove/change chain alias or merchant-type heuristics.
+- Analytics receipt selection / Analysis D universe / duplicate fingerprints unchanged.
+- Unsupported merchants still save; unknown retailers may stay unresolved.
+- R1-B2 does not expand OCR convenience alias rules beyond mapping existing canonicals.
