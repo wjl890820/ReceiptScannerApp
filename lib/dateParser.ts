@@ -258,3 +258,28 @@ export function parseReceiptDateTime(
 
   return fallback ? nowMs : null;
 }
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/**
+ * Calendar day start (00:00:00.000) in Asia/Tokyo for an epoch timestamp.
+ * Used for purchase-day frequency bucketing — never invents "now".
+ * Returns null for non-finite / non-positive timestamps.
+ */
+export function jstCalendarDayStartMs(epochMs: number): number | null {
+  if (!Number.isFinite(epochMs) || epochMs <= 0) return null;
+  const jst = epochMs + JST_OFFSET_MS;
+  const dayStartUtcEquivalent = Math.floor(jst / 86_400_000) * 86_400_000;
+  return dayStartUtcEquivalent - JST_OFFSET_MS;
+}
+
+/** Stable YYYY-MM-DD key in Asia/Tokyo, or null when timestamp is invalid. */
+export function jstCalendarDayKey(epochMs: number): string | null {
+  const start = jstCalendarDayStartMs(epochMs);
+  if (start == null) return null;
+  const jst = new Date(start + JST_OFFSET_MS);
+  const y = jst.getUTCFullYear();
+  const m = String(jst.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(jst.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}

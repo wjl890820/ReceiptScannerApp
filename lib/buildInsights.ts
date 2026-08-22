@@ -102,22 +102,26 @@ export function buildInsights(
   let previousReceipts = filterByRange(receipts, previousStart, previousEnd);
 
   if (timeRange === 'all') {
-    periodDays = 30;
-    currentStart = now - PERIOD_30_DAYS;
-    currentEnd = now;
-    previousStart = currentStart - PERIOD_30_DAYS;
-    previousEnd = currentStart;
-    currentReceipts = filterByRange(receipts, currentStart, currentEnd);
-    previousReceipts = filterByRange(receipts, previousStart, previousEnd);
-    if (currentReceipts.length < MIN_RECEIPTS) {
-      periodDays = 14;
-      currentStart = now - PERIOD_14_DAYS;
-      currentEnd = now;
-      previousStart = currentStart - PERIOD_14_DAYS;
-      previousEnd = currentStart;
-      currentReceipts = filterByRange(receipts, currentStart, currentEnd);
+    // Keep insight universe aligned with Analysis "all" overview (no silent 30d shrink).
+    // Period-over-period changes use a matched trailing window of equal length when possible.
+    currentReceipts = [...receipts].sort((a, b) => ts(a) - ts(b));
+    previousReceipts = [];
+    if (currentReceipts.length >= 2) {
+      const spanMs = Math.max(0, ts(currentReceipts[currentReceipts.length - 1]) - ts(currentReceipts[0]));
+      periodDays = Math.max(1, Math.ceil(spanMs / MS_DAY) || 1);
+      // Matched prior window immediately before first receipt — only if we have prior data.
+      previousEnd = ts(currentReceipts[0]);
+      previousStart = previousEnd - spanMs;
       previousReceipts = filterByRange(receipts, previousStart, previousEnd);
+      // If no matched prior data, suppress period comparison (avoid partial vs full mismatch).
+      if (previousReceipts.length === 0) {
+        previousReceipts = [];
+      }
+    } else {
+      periodDays = 0;
     }
+    currentStart = currentReceipts.length ? ts(currentReceipts[0]) : now;
+    currentEnd = now;
   } else if (periodDays === 30 && currentReceipts.length < MIN_RECEIPTS) {
     periodDays = 14;
     currentStart = now - PERIOD_14_DAYS;
@@ -186,14 +190,14 @@ function buildStory(stats: WeeklyMonthlyStats): StoryOutput {
 
 function pickExplanationKey(category: string): string {
   switch (category) {
-    case 'quick_meals':
+    case 'ready_to_eat':
       return 'analysisV2.story.explainQuickMeals';
-    case 'snacks_sweets':
+    case 'snacks_drinks':
       return 'analysisV2.story.explainSnacks';
-    case 'non_alcoholic_drinks':
-    case 'beverages_other':
-    case 'alcohol':
-      return 'analysisV2.story.explainDrinks';
+    case 'food_ingredients':
+    case 'household':
+    case 'other':
+      return 'analysisV2.story.explainDefault';
     default:
       return 'analysisV2.story.explainDefault';
   }
@@ -206,6 +210,13 @@ function buildChanges(
 ): ChangeOutput[] {
   const out: ChangeOutput[] = [];
   if (!previous) return out;
+  // Both windows need enough V1 receipts before claiming a trend.
+  if (
+    current.supportedReceiptCount < MIN_RECEIPTS ||
+    previous.supportedReceiptCount < MIN_RECEIPTS
+  ) {
+    return out;
+  }
 
   const spendDiff = current.totalSpend - previous.totalSpend;
   const spendKey = spendDiff >= 0 ? 'analysisV2.changes.spendUp' : 'analysisV2.changes.spendDown';
@@ -216,9 +227,17 @@ function buildChanges(
 
   const topNow = current.topCategories[0];
   const topPrev = previous.topCategories[0];
-  if (topNow && topPrev && current.supportedSpend > 0 && previous.supportedSpend > 0) {
-    const pctNow = (100 * topNow.amount) / current.supportedSpend;
-    const pctPrev = (100 * topPrev.amount) / previous.supportedSpend;
+  const compositionNow =
+    current.categoryCompositionTotal > 0
+      ? current.categoryCompositionTotal
+      : current.topCategories.reduce((sum, row) => sum + row.amount, 0);
+  const compositionPrev =
+    previous.categoryCompositionTotal > 0
+      ? previous.categoryCompositionTotal
+      : previous.topCategories.reduce((sum, row) => sum + row.amount, 0);
+  if (topNow && topPrev && compositionNow > 0 && compositionPrev > 0) {
+    const pctNow = (100 * topNow.amount) / compositionNow;
+    const pctPrev = (100 * topPrev.amount) / compositionPrev;
     const sameCat = topNow.category === topPrev.category;
     if (sameCat) {
       const diff = pctNow - pctPrev;
@@ -239,9 +258,9 @@ function buildChanges(
 
   const topMNow = current.topMerchants[0];
   const topMPrev = previous.topMerchants[0];
-  if (topMNow && topMPrev && current.totalSpend > 0 && previous.totalSpend > 0) {
-    const shareNow = (100 * topMNow.total) / current.totalSpend;
-    const sharePrev = (100 * topMPrev.total) / previous.totalSpend;
+  if (topMNow && topMPrev && current.supportedSpend > 0 && previous.supportedSpend > 0) {
+    const shareNow = (100 * topMNow.total) / current.supportedSpend;
+    const sharePrev = (100 * topMPrev.total) / previous.supportedSpend;
     const sameMerchant = topMNow.merchant === topMPrev.merchant;
     if (sameMerchant && shareNow >= 20 && shareNow - sharePrev >= 5) {
       out.push({
@@ -261,23 +280,28 @@ function buildChanges(
 
 function buildTips(stats: WeeklyMonthlyStats): TipOutput[] {
   const tips: TipOutput[] = [];
-  if (stats.supportedSpend <= 0) return tips;
+  const compositionTotal =
+    stats.categoryCompositionTotal > 0
+      ? stats.categoryCompositionTotal
+      : stats.topCategories.reduce((sum, row) => sum + row.amount, 0);
+  // Require meaningful composition + enough V1 receipts (same gate as story).
+  if (!(compositionTotal > 0) || stats.supportedReceiptCount < 3) return tips;
 
   const byCat = new Map<string, number>();
   for (const c of stats.topCategories) byCat.set(c.category, c.amount);
-  const pct = (cat: string) => (100 * (byCat.get(cat) ?? 0)) / stats.supportedSpend;
+  const pct = (cat: string) => (100 * (byCat.get(cat) ?? 0)) / compositionTotal;
 
-  const quickPct = pct('quick_meals') + pct('snacks_sweets');
-  const drinksPct = pct('non_alcoholic_drinks') + pct('beverages_other') + pct('alcohol');
-  const snacksPct = pct('snacks_sweets');
+  // V1 active keys only — legacy quick_meals / snacks_sweets never match.
+  const readyPct = pct('ready_to_eat');
+  const snacksDrinksPct = pct('snacks_drinks');
 
-  if (quickPct >= 25 && tips.length < 2) {
+  if (readyPct + snacksDrinksPct >= 25 && tips.length < 2) {
     tips.push({ tipKey: 'analysisV2.tips.saveQuick' });
   }
-  if ((snacksPct >= 20 || drinksPct >= 20) && tips.length < 2) {
+  if (snacksDrinksPct >= 20 && tips.length < 2) {
     tips.push({ tipKey: 'analysisV2.tips.healthSnacksDrinks' });
   }
-  if (pct('quick_meals') >= 20 && tips.length < 2) {
+  if (readyPct >= 20 && tips.length < 2) {
     tips.push({ tipKey: 'analysisV2.tips.timeQuick' });
   }
 

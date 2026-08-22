@@ -468,7 +468,7 @@
     },
     "tenth": {
       "frequency": "已记录的购物平均约每 {days} 天一次。",
-      "windowCompared": "已比较前5次与最近5次购物记录。"
+      "windowCompared": "已比较最近 10 次记录中较早 5 次与较近 5 次（非全部历史）。"
     }
   },
   "engagementMilestone": {

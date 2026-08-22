@@ -468,7 +468,7 @@
     },
     "tenth": {
       "frequency": "記録された買い物は平均約{days}日に1回です。",
-      "windowCompared": "最初の5回と最近の5回の買い物記録を比較しました。"
+      "windowCompared": "直近10回のうち、前半5回と後半5回を比較しています（全履歴ではありません）。"
     }
   },
   "engagementMilestone": {

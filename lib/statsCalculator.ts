@@ -146,7 +146,12 @@ export function calculateStats(
 
   const topMerchants = Array.from(merchantMap.entries())
     .map(([merchant, data]) => ({ merchant, ...data }))
-    .sort((a, b) => b.count - a.count)
+    .sort(
+      (a, b) =>
+        b.count - a.count ||
+        b.total - a.total ||
+        a.merchant.localeCompare(b.merchant)
+    )
     .slice(0, 3);
 
   // Highest single receipt within V1 supported universe
@@ -166,9 +171,20 @@ export function calculateStats(
 
   // Most frequent merchant (V1 supported only)
   let mostFrequentMerchant: { merchant: string; count: number } | null = null;
-  for (const [merchant, data] of merchantMap.entries()) {
-    if (!mostFrequentMerchant || data.count > mostFrequentMerchant.count) {
+  for (const row of topMerchants) {
+    // Reuse deterministic ranking (count → spend → name)
+    mostFrequentMerchant = { merchant: row.merchant, count: row.count };
+    break;
+  }
+  if (!mostFrequentMerchant) {
+    for (const [merchant, data] of [...merchantMap.entries()].sort(
+      (a, b) =>
+        b[1].count - a[1].count ||
+        b[1].total - a[1].total ||
+        a[0].localeCompare(b[0])
+    )) {
       mostFrequentMerchant = { merchant, count: data.count };
+      break;
     }
   }
 

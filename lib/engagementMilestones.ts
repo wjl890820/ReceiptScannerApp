@@ -12,6 +12,7 @@ import type {
   ProductPriceKind,
 } from './productPriceHistory';
 import { getReceiptItems } from './receiptItems';
+import { jstCalendarDayStartMs } from './dateParser';
 
 export const ENGAGEMENT_MILESTONES = [1, 3, 5, 10] as const;
 
@@ -585,7 +586,7 @@ export function buildThreeReceiptMilestone(
   };
 }
 
-function frequentProductGroups(
+export function frequentProductGroups(
   receipts: EngagementReceipt[],
   context: MilestoneProductInsightContext
 ): {
@@ -617,7 +618,14 @@ function frequentProductGroups(
   for (const row of rows) {
     const canonical = row.canonicalProductName?.trim();
     const family = row.productFamilyKey?.trim();
-    const groupingType = canonical ? 'canonical' : family ? 'family' : null;
+    // Frequent list only aggregates strong identities (canonical/family).
+    // Unresolved names remain independently usable via product occurrence detail,
+    // and must not be fuzzy-merged into 常购.
+    const groupingType: 'canonical' | 'family' | null = canonical
+      ? 'canonical'
+      : family
+        ? 'family'
+        : null;
     const key = canonical || family;
     if (!groupingType || !key) continue;
     const mapKey = `${groupingType}:${key}`;
@@ -635,8 +643,10 @@ function frequentProductGroups(
           left.receiptId.localeCompare(right.receiptId) ||
           left.sourceIndex - right.sourceIndex
       );
-      const target = { type: group.groupingType, key: group.key } as const;
-      const priceHistory = context.priceHistoryBuilder?.(target, sortedRows);
+      const priceHistory = context.priceHistoryBuilder?.(
+        { type: group.groupingType, key: group.key },
+        sortedRows
+      );
       const latestPoint =
         priceHistory?.points[priceHistory.points.length - 1] ?? null;
       const priceSummary =
@@ -673,7 +683,9 @@ function frequentProductGroups(
     .sort(
       (left, right) =>
         right.purchaseOccurrenceCount - left.purchaseOccurrenceCount ||
+        right.totalPurchaseQuantity - left.totalPurchaseQuantity ||
         right.lastPurchasedAt - left.lastPurchasedAt ||
+        left.groupingType.localeCompare(right.groupingType) ||
         left.key.localeCompare(right.key)
     )
     .slice(0, 5);
@@ -693,7 +705,7 @@ export function buildFiveReceiptMilestone(
     filterV1SupportedReceipts(supportedReceipts)
   );
   if (allSupported.length < 5) return null;
-  const receipts = allSupported.slice(0, 5);
+  const receipts = allSupported.slice(-5);
   const products = frequentProductGroups(receipts, productContext);
   return {
     ...milestoneBase(
@@ -714,8 +726,8 @@ export function buildShoppingFrequency(
     ...new Set(
       sortReceiptsChronologically(receipts)
         .map(receiptTimestamp)
-        .filter((timestamp) => timestamp > 0)
-        .map((timestamp) => Math.floor(timestamp / DAY_MS) * DAY_MS)
+        .map((timestamp) => jstCalendarDayStartMs(timestamp))
+        .filter((timestamp): timestamp is number => timestamp != null)
     ),
   ].sort((left, right) => left - right);
   if (dates.length < 2) return null;
@@ -798,7 +810,7 @@ export function buildTenReceiptMilestone(
     filterV1SupportedReceipts(supportedReceipts)
   );
   if (allSupported.length < 10) return null;
-  const receipts = allSupported.slice(0, 10);
+  const receipts = allSupported.slice(-10);
   const firstWindow = receipts.slice(0, 5);
   const latestWindow = receipts.slice(-5);
   const firstCategoryStructure =

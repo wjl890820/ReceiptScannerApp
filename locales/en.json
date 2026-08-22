@@ -468,7 +468,7 @@
     },
     "tenth": {
       "frequency": "Recorded shopping averages about once every {days} days.",
-      "windowCompared": "The first 5 and latest 5 shopping records were compared."
+      "windowCompared": "Compared the earlier 5 vs later 5 within your latest 10 trips (not all history)."
     }
   },
   "engagementMilestone": {
