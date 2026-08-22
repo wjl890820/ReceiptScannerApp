@@ -144,6 +144,13 @@ describe('settings release surface contracts', () => {
     expect(settingsSource).toContain('Hide Dev Tools');
   });
 
+  it('gates Analysis D diagnostics behind the validation flag helper', () => {
+    expect(settingsSource).toContain('shouldShowAnalysisDDiagnosticsEntry');
+    expect(settingsSource).toContain('isAnalysisDDiagnosticsEnabled');
+    expect(settingsSource).toContain('showAnalysisDDiagnostics');
+    expect(settingsSource).toContain('Analysis D Diagnostics');
+  });
+
   it('does not introduce payment or quota code', () => {
     expect(settingsSource).not.toMatch(
       /StoreKit|purchase|paywall|scan.?quota|IAP/i

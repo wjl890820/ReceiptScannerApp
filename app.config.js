@@ -95,6 +95,11 @@ export default ({ config }) => {
       // P0 Phase 7: Apple protect/restore flows (default OFF)
       ENABLE_APPLE_LINK:
         process.env.ENABLE_APPLE_LINK || process.env.EXPO_PUBLIC_ENABLE_APPLE_LINK || 'false',
+      // Analysis D real-data diagnostics (default OFF). Validation builds set true.
+      ENABLE_ANALYSIS_D_DIAGNOSTICS:
+        process.env.ENABLE_ANALYSIS_D_DIAGNOSTICS ||
+        process.env.EXPO_PUBLIC_ENABLE_ANALYSIS_D_DIAGNOSTICS ||
+        'false',
     },
   };
 };

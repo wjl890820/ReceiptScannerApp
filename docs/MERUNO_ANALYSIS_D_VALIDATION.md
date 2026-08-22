@@ -105,12 +105,17 @@ Assigned only after real-device / real-data review. No hard product thresholds i
 | **CONDITIONAL PASS** | Core value exists, but specific coverage/correctness issues must be fixed before UI polish |
 | **FAIL** | Current Analysis is mostly noise/insufficient and needs product-logic revision |
 
-## Proposed D1 access
+## D1-A on-device access (implemented)
 
-- Flag: `ENABLE_ANALYSIS_D_DIAGNOSTICS` (also `EXPO_PUBLIC_ENABLE_ANALYSIS_D_DIAGNOSTICS` / Expo `extra`)
+- Flag: `ENABLE_ANALYSIS_D_DIAGNOSTICS` (also `EXPO_PUBLIC_ENABLE_ANALYSIS_D_DIAGNOSTICS` / Expo `extra` in `app.config.js`)
 - Gate: `isAnalysisDDiagnosticsEnabled()` in `lib/env.ts`
 - **Default OFF**
-- When ON (validation build only): Settings / internal diagnostics may **generate report**, show **summary**, and allow **manual JSON share**
+- When ON (validation build only):
+  - Settings → **Internal / Validation** → **Analysis D Diagnostics**
+  - Screen: `app/analysis-d-diagnostics.tsx`
+  - Generate / refresh via `generateAnalysisDReportFromLocalReceipts()` → D0 `buildAnalysisDReport`
+  - Concise summary + manual JSON share (`analysis-d-report-YYYYMMDD-HHmmss.json`)
 - No permanent debug menu
-- No auto-upload
-- No Shopping UI / Product Analytics / OCR / Data Foundation changes in D0
+- No auto-upload / Supabase / telemetry
+- Read-only: no receipt / correction / outbox / cloud writes
+- No Shopping UI / Product Analytics / OCR / Data Foundation changes

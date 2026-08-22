@@ -21,7 +21,11 @@ import { restoreExistingAppleAccount } from '@/lib/appleAccountRestore';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { listReceipts } from '@/lib/db';
 import { DEV_TOOLS_ENABLED_KEY } from '@/lib/devToolsAccess';
-import { isAppleLinkEnabled } from '@/lib/env';
+import {
+  isAnalysisDDiagnosticsEnabled,
+  isAppleLinkEnabled,
+} from '@/lib/env';
+import { shouldShowAnalysisDDiagnosticsEntry } from '@/lib/analysisDDiagnosticsAccess';
 import {
   getCurrentLocalePreference,
   setLocalePreference,
@@ -144,6 +148,9 @@ export default function SettingsScreen() {
   const showPro = shouldShowSettingsProEntry({ comingSoon: true });
   const showAppleAccount =
     isAppleLinkEnabled() && Platform.OS === 'ios';
+  const showAnalysisDDiagnostics = shouldShowAnalysisDDiagnosticsEntry(
+    isAnalysisDDiagnosticsEnabled()
+  );
   const aboutVersionLine = formatAboutVersionLine(currentVersion, currentBuild);
 
   const refreshAccountStatus = useMemo(() => {
@@ -811,6 +818,22 @@ export default function SettingsScreen() {
           accessibilityLabel={`${t('settings.about.title')}, ${aboutVersionLine}`}
         />
       </View>
+
+      {showAnalysisDDiagnostics ? (
+        <View style={styles.devGroup}>
+          <Text style={styles.devSectionLabel}>Internal / Validation</Text>
+          <View style={styles.group}>
+            <SettingsRow
+              title="Analysis D Diagnostics"
+              subtitle="Read-only real-data validation report"
+              onPress={() =>
+                router.push('/analysis-d-diagnostics' as Href)
+              }
+              accessibilityLabel="Analysis D Diagnostics"
+            />
+          </View>
+        </View>
+      ) : null}
 
       {showDevTools ? (
         <View style={styles.devGroup}>

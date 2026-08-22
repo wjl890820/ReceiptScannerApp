@@ -11,6 +11,15 @@
     "preview": {
       "distribution": "internal"
     },
+    "validation": {
+      "distribution": "internal",
+      "env": {
+        "ENABLE_ANON_AUTH": "true",
+        "ENABLE_CLOUD_BACKUP": "true",
+        "ENABLE_APPLE_LINK": "true",
+        "ENABLE_ANALYSIS_D_DIAGNOSTICS": "true"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "env": {
