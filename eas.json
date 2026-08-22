@@ -12,7 +12,8 @@
       "distribution": "internal"
     },
     "validation": {
-      "distribution": "internal",
+      "distribution": "store",
+      "autoIncrement": true,
       "env": {
         "ENABLE_ANON_AUTH": "true",
         "ENABLE_CLOUD_BACKUP": "true",
