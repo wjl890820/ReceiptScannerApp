@@ -648,7 +648,7 @@
       "itemCount": "商品数",
       "categoryTitle": "カテゴリ構成",
       "insightTitle": "期間のインサイト",
-      "topCategoryInsight": "最近の記録では「{catLabel}」の支出割合が最も高いです（約 {pct}%）。",
+      "topCategoryInsight": "最近の記録では、分類済み商品支出のうち「{catLabel}」の割合が最も高いです（約 {pct}%）。",
       "lowDataHint": "記録を続けると、ここでの傾向がよりはっきりします。",
       "loadFailed": "分析を一時的に読み込めません"
     }

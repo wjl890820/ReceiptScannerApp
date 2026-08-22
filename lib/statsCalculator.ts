@@ -19,6 +19,12 @@ export type WeeklyMonthlyStats = {
   supportedSpend: number;
   supportedReceiptCount: number;
   topCategories: Array<{ category: string; amount: number }>; // V1 supported receipts only
+  /**
+   * Sum of ALL eligible categorized merchandise amounts (before top-N truncation).
+   * Used as the shared denominator for category bars + category-share insights.
+   * Does NOT include uncategorized, and is NOT forced to equal supportedSpend.
+   */
+  categoryCompositionTotal: number;
   topMerchants: Array<{ merchant: string; count: number; total: number }>;
   highestSingleReceipt: { amount: number; merchant: string; date: number } | null;
   mostFrequentMerchant: { merchant: string; count: number } | null;
@@ -116,10 +122,14 @@ export function calculateStats(
     }
   }
 
-  const topCategories = Array.from(categoryMap.entries())
+  const allCategoryRows = Array.from(categoryMap.entries())
     .map(([category, amount]) => ({ category, amount }))
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, 3);
+    .sort((a, b) => b.amount - a.amount);
+  const categoryCompositionTotal = allCategoryRows.reduce(
+    (sum, row) => sum + row.amount,
+    0
+  );
+  const topCategories = allCategoryRows.slice(0, 3);
 
   // 商家统计
   const merchantMap = new Map<string, { count: number; total: number }>();
@@ -171,6 +181,7 @@ export function calculateStats(
     supportedSpend,
     supportedReceiptCount,
     topCategories,
+    categoryCompositionTotal,
     topMerchants,
     highestSingleReceipt,
     mostFrequentMerchant,

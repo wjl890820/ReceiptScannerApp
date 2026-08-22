@@ -18,8 +18,15 @@ export type DiscountableItem = {
   lineTotal?: number | null;
   line_total?: number | null;
   quantity?: number | null;
+  unitPrice?: number | null;
+  unit_price?: number | null;
   effectiveLineTotal?: number | null;
   discountAllocated?: number | null;
+  /**
+   * Explicit user amount edit marker. When true, analytics must use the
+   * user-authored lineTotal and must not prefer a stale effectiveLineTotal.
+   */
+  amountUserEdited?: boolean | null;
   [key: string]: unknown;
 };
 
@@ -294,11 +301,84 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
   return { items: next, unboundDiscounts, boundCount };
 }
 
-/** Analytics / category amounts: prefer effective (paid) over gross. */
+/**
+ * Apply an explicit user line-amount edit while keeping the user-layer
+ * monetary representation coherent for analytics.
+ *
+ * - Writes lineTotal / line_total / effectiveLineTotal to the same amount
+ * - Recomputes unitPrice from quantity when possible
+ * - Clears discountAllocated (user set the final paid amount)
+ * - Marks amountUserEdited so resolvers prefer the override
+ *
+ * Does NOT touch analysis_json / recognition snapshots (provenance).
+ */
+export function applyUserLineAmountEdit<T extends DiscountableItem>(
+  item: T,
+  amount: number
+): T {
+  const paid = Number(amount);
+  if (!Number.isFinite(paid) || paid < 0) {
+    return item;
+  }
+  const rounded = Math.round(paid);
+  const qtyRaw = Number(item.quantity);
+  const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+  const unit = Math.round(rounded / qty);
+  return {
+    ...item,
+    lineTotal: rounded,
+    line_total: rounded,
+    effectiveLineTotal: rounded,
+    unitPrice: unit,
+    unit_price: unit,
+    discountAllocated: 0,
+    amountUserEdited: true,
+  };
+}
+
+function hasActiveDiscountAllocation(item: DiscountableItem): boolean {
+  const allocated = Number(item.discountAllocated);
+  return Number.isFinite(allocated) && allocated !== 0;
+}
+
+/**
+ * Detect legacy edit rows where only camelCase lineTotal was updated
+ * (69→70) while effectiveLineTotal + snake line_total stayed at OCR/net.
+ * Do NOT treat legitimate discounted rows (gross lineTotal ≠ effective with
+ * discountAllocated) as overrides.
+ */
+function isStaleEffectiveAfterUserLineEdit(item: DiscountableItem): boolean {
+  if (hasActiveDiscountAllocation(item)) return false;
+  const camel = Number(item.lineTotal);
+  const effective = Number(item.effectiveLineTotal);
+  if (!Number.isFinite(camel) || !Number.isFinite(effective)) return false;
+  if (camel === effective) return false;
+  const snake = Number(item.line_total);
+  // Classic stale-alias pattern from history edit: snake + effective remain OCR.
+  if (Number.isFinite(snake) && snake === effective && camel !== snake) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Analytics / category amounts.
+ *
+ * Precedence:
+ * 1) Explicit user amount override (amountUserEdited or stale-alias heal)
+ * 2) effectiveLineTotal (discount-aware paid amount)
+ * 3) gross lineTotal / line_total
+ */
 export function itemAmountForAnalytics(item: DiscountableItem): number {
+  const gross = grossOf(item);
+  if (item.amountUserEdited === true) {
+    return Number.isFinite(gross) ? gross : 0;
+  }
+  if (isStaleEffectiveAfterUserLineEdit(item)) {
+    return Number.isFinite(gross) ? gross : 0;
+  }
   const effective = Number(item.effectiveLineTotal);
   if (Number.isFinite(effective)) return effective;
-  const gross = grossOf(item);
   return Number.isFinite(gross) ? gross : 0;
 }
 

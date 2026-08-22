@@ -170,10 +170,14 @@ export function buildInsights(
 
 function buildStory(stats: WeeklyMonthlyStats): StoryOutput {
   const top = stats.topCategories[0];
-  if (!top || stats.supportedSpend <= 0) {
+  const compositionTotal =
+    stats.categoryCompositionTotal > 0
+      ? stats.categoryCompositionTotal
+      : stats.topCategories.reduce((sum, row) => sum + row.amount, 0);
+  if (!top || !(compositionTotal > 0)) {
     return { type: 'fallback', fallbackKey: 'analysisV2.story.fallback' };
   }
-  const pct = Math.round((100 * top.amount) / stats.supportedSpend);
+  const pct = Math.round((100 * top.amount) / compositionTotal);
   const conclusionKey = 'analysisV2.story.conclusion';
   const conclusionParams = { cat: top.category, pct, amt: Math.round(top.amount) };
   const explanationKey = pickExplanationKey(top.category);

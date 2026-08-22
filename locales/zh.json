@@ -648,7 +648,7 @@
       "itemCount": "商品数量",
       "categoryTitle": "分类构成",
       "insightTitle": "本期洞察",
-      "topCategoryInsight": "最近记录中，「{catLabel}」支出占比最高（约 {pct}%）。",
+      "topCategoryInsight": "最近记录中，在已分类商品支出里，「{catLabel}」占比最高（约 {pct}%）。",
       "lowDataHint": "继续记录后，这里的趋势会更完整。",
       "loadFailed": "暂时无法加载分析"
     }

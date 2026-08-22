@@ -30,6 +30,10 @@ import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/cat
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
+import {
+  applyUserLineAmountEdit,
+  itemAmountForAnalytics,
+} from '@/lib/receiptDiscountAllocation';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -81,12 +85,10 @@ function round0(n: number) {
   return Math.round(n);
 }
 
-/** Amount for summary: prefer effective/net, then line_total / lineTotal, else unit * qty */
+/** Amount for summary: shared analytics resolver (user override > effective > gross). */
 function itemLineAmountForSummary(it: any): number {
-  const effective = toNum(it.effectiveLineTotal, NaN);
-  if (Number.isFinite(effective) && effective >= 0) return round0(effective);
-  const lt = toNum(it.lineTotal ?? it.line_total, 0);
-  if (lt > 0) return round0(lt);
+  const amount = itemAmountForAnalytics(it);
+  if (amount > 0) return round0(amount);
   const qRaw = toNum(it.quantity, 0);
   const q = qRaw > 0 ? qRaw : 1;
   const up = toNum(it.unitPrice ?? it.unit_price, 0);
@@ -268,10 +270,9 @@ export default function ReceiptDetailScreen() {
     const updatedItems = [...displayItems];
     const existingItem = updatedItems[editingItemIndex] as ReceiptItem & Record<string, unknown>;
     const finalCategory = (draftCategory.trim() || 'uncategorized') as ProductCategory;
-    updatedItems[editingItemIndex] = applyProductIdentityToItem({
+    const withIdentity = applyProductIdentityToItem({
       ...existingItem,
       quantity: round0(quantity),
-      lineTotal: round0(lineTotal),
       category: finalCategory,
     }, {
       finalName: existingItem.name,
@@ -280,6 +281,11 @@ export default function ReceiptDetailScreen() {
       classificationBrand: (existingItem as any).brand,
       useExistingClassificationEvidence: true,
     });
+    // Keep user-layer money fields coherent so analytics prefers the edit (not stale effective).
+    updatedItems[editingItemIndex] = applyUserLineAmountEdit(
+      withIdentity as ReceiptItem & Record<string, unknown>,
+      round0(lineTotal)
+    ) as ReceiptItem & Record<string, unknown>;
 
     try {
       setSavingItem(true);

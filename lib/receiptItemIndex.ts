@@ -3,6 +3,10 @@ import type * as SQLite from 'expo-sqlite';
 import { getReceiptItems, type ReceiptItemSource } from './receiptItems';
 import { applyProductIdentityToItem } from './receiptItemIdentity';
 import {
+  itemAmountForAnalytics,
+  type DiscountableItem,
+} from './receiptDiscountAllocation';
+import {
   buildSkuKey,
   type ProductIdentity,
   type ProductIdentitySource,
@@ -387,16 +391,17 @@ export function buildReceiptItemIndexRows(
       : derived.spec_confidence;
 
     const purchaseQuantity = positiveNumberOrNull(item.quantity) ?? 1;
-    const effectiveLineTotal = nonNegativeNumberOrNull(item.effectiveLineTotal);
     const camelLineTotal = nonNegativeNumberOrNull(item.lineTotal);
-    const snakeLineTotal =
-      camelLineTotal == null ? nonNegativeNumberOrNull(item.line_total) : null;
-    // Prefer paid/net amount for derived index + Price History; gross stays in analysis_json.
-    const hasValidLineTotal =
+    const snakeLineTotal = nonNegativeNumberOrNull(item.line_total);
+    const effectiveLineTotal = nonNegativeNumberOrNull(item.effectiveLineTotal);
+    const hasAmountField =
       effectiveLineTotal != null || camelLineTotal != null || snakeLineTotal != null;
-    const lineTotal = effectiveLineTotal ?? camelLineTotal ?? snakeLineTotal ?? 0;
-    const purchaseUnitPrice = hasValidLineTotal
-      ? lineTotal / purchaseQuantity
+    // Shared analytics resolver: user override > effective > gross.
+    const resolvedLineTotal = hasAmountField
+      ? itemAmountForAnalytics(item as DiscountableItem)
+      : 0;
+    const purchaseUnitPrice = hasAmountField
+      ? resolvedLineTotal / purchaseQuantity
       : null;
 
     const specification = buildSpecification(
@@ -436,7 +441,7 @@ export function buildReceiptItemIndexRows(
       product_family_key: family,
       category,
       purchase_quantity: purchaseQuantity,
-      line_total: lineTotal,
+      line_total: resolvedLineTotal,
       purchase_unit_price: purchaseUnitPrice,
       spec_size_value: specSizeValue,
       spec_size_unit: specSizeUnit,

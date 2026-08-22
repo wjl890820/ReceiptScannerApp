@@ -122,20 +122,37 @@ export function buildAnalysisOverview(
   };
 }
 
+/**
+ * Shared category-composition percentage (integer 0–100).
+ * Uses the full eligible category universe as denominator — not receipt.total,
+ * and not the truncated top-N display list alone.
+ */
+export function categoryCompositionPercent(
+  amount: number,
+  compositionTotal: number
+): number | null {
+  if (!(compositionTotal > 0) || !Number.isFinite(compositionTotal)) return null;
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return Math.round((100 * amount) / compositionTotal);
+}
+
 export function buildAnalysisCategoryShares(
   stats: WeeklyMonthlyStats
 ): AnalysisCategoryShare[] {
-  const categorizedTotal = stats.topCategories.reduce(
-    (sum, row) => sum + row.amount,
-    0
-  );
+  const compositionTotal =
+    stats.categoryCompositionTotal > 0
+      ? stats.categoryCompositionTotal
+      : stats.topCategories.reduce((sum, row) => sum + row.amount, 0);
   return stats.topCategories
     .filter((row) => ACTIVE_CATEGORY_SET.has(row.category) || row.category === 'other')
-    .map((row) => ({
-      category: row.category,
-      amount: row.amount,
-      share: categorizedTotal > 0 ? row.amount / categorizedTotal : 0,
-    }));
+    .map((row) => {
+      const pct = categoryCompositionPercent(row.amount, compositionTotal);
+      return {
+        category: row.category,
+        amount: row.amount,
+        share: pct == null ? 0 : pct / 100,
+      };
+    });
 }
 
 export function buildAnalysisInsightPresentation(
@@ -147,27 +164,44 @@ export function buildAnalysisInsightPresentation(
     return null;
   }
 
+  const compositionTotal =
+    stats.categoryCompositionTotal > 0
+      ? stats.categoryCompositionTotal
+      : stats.topCategories.reduce((sum, row) => sum + row.amount, 0);
+
   if (story?.type === 'full') {
+    const storyPct = Number(story.conclusionParams.pct ?? NaN);
+    const cat = String(story.conclusionParams.cat ?? '');
+    const topMatch = stats.topCategories.find((row) => row.category === cat);
+    const pct =
+      topMatch != null
+        ? categoryCompositionPercent(topMatch.amount, compositionTotal)
+        : Number.isFinite(storyPct)
+          ? Math.round(storyPct)
+          : null;
+    if (pct == null) return null;
     return {
       kind: 'story',
       titleKey: 'analysis.release.insightTitle',
       bodyKey: 'analysis.release.topCategoryInsight',
       bodyParams: {
-        category: String(story.conclusionParams.cat ?? ''),
-        pct: Number(story.conclusionParams.pct ?? 0),
+        category: cat,
+        pct,
       },
     };
   }
 
   const top = stats.topCategories[0];
-  if (top && stats.supportedSpend > 0) {
+  const pct =
+    top != null ? categoryCompositionPercent(top.amount, compositionTotal) : null;
+  if (top && pct != null) {
     return {
       kind: 'top_category',
       titleKey: 'analysis.release.insightTitle',
       bodyKey: 'analysis.release.topCategoryInsight',
       bodyParams: {
         category: top.category,
-        pct: Math.round((100 * top.amount) / stats.supportedSpend),
+        pct,
       },
     };
   }

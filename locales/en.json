@@ -648,7 +648,7 @@
       "itemCount": "Items",
       "categoryTitle": "Category mix",
       "insightTitle": "Period insights",
-      "topCategoryInsight": "In recent records, “{catLabel}” accounts for the largest share of spending (about {pct}%).",
+      "topCategoryInsight": "In recent records, among categorized item spending, “{catLabel}” is the largest share (about {pct}%).",
       "lowDataHint": "Trends here become clearer as you keep recording receipts.",
       "loadFailed": "Analysis is temporarily unavailable"
     }
