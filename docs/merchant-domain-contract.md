@@ -1,7 +1,7 @@
-# Merchant Domain Contract (R1-B1 freeze + R1-B2 derived retailer identity)
+# Merchant Domain Contract (R1-B1–B3a)
 
-**Status:** R1-B1 frozen; R1-B2 adds recomputable `DerivedRetailerIdentity` only.
-**Scope:** No retailer/store DB tables, migrations, backfill, receipt rewrite, or analytics wiring of `retailerKey`.
+**Status:** R1-B1 frozen; R1-B2 `DerivedRetailerIdentity`; R1-B3a `RetailerProfile` metadata only.
+**Scope:** No retailer/store DB tables, migrations, backfill, receipt rewrite, analytics wiring, or UI consumption of profile yet.
 
 Analysis D production universe and duplicate fingerprints remain frozen. `merchantAnalyticsKey` outputs must stay byte-identical for existing fixtures.
 
@@ -13,10 +13,11 @@ Analysis D production universe and duplicate fingerprints remain frozen. `mercha
 | --- | --- | --- |
 | Observation | `merchant_raw` | Receipt / OCR / user-reviewed merchant evidence |
 | Retailer-ish derived | `merchant_normalized` | Current chain-ish normalization (not a DB retailer id) |
-| **Derived retailer identity** | `deriveRetailerIdentity(...)` → `DerivedRetailerIdentity` | Stable chain key + optional `storeHint` (recomputable; **not** persisted) |
-| Business format | `merchant_type` | `supermarket` \| `convenience` \| `other` \| `unknown` |
-| Analytics identity | `merchantAnalyticsKey(receipt)` | **Single** V1 merchant aggregation key (**unchanged** by R1-B2) |
-| Legacy mirror | `store_raw` / `store_normalized` | Placeholder copies of merchant fields — **not** verified branch identity |
+| Derived retailer identity | `deriveRetailerIdentity(...)` | Stable chain key + optional `storeHint` (recomputable; **not** persisted) |
+| **Retailer profile** | `getRetailerProfile(retailerKey)` → `RetailerProfile` | Objective descriptive metadata on a known `retailerKey` (**not** persisted; **not** analytics-wired) |
+| Business format | `merchant_type` | `supermarket` \| `convenience` \| `other` \| `unknown` — **V1 eligibility only** |
+| Analytics identity | `merchantAnalyticsKey(receipt)` | **Single** V1 merchant aggregation key (**unchanged**) |
+| Legacy mirror | `store_raw` / `store_normalized` | Placeholder copies — **not** verified branch identity |
 
 Pipeline (additive):
 
@@ -25,9 +26,11 @@ merchant_raw
     ↓
 merchant_normalized          (existing; do not repurpose)
     ↓
-DerivedRetailerIdentity      (R1-B2 — deriveRetailerIdentity)
+DerivedRetailerIdentity      (R1-B2)
     ↓
-future optional verified Store   (not implemented)
+RetailerProfile              (R1-B3a — metadata only)
+    ↓
+future optional verified Store / richer merchant intelligence
 ```
 
 ---
@@ -51,7 +54,7 @@ Meaning: derived canonical merchant/chain representation used for persistence an
 
 Rules:
 
-- Derived; may evolve when R1-B2 expands chain rules.
+- Derived; may evolve when chain rules expand.
 - **Not** guaranteed physical store identity.
 - **Not** a durable retailer database primary key.
 - Prefer this over raw when building `merchantAnalyticsKey`.
@@ -68,6 +71,7 @@ It is **not**:
 - shopping intent
 - physical store identity
 - retailer ID
+- `RetailerProfile.retailerFormat` (see §G)
 
 V1 eligibility (`isV1SupportedReceipt` / `isV1SupportedMerchantType`):
 
@@ -95,7 +99,7 @@ Rules:
 
 - Prefer `merchant_normalized`, then `merchant_raw`, then empty.
 - Always run through `normalizeMerchantName` (light cleanup only).
-- Do **not** introduce a second production aggregation key in R1-B1/B2 without an explicit migration plan.
+- Do **not** introduce a second production aggregation key without an explicit migration plan.
 - Do **not** use UI display strings as analytics identity.
 
 ### E. `store_raw` / `store_normalized` — LEGACY / PLACEHOLDER MIRROR
@@ -106,7 +110,6 @@ Do **not**:
 
 - treat them as real store IDs
 - expose store analytics from them
-- rename/delete/migrate them in R1-B1
 - invent branch extraction here
 
 ### F. `DerivedRetailerIdentity` — R1-B2 recomputable metadata
@@ -123,27 +126,59 @@ type DerivedRetailerIdentity = {
 };
 ```
 
-It **is**:
+It is **NOT** receipt Source of Truth, `merchantAnalyticsKey`, a persisted DB id, or physical store proof.
 
-- deterministic, rebuildable from `merchant_raw` / `merchant_normalized`
-- derived from an explicit registry + reuse of existing `canonicalizeMerchantChain` / `normalizeMerchant` evidence
-- independent of UI language for `retailerKey` where practical (`costco`, `gyomu_super`, …)
+`storeHint` is parse evidence only — **not** `storeKey` / verified branch identity.
 
-It is **NOT**:
+### G. `RetailerProfile` — R1-B3a descriptive metadata
 
-- receipt Source of Truth
-- a replacement for `merchantAnalyticsKey`
-- a persisted retailer DB ID / UUID
-- physical store proof
-- wired into Home / Analysis / duplicates / price history / Product Detail / ShoppingIntent (R1-B2)
+SSOT: `lib/retailerProfile.ts` → `getRetailerProfile`.
 
-`storeHint`:
+```ts
+type RetailerProfile = {
+  retailerKey: RetailerKey;
+  displayName: string;
+  retailerFormat: 'supermarket' | 'convenience' | 'warehouse_club';
+  membershipRequired: boolean;
+  bulkPurchaseFormat: boolean;
+};
+```
 
-- optional residue after removing a known chain prefix (e.g. `業務スーパー古川` → `古川`)
-- **not** `storeKey`, **not** verified branch identity
-- must **not** be persisted, geocoded, or merged across receipts in R1-B2
+**RetailerProfile =** stable descriptive retailer metadata.
 
-Unknown / independent merchants may remain `retailerKey: null` (`source: 'unresolved'`). Do not force `normalizeMerchantName(any merchant)` into a retailer key.
+**RetailerProfile ≠**
+
+- `merchant_type`
+- V1 eligibility
+- receipt intent / stock-up behavior
+- user preference or membership status
+- physical-store identity
+- brand / parent-company hierarchy
+
+#### `merchant_type` vs `retailerFormat`
+
+| Concern | Field | Example (Costco) |
+| --- | --- | --- |
+| V1 analytics eligibility | `merchant_type` on receipt | `supermarket` (existing contract) |
+| Descriptive retailer format | `RetailerProfile.retailerFormat` | `warehouse_club` |
+
+`retailerFormat = warehouse_club` must **not** invent `merchant_type = warehouse_club` and must **not** change `isV1SupportedReceipt` / `isV1SupportedMerchantType`.
+
+#### `membershipRequired`
+
+Ordinary shopping at the retailer generally requires a membership relationship as part of the retailer format.
+
+Does **not** model the user's actual membership, tier, renewal, or card.
+
+#### `bulkPurchaseFormat`
+
+The retailer's business/store format is materially oriented toward bulk / large-pack purchasing.
+
+Does **not** mean this receipt was a stock-up trip, every item was bulk, or the user prefers bulk.
+
+Unresolved / unknown `retailerKey` → `getRetailerProfile` returns `null` (no invented profile).
+
+Not wired into Home / Analysis / History / Product Detail / ShoppingIntent / duplicates / Analysis D in B3a.
 
 ---
 
@@ -154,15 +189,16 @@ Unknown / independent merchants may remain `retailerKey: null` (`source: 'unreso
 | History / Product Detail / summaries | `merchant_raw \|\| merchant_normalized` | Display may keep OCR/user spelling |
 | V1 merchant spend / frequency | `merchantAnalyticsKey(...)` | Aggregation only |
 
-Display identity and analytics identity are **intentionally different**. Do not “fix” History by replacing raw display with analytics keys in R1-B1.
+Display identity and analytics identity are **intentionally different**.
 
 ---
 
-## 4. Known follow-up
+## 4. Known follow-up (do not fix in B3a)
 
-**Product Detail / price-history grouping** may still use SQL `COALESCE(merchant_normalized, merchant_raw)` without `merchantAnalyticsKey` / `normalizeMerchantName`.
+1. Scan-review merchant edits may not reliably re-persist `merchant_type`.
+2. Product Detail / price-history merchant grouping may not always align with `merchantAnalyticsKey`.
 
-→ Tracked for **R1-B3** (RetailerProfile / consumption). Do not change Product Detail or analytics aggregation in B2.
+Handle independently after profile foundation so behavior changes stay isolated.
 
 ---
 
@@ -173,27 +209,28 @@ merchant_raw
     ↓
 merchant_normalized
     ↓
-DerivedRetailerIdentity   (R1-B2 — implemented, not persisted, not analytics-wired)
+DerivedRetailerIdentity   (R1-B2)
     ↓
-optional verified Store   (later; storeHint is only parse evidence)
+RetailerProfile           (R1-B3a — implemented, not persisted, not analytics-wired)
+    ↓
+future optional verified Store / richer merchant intelligence
 ```
 
 - **Retailer identity ≠ store identity**
-  Example: `業務スーパー古川` → `retailerKey=gyomu_super` → optional `storeHint=古川`
-- **RetailerProfile** (R1-B3+) = objective metadata on retailer identity
-  It does **not** replace `merchant_type` or V1 eligibility.
+  Example: `業務スーパー古川` → `retailerKey=gyomu_super` → optional `storeHint=古川` → profile for 業務スーパー
+- No `StoreProfile` / geocoding / brand hierarchy in B3a
 
 ---
 
 ## 6. Invariants (must not regress)
 
-- Raw observation preserved (`merchant_raw` not mutated by derive).
-- `merchant_normalized` semantics / outputs unchanged by R1-B2 (no rewrite of existing helpers).
+- Raw observation preserved (`merchant_raw` not mutated by derive / profile lookup).
+- `merchant_normalized` helper outputs unchanged.
 - `merchantAnalyticsKey` unchanged for existing fixtures.
-- Derived retailer identity recomputable; no persistence / backfill.
-- User override > machine-derived observation when reviewed.
-- No destructive receipt rewrite / no schema or sync payload change in B1/B2.
+- `merchant_type` / V1 eligibility unchanged by profile metadata.
+- Derived identity + profile recomputable; no persistence / backfill.
+- No destructive receipt rewrite / no schema or sync payload change.
 - History remains historical/raw-first for display.
 - Analytics receipt selection / Analysis D universe / duplicate fingerprints unchanged.
-- Unsupported merchants still save; unknown retailers may stay unresolved.
-- R1-B2 does not expand OCR convenience alias rules beyond mapping existing canonicals.
+- Unsupported merchants still save; unknown retailers may stay unresolved / profile-null.
+- R1-B2/B3a do not expand OCR convenience alias rules beyond existing canonical mapping.
