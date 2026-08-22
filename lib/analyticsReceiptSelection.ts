@@ -29,6 +29,12 @@ export type AnalyticsReceiptSelection = {
   structuralExactDuplicateExtras: number;
   reconciledStructuralExactDuplicateExtras: number;
   probableDuplicateExtras: number;
+  /**
+   * Authoritative high-confidence excluded count = excludedDuplicateReceiptIds.size.
+   * Includes CONTENT + STRUCTURAL + RECONCILED extras actually dropped from analytics.
+   * Do not re-sum confidence buckets independently for this field.
+   */
+  highConfidenceDuplicateExtras: number;
   highConfidenceDuplicateGroups: AnalysisDDuplicateGroup[];
   analyticsPurchaseCandidateCount: number;
   keepSeparateReceiptIds: ReadonlySet<string>;
@@ -71,6 +77,9 @@ export function selectAnalyticsReceipts(
   // keepSeparate may re-include extras; recount candidates from final set
   const analyticsReceipts = receipts.filter((r) => !excluded.has(r.id));
 
+  // Single source of truth: actual excluded receipt set size (includes reconciled).
+  const highConfidenceDuplicateExtras = excluded.size;
+
   return {
     storedReceipts: receipts,
     analyticsReceipts,
@@ -79,6 +88,7 @@ export function selectAnalyticsReceipts(
     structuralExactDuplicateExtras,
     reconciledStructuralExactDuplicateExtras,
     probableDuplicateExtras: 0,
+    highConfidenceDuplicateExtras,
     highConfidenceDuplicateGroups,
     analyticsPurchaseCandidateCount: analyticsReceipts.length,
     keepSeparateReceiptIds,

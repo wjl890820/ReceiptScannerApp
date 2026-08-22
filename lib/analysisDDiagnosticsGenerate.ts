@@ -31,9 +31,11 @@ export type AnalysisDGenerateDeps = {
 export type AnalysisDDiagnosticsSelectionMeta = {
   storedReceiptCount: number;
   analyticsPurchaseCandidateCount: number;
+  /** Authoritative: excludedDuplicateReceiptIds.size from selectAnalyticsReceipts. */
   highConfidenceDuplicateExtras: number;
   contentExactDuplicateExtras: number;
   structuralExactDuplicateExtras: number;
+  reconciledStructuralExactDuplicateExtras: number;
 };
 
 export type AnalysisDDiagnosticsBundle = {
@@ -81,11 +83,11 @@ export async function generateAnalysisDDiagnosticsBundle(
     selection: {
       storedReceiptCount: selection.storedReceipts.length,
       analyticsPurchaseCandidateCount: selection.analyticsPurchaseCandidateCount,
-      highConfidenceDuplicateExtras:
-        selection.contentExactDuplicateExtras +
-        selection.structuralExactDuplicateExtras,
+      highConfidenceDuplicateExtras: selection.highConfidenceDuplicateExtras,
       contentExactDuplicateExtras: selection.contentExactDuplicateExtras,
       structuralExactDuplicateExtras: selection.structuralExactDuplicateExtras,
+      reconciledStructuralExactDuplicateExtras:
+        selection.reconciledStructuralExactDuplicateExtras,
     },
   };
 }
