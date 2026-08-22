@@ -2,6 +2,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   Pressable,
@@ -32,6 +33,7 @@ import { type TimeRange } from '@/lib/statsCalculator';
  */
 export default function AnalysisScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -107,7 +109,10 @@ export default function AnalysisScreen() {
   return (
     <ScrollView
       style={styles.screen}
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: insets.top + 16 },
+      ]}
     >
       <Text style={styles.title}>{t('analysis.title')}</Text>
 
@@ -239,6 +244,84 @@ export default function AnalysisScreen() {
             </>
           ) : null}
 
+          {viewModel.merchants.length > 0 ? (
+            <>
+              <Text style={styles.sectionTitle}>
+                {t('analysis.release.merchantsTitle')}
+              </Text>
+              <View style={styles.card}>
+                {viewModel.merchants.map((row) => (
+                  <View key={row.merchantKey} style={styles.merchantRow}>
+                    <View style={styles.merchantTextCol}>
+                      <Text style={styles.merchantName} numberOfLines={1}>
+                        {row.displayName}
+                      </Text>
+                      <Text style={styles.merchantMeta}>
+                        {t('analysis.release.merchantVisits', {
+                          count: row.visitCount,
+                        })}
+                      </Text>
+                    </View>
+                    <Text style={styles.merchantSpend}>
+                      {formatJPY(row.spend)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : null}
+
+          <Text style={styles.sectionTitle}>
+            {t('analysis.release.spendChangeTitle')}
+          </Text>
+          <View style={styles.card}>
+            {viewModel.spendChange.status === 'available' ? (
+              <>
+                <Text style={styles.changeCompared}>
+                  {t('analysis.release.spendChangeCompared', {
+                    days: viewModel.spendChange.periodDays,
+                  })}
+                </Text>
+                <Text style={styles.changeAmount}>
+                  {formatJPY(viewModel.spendChange.currentSpend)}
+                </Text>
+                <Text style={styles.changeDelta}>
+                  {viewModel.spendChange.direction === 'up'
+                    ? t('analysis.release.spendChangeUp', {
+                        amount: formatJPY(viewModel.spendChange.absoluteDelta),
+                        percent:
+                          viewModel.spendChange.percentDelta == null
+                            ? ''
+                            : t('analysis.release.spendChangePercent', {
+                                percent: Math.abs(
+                                  viewModel.spendChange.percentDelta
+                                ),
+                              }),
+                      })
+                    : viewModel.spendChange.direction === 'down'
+                      ? t('analysis.release.spendChangeDown', {
+                          amount: formatJPY(
+                            viewModel.spendChange.absoluteDelta
+                          ),
+                          percent:
+                            viewModel.spendChange.percentDelta == null
+                              ? ''
+                              : t('analysis.release.spendChangePercent', {
+                                  percent: Math.abs(
+                                    viewModel.spendChange.percentDelta
+                                  ),
+                                }),
+                        })
+                      : t('analysis.release.spendChangeFlat')}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.changeUnavailable}>
+                {t('analysis.release.spendChangeUnavailable')}
+              </Text>
+            )}
+          </View>
+
           {viewModel.insight ? (
             <>
               <Text style={styles.sectionTitle}>
@@ -280,7 +363,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f7f8fa',
   },
   container: {
-    paddingTop: 72,
     paddingHorizontal: 16,
     paddingBottom: 40,
   },
@@ -399,6 +481,59 @@ const styles = StyleSheet.create({
     color: '#68707a',
     fontSize: 13,
     fontWeight: '700',
+  },
+  merchantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#eef1f4',
+  },
+  merchantTextCol: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 12,
+  },
+  merchantName: {
+    color: '#15181c',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  merchantMeta: {
+    marginTop: 4,
+    color: '#68707a',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  merchantSpend: {
+    color: '#15181c',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  changeCompared: {
+    paddingTop: 12,
+    color: '#68707a',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  changeAmount: {
+    marginTop: 8,
+    color: '#15181c',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  changeDelta: {
+    marginTop: 6,
+    marginBottom: 12,
+    color: '#3c4654',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  changeUnavailable: {
+    paddingVertical: 14,
+    color: '#8a929c',
+    fontSize: 13,
+    lineHeight: 19,
   },
   uncategorizedHint: {
     paddingVertical: 12,

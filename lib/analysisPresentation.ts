@@ -11,6 +11,12 @@ import { getReceiptItems } from './receiptItems';
 import type { WeeklyMonthlyStats, TimeRange } from './statsCalculator';
 import type { BuildInsightsOutput, StoryOutput } from './buildInsights';
 import {
+  buildAnalysisMerchantSurface,
+  buildAnalysisSpendChangeSurface,
+  type AnalysisMerchantRow,
+  type AnalysisSpendChangeSurface,
+} from './analysisValueSurfaces';
+import {
   filterByRollingWindowDays,
   rollingDaysForAnalysisRange,
 } from './rollingTimeWindow';
@@ -55,6 +61,10 @@ export type AnalysisReleaseViewModel = {
   categories: AnalysisCategoryShare[];
   uncategorized: { count: number; total: number } | null;
   insight: AnalysisInsightPresentation | null;
+  /** Top merchants from periodStats.topMerchants (selected period only). */
+  merchants: AnalysisMerchantRow[];
+  /** Matched-period spend change from buildInsights.changes (or unavailable). */
+  spendChange: AnalysisSpendChangeSurface;
   showLowDataHint: boolean;
   showSwitchToAll: boolean;
   showProSection: boolean;
@@ -316,6 +326,15 @@ export function buildAnalysisReleaseViewModel(input: {
   const categories = buildAnalysisCategoryShares(input.periodStats);
   const story = input.insights?.story ?? null;
 
+  const merchants =
+    stage === 'low' || stage === 'ready'
+      ? buildAnalysisMerchantSurface(input.periodStats, 3)
+      : [];
+  const spendChange =
+    stage === 'low' || stage === 'ready'
+      ? buildAnalysisSpendChangeSurface(input.insights)
+      : { status: 'unavailable' as const };
+
   return {
     stage,
     overview,
@@ -328,6 +347,8 @@ export function buildAnalysisReleaseViewModel(input: {
           }
         : null,
     insight: buildAnalysisInsightPresentation(stage, input.periodStats, story),
+    merchants,
+    spendChange,
     showLowDataHint: stage === 'low',
     showSwitchToAll: stage === 'period_empty',
     showProSection: shouldShowAnalysisProSection({

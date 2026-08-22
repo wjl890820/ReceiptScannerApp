@@ -652,7 +652,16 @@
       "insightTitle": "本期洞察",
       "topCategoryInsight": "最近记录中，在已分类商品支出里，「{catLabel}」占比最高（约 {pct}%）。",
       "lowDataHint": "继续记录后，这里的趋势会更完整。",
-      "loadFailed": "暂时无法加载分析"
+      "loadFailed": "暂时无法加载分析",
+      "merchantsTitle": "常去的店",
+      "merchantVisits": "{count} 次",
+      "spendChangeTitle": "支出变化",
+      "spendChangeCompared": "与前 {days} 天相比",
+      "spendChangeUp": "增加了 {amount}{percent}",
+      "spendChangeDown": "减少了 {amount}{percent}",
+      "spendChangeFlat": "与上一周期大致相同",
+      "spendChangePercent": "（{percent}%）",
+      "spendChangeUnavailable": "数据不足，暂无法与上一周期比较。"
     }
   },
   "easterEgg": {

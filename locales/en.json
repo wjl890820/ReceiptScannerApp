@@ -652,7 +652,16 @@
       "insightTitle": "Period insights",
       "topCategoryInsight": "In recent records, among categorized item spending, “{catLabel}” is the largest share (about {pct}%).",
       "lowDataHint": "Trends here become clearer as you keep recording receipts.",
-      "loadFailed": "Analysis is temporarily unavailable"
+      "loadFailed": "Analysis is temporarily unavailable",
+      "merchantsTitle": "Where you shop",
+      "merchantVisits": "{count} visits",
+      "spendChangeTitle": "Spending change",
+      "spendChangeCompared": "Compared with the previous {days} days",
+      "spendChangeUp": "Increased by {amount}{percent}",
+      "spendChangeDown": "Decreased by {amount}{percent}",
+      "spendChangeFlat": "About the same as the previous period",
+      "spendChangePercent": " ({percent}%)",
+      "spendChangeUnavailable": "Not enough data to compare with the previous period."
     }
   },
   "easterEgg": {

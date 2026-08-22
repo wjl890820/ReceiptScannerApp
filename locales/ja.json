@@ -652,7 +652,16 @@
       "insightTitle": "期間のインサイト",
       "topCategoryInsight": "最近の記録では、分類済み商品支出のうち「{catLabel}」の割合が最も高いです（約 {pct}%）。",
       "lowDataHint": "記録を続けると、ここでの傾向がよりはっきりします。",
-      "loadFailed": "分析を一時的に読み込めません"
+      "loadFailed": "分析を一時的に読み込めません",
+      "merchantsTitle": "よく行くお店",
+      "merchantVisits": "{count}回",
+      "spendChangeTitle": "支出の変化",
+      "spendChangeCompared": "直近{days}日の前の期間と比較",
+      "spendChangeUp": "{amount}増加{percent}",
+      "spendChangeDown": "{amount}減少{percent}",
+      "spendChangeFlat": "前の期間とほぼ同じ",
+      "spendChangePercent": "（{percent}%）",
+      "spendChangeUnavailable": "比較できるデータがまだ足りません。"
     }
   },
   "easterEgg": {
