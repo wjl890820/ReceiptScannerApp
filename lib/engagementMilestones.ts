@@ -13,6 +13,7 @@ import type {
 } from './productPriceHistory';
 import { getReceiptItems } from './receiptItems';
 import { jstCalendarDayStartMs } from './dateParser';
+import type { ReceiptRow } from './db';
 
 export const ENGAGEMENT_MILESTONES = [1, 3, 5, 10] as const;
 
@@ -186,6 +187,9 @@ export type EngagementReceipt = V1SupportedReceiptSource & {
   merchant_raw: string | null;
   merchant_normalized: string | null;
   total: number;
+  /** Optional — used by duplicate fingerprints when present. */
+  tax?: number;
+  tax_is_known?: number;
   currency: string;
   final_total: number | null;
   user_items_json: string | null;
@@ -850,11 +854,13 @@ async function readAllReceipts(
     `SELECT
        id,
        created_at,
-       COALESCE(transaction_at, created_at) AS transaction_at,
+       transaction_at,
        merchant_raw,
        merchant_normalized,
        merchant_type,
        total,
+       COALESCE(tax, 0) AS tax,
+       COALESCE(tax_is_known, 0) AS tax_is_known,
        currency,
        analysis_json,
        final_total,
@@ -863,6 +869,30 @@ async function readAllReceipts(
      ORDER BY COALESCE(transaction_at, created_at) ASC, id ASC`,
     []
   );
+}
+
+/** Apply D2-A3 analytics selection; returns purchase-candidate receipts + excluded ids. */
+async function selectEngagementAnalyticsReceipts(
+  receipts: EngagementReceipt[]
+): Promise<{
+  analyticsReceipts: EngagementReceipt[];
+  excludedDuplicateReceiptIds: ReadonlySet<string>;
+}> {
+  // Dynamic import keeps engagement module graph free of analysisDReport → expo-sqlite.
+  const { selectAnalyticsReceipts } = await import('./analyticsReceiptSelection');
+  const selection = selectAnalyticsReceipts(receipts as ReceiptRow[]);
+  return {
+    analyticsReceipts: selection.analyticsReceipts as EngagementReceipt[],
+    excludedDuplicateReceiptIds: selection.excludedDuplicateReceiptIds,
+  };
+}
+
+function filterProductRowsByExcludedReceiptIds<T extends { receiptId: string }>(
+  rows: readonly T[],
+  excludedIds: ReadonlySet<string>
+): T[] {
+  if (excludedIds.size === 0) return [...rows];
+  return rows.filter((row) => !excludedIds.has(row.receiptId));
 }
 
 async function readProductRows(
@@ -906,21 +936,29 @@ async function readProductRows(
 }
 
 async function readProductInsightContext(
-  db: EngagementMilestoneDatabase
+  db: EngagementMilestoneDatabase,
+  excludedDuplicateReceiptIds?: ReadonlySet<string>
 ): Promise<MilestoneProductInsightContext> {
   try {
     const rows = await readProductRows(db);
+    const filtered =
+      excludedDuplicateReceiptIds && excludedDuplicateReceiptIds.size > 0
+        ? filterProductRowsByExcludedReceiptIds(
+            rows,
+            excludedDuplicateReceiptIds
+          )
+        : rows;
     try {
       const { buildProductPriceHistory } = await import(
         './productPriceHistory'
       );
       return {
-        rows,
+        rows: filtered,
         queryFailed: false,
         priceHistoryBuilder: buildProductPriceHistory,
       };
     } catch {
-      return { rows, queryFailed: false };
+      return { rows: filtered, queryFailed: false };
     }
   } catch {
     return { rows: [], queryFailed: true };
@@ -933,6 +971,7 @@ async function evaluateReceiptSetWithDb(
   options: {
     beforeSupportedReceiptCount?: number | null;
     generatedAt?: number;
+    excludedDuplicateReceiptIds?: ReadonlySet<string>;
   }
 ): Promise<EngagementMilestoneEvaluation> {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
@@ -964,7 +1003,10 @@ async function evaluateReceiptSetWithDb(
     };
   }
 
-  const productContext = await readProductInsightContext(db);
+  const productContext = await readProductInsightContext(
+    db,
+    options.excludedDuplicateReceiptIds
+  );
   return {
     status,
     unlockedResult:
@@ -990,7 +1032,12 @@ export async function evaluateEngagementMilestonesWithDb(
   } = {}
 ): Promise<EngagementMilestoneEvaluation> {
   const receipts = await readAllReceipts(db);
-  return evaluateReceiptSetWithDb(db, receipts, options);
+  const { analyticsReceipts, excludedDuplicateReceiptIds } =
+    await selectEngagementAnalyticsReceipts(receipts);
+  return evaluateReceiptSetWithDb(db, analyticsReceipts, {
+    ...options,
+    excludedDuplicateReceiptIds,
+  });
 }
 
 export async function evaluateSavedReceiptMilestoneWithDb(
@@ -999,14 +1046,19 @@ export async function evaluateSavedReceiptMilestoneWithDb(
   options: { generatedAt?: number } = {}
 ): Promise<EngagementMilestoneEvaluation> {
   const receipts = await readAllReceipts(db);
-  const supportedCount = countSupportedReceipts(receipts);
-  const savedReceipt = receipts.find((receipt) => receipt.id === savedReceiptId);
+  const { analyticsReceipts, excludedDuplicateReceiptIds } =
+    await selectEngagementAnalyticsReceipts(receipts);
+  const supportedCount = countSupportedReceipts(analyticsReceipts);
+  const savedReceipt = analyticsReceipts.find(
+    (receipt) => receipt.id === savedReceiptId
+  );
   const savedReceiptIsSupported =
     savedReceipt != null && isV1SupportedReceipt(savedReceipt);
-  return evaluateReceiptSetWithDb(db, receipts, {
+  return evaluateReceiptSetWithDb(db, analyticsReceipts, {
     generatedAt: options.generatedAt,
     beforeSupportedReceiptCount:
       supportedCount - (savedReceiptIsSupported ? 1 : 0),
+    excludedDuplicateReceiptIds,
   });
 }
 
@@ -1015,7 +1067,9 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
   options: { generatedAt?: number } = {}
 ): Promise<CurrentEngagementMilestoneEvaluation> {
   const receipts = await readAllReceipts(db);
-  const supportedReceipts = filterV1SupportedReceipts(receipts);
+  const { analyticsReceipts, excludedDuplicateReceiptIds } =
+    await selectEngagementAnalyticsReceipts(receipts);
+  const supportedReceipts = filterV1SupportedReceipts(analyticsReceipts);
   const status = getEngagementMilestoneStatus(supportedReceipts.length);
   const generatedAt = options.generatedAt ?? Date.now();
   if (supportedReceipts.length === 0) {
@@ -1039,7 +1093,10 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
       ),
     };
   }
-  const productContext = await readProductInsightContext(db);
+  const productContext = await readProductInsightContext(
+    db,
+    excludedDuplicateReceiptIds
+  );
   return {
     status,
     currentResult:

@@ -112,6 +112,20 @@ function nullableTimestamp(value: unknown): number | null {
     : null;
 }
 
+/** SQL fragment to exclude high-confidence duplicate receipt ids from product history. */
+function excludedReceiptSql(
+  excludedReceiptIds?: ReadonlySet<string>
+): { sql: string; params: string[] } {
+  if (!excludedReceiptIds || excludedReceiptIds.size === 0) {
+    return { sql: '', params: [] };
+  }
+  const ids = [...excludedReceiptIds];
+  return {
+    sql: ` AND receipt_items.receipt_id NOT IN (${ids.map(() => '?').join(',')})`,
+    params: ids,
+  };
+}
+
 function formatNumber(value: number): string {
   return Number.isInteger(value)
     ? String(value)
@@ -230,10 +244,17 @@ async function getProductHistoryDb(): Promise<SQLite.SQLiteDatabase> {
 export async function loadProductHistoryWithDb(
   db: ProductHistoryDatabase,
   target: ProductDetailTarget,
-  options: { recentLimit?: number; locale?: Locale } = {}
+  options: {
+    recentLimit?: number;
+    locale?: Locale;
+    excludedReceiptIds?: ReadonlySet<string>;
+  } = {}
 ): Promise<ProductHistorySummary | null> {
   if (target.type === 'occurrence') return null;
   const filter = filterForTarget(target);
+  const exclusion = excludedReceiptSql(options.excludedReceiptIds);
+  const whereSql = `${filter.sql}${exclusion.sql}`;
+  const whereParams = [...filter.params, ...exclusion.params];
   const recentLimit = Math.max(
     1,
     Math.min(100, Math.floor(finiteNumber(options.recentLimit, DEFAULT_RECENT_PURCHASE_LIMIT)))
@@ -255,8 +276,8 @@ export async function loadProductHistoryWithDb(
        COUNT(DISTINCT receipt_items.sku_key) AS skuCount
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${filter.sql}`,
-    filter.params
+     WHERE ${whereSql}`,
+    whereParams
   );
   const occurrenceCount = finiteNumber(aggregate?.purchaseOccurrenceCount);
   if (occurrenceCount === 0) return null;
@@ -275,11 +296,11 @@ export async function loadProductHistoryWithDb(
        receipt_items.spec_source_text AS specSourceText
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${filter.sql}
+     WHERE ${whereSql}
      ORDER BY COALESCE(receipts.transaction_at, receipts.created_at) DESC,
        receipt_items.source_index ASC
      LIMIT 1`,
-    filter.params
+    whereParams
   );
 
   const currencyTotals = await db.getAllAsync<ProductCurrencyTotal>(
@@ -294,10 +315,10 @@ export async function loadProductHistoryWithDb(
        ), 0) AS totalSpend
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${filter.sql}
+     WHERE ${whereSql}
      GROUP BY receipts.currency
      ORDER BY receipts.currency ASC`,
-    filter.params
+    whereParams
   );
 
   const merchants = await db.getAllAsync<ProductMerchantSummary>(
@@ -310,10 +331,10 @@ export async function loadProductHistoryWithDb(
        MAX(COALESCE(receipts.transaction_at, receipts.created_at)) AS lastPurchasedAt
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${filter.sql}
+     WHERE ${whereSql}
      GROUP BY merchantName
      ORDER BY purchaseOccurrenceCount DESC, lastPurchasedAt DESC`,
-    filter.params
+    whereParams
   );
 
   const specificationVariants = await db.getAllAsync<ProductSpecificationVariant>(
@@ -328,7 +349,7 @@ export async function loadProductHistoryWithDb(
        COUNT(*) AS purchaseOccurrenceCount
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${filter.sql}
+     WHERE ${whereSql}
        AND (
          receipt_items.spec_size_value IS NOT NULL
          OR receipt_items.volume_base_ml IS NOT NULL
@@ -344,7 +365,7 @@ export async function loadProductHistoryWithDb(
        receipt_items.count_base,
        receipt_items.spec_source_text
      ORDER BY purchaseOccurrenceCount DESC, sizeValue ASC`,
-    filter.params
+    whereParams
   );
 
   const recentPurchases = await db.getAllAsync<ProductPurchaseOccurrence>(
@@ -375,11 +396,11 @@ export async function loadProductHistoryWithDb(
        receipt_items.spec_source_text AS specSourceText
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${filter.sql}
+     WHERE ${whereSql}
      ORDER BY COALESCE(receipts.transaction_at, receipts.created_at) DESC,
        receipt_items.source_index ASC
      LIMIT ?`,
-    [...filter.params, recentLimit]
+    [...whereParams, recentLimit]
   );
 
   const normalizedPurchases = recentPurchases.map((purchase) => {
@@ -449,7 +470,11 @@ export async function loadProductHistoryWithDb(
 
 export async function loadProductHistory(
   target: ProductDetailTarget,
-  options: { recentLimit?: number; locale?: Locale } = {}
+  options: {
+    recentLimit?: number;
+    locale?: Locale;
+    excludedReceiptIds?: ReadonlySet<string>;
+  } = {}
 ): Promise<ProductHistorySummary | null> {
   const db = await getProductHistoryDb();
   return loadProductHistoryWithDb(db, target, options);

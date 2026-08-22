@@ -380,7 +380,8 @@ async function getProductPriceHistoryDb(): Promise<SQLite.SQLiteDatabase> {
 
 export async function loadProductPriceHistoryWithDb(
   db: ProductPriceHistoryDatabase,
-  target: ProductDetailTarget
+  target: ProductDetailTarget,
+  options: { excludedReceiptIds?: ReadonlySet<string> } = {}
 ): Promise<ProductPriceHistoryResult> {
   if (target.type === 'occurrence') {
     return buildProductPriceHistory(target, []);
@@ -417,12 +418,18 @@ export async function loadProductPriceHistoryWithDb(
        receipt_items.source_index ASC`,
     filter.params
   );
-  return buildProductPriceHistory(target, rows);
+  const excluded = options.excludedReceiptIds;
+  const filtered =
+    excluded && excluded.size > 0
+      ? rows.filter((row) => !excluded.has(row.receiptId))
+      : rows;
+  return buildProductPriceHistory(target, filtered);
 }
 
 export async function loadProductPriceHistory(
-  target: ProductDetailTarget
+  target: ProductDetailTarget,
+  options: { excludedReceiptIds?: ReadonlySet<string> } = {}
 ): Promise<ProductPriceHistoryResult> {
   const db = await getProductPriceHistoryDb();
-  return loadProductPriceHistoryWithDb(db, target);
+  return loadProductPriceHistoryWithDb(db, target, options);
 }

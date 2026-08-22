@@ -13,6 +13,7 @@ import {
 
 import { AnalysisEmptyState } from '@/components/analysis/AnalysisEmptyState';
 import { getCategoryLabel } from '@/lib/categoryPalette';
+import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from '@/lib/db';
 import { buildInsights } from '@/lib/buildInsights';
 import {
@@ -41,7 +42,7 @@ export default function AnalysisScreen() {
       setLoading(true);
       setLoadError(false);
       const allReceipts = await listReceipts();
-      setReceipts(allReceipts);
+      setReceipts(selectAnalyticsReceipts(allReceipts).analyticsReceipts);
     } catch (e) {
       console.error('加载收据失败:', e);
       setLoadError(true);

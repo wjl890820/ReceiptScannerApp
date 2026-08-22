@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
+import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
+import { listReceipts } from '@/lib/db';
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -66,28 +68,36 @@ export default function ProductDetailScreen() {
       };
     }
 
-    void Promise.allSettled([
-      loadProductHistory(target, { locale }),
-      loadProductPriceHistory(target),
-    ])
-      .then(([historyResult, priceResult]) => {
-        if (!active) return;
-        if (historyResult.status === 'fulfilled') {
-          setSummary(historyResult.value);
-        } else {
-          console.error('[ProductDetail] history load failed', historyResult.reason);
-          setLoadFailed(true);
-        }
-        if (priceResult.status === 'fulfilled') {
-          setPriceHistory(priceResult.value);
-        } else {
-          console.error('[ProductDetail] price history load failed', priceResult.reason);
-          setPriceLoadFailed(true);
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    void (async () => {
+      let excludedReceiptIds: ReadonlySet<string> | undefined;
+      try {
+        const allReceipts = await listReceipts();
+        excludedReceiptIds =
+          selectAnalyticsReceipts(allReceipts).excludedDuplicateReceiptIds;
+      } catch (e) {
+        console.error('[ProductDetail] analytics selection failed', e);
+      }
+
+      const [historyResult, priceResult] = await Promise.allSettled([
+        loadProductHistory(target, { locale, excludedReceiptIds }),
+        loadProductPriceHistory(target, { excludedReceiptIds }),
+      ]);
+      if (!active) return;
+      if (historyResult.status === 'fulfilled') {
+        setSummary(historyResult.value);
+      } else {
+        console.error('[ProductDetail] history load failed', historyResult.reason);
+        setLoadFailed(true);
+      }
+      if (priceResult.status === 'fulfilled') {
+        setPriceHistory(priceResult.value);
+      } else {
+        console.error('[ProductDetail] price history load failed', priceResult.reason);
+        setPriceLoadFailed(true);
+      }
+      if (active) setLoading(false);
+    })();
+
     return () => {
       active = false;
     };

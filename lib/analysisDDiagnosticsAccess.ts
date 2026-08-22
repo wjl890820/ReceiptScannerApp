@@ -170,6 +170,8 @@ export function buildAnalysisDDiagnosticsViewModel(
       lines: [
         ...formatAnalysisDDuplicateAuditSummary(duplicateScanAudit),
         `sweet-potato: ${duplicateScanAudit.sweetPotatoAudit.interpretation}`,
+        `sweet-potato storedReceiptCount: ${duplicateScanAudit.sweetPotatoAudit.storedReceiptCount}`,
+        `sweet-potato purchaseCandidateCount: ${duplicateScanAudit.sweetPotatoAudit.purchaseCandidateCount}`,
         ...(groupLines.length
           ? ['groups (sample):', ...groupLines]
           : ['groups: (none)']),

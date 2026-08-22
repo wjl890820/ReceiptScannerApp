@@ -36,6 +36,7 @@ import {
 import { getScanErrorMessage } from '@/lib/scanError';
 import { logger } from '@/lib/logger';
 
+import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from '@/lib/db';
 import {
   evaluateCurrentEngagementMilestone,
@@ -66,24 +67,26 @@ export default function HomeScreen() {
   });
 
 
-  // 加载所有收据用于饼图
+  // 加载所有收据； progressive analytics 使用去重后的 purchase candidates
   const loadReceipts = useCallback(async () => {
     try {
       setLoadingReceipts(true);
       const allReceipts = await listReceipts();
       setReceipts(allReceipts);
-      setHomeExperience(buildHomeProgressiveExperience(allReceipts, null));
+      const analyticsReceipts =
+        selectAnalyticsReceipts(allReceipts).analyticsReceipts;
+      setHomeExperience(buildHomeProgressiveExperience(analyticsReceipts, null));
       try {
         const evaluation = await evaluateCurrentEngagementMilestone();
         setHomeExperience(
-          buildHomeProgressiveExperience(allReceipts, evaluation)
+          buildHomeProgressiveExperience(analyticsReceipts, evaluation)
         );
       } catch (analyticsError) {
         logger.warn('Home', 'progressive analytics failed', {
           error: analyticsError,
         });
         setHomeExperience(
-          buildHomeProgressiveExperience(allReceipts, null, true)
+          buildHomeProgressiveExperience(analyticsReceipts, null, true)
         );
       }
     } catch (e: any) {

@@ -1,12 +1,41 @@
 /**
- * Analysis D2-A — read-only duplicate / re-scan audit.
+ * Analysis D2-A3 — read-only duplicate / re-scan audit.
  *
  * Domain freeze:
  *   Stored Receipt Record ≠ Unique Real-World Purchase
  *
- * Exact fingerprint is deterministic and independent of receipt id / created_at.
- * Probable matching is diagnostic-only (no approximate string matching).
- * Never deletes, merges, or mutates receipts.
+ * Confidence contract:
+ *   CONTENT_EXACT_DUPLICATE — identical content fingerprint (incl. item names)
+ *   STRUCTURAL_EXACT_DUPLICATE — merchant + valid transaction_at + total + tax
+ *     slot + ordered qty+lineAmount (NO item names); OCR name variance allowed
+ *   PROBABLE_DUPLICATE — weaker than structural (V1: empty; not excluded)
+ *   NOT_ENOUGH_EVIDENCE — insufficient for high-confidence dedupe
+ *
+ * Grouping: by STRUCTURAL fingerprint. If every member shares the same content
+ * fingerprint → CONTENT_EXACT_DUPLICATE; else STRUCTURAL_EXACT_DUPLICATE.
+ * Multiple content-exact subgroups under one structural fingerprint collapse
+ * to ONE group with ONE analytics representative.
+ *
+ * Representative rule (documented): earliest created_at, then receipt id
+ * ascending. Does not merge receipt contents — only chooses which stored
+ * receipt contributes to analytics.
+ *
+ * V1 policy: B_EXCLUDE_CONTENT_AND_STRUCTURAL_EXACT
+ *   Exclude CONTENT_EXACT + STRUCTURAL_EXACT extras from analytics.
+ *   Do NOT exclude PROBABLE / NOT_ENOUGH_EVIDENCE.
+ *
+ * Collision / safety notes:
+ *   - Same merchant + calendar day + total is NOT sufficient.
+ *   - Same merchant + total + items with different transaction_at → distinct.
+ *   - Missing/invalid transaction_at → never high-confidence dedupe.
+ *   - created_at is ignored by fingerprints (scan time ≠ purchase identity).
+ *   - No register/order number exists reliably in the domain model today;
+ *     fingerprints do not invent OCR heuristics for register/order ids.
+ *   - Optional keepSeparateReceiptIds (on selection/audit) is a future
+ *     KEEP_SEPARATE override so two structurally identical purchases can both
+ *     count — no UI in D2-A3.
+ *   - No fuzzy / approximate string matching.
+ *   - Never deletes, merges, or mutates receipts.
  */
 
 import {
@@ -19,11 +48,12 @@ import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { getReceiptItems } from './receiptItems';
 
 export const ANALYSIS_D_DUPLICATE_AUDIT_VERSION =
-  'meruno-analysis-d-duplicate-audit-v1' as const;
+  'meruno-analysis-d-duplicate-audit-v2' as const;
 
 export type AnalysisDDuplicateConfidence =
-  | 'EXACT_DUPLICATE_CANDIDATE'
-  | 'PROBABLE_DUPLICATE_CANDIDATE'
+  | 'CONTENT_EXACT_DUPLICATE'
+  | 'STRUCTURAL_EXACT_DUPLICATE'
+  | 'PROBABLE_DUPLICATE'
   | 'NOT_ENOUGH_EVIDENCE';
 
 export type AnalysisDDuplicateItemEvidence = {
@@ -43,6 +73,9 @@ export type AnalysisDDuplicateReceiptSummary = {
   taxKnown: boolean;
   itemCount: number;
   createdAt: number;
+  /** Content fingerprint (includes item names). Alias field: exactFingerprint. */
+  contentFingerprint: string | null;
+  /** Back-compat alias of contentFingerprint. */
   exactFingerprint: string | null;
   structuralFingerprint: string | null;
 };
@@ -80,8 +113,13 @@ export type AnalysisDDuplicateImpactMetrics = {
 export type AnalysisDSweetPotatoAudit = {
   matchedReceiptIds: string[];
   matchedItemLineCount: number;
+  /** Distinct stored receipt rows that matched. */
+  storedReceiptCount: number;
+  /** Distinct high-confidence purchase candidates among matches. */
+  purchaseCandidateCount: number;
   interpretation:
     | 'SAME_RECEIPT_SCANNED_TWICE'
+    | 'SAME_PURCHASE_CANDIDATE_MULTIPLE_SCANS'
     | 'TWO_ITEM_LINES_ON_ONE_RECEIPT'
     | 'TWO_DISTINCT_STORED_RECEIPTS'
     | 'MIXED_OR_UNCLEAR'
@@ -92,24 +130,26 @@ export type AnalysisDSweetPotatoAudit = {
 export type AnalysisDDuplicateScanAudit = {
   auditVersion: typeof ANALYSIS_D_DUPLICATE_AUDIT_VERSION;
   storedReceiptCount: number;
-  exactUniquePurchaseCandidateCount: number;
-  exactDuplicateReceiptCount: number;
-  probableDuplicateReceiptCount: number;
-  exactDuplicateGroupCount: number;
-  probableDuplicateGroupCount: number;
+  analyticsPurchaseCandidateCount: number;
+  contentExactDuplicateExtras: number;
+  structuralExactDuplicateExtras: number;
+  probableDuplicateExtras: number;
+  /** CONTENT_EXACT + STRUCTURAL_EXACT extras (V1 high-confidence). */
+  highConfidenceDuplicateExtras: number;
+  duplicateGroupCount: number;
   notEnoughEvidencePairCount: number;
   missingTransactionAtReceiptCount: number;
   recommendedV1AnalyticsPolicy:
     | 'A_COUNT_ALL'
-    | 'B_EXCLUDE_EXACT_ONLY'
-    | 'C_EXCLUDE_EXACT_AND_PROBABLE';
-  recommendedExcludeExactDuplicatesFromV1Analytics: boolean;
+    | 'B_EXCLUDE_CONTENT_AND_STRUCTURAL_EXACT'
+    | 'C_EXCLUDE_INCLUDING_PROBABLE';
+  recommendedExcludeHighConfidenceDuplicatesFromV1Analytics: boolean;
   collisionRiskNotes: string[];
   sweetPotatoAudit: AnalysisDSweetPotatoAudit;
   groups: AnalysisDDuplicateGroup[];
   impact: {
     before: AnalysisDDuplicateImpactMetrics;
-    exactDeduped: AnalysisDDuplicateImpactMetrics;
+    highConfidenceDeduped: AnalysisDDuplicateImpactMetrics;
     delta: {
       storedReceiptCount: number;
       v1SupportedReceiptCount: number;
@@ -191,11 +231,11 @@ export function extractDuplicateItemEvidence(
 }
 
 /**
- * Exact receipt fingerprint.
+ * Content (exact) receipt fingerprint — includes canonicalized item names.
  * Independent of receipt id and created_at.
  * Requires valid transaction_at — otherwise null (conservative).
  */
-export function buildExactReceiptFingerprint(
+export function buildContentReceiptFingerprint(
   receipt: ReceiptRow
 ): string | null {
   if (!hasValidTransactionAt(receipt)) return null;
@@ -219,8 +259,18 @@ export function buildExactReceiptFingerprint(
 }
 
 /**
+ * Back-compat alias of buildContentReceiptFingerprint.
+ */
+export function buildExactReceiptFingerprint(
+  receipt: ReceiptRow
+): string | null {
+  return buildContentReceiptFingerprint(receipt);
+}
+
+/**
  * Structural fingerprint (merchant/time/total/tax/qty+amount sequence).
- * Diagnostic probable detection only when exact names differ.
+ * Item OCR names are intentionally omitted — OCR variance must not block
+ * high-confidence same-purchase detection.
  */
 export function buildStructuralReceiptFingerprint(
   receipt: ReceiptRow
@@ -248,6 +298,7 @@ export function summarizeReceiptForDuplicateAudit(
 ): AnalysisDDuplicateReceiptSummary {
   const items = extractDuplicateItemEvidence(receipt);
   const tax = taxSlot(receipt);
+  const contentFingerprint = buildContentReceiptFingerprint(receipt);
   return {
     receiptId: receipt.id,
     merchantKey: merchantAnalyticsKey(receipt),
@@ -264,12 +315,17 @@ export function summarizeReceiptForDuplicateAudit(
     taxKnown: tax.known,
     itemCount: items.length,
     createdAt: receipt.created_at,
-    exactFingerprint: buildExactReceiptFingerprint(receipt),
+    contentFingerprint,
+    exactFingerprint: contentFingerprint,
     structuralFingerprint: buildStructuralReceiptFingerprint(receipt),
   };
 }
 
-function pickRepresentative(
+/**
+ * Deterministic representative: earliest created_at, then receipt id ASC.
+ * Documented rule — do not merge contents; pick analytics contributor only.
+ */
+export function pickDuplicateRepresentative(
   members: AnalysisDDuplicateReceiptSummary[]
 ): string {
   const sorted = [...members].sort((a, b) => {
@@ -277,6 +333,12 @@ function pickRepresentative(
     return a.receiptId.localeCompare(b.receiptId);
   });
   return sorted[0]!.receiptId;
+}
+
+function pickRepresentative(
+  members: AnalysisDDuplicateReceiptSummary[]
+): string {
+  return pickDuplicateRepresentative(members);
 }
 
 function groupByKey<T>(
@@ -294,19 +356,70 @@ function groupByKey<T>(
   return map;
 }
 
-export function buildExactDuplicateGroups(
+/**
+ * High-confidence groups keyed by STRUCTURAL fingerprint.
+ * Content-identical clusters → CONTENT_EXACT_DUPLICATE;
+ * mixed content under same structure → STRUCTURAL_EXACT_DUPLICATE.
+ */
+export function buildHighConfidenceDuplicateGroups(
   summaries: AnalysisDDuplicateReceiptSummary[]
 ): AnalysisDDuplicateGroup[] {
   const groups: AnalysisDDuplicateGroup[] = [];
   for (const [fp, members] of groupByKey(
     summaries,
-    (s) => s.exactFingerprint
+    (s) => s.structuralFingerprint
   )) {
     if (members.length < 2) continue;
+    const contentKeys = new Set(
+      members.map((m) => m.contentFingerprint).filter(Boolean)
+    );
+    const allSameContent =
+      contentKeys.size === 1 &&
+      members.every((m) => m.contentFingerprint != null);
+    const confidence: AnalysisDDuplicateConfidence = allSameContent
+      ? 'CONTENT_EXACT_DUPLICATE'
+      : 'STRUCTURAL_EXACT_DUPLICATE';
     const representativeReceiptId = pickRepresentative(members);
     const rep = members.find((m) => m.receiptId === representativeReceiptId)!;
+    const matchingEvidence = allSameContent
+      ? [
+          'identical_content_fingerprint',
+          'merchant',
+          'transaction_at',
+          'total',
+          'tax_slot',
+          'ordered_item_name_qty_amount',
+        ]
+      : [
+          'identical_structural_fingerprint',
+          'merchant',
+          'transaction_at',
+          'total',
+          'tax_slot',
+          'ordered_qty_amount_structure',
+        ];
+    const differenceEvidence = allSameContent
+      ? members
+          .filter((m) => m.receiptId !== representativeReceiptId)
+          .map(
+            (m) =>
+              `receipt_id=${m.receiptId};created_at_delta_ms=${
+                m.createdAt - rep.createdAt
+              }`
+          )
+      : [
+          'item_name_canonical_may_differ',
+          ...members
+            .filter((m) => m.receiptId !== representativeReceiptId)
+            .map(
+              (m) =>
+                `receipt_id=${m.receiptId};created_at_delta_ms=${
+                  m.createdAt - rep.createdAt
+                }`
+            ),
+        ];
     groups.push({
-      confidence: 'EXACT_DUPLICATE_CANDIDATE',
+      confidence,
       fingerprint: fp,
       receiptIds: members.map((m) => m.receiptId),
       representativeReceiptId,
@@ -314,71 +427,32 @@ export function buildExactDuplicateGroups(
       transactionAt: members[0]!.transactionAt,
       total: members[0]!.total,
       itemCount: members[0]!.itemCount,
-      matchingEvidence: [
-        'identical_exact_fingerprint',
-        'merchant',
-        'transaction_at',
-        'total',
-        'tax_slot',
-        'ordered_item_name_qty_amount',
-      ],
-      differenceEvidence: members
-        .filter((m) => m.receiptId !== representativeReceiptId)
-        .map(
-          (m) =>
-            `receipt_id=${m.receiptId};created_at_delta_ms=${
-              m.createdAt - rep.createdAt
-            }`
-        ),
+      matchingEvidence,
+      differenceEvidence,
       members,
     });
   }
   return groups;
 }
 
-export function buildProbableDuplicateGroups(
-  summaries: AnalysisDDuplicateReceiptSummary[],
-  exactGroupedIds: Set<string>
+/** Content-exact groups only (diagnostic / tests). Prefer structural grouping. */
+export function buildExactDuplicateGroups(
+  summaries: AnalysisDDuplicateReceiptSummary[]
 ): AnalysisDDuplicateGroup[] {
-  const candidates = summaries.filter(
-    (s) =>
-      !!s.structuralFingerprint &&
-      !!s.exactFingerprint &&
-      !exactGroupedIds.has(s.receiptId)
+  return buildHighConfidenceDuplicateGroups(summaries).filter(
+    (g) => g.confidence === 'CONTENT_EXACT_DUPLICATE'
   );
-  const groups: AnalysisDDuplicateGroup[] = [];
-  for (const [fp, members] of groupByKey(
-    candidates,
-    (s) => s.structuralFingerprint
-  )) {
-    if (members.length < 2) continue;
-    const exactKeys = new Set(members.map((m) => m.exactFingerprint));
-    if (exactKeys.size < 2) continue;
-    const representativeReceiptId = pickRepresentative(members);
-    groups.push({
-      confidence: 'PROBABLE_DUPLICATE_CANDIDATE',
-      fingerprint: fp,
-      receiptIds: members.map((m) => m.receiptId),
-      representativeReceiptId,
-      merchant: members[0]!.merchantLabel,
-      transactionAt: members[0]!.transactionAt,
-      total: members[0]!.total,
-      itemCount: members[0]!.itemCount,
-      matchingEvidence: [
-        'merchant',
-        'transaction_at',
-        'total',
-        'tax_slot',
-        'ordered_qty_amount_structure',
-      ],
-      differenceEvidence: [
-        'item_name_canonical_differs',
-        'diagnostic_only_not_for_v1_exclusion',
-      ],
-      members,
-    });
-  }
-  return groups;
+}
+
+/**
+ * PROBABLE is reserved for evidence weaker than STRUCTURAL_EXACT.
+ * V1: return empty — do not label structural cases as probable.
+ */
+export function buildProbableDuplicateGroups(
+  _summaries: AnalysisDDuplicateReceiptSummary[],
+  _exactGroupedIds?: Set<string>
+): AnalysisDDuplicateGroup[] {
+  return [];
 }
 
 function countWeakMerchantDayTotalCollisions(
@@ -398,17 +472,39 @@ function countWeakMerchantDayTotalCollisions(
   return pairs;
 }
 
-export function selectExactDedupedReceipts(
+export type DedupSelectionOpts = {
+  /** Future KEEP_SEPARATE override — these ids are never dropped. */
+  keepSeparateReceiptIds?: ReadonlySet<string>;
+};
+
+/**
+ * Drop high-confidence duplicate extras (keep one representative per group).
+ * Respects optional keepSeparateReceiptIds.
+ */
+export function selectHighConfidenceDedupedReceipts(
   receipts: ReceiptRow[],
-  exactGroups: AnalysisDDuplicateGroup[]
+  highConfidenceGroups: AnalysisDDuplicateGroup[],
+  opts?: DedupSelectionOpts
 ): ReceiptRow[] {
+  const keepSeparate = opts?.keepSeparateReceiptIds;
   const drop = new Set<string>();
-  for (const g of exactGroups) {
+  for (const g of highConfidenceGroups) {
     for (const id of g.receiptIds) {
-      if (id !== g.representativeReceiptId) drop.add(id);
+      if (id === g.representativeReceiptId) continue;
+      if (keepSeparate?.has(id)) continue;
+      drop.add(id);
     }
   }
   return receipts.filter((r) => !drop.has(r.id));
+}
+
+/** Back-compat alias — now uses high-confidence (content + structural) groups. */
+export function selectExactDedupedReceipts(
+  receipts: ReceiptRow[],
+  groups: AnalysisDDuplicateGroup[],
+  opts?: DedupSelectionOpts
+): ReceiptRow[] {
+  return selectHighConfidenceDedupedReceipts(receipts, groups, opts);
 }
 
 function metricsFromReport(
@@ -458,6 +554,26 @@ function metricsFromReport(
   };
 }
 
+function countPurchaseCandidatesAmongMatched(
+  matchedReceiptIds: string[],
+  highConfidenceGroups: AnalysisDDuplicateGroup[]
+): number {
+  if (matchedReceiptIds.length === 0) return 0;
+  const matched = new Set(matchedReceiptIds);
+  const covered = new Set<string>();
+  let candidates = 0;
+  for (const g of highConfidenceGroups) {
+    const overlap = g.receiptIds.filter((id) => matched.has(id));
+    if (overlap.length === 0) continue;
+    candidates += 1;
+    for (const id of overlap) covered.add(id);
+  }
+  for (const id of matchedReceiptIds) {
+    if (!covered.has(id)) candidates += 1;
+  }
+  return candidates;
+}
+
 export function auditSweetPotatoStyleObservations(
   receipts: ReceiptRow[],
   opts?: {
@@ -490,6 +606,16 @@ export function auditSweetPotatoStyleObservations(
     matchedItemLineCount += hits.length;
   }
 
+  const matchedSummaries = receipts
+    .filter((r) => matchedReceiptIds.includes(r.id))
+    .map(summarizeReceiptForDuplicateAudit);
+  const highConfidence = buildHighConfidenceDuplicateGroups(matchedSummaries);
+  const purchaseCandidateCount = countPurchaseCandidatesAmongMatched(
+    matchedReceiptIds,
+    highConfidence
+  );
+  const storedReceiptCount = matchedReceiptIds.length;
+
   let interpretation: AnalysisDSweetPotatoAudit['interpretation'] = 'NOT_FOUND';
   if (matchedReceiptIds.length === 0) {
     notes.push('No Costco sweet-potato ¥698 lines found in provided receipts.');
@@ -498,22 +624,35 @@ export function auditSweetPotatoStyleObservations(
     notes.push(
       'Single stored receipt contains multiple matching item lines — Product Detail can show two observations without a re-scan.'
     );
-  } else if (matchedReceiptIds.length >= 2) {
-    const summaries = receipts
-      .filter((r) => matchedReceiptIds.includes(r.id))
-      .map(summarizeReceiptForDuplicateAudit);
-    const exact = buildExactDuplicateGroups(summaries);
-    if (exact.some((g) => g.receiptIds.length >= 2)) {
+  } else if (
+    matchedReceiptIds.length >= 2 &&
+    purchaseCandidateCount === 1 &&
+    highConfidence.some((g) =>
+      matchedReceiptIds.every((id) => g.receiptIds.includes(id))
+    )
+  ) {
+    const conf = highConfidence[0]?.confidence;
+    if (conf === 'CONTENT_EXACT_DUPLICATE') {
       interpretation = 'SAME_RECEIPT_SCANNED_TWICE';
       notes.push(
-        'Matched receipts share an exact fingerprint — likely the same physical receipt scanned twice.'
+        'Matched receipts share a content fingerprint — likely the same physical receipt scanned twice.'
       );
     } else {
-      interpretation = 'TWO_DISTINCT_STORED_RECEIPTS';
+      interpretation = 'SAME_PURCHASE_CANDIDATE_MULTIPLE_SCANS';
       notes.push(
-        'Multiple stored receipts matched but exact fingerprints differ — treat as distinct unless stronger evidence appears.'
+        `Multiple stored receipts (${storedReceiptCount}) collapse to one STRUCTURAL_EXACT purchase candidate — OCR names may differ across scans.`
       );
     }
+  } else if (matchedReceiptIds.length >= 2 && purchaseCandidateCount === 1) {
+    interpretation = 'SAME_PURCHASE_CANDIDATE_MULTIPLE_SCANS';
+    notes.push(
+      `Matched stored receipts (${storedReceiptCount}) map to one purchase candidate.`
+    );
+  } else if (matchedReceiptIds.length >= 2) {
+    interpretation = 'TWO_DISTINCT_STORED_RECEIPTS';
+    notes.push(
+      `Multiple stored receipts matched with ${purchaseCandidateCount} purchase candidates — treat as distinct unless stronger evidence appears.`
+    );
   } else {
     interpretation = 'MIXED_OR_UNCLEAR';
   }
@@ -521,6 +660,8 @@ export function auditSweetPotatoStyleObservations(
   return {
     matchedReceiptIds,
     matchedItemLineCount,
+    storedReceiptCount,
+    purchaseCandidateCount,
     interpretation,
     notes,
   };
@@ -528,111 +669,118 @@ export function auditSweetPotatoStyleObservations(
 
 export function buildAnalysisDDuplicateScanAudit(
   receipts: ReceiptRow[],
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  opts?: DedupSelectionOpts
 ): AnalysisDDuplicateScanAudit {
   const summaries = receipts.map(summarizeReceiptForDuplicateAudit);
   const missingTransactionAtReceiptCount = summaries.filter(
     (s) => !s.hasValidTransactionAt
   ).length;
 
-  const exactGroups = buildExactDuplicateGroups(summaries);
-  const exactGroupedIds = new Set(exactGroups.flatMap((g) => g.receiptIds));
-  const probableGroups = buildProbableDuplicateGroups(
-    summaries,
-    exactGroupedIds
-  );
+  const highConfidenceGroups = buildHighConfidenceDuplicateGroups(summaries);
+  const probableGroups = buildProbableDuplicateGroups(summaries);
 
-  const exactDuplicateReceiptCount = exactGroups.reduce(
+  let contentExactDuplicateExtras = 0;
+  let structuralExactDuplicateExtras = 0;
+  for (const g of highConfidenceGroups) {
+    const extras = Math.max(0, g.receiptIds.length - 1);
+    if (g.confidence === 'CONTENT_EXACT_DUPLICATE') {
+      contentExactDuplicateExtras += extras;
+    } else {
+      structuralExactDuplicateExtras += extras;
+    }
+  }
+  const probableDuplicateExtras = probableGroups.reduce(
     (sum, g) => sum + Math.max(0, g.receiptIds.length - 1),
     0
   );
-  const probableDuplicateReceiptCount = probableGroups.reduce(
-    (sum, g) => sum + Math.max(0, g.receiptIds.length - 1),
-    0
-  );
+  const highConfidenceDuplicateExtras =
+    contentExactDuplicateExtras + structuralExactDuplicateExtras;
 
-  const exactUniquePurchaseCandidateCount =
-    receipts.length - exactDuplicateReceiptCount;
+  const analyticsPurchaseCandidateCount =
+    receipts.length - highConfidenceDuplicateExtras;
   const notEnoughEvidencePairCount =
     countWeakMerchantDayTotalCollisions(summaries);
 
-  const dedupedReceipts = selectExactDedupedReceipts(receipts, exactGroups);
+  const dedupedReceipts = selectHighConfidenceDedupedReceipts(
+    receipts,
+    highConfidenceGroups,
+    opts
+  );
   const beforeReport = buildAnalysisDReport({ receipts, nowMs });
   const afterReport = buildAnalysisDReport({
     receipts: dedupedReceipts,
     nowMs,
   });
   const before = metricsFromReport(beforeReport, receipts.length);
-  const exactDeduped = metricsFromReport(afterReport, dedupedReceipts.length);
-
-  const highPrecisionExact =
-    exactGroups.length === 0 ||
-    exactGroups.every(
-      (g) =>
-        g.members.every((m) => m.hasValidTransactionAt) &&
-        g.matchingEvidence.includes('identical_exact_fingerprint')
-    );
-
-  const recommendedExcludeExactDuplicatesFromV1Analytics = highPrecisionExact;
-  const recommendedV1AnalyticsPolicy = highPrecisionExact
-    ? 'B_EXCLUDE_EXACT_ONLY'
-    : 'A_COUNT_ALL';
+  const highConfidenceDeduped = metricsFromReport(
+    afterReport,
+    dedupedReceipts.length
+  );
 
   return {
     auditVersion: ANALYSIS_D_DUPLICATE_AUDIT_VERSION,
     storedReceiptCount: receipts.length,
-    exactUniquePurchaseCandidateCount,
-    exactDuplicateReceiptCount,
-    probableDuplicateReceiptCount,
-    exactDuplicateGroupCount: exactGroups.length,
-    probableDuplicateGroupCount: probableGroups.length,
+    analyticsPurchaseCandidateCount,
+    contentExactDuplicateExtras,
+    structuralExactDuplicateExtras,
+    probableDuplicateExtras,
+    highConfidenceDuplicateExtras,
+    duplicateGroupCount: highConfidenceGroups.length,
     notEnoughEvidencePairCount,
     missingTransactionAtReceiptCount,
-    recommendedV1AnalyticsPolicy,
-    recommendedExcludeExactDuplicatesFromV1Analytics,
+    recommendedV1AnalyticsPolicy: 'B_EXCLUDE_CONTENT_AND_STRUCTURAL_EXACT',
+    recommendedExcludeHighConfidenceDuplicatesFromV1Analytics: true,
     collisionRiskNotes: [
-      'Same merchant + same calendar day + same total is NOT sufficient for exact duplicate.',
+      'Same merchant + same calendar day + same total is NOT sufficient for high-confidence duplicate.',
       'Same merchant + total + items with different transaction_at are treated as distinct purchases.',
-      'created_at is ignored by the exact fingerprint (scan time ≠ purchase identity).',
-      'Receipts missing valid transaction_at are never exact/probable-deduped.',
-      'Probable groups are diagnostic-only and must not drive V1 exclusion (policy C rejected without stronger evidence).',
-      `Weak merchant/day/total collision pairs (informational only): ${notEnoughEvidencePairCount}`,
+      'created_at is ignored by content/structural fingerprints (scan time ≠ purchase identity).',
+      'Receipts missing valid transaction_at are never content/structural-deduped.',
+      'No register/order number is reliably available in the domain model; fingerprints do not invent OCR register heuristics.',
+      'PROBABLE is reserved for weaker-than-structural evidence and is empty in V1 (not excluded).',
+      'Optional keepSeparateReceiptIds can preserve structurally identical purchases (future KEEP_SEPARATE).',
+      `Weak merchant/day/total collision pairs (NOT_ENOUGH_EVIDENCE, informational only): ${notEnoughEvidencePairCount}`,
     ],
     sweetPotatoAudit: auditSweetPotatoStyleObservations(receipts),
-    groups: [...exactGroups, ...probableGroups],
+    groups: [...highConfidenceGroups, ...probableGroups],
     impact: {
       before,
-      exactDeduped,
+      highConfidenceDeduped,
       delta: {
         storedReceiptCount:
-          exactDeduped.storedReceiptCount - before.storedReceiptCount,
+          highConfidenceDeduped.storedReceiptCount - before.storedReceiptCount,
         v1SupportedReceiptCount:
-          exactDeduped.v1SupportedReceiptCount - before.v1SupportedReceiptCount,
-        supportedSpend: exactDeduped.supportedSpend - before.supportedSpend,
+          highConfidenceDeduped.v1SupportedReceiptCount -
+          before.v1SupportedReceiptCount,
+        supportedSpend:
+          highConfidenceDeduped.supportedSpend - before.supportedSpend,
         merchantVisitCount:
-          exactDeduped.merchantVisitCount - before.merchantVisitCount,
+          highConfidenceDeduped.merchantVisitCount - before.merchantVisitCount,
         itemOccurrenceCount:
-          exactDeduped.itemOccurrenceCount - before.itemOccurrenceCount,
+          highConfidenceDeduped.itemOccurrenceCount -
+          before.itemOccurrenceCount,
         frequentProductCount:
-          exactDeduped.frequentProductCount - before.frequentProductCount,
+          highConfidenceDeduped.frequentProductCount -
+          before.frequentProductCount,
         priceHistoryObservationCount:
-          exactDeduped.priceHistoryObservationCount -
+          highConfidenceDeduped.priceHistoryObservationCount -
           before.priceHistoryObservationCount,
         trend7dSampleSize:
-          exactDeduped.trend7dSampleSize - before.trend7dSampleSize,
+          highConfidenceDeduped.trend7dSampleSize - before.trend7dSampleSize,
         trend30dSampleSize:
-          exactDeduped.trend30dSampleSize - before.trend30dSampleSize,
+          highConfidenceDeduped.trend30dSampleSize - before.trend30dSampleSize,
         categoryCompositionTotal:
-          exactDeduped.categoryCompositionTotal -
+          highConfidenceDeduped.categoryCompositionTotal -
           before.categoryCompositionTotal,
       },
     },
     policyNotes: [
-      'OPTION A: count every stored receipt (current production behavior).',
-      'OPTION B (recommended if exact precision stays high): exclude only EXACT_DUPLICATE_CANDIDATE extras.',
-      'OPTION C: exclude probable as well — NOT recommended; OCR name variance lacks proven precision.',
+      'OPTION A: count every stored receipt (legacy production behavior).',
+      'OPTION B (V1): B_EXCLUDE_CONTENT_AND_STRUCTURAL_EXACT — exclude CONTENT_EXACT + STRUCTURAL_EXACT extras.',
+      'OPTION C: also exclude PROBABLE — NOT recommended; PROBABLE is empty/weaker and not used for V1 exclusion.',
       'Category conservation gap is independent of duplicate scans and remains a D2-B topic.',
       'Future metadata (derived only): receipt_fingerprint, duplicate_of_candidate, duplicate_confidence — recompute; no destructive migration.',
+      'Future KEEP_SEPARATE override via keepSeparateReceiptIds — no save UI in D2-A3.',
     ],
   };
 }
@@ -643,21 +791,26 @@ export function formatAnalysisDDuplicateAuditSummary(
 ): string[] {
   return [
     `stored receipts: ${audit.storedReceiptCount}`,
-    `exact unique purchase candidates: ${audit.exactUniquePurchaseCandidateCount}`,
-    `exact duplicate receipts (extras): ${audit.exactDuplicateReceiptCount}`,
-    `exact groups: ${audit.exactDuplicateGroupCount}`,
-    `probable duplicate receipts (diagnostic): ${audit.probableDuplicateReceiptCount}`,
-    `probable groups: ${audit.probableDuplicateGroupCount}`,
+    `analytics purchase candidates: ${audit.analyticsPurchaseCandidateCount}`,
+    `content-exact duplicate extras: ${audit.contentExactDuplicateExtras}`,
+    `structural-exact duplicate extras: ${audit.structuralExactDuplicateExtras}`,
+    `probable duplicate extras (not excluded): ${audit.probableDuplicateExtras}`,
+    `high-confidence duplicate extras: ${audit.highConfidenceDuplicateExtras}`,
+    `duplicate groups: ${audit.duplicateGroupCount}`,
     `missing transaction_at: ${audit.missingTransactionAtReceiptCount}`,
     `recommended policy: ${audit.recommendedV1AnalyticsPolicy}`,
-    `exclude exact from V1 analytics?: ${
-      audit.recommendedExcludeExactDuplicatesFromV1Analytics ? 'YES' : 'NO'
+    `exclude high-confidence from V1 analytics?: ${
+      audit.recommendedExcludeHighConfidenceDuplicatesFromV1Analytics
+        ? 'YES'
+        : 'NO'
     }`,
-    `spend before→exactDeduped: ${audit.impact.before.supportedSpend} → ${audit.impact.exactDeduped.supportedSpend}`,
-    `visits before→exactDeduped: ${audit.impact.before.merchantVisitCount} → ${audit.impact.exactDeduped.merchantVisitCount}`,
-    `item occurrences before→exactDeduped: ${audit.impact.before.itemOccurrenceCount} → ${audit.impact.exactDeduped.itemOccurrenceCount}`,
-    `price obs before→exactDeduped: ${audit.impact.before.priceHistoryObservationCount} → ${audit.impact.exactDeduped.priceHistoryObservationCount}`,
-    `category composition before→exactDeduped: ${audit.impact.before.categoryCompositionTotal} → ${audit.impact.exactDeduped.categoryCompositionTotal}`,
+    `spend before→highConfidenceDeduped: ${audit.impact.before.supportedSpend} → ${audit.impact.highConfidenceDeduped.supportedSpend}`,
+    `visits before→highConfidenceDeduped: ${audit.impact.before.merchantVisitCount} → ${audit.impact.highConfidenceDeduped.merchantVisitCount}`,
+    `item occurrences before→highConfidenceDeduped: ${audit.impact.before.itemOccurrenceCount} → ${audit.impact.highConfidenceDeduped.itemOccurrenceCount}`,
+    `price obs before→highConfidenceDeduped: ${audit.impact.before.priceHistoryObservationCount} → ${audit.impact.highConfidenceDeduped.priceHistoryObservationCount}`,
+    `category composition before→highConfidenceDeduped: ${audit.impact.before.categoryCompositionTotal} → ${audit.impact.highConfidenceDeduped.categoryCompositionTotal}`,
     `category conservation gap (before): ${audit.impact.before.categoryConservationGap}`,
+    `sweet-potato storedReceiptCount: ${audit.sweetPotatoAudit.storedReceiptCount}`,
+    `sweet-potato purchaseCandidateCount: ${audit.sweetPotatoAudit.purchaseCandidateCount}`,
   ];
 }

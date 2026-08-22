@@ -260,9 +260,14 @@ describe('Analysis D1-A diagnostics access', () => {
     const section = vm.sections.find(
       (s) => s.title === 'Duplicate / re-scan (D2-A)'
     );
-    expect(section?.lines.some((l) => l.includes('exact duplicate'))).toBe(
-      true
-    );
+    expect(
+      section?.lines.some((l) => l.includes('content-exact duplicate extras'))
+    ).toBe(true);
+    expect(
+      section?.lines.some((l) =>
+        l.includes('analytics purchase candidates')
+      )
+    ).toBe(true);
   });
 });
 
