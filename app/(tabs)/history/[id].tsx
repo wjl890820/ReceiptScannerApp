@@ -1,5 +1,5 @@
 // app/(tabs)/history/[id].tsx
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -12,7 +12,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   deleteReceipt,
   getReceipt,
@@ -22,6 +24,11 @@ import {
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
+import { navigateBackOrHistory } from '@/lib/navigationBack';
+import {
+  buildAggregatableProductDetailHref,
+  productDetailTargetSourceFromReceiptItem,
+} from '@/lib/productDetailTarget';
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { upsertProductDictionary } from '@/lib/productDictionary';
 import { upsertProductNameAlias } from '@/lib/productAlias';
@@ -136,10 +143,15 @@ function buildCategorySummary(
 
 export default function ReceiptDetailScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id?: string }>();
 
   const [loading, setLoading] = useState(true);
   const [receipt, setReceipt] = useState<ReceiptRow | null>(null);
+
+  const onBack = useCallback(() => {
+    navigateBackOrHistory(router);
+  }, [router]);
 
   // ====== 商品编辑 Modal 状态 ======
   const [itemEditOpen, setItemEditOpen] = useState(false);
@@ -413,7 +425,7 @@ export default function ReceiptDetailScreen() {
             try {
               await deleteReceipt(receipt.id);
               Alert.alert(t('history.detail.deletedTitle'));
-              router.back();
+              navigateBackOrHistory(router);
             } catch (e: any) {
               console.error(e);
               Alert.alert(t('history.detail.deleteFailedTitle'), t('history.detail.retry'));
@@ -426,23 +438,55 @@ export default function ReceiptDetailScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator />
-        <Text style={{ marginTop: 10 }}>{t('history.detail.loading')}</Text>
+      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+        <Pressable
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel={t('history.detail.back')}
+          style={({ pressed }) => [styles.backButton, pressed && { opacity: 0.55 }]}
+          hitSlop={8}
+        >
+          <Text style={styles.backText}>{t('history.detail.back')}</Text>
+        </Pressable>
+        <View style={styles.center}>
+          <ActivityIndicator />
+          <Text style={{ marginTop: 10 }}>{t('history.detail.loading')}</Text>
+        </View>
       </View>
     );
   }
 
   if (!receipt) {
     return (
-      <View style={styles.center}>
-        <Text>{t('history.detail.notFound')}</Text>
+      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+        <Pressable
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel={t('history.detail.back')}
+          style={({ pressed }) => [styles.backButton, pressed && { opacity: 0.55 }]}
+          hitSlop={8}
+        >
+          <Text style={styles.backText}>{t('history.detail.back')}</Text>
+        </Pressable>
+        <View style={styles.center}>
+          <Text>{t('history.detail.notFound')}</Text>
+        </View>
       </View>
     );
   }
 
   return (
     <>
+      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+        <Pressable
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel={t('history.detail.back')}
+          style={({ pressed }) => [styles.backButton, pressed && { opacity: 0.55 }]}
+          hitSlop={8}
+        >
+          <Text style={styles.backText}>{t('history.detail.back')}</Text>
+        </Pressable>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
@@ -500,32 +544,58 @@ export default function ReceiptDetailScreen() {
 
         {displayItems.length > 0 ? (
           <View style={styles.itemsWrap}>
-            {displayItems.map((it, idx) => (
-              <Pressable
-                key={`${it.name}-${idx}`}
-                style={({ pressed }) => [
-                  styles.itemRow,
-                  pressed && { backgroundColor: '#f5f5f5' },
-                ]}
-                onPress={() => openItemEditor(idx)}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName}>{it.name}</Text>
-                  <Text style={styles.itemMeta}>
-                    {t('history.detail.quantityShort')} {it.quantity} · {t('history.detail.subtotalShort')} {formatJPY(it.lineTotal)}
-                  </Text>
-                </View>
-                {(() => {
-                  const tag = getItemTagDisplay(it as any);
-                  if (!tag.visible) return null;
-                  return (
-                    <View style={styles.tag}>
-                      <Text style={styles.tagText}>{tag.label}</Text>
+            {displayItems.map((it, idx) => {
+              const productHref = buildAggregatableProductDetailHref(
+                productDetailTargetSourceFromReceiptItem(
+                  it as unknown as Record<string, unknown>,
+                  receipt.id,
+                  idx
+                )
+              );
+              return (
+                <View key={`${it.name}-${idx}`} style={styles.itemRow}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.itemEditHit,
+                      pressed && { backgroundColor: '#f5f5f5' },
+                    ]}
+                    onPress={() => openItemEditor(idx)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('history.detail.edit.title')}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemName}>{it.name}</Text>
+                      <Text style={styles.itemMeta}>
+                        {t('history.detail.quantityShort')} {it.quantity} · {t('history.detail.subtotalShort')} {formatJPY(it.lineTotal)}
+                      </Text>
                     </View>
-                  );
-                })()}
-              </Pressable>
-            ))}
+                    {(() => {
+                      const tag = getItemTagDisplay(it as any);
+                      if (!tag.visible) return null;
+                      return (
+                        <View style={styles.tag}>
+                          <Text style={styles.tagText}>{tag.label}</Text>
+                        </View>
+                      );
+                    })()}
+                  </Pressable>
+                  {productHref ? (
+                    <Pressable
+                      onPress={() => router.push(productHref as Href)}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('history.detail.viewProductHistory')}
+                      style={({ pressed }) => [
+                        styles.productDetailHit,
+                        pressed && { opacity: 0.55 },
+                      ]}
+                      hitSlop={4}
+                    >
+                      <IconSymbol name="chevron.right" size={22} color="#888" />
+                    </Pressable>
+                  ) : null}
+                </View>
+              );
+            })}
           </View>
         ) : (
           <Text style={{ color: '#666' }}>{t('history.detail.noItems')}</Text>
@@ -555,6 +625,7 @@ export default function ReceiptDetailScreen() {
           <Text style={styles.deleteText}>{t('history.detail.deleteRecord')}</Text>
         </Pressable>
       </ScrollView>
+      </View>
 
       {/* ===== 商品编辑 Modal ===== */}
       <Modal
@@ -656,12 +727,28 @@ export default function ReceiptDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  backButton: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    alignSelf: 'flex-start',
+  },
+  backText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111',
+  },
   center: {
-    paddingTop: 120,
+    paddingTop: 80,
     alignItems: 'center',
   },
   container: {
-    paddingTop: 70,
+    paddingTop: 8,
     paddingHorizontal: 18,
     paddingBottom: 40,
   },
@@ -722,10 +809,23 @@ const styles = StyleSheet.create({
   },
   itemRow: {
     flexDirection: 'row',
-    gap: 12,
-    paddingVertical: 12,
+    alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e3e3e3',
+  },
+  itemEditHit: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    minHeight: 44,
+  },
+  productDetailHit: {
+    width: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   itemName: {
     fontSize: 18,

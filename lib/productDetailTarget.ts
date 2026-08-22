@@ -46,6 +46,42 @@ export function buildProductDetailHref(
   return `/product/${target.type}?key=${encodeURIComponent(target.key)}`;
 }
 
+/**
+ * Product Detail route for aggregatable identities only.
+ * Occurrence (insufficient identity) → null — never invent a target.
+ */
+export function buildAggregatableProductDetailHref(
+  source: ProductDetailTargetSource
+): `/product/${AggregatableProductDetailTarget['type']}?key=${string}` | null {
+  const target = resolveProductDetailTarget(source);
+  return target.type === 'occurrence' ? null : buildProductDetailHref(target);
+}
+
+/**
+ * Map a persisted receipt-line object onto the shared Product Detail source
+ * contract. Reads existing identity fields only (snake_case or camelCase);
+ * does not call buildSkuKey or invent family/canonical from raw name.
+ */
+export function productDetailTargetSourceFromReceiptItem(
+  item: Record<string, unknown>,
+  receiptId: string,
+  itemIndex: number
+): ProductDetailTargetSource {
+  const existingId = nonEmptyString(item.id);
+  return {
+    receiptId,
+    itemId: existingId ?? `${receiptId}:${itemIndex}`,
+    skuKey:
+      nonEmptyString(item.sku_key) ?? nonEmptyString(item.skuKey),
+    canonicalProductName:
+      nonEmptyString(item.canonical_product_name) ??
+      nonEmptyString(item.canonicalProductName),
+    productFamilyKey:
+      nonEmptyString(item.product_family_key) ??
+      nonEmptyString(item.productFamilyKey),
+  };
+}
+
 export function buildProductSearchResultHref(
   source: ProductDetailTargetSource
 ):

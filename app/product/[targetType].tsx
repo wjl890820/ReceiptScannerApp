@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -8,6 +8,9 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { navigateBackOrHistory } from '@/lib/navigationBack';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
@@ -34,6 +37,10 @@ function formatCurrency(amount: number, currency: string): string {
 
 export default function ProductDetailScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const onBack = useCallback(() => {
+    navigateBackOrHistory(router);
+  }, [router]);
   const locale = getCurrentLocale();
   const params = useLocalSearchParams<{
     targetType?: string | string[];
@@ -123,11 +130,14 @@ export default function ProductDetailScreen() {
     : [];
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
       <View style={styles.header}>
         <Pressable
-          onPress={() => router.back()}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel={t('productDetail.back')}
           style={({ pressed }) => [styles.backButton, pressed && { opacity: 0.55 }]}
+          hitSlop={8}
         >
           <Text style={styles.backText}>{t('productDetail.back')}</Text>
         </Pressable>
@@ -325,7 +335,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
-    paddingTop: 58,
   },
   header: {
     minHeight: 54,
@@ -338,6 +347,8 @@ const styles = StyleSheet.create({
   },
   backButton: {
     minWidth: 72,
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: 10,
   },
   backText: {

@@ -315,6 +315,8 @@
       "deleteFailed": "删除失败，请重试。"
     },
     "detail": {
+      "back": "返回",
+      "viewProductHistory": "查看商品购买记录",
       "notFound": "未找到该记录",
       "loadMessage": "无法读取该记录",
       "inputErrorTitle": "输入错误",

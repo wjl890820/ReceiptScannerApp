@@ -315,6 +315,8 @@
       "deleteFailed": "削除に失敗しました。もう一度お試しください。"
     },
     "detail": {
+      "back": "戻る",
+      "viewProductHistory": "商品の購入履歴を見る",
       "notFound": "この記録は見つかりませんでした",
       "loadMessage": "この記録を読み込めませんでした",
       "inputErrorTitle": "入力エラー",

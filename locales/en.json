@@ -315,6 +315,8 @@
       "deleteFailed": "Delete failed. Please try again."
     },
     "detail": {
+      "back": "Back",
+      "viewProductHistory": "View product purchase history",
       "notFound": "Record not found",
       "loadMessage": "Could not load this record",
       "inputErrorTitle": "Input error",

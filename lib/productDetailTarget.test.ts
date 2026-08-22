@@ -1,7 +1,9 @@
 import {
+  buildAggregatableProductDetailHref,
   buildProductDetailHref,
   buildProductSearchResultHref,
   parseProductDetailTarget,
+  productDetailTargetSourceFromReceiptItem,
   resolveProductDetailTarget,
 } from './productDetailTarget';
 
@@ -75,5 +77,111 @@ describe('Product Detail route safety', () => {
         itemId: 'receipt-1:0',
       })
     ).toBe('/history/receipt%20%2F%201');
+  });
+});
+
+describe('Receipt Detail → Product Detail affordance (R2-B1)', () => {
+  it('reuses the same aggregatable href contract as Home/History-search', () => {
+    const source = {
+      receiptId: 'receipt-1',
+      itemId: 'receipt-1:0',
+      skuKey: 'sku-900',
+      canonicalProductName: '明治 おいしい牛乳',
+      productFamilyKey: 'milk',
+    };
+    expect(buildAggregatableProductDetailHref(source)).toBe(
+      buildProductDetailHref({ type: 'sku', key: 'sku-900' })
+    );
+    expect(buildAggregatableProductDetailHref(source)).toBe(
+      buildProductSearchResultHref(source)
+    );
+
+    const familyOnly = {
+      receiptId: 'receipt-1',
+      itemId: 'receipt-1:0',
+      productFamilyKey: 'milk',
+    };
+    expect(buildAggregatableProductDetailHref(familyOnly)).toBe(
+      '/product/family?key=milk'
+    );
+    expect(buildAggregatableProductDetailHref(familyOnly)).toBe(
+      buildProductSearchResultHref(familyOnly)
+    );
+  });
+
+  it('returns null for unresolved identity instead of inventing a Product Detail route', () => {
+    expect(
+      buildAggregatableProductDetailHref({
+        receiptId: 'receipt-1',
+        itemId: 'receipt-1:0',
+      })
+    ).toBeNull();
+    expect(
+      buildAggregatableProductDetailHref({
+        receiptId: 'receipt-1',
+        itemId: 'receipt-1:0',
+        canonicalProductName: '   ',
+        productFamilyKey: null,
+        skuKey: undefined,
+      })
+    ).toBeNull();
+  });
+
+  it('maps receipt-item JSON fields without inventing identity from raw name', () => {
+    expect(
+      productDetailTargetSourceFromReceiptItem(
+        {
+          name: '何かの商品',
+          canonical_product_name: '明治 おいしい牛乳',
+          product_family_key: 'milk',
+          sku_key: 'sku-900',
+        },
+        'receipt-1',
+        2
+      )
+    ).toEqual({
+      receiptId: 'receipt-1',
+      itemId: 'receipt-1:2',
+      skuKey: 'sku-900',
+      canonicalProductName: '明治 おいしい牛乳',
+      productFamilyKey: 'milk',
+    });
+
+    const unresolved = productDetailTargetSourceFromReceiptItem(
+      { name: '未知の商品だけ' },
+      'receipt-1',
+      0
+    );
+    expect(unresolved).toEqual({
+      receiptId: 'receipt-1',
+      itemId: 'receipt-1:0',
+      skuKey: null,
+      canonicalProductName: null,
+      productFamilyKey: null,
+    });
+    expect(buildAggregatableProductDetailHref(unresolved)).toBeNull();
+  });
+
+  it('does not replace edit semantics — href builder is independent of row-edit open', () => {
+    // Edit remains a separate Pressable onPress(openItemEditor); this helper
+    // only produces optional navigation hrefs and never mutates item fields.
+    const source = productDetailTargetSourceFromReceiptItem(
+      {
+        name: '牛乳',
+        product_family_key: 'milk',
+        quantity: 1,
+        lineTotal: 198,
+      },
+      'r1',
+      0
+    );
+    expect(buildAggregatableProductDetailHref(source)).toBe(
+      '/product/family?key=milk'
+    );
+    expect(source).toMatchObject({
+      receiptId: 'r1',
+      itemId: 'r1:0',
+      productFamilyKey: 'milk',
+    });
   });
 });
