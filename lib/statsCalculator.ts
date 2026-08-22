@@ -8,6 +8,10 @@ import { isGroceryMerchant } from './groceryDetector';
 import { isV1SupportedReceipt } from './merchantType';
 import { resolveItemFinalCategory } from './homeMetricsHelpers';
 import type { ReceiptRow } from './db';
+import {
+  filterByRollingWindowDays,
+  rollingDaysForAnalysisRange,
+} from './rollingTimeWindow';
 
 export type TimeRange = 'week' | 'month' | 'all';
 
@@ -64,17 +68,13 @@ export function calculateStats(
   range: TimeRange = 'all'
 ): WeeklyMonthlyStats {
   const now = Date.now();
-  let cutoffTime = 0;
-
-  if (range === 'week') {
-    cutoffTime = now - 7 * 24 * 60 * 60 * 1000;
-  } else if (range === 'month') {
-    cutoffTime = now - 30 * 24 * 60 * 60 * 1000;
-  }
-
+  const days = rollingDaysForAnalysisRange(range);
   // Use transaction_at with fallback to created_at for consistent time filtering
-  const filteredReceipts = receipts.filter(
-    (r) => (r.transaction_at || r.created_at) >= cutoffTime
+  const filteredReceipts = filterByRollingWindowDays(
+    receipts,
+    (r) => r.transaction_at || r.created_at,
+    days,
+    now
   );
 
   // Total spend (all receipts)

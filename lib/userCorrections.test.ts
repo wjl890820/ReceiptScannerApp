@@ -30,7 +30,7 @@ import { parseProductSpecification } from './productSpecification';
 (global as unknown as { __DEV__: boolean }).__DEV__ = false;
 
 jest.mock('expo-sqlite', () => ({}));
-jest.mock('./db', () => ({ initIfNeeded: jest.fn() }), { virtual: true });
+jest.mock('./db', () => ({ initIfNeeded: jest.fn() }));
 
 import { fixJsonItems } from './categoryBackfill';
 

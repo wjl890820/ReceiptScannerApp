@@ -2,9 +2,6 @@
 jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn(),
 }));
-jest.mock('./db', () => ({
-  initIfNeeded: jest.fn(async () => undefined),
-}));
 
 import {
   archiveShoppingIntentWithDb,

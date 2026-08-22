@@ -7,7 +7,6 @@
 
 import * as SQLite from 'expo-sqlite';
 
-import { initIfNeeded } from './db';
 import {
   applyShoppingIntentUpdate,
   buildShoppingIntent,
@@ -61,7 +60,9 @@ let _schemaReady = false;
 
 export { SHOPPING_INTENTS_SCHEMA_SQL, ensureShoppingIntentsSchema };
 
+/** Lazy db import so memory/WithDb tests never load Expo Constants. */
 async function getSqliteDb(): Promise<SQLite.SQLiteDatabase> {
+  const { initIfNeeded } = await import('./db');
   await initIfNeeded();
   if (!_db) {
     _db = await SQLite.openDatabaseAsync(DB_NAME);

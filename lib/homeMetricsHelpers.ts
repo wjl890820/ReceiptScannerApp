@@ -66,7 +66,15 @@ export function resolveItemFinalCategory(item: ReceiptItem): string {
 }
 
 /**
- * 按分类聚合 V1 支持零售小票（supermarket + convenience）商品金额（饼图数据）。
+ * 按分类聚合 V1 支持零售小票（supermarket + convenience）商品金额。
+ *
+ * DISPLAY composition (Home pie / legacy display helpers):
+ * - May include an `uncategorized` slice so the UI can show "pending review".
+ * - Percentage denominator = sum of displayed slices (including uncategorized).
+ *
+ * This is NOT the Analysis spending-category share denominator.
+ * Analysis SSOT for category share is `categoryCompositionTotal` in
+ * `statsCalculator.calculateStats` (excludes uncategorized).
  */
 export function aggregateCategoryData(receipts: ReceiptRow[]): CategoryData[] {
   const supportedReceipts = filterV1SupportedReceiptRows(receipts);

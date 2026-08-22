@@ -10,6 +10,10 @@ import { V1_SPENDING_PRODUCT_CATEGORIES } from './productCategory';
 import { getReceiptItems } from './receiptItems';
 import type { WeeklyMonthlyStats, TimeRange } from './statsCalculator';
 import type { BuildInsightsOutput, StoryOutput } from './buildInsights';
+import {
+  filterByRollingWindowDays,
+  rollingDaysForAnalysisRange,
+} from './rollingTimeWindow';
 
 export type AnalysisReleaseStage = 'empty' | 'period_empty' | 'low' | 'ready';
 
@@ -85,10 +89,12 @@ export function filterReceiptsByTimeRange(
   range: TimeRange,
   now = Date.now()
 ): ReceiptRow[] {
-  let cutoff = 0;
-  if (range === 'week') cutoff = now - 7 * 24 * 60 * 60 * 1000;
-  else if (range === 'month') cutoff = now - 30 * 24 * 60 * 60 * 1000;
-  return receipts.filter((receipt) => receiptTimestamp(receipt) >= cutoff);
+  return filterByRollingWindowDays(
+    receipts,
+    receiptTimestamp,
+    rollingDaysForAnalysisRange(range),
+    now
+  );
 }
 
 export function countSupportedItemsInRange(
