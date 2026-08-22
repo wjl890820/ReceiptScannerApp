@@ -690,6 +690,20 @@ export function auditSweetPotatoStyleObservations(
   };
 }
 
+/**
+ * Device forensic target receipt ids for the known Costco ¥9534 re-scan case.
+ * Single source for D2-E1 export — do not duplicate this list elsewhere.
+ */
+export const ANALYSIS_D_KNOWN_COSTCO_9534_FORENSIC_TARGET_RECEIPT_IDS = [
+  '2bDvMWs3dkCKagyrYWyxA',
+  'C_aMA69ijcqNLhGI76Y5Q',
+  'n6_vGM5c8X255Psyiup4k',
+  'NEHGZCkqd8MiBCyKO-fWd',
+] as const;
+
+export type AnalysisDKnownCostco9534ForensicTargetReceiptId =
+  (typeof ANALYSIS_D_KNOWN_COSTCO_9534_FORENSIC_TARGET_RECEIPT_IDS)[number];
+
 /** Explicit Costco 2023-07-06 11:44 / ¥9534 structural re-scan case. */
 export function auditKnownStructuralCostco9534Case(
   receipts: ReceiptRow[]

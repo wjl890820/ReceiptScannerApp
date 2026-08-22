@@ -14,6 +14,11 @@ import {
 } from './analysisDReport';
 import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from './db';
+import {
+  buildAnalysisDRescanForensicsExport,
+  serializeAnalysisDRescanForensicsExport,
+  type AnalysisDRescanForensicsExport,
+} from './analysisDRescanForensics';
 
 /** Same loader Home/Analysis use; higher limit for validation completeness. */
 export const ANALYSIS_D_DIAGNOSTICS_RECEIPT_LIMIT = 5000;
@@ -94,4 +99,19 @@ export async function generateAnalysisDReportFromLocalReceipts(
 ): Promise<AnalysisDReport> {
   const bundle = await generateAnalysisDDiagnosticsBundle(deps);
   return bundle.productionAnalytics;
+}
+
+/**
+ * Load local receipts and build the known Costco re-scan forensic export.
+ * Read-only; inject listReceiptsFn in tests.
+ */
+export async function generateAnalysisDRescanForensicsExport(
+  deps: AnalysisDGenerateDeps = {}
+): Promise<{ payload: AnalysisDRescanForensicsExport; json: string }> {
+  const { receipts, nowMs } = await loadLocalReceipts(deps);
+  const payload = buildAnalysisDRescanForensicsExport({ receipts, nowMs });
+  return {
+    payload,
+    json: serializeAnalysisDRescanForensicsExport(payload),
+  };
 }

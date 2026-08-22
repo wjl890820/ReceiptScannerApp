@@ -28,9 +28,13 @@ import {
   buildAnalysisDSharePayload,
   shareAnalysisDJsonFile,
   writeAnalysisDJsonExportFile,
+  writeAnalysisDRescanForensicsExportFile,
   type AnalysisDDiagnosticsViewModel,
 } from '@/lib/analysisDDiagnosticsAccess';
-import { generateAnalysisDDiagnosticsBundle } from '@/lib/analysisDDiagnosticsGenerate';
+import {
+  generateAnalysisDDiagnosticsBundle,
+  generateAnalysisDRescanForensicsExport,
+} from '@/lib/analysisDDiagnosticsGenerate';
 import { isAnalysisDDiagnosticsEnabled } from '@/lib/env';
 
 export default function AnalysisDDiagnosticsScreen() {
@@ -174,6 +178,41 @@ export default function AnalysisDDiagnosticsScreen() {
     ]);
   }, [report, duplicateScanAudit, storedScanBaseline, selectionMeta]);
 
+  const onExportRescanForensics = useCallback(async () => {
+    Alert.alert('Private data', ANALYSIS_D_EXPORT_PRIVACY_WARNING, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Share forensics JSON',
+        onPress: async () => {
+          try {
+            setLoading(true);
+            const { json } = await generateAnalysisDRescanForensicsExport();
+            const written = await writeAnalysisDRescanForensicsExportFile({
+              json,
+              cacheDirectory: FileSystem.cacheDirectory,
+              writeAsStringAsync: FileSystem.writeAsStringAsync,
+            });
+            await shareAnalysisDJsonFile({
+              fileUri: written.fileUri,
+              filename: written.filename,
+              isAvailableAsync: Sharing.isAvailableAsync,
+              shareAsync: Sharing.shareAsync,
+            });
+          } catch (e: unknown) {
+            Alert.alert(
+              'Forensics export failed',
+              e instanceof Error ? e.message : String(e)
+            );
+          } finally {
+            setLoading(false);
+          }
+        },
+      },
+    ]);
+  }, []);
+
+
+
   if (!enabled) {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 24 }]}>
@@ -221,7 +260,19 @@ export default function AnalysisDDiagnosticsScreen() {
         >
           <Text style={styles.buttonSecondaryText}>Share / Export JSON</Text>
         </Pressable>
+
         <Pressable
+          style={[styles.buttonSecondary, loading && styles.buttonDisabled]}
+          disabled={loading}
+          onPress={() => void onExportRescanForensics()}
+          accessibilityRole="button"
+          accessibilityLabel="Export known rescan forensics"
+        >
+          <Text style={styles.buttonSecondaryText}>
+            Export known rescan forensics
+          </Text>
+        </Pressable>
+<Pressable
           style={[styles.buttonSecondary, !viewModel && styles.buttonDisabled]}
           disabled={!viewModel || loading}
           onPress={() => void onShareSummary()}
