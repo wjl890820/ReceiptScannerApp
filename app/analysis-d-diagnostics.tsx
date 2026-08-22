@@ -18,12 +18,15 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 
 import type { AnalysisDReport } from '@/lib/analysisDReport';
 import {
   ANALYSIS_D_EXPORT_PRIVACY_WARNING,
   buildAnalysisDDiagnosticsViewModel,
   buildAnalysisDSharePayload,
+  shareAnalysisDJsonFile,
+  writeAnalysisDJsonExportFile,
   type AnalysisDDiagnosticsViewModel,
 } from '@/lib/analysisDDiagnosticsAccess';
 import { generateAnalysisDReportFromLocalReceipts } from '@/lib/analysisDDiagnosticsGenerate';
@@ -91,17 +94,16 @@ export default function AnalysisDDiagnosticsScreen() {
         text: 'Share JSON',
         onPress: async () => {
           try {
-            const base = FileSystem.cacheDirectory;
-            if (base) {
-              const path = `${base}${payload.filename}`;
-              await FileSystem.writeAsStringAsync(path, payload.json);
-            }
-            await Share.share({
-              message:
-                payload.json.length > 90000
-                  ? `${payload.privacyWarning}\n\n${payload.json.slice(0, 90000)}\n…(truncated)`
-                  : `${payload.privacyWarning}\n\n${payload.json}`,
-              title: payload.filename,
+            const written = await writeAnalysisDJsonExportFile({
+              report,
+              cacheDirectory: FileSystem.cacheDirectory,
+              writeAsStringAsync: FileSystem.writeAsStringAsync,
+            });
+            await shareAnalysisDJsonFile({
+              fileUri: written.fileUri,
+              filename: written.filename,
+              isAvailableAsync: Sharing.isAvailableAsync,
+              shareAsync: Sharing.shareAsync,
             });
           } catch (e: unknown) {
             Alert.alert(

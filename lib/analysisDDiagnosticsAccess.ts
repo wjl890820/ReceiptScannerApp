@@ -187,3 +187,101 @@ export function buildAnalysisDSharePayload(
     autoUpload: false,
   };
 }
+
+export const ANALYSIS_D_JSON_MIME_TYPE = 'application/json';
+/** iOS Uniform Type Identifier for JSON files. */
+export const ANALYSIS_D_JSON_UTI = 'public.json';
+
+export type AnalysisDJsonFileShareRequest = {
+  filename: string;
+  /** Local file URI to share (file://…). Never the JSON body. */
+  fileUri: string;
+  mimeType: typeof ANALYSIS_D_JSON_MIME_TYPE;
+  uti: typeof ANALYSIS_D_JSON_UTI;
+  /** Explicit: file share must not put the report body in `message`. */
+  message: undefined;
+  autoUpload: false;
+};
+
+/** Describe a file-URI share request (no JSON body as text). */
+export function buildAnalysisDJsonFileShareRequest(
+  fileUri: string,
+  filename: string
+): AnalysisDJsonFileShareRequest {
+  return {
+    filename,
+    fileUri,
+    mimeType: ANALYSIS_D_JSON_MIME_TYPE,
+    uti: ANALYSIS_D_JSON_UTI,
+    message: undefined,
+    autoUpload: false,
+  };
+}
+
+export type WriteAnalysisDJsonExportFileDeps = {
+  report: AnalysisDReport;
+  cacheDirectory: string | null | undefined;
+  writeAsStringAsync: (fileUri: string, contents: string) => Promise<void>;
+  nowMs?: number;
+};
+
+/**
+ * Write the full serialized report to a cache `.json` file.
+ * Does not share, upload, or mutate domain data.
+ */
+export async function writeAnalysisDJsonExportFile(
+  deps: WriteAnalysisDJsonExportFileDeps
+): Promise<{ fileUri: string; filename: string; json: string }> {
+  if (!deps.cacheDirectory) {
+    throw new Error(
+      'Cache directory unavailable; cannot export Analysis D JSON file.'
+    );
+  }
+  const payload = buildAnalysisDSharePayload(deps.report, deps.nowMs);
+  const fileUri = `${deps.cacheDirectory}${payload.filename}`;
+  await deps.writeAsStringAsync(fileUri, payload.json);
+  return {
+    fileUri,
+    filename: payload.filename,
+    json: payload.json,
+  };
+}
+
+export type ShareAnalysisDJsonFileDeps = {
+  fileUri: string;
+  filename: string;
+  isAvailableAsync: () => Promise<boolean>;
+  shareAsync: (
+    url: string,
+    options?: {
+      mimeType?: string;
+      UTI?: string;
+      dialogTitle?: string;
+    }
+  ) => Promise<void>;
+};
+
+/**
+ * Share a previously written local JSON file via native file sharing.
+ * Fails clearly when file sharing is unavailable — never falls back to text.
+ */
+export async function shareAnalysisDJsonFile(
+  deps: ShareAnalysisDJsonFileDeps
+): Promise<AnalysisDJsonFileShareRequest> {
+  const available = await deps.isAvailableAsync();
+  if (!available) {
+    throw new Error(
+      'Native file sharing is unavailable on this device. Cannot export Analysis D JSON as a file.'
+    );
+  }
+  const request = buildAnalysisDJsonFileShareRequest(
+    deps.fileUri,
+    deps.filename
+  );
+  await deps.shareAsync(request.fileUri, {
+    mimeType: request.mimeType,
+    UTI: request.uti,
+    dialogTitle: request.filename,
+  });
+  return request;
+}

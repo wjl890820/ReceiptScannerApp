@@ -10,10 +10,15 @@ import * as path from 'path';
 
 import {
   ANALYSIS_D_EXPORT_PRIVACY_WARNING,
+  ANALYSIS_D_JSON_MIME_TYPE,
+  ANALYSIS_D_JSON_UTI,
   buildAnalysisDDiagnosticsViewModel,
   buildAnalysisDExportFilename,
+  buildAnalysisDJsonFileShareRequest,
   buildAnalysisDSharePayload,
+  shareAnalysisDJsonFile,
   shouldShowAnalysisDDiagnosticsEntry,
+  writeAnalysisDJsonExportFile,
 } from './analysisDDiagnosticsAccess';
 import {
   ANALYSIS_D_DIAGNOSTICS_RECEIPT_LIMIT,
@@ -145,6 +150,8 @@ describe('Analysis D1-A diagnostics access', () => {
     expect(accessSource).toContain('autoUpload: false');
     expect(screenSource).not.toMatch(/supabase\.|uploadAsync|telemetry/i);
     expect(screenSource).toContain('Share.share');
+    expect(screenSource).toContain('Sharing.shareAsync');
+    expect(screenSource).toContain('writeAnalysisDJsonExportFile');
     expect(payload.autoUpload).toBe(false);
   });
 
@@ -233,5 +240,156 @@ describe('Analysis D1-A diagnostics access', () => {
     ]);
     const blob = JSON.stringify(vm);
     expect(blob).not.toMatch(/\bUSEFUL\b|\bBAD\b|\bNOISY\b|\bMISLEADING\b/);
+  });
+});
+
+
+describe('Analysis D1-B1 JSON file export', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('A/B/C — full JSON export writes a .json file with complete serialized report', async () => {
+    const report = analysisDReport.buildAnalysisDReport({
+      receipts: [makeReceipt('d1b1-abc')],
+      nowMs,
+    });
+    const expectedJson = analysisDReport.serializeAnalysisDReport(report);
+    let writtenUri = '';
+    let writtenContents = '';
+    const written = await writeAnalysisDJsonExportFile({
+      report,
+      cacheDirectory: 'file:///tmp/analysis-d-cache/',
+      writeAsStringAsync: async (uri, contents) => {
+        writtenUri = uri;
+        writtenContents = contents;
+      },
+      nowMs,
+    });
+
+    expect(written.filename).toMatch(/\.json$/);
+    expect(written.filename).toBe(buildAnalysisDExportFilename(nowMs));
+    expect(written.filename.startsWith('analysis-d-report-')).toBe(true);
+    expect(written.fileUri).toBe(`file:///tmp/analysis-d-cache/${written.filename}`);
+    expect(writtenUri).toBe(written.fileUri);
+    expect(writtenContents).toBe(expectedJson);
+    expect(written.json).toBe(expectedJson);
+  });
+
+  test('D/E — file share receives a file URI + application/json (not full JSON string)', async () => {
+    const report = analysisDReport.buildAnalysisDReport({
+      receipts: [makeReceipt('d1b1-de')],
+      nowMs,
+    });
+    const payload = buildAnalysisDSharePayload(report, nowMs);
+    const fileUri = `file:///tmp/${payload.filename}`;
+    const request = buildAnalysisDJsonFileShareRequest(fileUri, payload.filename);
+
+    expect(request.fileUri).toBe(fileUri);
+    expect(request.fileUri).not.toBe(payload.json);
+    expect(request.message).toBeUndefined();
+    expect(request.mimeType).toBe(ANALYSIS_D_JSON_MIME_TYPE);
+    expect(request.mimeType).toBe('application/json');
+    expect(request.uti).toBe(ANALYSIS_D_JSON_UTI);
+    expect(request.autoUpload).toBe(false);
+
+    const shareCalls: Array<{ url: string; options?: Record<string, string> }> =
+      [];
+    const shared = await shareAnalysisDJsonFile({
+      fileUri,
+      filename: payload.filename,
+      isAvailableAsync: async () => true,
+      shareAsync: async (url, options) => {
+        shareCalls.push({
+          url,
+          options: options as Record<string, string> | undefined,
+        });
+      },
+    });
+    expect(shareCalls).toHaveLength(1);
+    expect(shareCalls[0]?.url).toBe(fileUri);
+    expect(shareCalls[0]?.url).not.toContain(payload.json.slice(0, 32));
+    expect(shareCalls[0]?.options).toMatchObject({
+      mimeType: 'application/json',
+      UTI: 'public.json',
+      dialogTitle: payload.filename,
+    });
+    expect(shared.fileUri).toBe(fileUri);
+  });
+
+  test('F — no auto upload / network path in export helpers or screen export', () => {
+    const accessSource = fs.readFileSync(
+      path.resolve(__dirname, 'analysisDDiagnosticsAccess.ts'),
+      'utf8'
+    );
+    const screenSource = fs.readFileSync(
+      path.resolve(__dirname, '../app/analysis-d-diagnostics.tsx'),
+      'utf8'
+    );
+    expect(accessSource).not.toMatch(/supabase|fetch\(|uploadAsync|telemetry/i);
+    expect(screenSource).not.toMatch(/supabase\.|uploadAsync|telemetry/i);
+    expect(screenSource).toContain('Sharing.shareAsync');
+    expect(screenSource).not.toMatch(/Share\.share\(\{[\s\S]*payload\.json/);
+    expect(screenSource).not.toContain('90000');
+  });
+
+  test('G — Share summary remains text-based', () => {
+    const screenSource = fs.readFileSync(
+      path.resolve(__dirname, '../app/analysis-d-diagnostics.tsx'),
+      'utf8'
+    );
+    expect(screenSource).toMatch(
+      /Share\.share\(\{\s*message:\s*viewModel\.summaryText\s*\}\)/
+    );
+  });
+
+  test('H — privacy confirmation remains on export path', () => {
+    const screenSource = fs.readFileSync(
+      path.resolve(__dirname, '../app/analysis-d-diagnostics.tsx'),
+      'utf8'
+    );
+    expect(screenSource).toContain('payload.privacyWarning');
+    expect(screenSource).toContain('Alert.alert');
+    expect(screenSource).toContain('ANALYSIS_D_EXPORT_PRIVACY_WARNING');
+  });
+
+  test('I — temporary file creation does not mutate receipts/domain data', async () => {
+    const report = analysisDReport.buildAnalysisDReport({
+      receipts: [makeReceipt('d1b1-i')],
+      nowMs,
+    });
+    await writeAnalysisDJsonExportFile({
+      report,
+      cacheDirectory: 'file:///tmp/analysis-d-cache/',
+      writeAsStringAsync: async () => undefined,
+      nowMs,
+    });
+
+    const accessSource = fs.readFileSync(
+      path.resolve(__dirname, 'analysisDDiagnosticsAccess.ts'),
+      'utf8'
+    );
+    const screenSource = fs.readFileSync(
+      path.resolve(__dirname, '../app/analysis-d-diagnostics.tsx'),
+      'utf8'
+    );
+    for (const src of [accessSource, screenSource]) {
+      expect(src).not.toMatch(
+        /saveReceipt|updateReceipt|deleteReceipt|reclassifyReceipts|appendUserCorrections/
+      );
+    }
+  });
+
+  test('fallback — unavailable native sharing throws (no text fallback)', async () => {
+    await expect(
+      shareAnalysisDJsonFile({
+        fileUri: 'file:///tmp/analysis-d-report.json',
+        filename: 'analysis-d-report.json',
+        isAvailableAsync: async () => false,
+        shareAsync: async () => {
+          throw new Error('should not be called');
+        },
+      })
+    ).rejects.toThrow(/Native file sharing is unavailable/i);
   });
 });
