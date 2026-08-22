@@ -5,7 +5,7 @@
  * purchases should use analyticsReceipts / excludedDuplicateReceiptIds from
  * this module rather than reimplementing duplicate detection.
  *
- * V1 excludes CONTENT_EXACT + STRUCTURAL_EXACT extras only.
+ * V1 excludes CONTENT_EXACT + STRUCTURAL_EXACT + RECONCILED_STRUCTURAL_EXACT extras.
  * Optional keepSeparateReceiptIds is a future KEEP_SEPARATE override.
  */
 
@@ -27,6 +27,7 @@ export type AnalyticsReceiptSelection = {
   excludedDuplicateReceiptIds: ReadonlySet<string>;
   contentExactDuplicateExtras: number;
   structuralExactDuplicateExtras: number;
+  reconciledStructuralExactDuplicateExtras: number;
   probableDuplicateExtras: number;
   highConfidenceDuplicateGroups: AnalysisDDuplicateGroup[];
   analyticsPurchaseCandidateCount: number;
@@ -48,12 +49,15 @@ export function selectAnalyticsReceipts(
 
   let contentExactDuplicateExtras = 0;
   let structuralExactDuplicateExtras = 0;
+  let reconciledStructuralExactDuplicateExtras = 0;
   const excluded = new Set<string>();
 
   for (const g of highConfidenceDuplicateGroups) {
     const extras = Math.max(0, g.receiptIds.length - 1);
     if (g.confidence === 'CONTENT_EXACT_DUPLICATE') {
       contentExactDuplicateExtras += extras;
+    } else if (g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE') {
+      reconciledStructuralExactDuplicateExtras += extras;
     } else {
       structuralExactDuplicateExtras += extras;
     }
@@ -73,6 +77,7 @@ export function selectAnalyticsReceipts(
     excludedDuplicateReceiptIds: excluded,
     contentExactDuplicateExtras,
     structuralExactDuplicateExtras,
+    reconciledStructuralExactDuplicateExtras,
     probableDuplicateExtras: 0,
     highConfidenceDuplicateGroups,
     analyticsPurchaseCandidateCount: analyticsReceipts.length,

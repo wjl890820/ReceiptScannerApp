@@ -18,8 +18,12 @@ import {
   buildStructuralReceiptFingerprint,
   canonicalizeReceiptItemName,
   pickDuplicateRepresentative,
+  pickReconciledDuplicateRepresentative,
+  evaluateReconciledStructuralExactPair,
   selectExactDedupedReceipts,
   summarizeReceiptForDuplicateAudit,
+  ANALYSIS_D_KNOWN_COSTCO_9534_FORENSIC_TARGET_RECEIPT_IDS,
+  auditKnownStructuralCostco9534Case,
 } from './analysisDDuplicateAudit';
 import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import * as analysisDReport from './analysisDReport';
@@ -617,5 +621,437 @@ describe('Analysis D2-A3 duplicate / re-scan audit', () => {
     expect(
       selectExactDedupedReceipts(receipts, []).map((r) => r.id)
     ).toEqual(['z1']);
+  });
+});
+
+
+
+
+describe('D2-E3 RECONCILED_STRUCTURAL_EXACT_DUPLICATE', () => {
+  const txAt = 1688611486000; // 2023-07-06 11:44:46+09:00
+
+  const costcoCoreItems: FixtureItem[] = [
+    { name: 'A', category: 'other', lineTotal: 418, quantity: 1 },
+    { name: 'B', category: 'other', lineTotal: 698, quantity: 1 },
+    { name: 'C', category: 'other', lineTotal: 428, quantity: 1 },
+    { name: 'D', category: 'other', lineTotal: 899, quantity: 1 },
+    { name: 'E', category: 'other', lineTotal: 488, quantity: 1 },
+    { name: 'F', category: 'other', lineTotal: 298, quantity: 1 },
+    { name: 'G', category: 'other', lineTotal: 998, quantity: 1 },
+    { name: 'H', category: 'other', lineTotal: 698, quantity: 1 },
+    { name: 'I', category: 'other', lineTotal: 777, quantity: 1 },
+    { name: 'J', category: 'other', lineTotal: 3484, quantity: 1 },
+    { name: 'K', category: 'other', lineTotal: 348, quantity: 1 },
+  ];
+
+  const trailingArtifacts: FixtureItem[] = [
+    { name: 'コストコ コネクション', category: 'other', lineTotal: 1, quantity: 1 },
+    { name: 'コストコ コネクション ムリョウ', category: 'other', lineTotal: 1, quantity: 1 },
+  ];
+
+  function cleanCostco(id: string, createdAt: number, nameSuffix = '') {
+    return makeReceipt({
+      id,
+      at: txAt,
+      createdAt,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 9534,
+      tax: 706,
+      taxIsKnown: 1,
+      items: costcoCoreItems.map((it, idx) => ({
+        ...it,
+        name: `${it.name}${nameSuffix}${idx}`,
+      })),
+    });
+  }
+
+  function noisyCostco(id: string, createdAt: number, tax = 708) {
+    return makeReceipt({
+      id,
+      at: txAt,
+      createdAt,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 9534,
+      tax,
+      taxIsKnown: 1,
+      items: [
+        ...costcoCoreItems.map((it, idx) => ({
+          ...it,
+          name: `${it.name}_n${idx}`,
+        })),
+        ...trailingArtifacts,
+      ],
+    });
+  }
+
+  test('A — four-scan Costco fixture collapses to 1 candidate', () => {
+    const receipts = [
+      cleanCostco('2bDvMWs3dkCKagyrYWyxA', 2000),
+      noisyCostco('C_aMA69ijcqNLhGI76Y5Q', 1000),
+      cleanCostco('n6_vGM5c8X255Psyiup4k', 3000, '_b'),
+      cleanCostco('NEHGZCkqd8MiBCyKO-fWd', 4000, '_c'),
+    ];
+    const selection = selectAnalyticsReceipts(receipts);
+    expect(selection.analyticsPurchaseCandidateCount).toBe(1);
+    expect(selection.excludedDuplicateReceiptIds.size).toBe(3);
+    expect(selection.analyticsReceipts).toHaveLength(1);
+    expect(selection.analyticsReceipts[0]!.id).not.toBe('C_aMA69ijcqNLhGI76Y5Q');
+
+    const known = auditKnownStructuralCostco9534Case(receipts)!;
+    expect(known.storedScanCount).toBe(4);
+    expect(known.purchaseCandidateCount).toBe(1);
+    expect(known.reconciledConfidence).toBe(
+      'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+    );
+    expect(known.reconciledEvidence?.noisyReceiptIds).toEqual(
+      expect.arrayContaining(['C_aMA69ijcqNLhGI76Y5Q'])
+    );
+  });
+
+  test('B — 11-row exact core + 2 trailing artifacts is high confidence', () => {
+    const clean = cleanCostco('clean', 2000);
+    const noisy = noisyCostco('noisy', 1000);
+    const link = evaluateReconciledStructuralExactPair(
+      summarizeReceiptForDuplicateAudit(clean),
+      summarizeReceiptForDuplicateAudit(noisy)
+    );
+    expect(link).not.toBeNull();
+    expect(link!.trailingExtraCount).toBe(2);
+    expect(link!.overage).toBe(2);
+    expect(link!.taxDelta).toBe(2);
+
+    const groups = buildHighConfidenceDuplicateGroups(
+      [clean, noisy].map(summarizeReceiptForDuplicateAudit)
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.confidence).toBe(
+      'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+    );
+  });
+
+  test('C — clean wins representative even when noisy has earlier createdAt', () => {
+    const clean = cleanCostco('clean-late', 9000);
+    const noisy = noisyCostco('noisy-early', 1000);
+    const summaries = [clean, noisy].map(summarizeReceiptForDuplicateAudit);
+    const groups = buildHighConfidenceDuplicateGroups(summaries);
+    expect(groups[0]!.representativeReceiptId).toBe('clean-late');
+    expect(pickReconciledDuplicateRepresentative(summaries)).toBe('clean-late');
+  });
+
+  test('D — same merchant/day/total alone does not merge', () => {
+    const sameDayDifferentItems = [
+      makeReceipt({
+        id: 'd3',
+        at: txAt,
+        merchantType: 'supermarket',
+        merchantNormalized: 'コストコ',
+        transactionAt: txAt + 1000,
+        total: 9534,
+        taxIsKnown: 0,
+        items: [
+          { name: 'P1', category: 'other', lineTotal: 5000, quantity: 1 },
+          { name: 'P2', category: 'other', lineTotal: 4534, quantity: 1 },
+        ],
+      }),
+      makeReceipt({
+        id: 'd4',
+        at: txAt,
+        createdAt: txAt + 2,
+        merchantType: 'supermarket',
+        merchantNormalized: 'コストコ',
+        transactionAt: txAt + 2000,
+        total: 9534,
+        taxIsKnown: 0,
+        items: [
+          { name: 'Q1', category: 'other', lineTotal: 4000, quantity: 1 },
+          { name: 'Q2', category: 'other', lineTotal: 5534, quantity: 1 },
+        ],
+      }),
+    ];
+    expect(
+      buildHighConfidenceDuplicateGroups(
+        sameDayDifferentItems.map(summarizeReceiptForDuplicateAudit)
+      )
+    ).toHaveLength(0);
+    expect(
+      selectAnalyticsReceipts(sameDayDifferentItems)
+        .analyticsPurchaseCandidateCount
+    ).toBe(2);
+  });
+
+  test('E — same merchant/exact timestamp/total with different item vectors does not merge', () => {
+    const a = makeReceipt({
+      id: 'e1',
+      at: txAt,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 9534,
+      tax: 706,
+      taxIsKnown: 1,
+      items: costcoCoreItems,
+    });
+    const b = makeReceipt({
+      id: 'e2',
+      at: txAt,
+      createdAt: txAt + 1,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 9534,
+      tax: 706,
+      taxIsKnown: 1,
+      items: [
+        ...costcoCoreItems.slice(0, 10),
+        { name: 'DIFF', category: 'other', lineTotal: 349, quantity: 1 },
+      ],
+    });
+    expect(
+      evaluateReconciledStructuralExactPair(
+        summarizeReceiptForDuplicateAudit(a),
+        summarizeReceiptForDuplicateAudit(b)
+      )
+    ).toBeNull();
+    expect(
+      buildHighConfidenceDuplicateGroups(
+        [a, b].map(summarizeReceiptForDuplicateAudit)
+      )
+    ).toHaveLength(0);
+  });
+
+  test('F — prefix without exact total reconciliation does not merge', () => {
+    const coreBad = makeReceipt({
+      id: 'f3',
+      at: txAt,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 1000,
+      taxIsKnown: 0,
+      items: [
+        { name: 'A', category: 'other', lineTotal: 400, quantity: 1 },
+        { name: 'B', category: 'other', lineTotal: 500, quantity: 1 },
+      ],
+    });
+    const longer2 = makeReceipt({
+      id: 'f4',
+      at: txAt,
+      createdAt: txAt + 1,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 1000,
+      taxIsKnown: 0,
+      items: [
+        { name: 'A', category: 'other', lineTotal: 400, quantity: 1 },
+        { name: 'B', category: 'other', lineTotal: 500, quantity: 1 },
+        { name: 'TRAIL', category: 'other', lineTotal: 100, quantity: 1 },
+      ],
+    });
+    expect(
+      evaluateReconciledStructuralExactPair(
+        summarizeReceiptForDuplicateAudit(coreBad),
+        summarizeReceiptForDuplicateAudit(longer2)
+      )
+    ).toBeNull();
+  });
+
+  test('G — trailing amount that does not exactly explain overage does not merge', () => {
+    const core = makeReceipt({
+      id: 'g1',
+      at: txAt,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 1000,
+      taxIsKnown: 0,
+      items: [
+        { name: 'A', category: 'other', lineTotal: 400, quantity: 1 },
+        { name: 'B', category: 'other', lineTotal: 599, quantity: 1 },
+      ],
+    });
+    const noisy = makeReceipt({
+      id: 'g2',
+      at: txAt,
+      createdAt: txAt + 1,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt,
+      total: 1000,
+      taxIsKnown: 0,
+      items: [
+        { name: 'A', category: 'other', lineTotal: 400, quantity: 1 },
+        { name: 'B', category: 'other', lineTotal: 599, quantity: 1 },
+        { name: 'TRAIL', category: 'other', lineTotal: 5, quantity: 1 },
+      ],
+    });
+    expect(
+      evaluateReconciledStructuralExactPair(
+        summarizeReceiptForDuplicateAudit(core),
+        summarizeReceiptForDuplicateAudit(noisy)
+      )
+    ).toBeNull();
+  });
+
+  test('H — known tax mismatch outside safe relation does not merge', () => {
+    const clean = cleanCostco('h1', 2000);
+    const noisy = noisyCostco('h2', 1000, 800);
+    expect(
+      evaluateReconciledStructuralExactPair(
+        summarizeReceiptForDuplicateAudit(clean),
+        summarizeReceiptForDuplicateAudit(noisy)
+      )
+    ).toBeNull();
+  });
+
+  test('I — different transaction_at does not merge', () => {
+    const clean = cleanCostco('i1', 2000);
+    const noisy = makeReceipt({
+      id: 'i2',
+      at: txAt,
+      createdAt: 1000,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt: txAt + 1000,
+      total: 9534,
+      tax: 708,
+      taxIsKnown: 1,
+      items: [...costcoCoreItems, ...trailingArtifacts],
+    });
+    expect(
+      evaluateReconciledStructuralExactPair(
+        summarizeReceiptForDuplicateAudit(clean),
+        summarizeReceiptForDuplicateAudit(noisy)
+      )
+    ).toBeNull();
+  });
+
+  test('J — no fuzzy/name similarity participates', () => {
+    const auditSrc = fs.readFileSync(
+      path.join(__dirname, 'analysisDDuplicateAudit.ts'),
+      'utf8'
+    );
+    expect(auditSrc).not.toMatch(
+      /levenshtein|stringSimilarity|fuse\.js|cosine|embedding/i
+    );
+    const clean = cleanCostco('j1', 2000);
+    const noisy = noisyCostco('j2', 1000);
+    expect(
+      evaluateReconciledStructuralExactPair(
+        summarizeReceiptForDuplicateAudit(clean),
+        summarizeReceiptForDuplicateAudit(noisy)
+      )
+    ).not.toBeNull();
+  });
+
+  test('K — existing CONTENT_EXACT behavior unchanged', () => {
+    const a = makeReceipt({
+      id: 'k1',
+      at: nowMs,
+      merchantType: 'supermarket',
+      items: milkItems,
+      createdAt: nowMs,
+    });
+    const b = makeReceipt({
+      id: 'k2',
+      at: nowMs,
+      merchantType: 'supermarket',
+      items: milkItems,
+      createdAt: nowMs + 1,
+    });
+    const groups = buildHighConfidenceDuplicateGroups(
+      [a, b].map(summarizeReceiptForDuplicateAudit)
+    );
+    expect(groups[0]!.confidence).toBe('CONTENT_EXACT_DUPLICATE');
+  });
+
+  test('L — existing STRUCTURAL_EXACT behavior unchanged', () => {
+    const a = makeReceipt({
+      id: 'l1',
+      at: nowMs,
+      merchantType: 'supermarket',
+      items: milkItems,
+      createdAt: nowMs,
+    });
+    const b = makeReceipt({
+      id: 'l2',
+      at: nowMs,
+      merchantType: 'supermarket',
+      items: [{ ...milkItems[0]!, name: '明治おいしい牛乳（別名）' }],
+      createdAt: nowMs + 1,
+    });
+    const groups = buildHighConfidenceDuplicateGroups(
+      [a, b].map(summarizeReceiptForDuplicateAudit)
+    );
+    expect(groups[0]!.confidence).toBe('STRUCTURAL_EXACT_DUPLICATE');
+  });
+
+  test('M — History/raw untouched (selection excludes only analytics extras)', () => {
+    const receipts = [
+      cleanCostco('2bDvMWs3dkCKagyrYWyxA', 2000),
+      noisyCostco('C_aMA69ijcqNLhGI76Y5Q', 1000),
+      cleanCostco('n6_vGM5c8X255Psyiup4k', 3000, '_b'),
+      cleanCostco('NEHGZCkqd8MiBCyKO-fWd', 4000, '_c'),
+    ];
+    const selection = selectAnalyticsReceipts(receipts);
+    expect(selection.storedReceipts).toHaveLength(4);
+    expect(receipts.map((r) => r.id).sort()).toEqual(
+      selection.storedReceipts.map((r) => r.id).sort()
+    );
+  });
+
+  test('N — category conservation gap remains 0 after reconciled selection', () => {
+    const receipts = [
+      cleanCostco('2bDvMWs3dkCKagyrYWyxA', 2000),
+      noisyCostco('C_aMA69ijcqNLhGI76Y5Q', 1000),
+      cleanCostco('n6_vGM5c8X255Psyiup4k', 3000, '_b'),
+      cleanCostco('NEHGZCkqd8MiBCyKO-fWd', 4000, '_c'),
+    ];
+    const selection = selectAnalyticsReceipts(receipts);
+    const report = analysisDReport.buildAnalysisDReport({
+      receipts: selection.analyticsReceipts,
+      nowMs: txAt + 86400000 * 400,
+    });
+    const categoryAll =
+      report.categoryValue.find((w) => w.window === 'all') ?? null;
+    const composition = categoryAll?.categoryCompositionTotal ?? 0;
+    const activeSum = (categoryAll?.categories ?? []).reduce(
+      (sum, c) => sum + (c.amount ?? 0),
+      0
+    );
+    expect(composition - activeSum).toBe(0);
+  });
+
+  test('O — Home/Analysis production parity unchanged (single selection boundary)', () => {
+    const srcHome = fs.readFileSync(
+      path.join(__dirname, '..', 'app', '(tabs)', 'index.tsx'),
+      'utf8'
+    );
+    const srcAnalysis = fs.readFileSync(
+      path.join(__dirname, '..', 'app', '(tabs)', 'analysis.tsx'),
+      'utf8'
+    );
+    expect(srcHome).toContain('selectAnalyticsReceipts');
+    expect(srcAnalysis).toContain('selectAnalyticsReceipts');
+  });
+
+  test('P — price observation / occurrence counts use selected receipt IDs only', () => {
+    const receipts = [
+      cleanCostco('2bDvMWs3dkCKagyrYWyxA', 2000),
+      noisyCostco('C_aMA69ijcqNLhGI76Y5Q', 1000),
+      cleanCostco('n6_vGM5c8X255Psyiup4k', 3000, '_b'),
+      cleanCostco('NEHGZCkqd8MiBCyKO-fWd', 4000, '_c'),
+    ];
+    const selection = selectAnalyticsReceipts(receipts);
+    expect(selection.excludedDuplicateReceiptIds.has('C_aMA69ijcqNLhGI76Y5Q')).toBe(
+      true
+    );
+    const selectedIds = new Set(selection.analyticsReceipts.map((r) => r.id));
+    expect(selectedIds.has('C_aMA69ijcqNLhGI76Y5Q')).toBe(false);
+    expect(selectedIds.size).toBe(1);
   });
 });
