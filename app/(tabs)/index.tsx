@@ -47,7 +47,10 @@ import {
   type HomeProgressiveExperience,
 } from '@/lib/homeProgressiveExperience';
 import { t } from '@/lib/i18n';
-import { buildProductDetailHref } from '@/lib/productDetailTarget';
+import {
+  buildHomeFrequentProductDetailHref,
+  HOME_ANALYSIS_HREF,
+} from '@/lib/homeValueHierarchy';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 export default function HomeScreen() {
   const router = useRouter();
@@ -493,22 +496,23 @@ export default function HomeScreen() {
   );
   const handleProductPress = useCallback(
     (product: MilestoneFrequentProduct) => {
-      router.push(
-        buildProductDetailHref({
-          type: product.groupingType,
-          key: product.key,
-        }) as any
-      );
+      const href = buildHomeFrequentProductDetailHref(product);
+      if (!href) return;
+      router.push(href as any);
     },
     [router]
   );
+
+  const handleViewAnalysis = useCallback(() => {
+    router.push(HOME_ANALYSIS_HREF as any);
+  }, [router]);
 
   return (
     <View style={styles.screenContainer}>
       <ScrollView
         contentContainerStyle={[
           styles.container,
-          { paddingBottom: bottomPadding },
+          { paddingTop: insets.top + 16, paddingBottom: bottomPadding },
         ]}
       >
         <ProgressiveHomeInsights
@@ -519,6 +523,7 @@ export default function HomeScreen() {
           onScan={handleScanReceipt}
           onRecentPurchasePress={handleRecentPurchasePress}
           onProductPress={handleProductPress}
+          onViewAnalysis={handleViewAnalysis}
         />
       </ScrollView>
 
@@ -559,7 +564,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f7f8fa',
   },
   container: {
-    paddingTop: 64,
+    paddingTop: 16,
     paddingHorizontal: 20,
     paddingBottom: 40,
   },

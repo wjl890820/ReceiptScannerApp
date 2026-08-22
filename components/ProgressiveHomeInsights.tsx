@@ -32,6 +32,7 @@ type ProgressiveHomeInsightsProps = {
   onScan: () => void;
   onRecentPurchasePress: (receiptId: string) => void;
   onProductPress: (product: MilestoneFrequentProduct) => void;
+  onViewAnalysis: () => void;
 };
 
 function categoryLabel(category: string): string {
@@ -57,33 +58,45 @@ function FrequentProductList({
 }) {
   return (
     <View style={styles.card}>
-      {products.map((product, index) => (
-        <Pressable
-          key={`${product.groupingType}:${product.key}`}
-          onPress={() => onPress(product)}
-          style={({ pressed }) => [
-            styles.productRow,
-            index > 0 && styles.borderTop,
-            pressed && styles.pressed,
-          ]}
-        >
-          <View style={styles.productText}>
-            <Text style={styles.productName} numberOfLines={2}>
-              {formatFrequentProductLabel(product, t)}
+      {products.map((product, index) => {
+        const label = formatFrequentProductLabel(product, t);
+        return (
+          <Pressable
+            key={`${product.groupingType}:${product.key}`}
+            onPress={() => onPress(product)}
+            accessibilityRole="button"
+            accessibilityLabel={t('home.progressive.frequent.openHistoryA11y', {
+              name: label,
+            })}
+            style={({ pressed }) => [
+              styles.productRow,
+              index > 0 && styles.borderTop,
+              pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.productText}>
+              <Text style={styles.productName} numberOfLines={2}>
+                {label}
+              </Text>
+              <Text style={styles.productMeta}>
+                {t('home.progressive.frequent.occurrences', {
+                  count: product.purchaseOccurrenceCount,
+                })}
+                {' · '}
+                {t('home.progressive.frequent.quantity', {
+                  count: product.totalPurchaseQuantity,
+                })}
+              </Text>
+              <Text style={styles.productActionHint}>
+                {t('home.progressive.frequent.viewHistory')}
+              </Text>
+            </View>
+            <Text style={styles.chevron} importantForAccessibility="no">
+              ›
             </Text>
-            <Text style={styles.productMeta}>
-              {t('home.progressive.frequent.occurrences', {
-                count: product.purchaseOccurrenceCount,
-              })}
-              {' · '}
-              {t('home.progressive.frequent.quantity', {
-                count: product.totalPurchaseQuantity,
-              })}
-            </Text>
-          </View>
-          <Text style={styles.chevron}>›</Text>
-        </Pressable>
-      ))}
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -125,6 +138,7 @@ export function ProgressiveHomeInsights({
   onScan,
   onRecentPurchasePress,
   onProductPress,
+  onViewAnalysis,
 }: ProgressiveHomeInsightsProps) {
   const scanLabel = processingProgress
     ? t('home.scan.processingMulti', {
@@ -160,6 +174,8 @@ export function ProgressiveHomeInsights({
         <Pressable
           onPress={onScan}
           disabled={scanning}
+          accessibilityRole="button"
+          accessibilityLabel={scanLabel}
           style={({ pressed }) => [
             styles.scanButton,
             scanning && styles.disabled,
@@ -194,6 +210,8 @@ export function ProgressiveHomeInsights({
             onPress={() =>
               onRecentPurchasePress(experience.latestPurchase!.receiptId)
             }
+            accessibilityRole="button"
+            accessibilityLabel={t('home.progressive.recent.openA11y')}
             style={({ pressed }) => [
               styles.card,
               styles.recentCard,
@@ -339,6 +357,26 @@ export function ProgressiveHomeInsights({
           )}
         </>
       )}
+
+
+      {experience.stage !== 'empty' ? (
+        <Pressable
+          onPress={onViewAnalysis}
+          accessibilityRole="button"
+          accessibilityLabel={t('home.progressive.analysisCta')}
+          style={({ pressed }) => [
+            styles.analysisCta,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.analysisCtaText}>
+            {t('home.progressive.analysisCta')}
+          </Text>
+          <Text style={styles.analysisCtaChevron} importantForAccessibility="no">
+            ›
+          </Text>
+        </Pressable>
+      ) : null}
 
       {experience.analyticsUnavailable && experience.stage !== 'empty' && (
         <Text style={styles.analyticsFallback}>
@@ -584,5 +622,32 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.62,
+  },
+  productActionHint: {
+    marginTop: 4,
+    color: '#1677ff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  analysisCta: {
+    marginTop: 22,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d7dde5',
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  analysisCtaText: {
+    color: '#171a1f',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  analysisCtaChevron: {
+    color: '#9aa2ad',
+    fontSize: 24,
   },
 });

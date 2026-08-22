@@ -28,7 +28,8 @@
       },
       "recent": {
         "title": "最近の買い物",
-        "items": "商品 {count} 点"
+        "items": "商品 {count} 点",
+        "openA11y": "最近の買い物を開く"
       },
       "progress": {
         "section": "記録の進み具合",
@@ -49,14 +50,17 @@
         "title": "よく買う商品",
         "occurrences": "{count} 回の買い物で記録",
         "quantity": "合計 {count} 点",
-        "preparing": "信頼できる一覧を作るには、商品の記録がまだ足りません。"
+        "preparing": "信頼できる一覧を作るには、商品の記録がまだ足りません。",
+        "viewHistory": "購入履歴を見る",
+        "openHistoryA11y": "{name}の購入履歴を見る"
       },
       "profile": {
         "title": "買い物プロフィール",
         "category": "記録済みの買い物のカテゴリ構成",
         "frequency": "記録済みの買い物の平均間隔は約 {days} 日です。"
       },
-      "analyticsUnavailable": "買い物インサイトを読み込めませんでした。レシートのスキャンは続けられます。"
+      "analyticsUnavailable": "買い物インサイトを読み込めませんでした。レシートのスキャンは続けられます。",
+      "analysisCta": "支出分析を見る"
     },
     "timeRange": {
       "7d": "7日",

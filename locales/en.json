@@ -28,7 +28,8 @@
       },
       "recent": {
         "title": "Recent Purchase",
-        "items": "{count} items"
+        "items": "{count} items",
+        "openA11y": "Open latest purchase"
       },
       "progress": {
         "section": "Record Progress",
@@ -49,14 +50,17 @@
         "title": "Frequent Products",
         "occurrences": "Recorded in {count} purchases",
         "quantity": "{count} items total",
-        "preparing": "There are not yet enough recorded products for a reliable frequent list."
+        "preparing": "There are not yet enough recorded products for a reliable frequent list.",
+        "viewHistory": "View purchase history",
+        "openHistoryA11y": "View purchase history for {name}"
       },
       "profile": {
         "title": "Shopping Profile",
         "category": "Category mix of recorded purchases",
         "frequency": "Recorded purchases average about {days} days apart."
       },
-      "analyticsUnavailable": "Shopping insights are temporarily unavailable. You can still scan receipts."
+      "analyticsUnavailable": "Shopping insights are temporarily unavailable. You can still scan receipts.",
+      "analysisCta": "View spending analysis"
     },
     "timeRange": {
       "7d": "7 days",

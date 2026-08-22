@@ -28,7 +28,8 @@
       },
       "recent": {
         "title": "近期购物",
-        "items": "{count} 件商品"
+        "items": "{count} 件商品",
+        "openA11y": "打开最近一笔购物"
       },
       "progress": {
         "section": "记录进度",
@@ -49,14 +50,17 @@
         "title": "常购商品",
         "occurrences": "记录于 {count} 次购物",
         "quantity": "共 {count} 件",
-        "preparing": "已记录的商品还不足以形成可靠的常购列表。"
+        "preparing": "已记录的商品还不足以形成可靠的常购列表。",
+        "viewHistory": "查看购买记录",
+        "openHistoryA11y": "查看{name}的购买记录"
       },
       "profile": {
         "title": "购物画像",
         "category": "已记录购物的分类构成",
         "frequency": "已记录购物的平均间隔约为 {days} 天。"
       },
-      "analyticsUnavailable": "购物洞察暂时无法载入，你仍可继续扫描小票。"
+      "analyticsUnavailable": "购物洞察暂时无法载入，你仍可继续扫描小票。",
+      "analysisCta": "查看支出分析"
     },
     "timeRange": {
       "7d": "7天",
