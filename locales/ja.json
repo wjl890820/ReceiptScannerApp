@@ -293,7 +293,8 @@
       "subtitle": "タップで詳細を表示",
       "empty": "まだ記録がありません。ホームでスキャンして保存してください。",
       "noCategoryInfo": "カテゴリ情報なし",
-      "dateUnknown": "日付未確認"
+      "dateUnknown": "日付未確認",
+      "selectingSubtitle": "{count}件選択中"
     },
     "search": {
       "placeholder": "商品・店舗を検索",
@@ -301,7 +302,9 @@
       "searching": "検索中…",
       "noResults": "該当する購入履歴がありません",
       "products": "商品に一致",
-      "receipts": "レシートに一致"
+      "receipts": "レシートに一致",
+      "productResultHint": "商品",
+      "receiptResultHint": "レシート"
     },
     "errors": {
       "loadTitle": "読み込みに失敗しました",
@@ -356,7 +359,9 @@
         "subtotal": "合計",
         "subtotalPlaceholder": "合計を入力",
         "unitNote": "単位：円"
-      }
+      },
+      "editRowHint": "編集",
+      "totalLabel": "合計"
     }
   },
   "productDetail": {

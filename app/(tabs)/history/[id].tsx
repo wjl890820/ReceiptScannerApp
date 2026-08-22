@@ -487,7 +487,10 @@ export default function ReceiptDetailScreen() {
         >
           <Text style={styles.backText}>{t('history.detail.back')}</Text>
         </Pressable>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={[styles.container, { paddingBottom: 28 + Math.max(insets.bottom, 0) }]}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.merchant}>{merchant}</Text>
@@ -499,7 +502,8 @@ export default function ReceiptDetailScreen() {
           </View>
         </View>
 
-        <Text style={styles.total}>
+        <Text style={styles.totalLabel}>{t('history.detail.totalLabel')}</Text>
+        <Text style={styles.total} accessibilityRole="text">
           {formatJPY(displayTotal)}
         </Text>
         {receipt.user_edited === 1 && receipt.user_items_json && (
@@ -578,6 +582,7 @@ export default function ReceiptDetailScreen() {
                         </View>
                       );
                     })()}
+                    <Text style={styles.editRowHint}>{t('history.detail.editRowHint')}</Text>
                   </Pressable>
                   {productHref ? (
                     <Pressable
@@ -621,6 +626,8 @@ export default function ReceiptDetailScreen() {
         <Pressable
           style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}
           onPress={onDelete}
+          accessibilityRole="button"
+          accessibilityLabel={t('history.detail.deleteRecord')}
         >
           <Text style={styles.deleteText}>{t('history.detail.deleteRecord')}</Text>
         </Pressable>
@@ -836,6 +843,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
+  editRowHint: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1677ff',
+    paddingHorizontal: 4,
+  },
   tag: {
     alignSelf: 'center',
     backgroundColor: '#eee',
@@ -860,9 +873,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   deleteBtn: {
+    marginTop: 8,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
+    backgroundColor: '#fff0f0',
   },
   deleteText: {
     color: '#d33',

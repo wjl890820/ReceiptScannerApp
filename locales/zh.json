@@ -293,7 +293,8 @@
       "subtitle": "点击任意一条进入详情页",
       "empty": "暂无记录。请先在首页识别并保存。",
       "noCategoryInfo": "未找到分类信息",
-      "dateUnknown": "日期待确认"
+      "dateUnknown": "日期待确认",
+      "selectingSubtitle": "已选 {count} 项"
     },
     "search": {
       "placeholder": "搜索商品或商店",
@@ -301,7 +302,9 @@
       "searching": "搜索中…",
       "noResults": "没有找到相关购买记录",
       "products": "商品匹配",
-      "receipts": "小票匹配"
+      "receipts": "小票匹配",
+      "productResultHint": "商品",
+      "receiptResultHint": "小票"
     },
     "errors": {
       "loadTitle": "读取失败",
@@ -356,7 +359,9 @@
         "subtotal": "小计",
         "subtotalPlaceholder": "请输入小计",
         "unitNote": "单位：日元"
-      }
+      },
+      "editRowHint": "编辑",
+      "totalLabel": "合计"
     }
   },
   "productDetail": {

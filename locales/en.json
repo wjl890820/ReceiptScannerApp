@@ -293,7 +293,8 @@
       "subtitle": "Tap any item for details",
       "empty": "No records yet. Scan and save from Home first.",
       "noCategoryInfo": "No category info",
-      "dateUnknown": "Date to confirm"
+      "dateUnknown": "Date to confirm",
+      "selectingSubtitle": "{count} selected"
     },
     "search": {
       "placeholder": "Search products or stores",
@@ -301,7 +302,9 @@
       "searching": "Searching…",
       "noResults": "No matching purchases found",
       "products": "Product matches",
-      "receipts": "Receipt matches"
+      "receipts": "Receipt matches",
+      "productResultHint": "Product",
+      "receiptResultHint": "Receipt"
     },
     "errors": {
       "loadTitle": "Load failed",
@@ -356,7 +359,9 @@
         "subtotal": "Subtotal",
         "subtotalPlaceholder": "Enter subtotal",
         "unitNote": "Unit: JPY"
-      }
+      },
+      "editRowHint": "Edit",
+      "totalLabel": "Total"
     }
   },
   "productDetail": {

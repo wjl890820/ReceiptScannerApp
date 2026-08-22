@@ -14,10 +14,17 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { deleteReceipts, listReceiptsForList, type ReceiptListRow } from '@/lib/db';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
+import {
+  buildHistoryReceiptRowA11yLabel,
+  buildHistorySelectModeSubtitle,
+  formatHistoryMerchantDisplay,
+} from '@/lib/historyPresentation';
 import { buildTopCategories, buildHistoryMetaLine } from '@/lib/receiptListHelpers';
 import { formatDate } from '@/lib/formatDate';
 import {
@@ -34,12 +41,16 @@ import {
   buildProductSearchResultHref,
 } from '@/lib/productDetailTarget';
 
+/** Matches Home tab content clearance so rows clear the bottom tab bar. */
+const TAB_BAR_CONTENT_CLEARANCE = 72;
+
 type HistorySearchEntry =
   | { kind: 'item'; result: ReceiptItemSearchResult }
   | { kind: 'receipt'; result: ReceiptListRow };
 
 export default function HistoryScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ReceiptListRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
@@ -291,25 +302,52 @@ export default function HistoryScreen() {
   }
   const selectModeBarVisible =
     !searchActive && selectMode && rows.length > 0;
+  const listBottomPad =
+    TAB_BAR_CONTENT_CLEARANCE +
+    Math.max(insets.bottom, 0) +
+    (selectModeBarVisible ? 70 : 0);
+  const headerSubtitle = buildHistorySelectModeSubtitle({
+    selectMode: selectMode && !searchActive,
+    selectedCount: selectedIds.size,
+    defaultSubtitle: t('history.list.subtitle'),
+    selectingSubtitle: t('history.list.selectingSubtitle'),
+  });
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 16 }]}>
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
           <Text style={styles.title}>{t('history.list.title')}</Text>
-          <Text style={styles.subtitle}>{t('history.list.subtitle')}</Text>
+          <Text
+            style={[styles.subtitle, selectMode && !searchActive && styles.subtitleSelecting]}
+            accessibilityLiveRegion={selectMode ? 'polite' : undefined}
+          >
+            {headerSubtitle}
+          </Text>
         </View>
         {!searchActive && (
           <Pressable
             onPress={toggleSelectMode}
             disabled={deleting}
+            accessibilityRole="button"
+            accessibilityLabel={
+              selectMode
+                ? t('history.batchDelete.cancel')
+                : t('history.batchDelete.select')
+            }
             style={({ pressed }) => [
               styles.headerBtn,
+              selectMode && styles.headerBtnSelecting,
               pressed && { opacity: 0.7 },
               deleting && { opacity: 0.5 },
             ]}
           >
-            <Text style={styles.headerBtnText}>
+            <Text
+              style={[
+                styles.headerBtnText,
+                selectMode && styles.headerBtnTextSelecting,
+              ]}
+            >
               {selectMode ? t('history.batchDelete.cancel') : t('history.batchDelete.select')}
             </Text>
           </Pressable>
@@ -355,6 +393,9 @@ export default function HistoryScreen() {
               : `receipt:${entry.result.id}`
           }
           style={styles.list}
+          contentContainerStyle={{ paddingBottom: listBottomPad }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
@@ -379,75 +420,105 @@ export default function HistoryScreen() {
           renderItem={({ item: entry }) => {
             if (entry.kind === 'item') {
               const result = entry.result;
-              const merchant =
-                result.merchantRaw ||
-                result.merchantNormalized ||
-                t('common.unknownMerchant');
+              const merchant = formatHistoryMerchantDisplay(
+                {
+                  merchantRaw: result.merchantRaw,
+                  merchantNormalized: result.merchantNormalized,
+                },
+                t('common.unknownMerchant')
+              );
               const itemMeta = [
                 result.purchaseQuantity > 1
                   ? `×${result.purchaseQuantity}`
                   : null,
                 result.category,
               ].filter((value): value is string => Boolean(value));
+              const totalLabel =
+                result.lineTotal == null ? '—' : formatJPY(result.lineTotal);
               return (
                 <Pressable
                   onPress={() => onProductSearchResultPress(result)}
+                  accessibilityRole="button"
+                  accessibilityLabel={buildHistoryReceiptRowA11yLabel({
+                    merchant: `${t('history.search.productResultHint')}: ${result.displayName}`,
+                    dateLine: `${merchant} · ${formatDate(result.transactionAt)}`,
+                    totalLabel,
+                  })}
                   style={({ pressed }) => [
                     styles.card,
                     pressed && { opacity: 0.6 },
                   ]}
                 >
-                  <View style={styles.row}>
-                    <Text style={styles.itemName} numberOfLines={2}>
-                      {result.displayName}
-                    </Text>
-                    <Text style={styles.total}>
-                      {result.lineTotal == null ? '—' : formatJPY(result.lineTotal)}
-                    </Text>
+                  <View style={styles.cardInner}>
+                    <View style={styles.cardBody}>
+                      <Text style={styles.resultTypeHint}>
+                        {t('history.search.productResultHint')}
+                      </Text>
+                      <View style={styles.row}>
+                        <Text style={styles.itemName} numberOfLines={2}>
+                          {result.displayName}
+                        </Text>
+                        <Text style={styles.total}>{totalLabel}</Text>
+                      </View>
+                      <Text style={styles.meta}>
+                        {merchant} · {formatDate(result.transactionAt)}
+                      </Text>
+                      {itemMeta.length > 0 && (
+                        <Text style={styles.cats}>{itemMeta.join(' · ')}</Text>
+                      )}
+                    </View>
+                    <IconSymbol name="chevron.right" size={18} color="#999" />
                   </View>
-                  <Text style={styles.meta}>
-                    {merchant} · {formatDate(result.transactionAt)}
-                  </Text>
-                  {itemMeta.length > 0 && (
-                    <Text style={styles.cats}>{itemMeta.join(' · ')}</Text>
-                  )}
                 </Pressable>
               );
             }
 
             const receipt = entry.result;
             const topCats = buildTopCategories(receipt.analysis_json, 2);
+            const merchant = formatHistoryMerchantDisplay(
+              receipt,
+              t('common.unknownMerchant')
+            );
+            const metaLine = buildHistoryMetaLine(
+              receipt.transaction_at,
+              receipt.created_at,
+              t('history.detail.taxLabel'),
+              receipt.tax,
+              formatDate,
+              t('history.list.dateUnknown'),
+              t('common.uncategorizedTag'),
+              receipt.tax_is_known
+            );
             return (
               <Pressable
                 onPress={() => onSearchResultPress(receipt.id)}
+                accessibilityRole="button"
+                accessibilityLabel={buildHistoryReceiptRowA11yLabel({
+                  merchant: `${t('history.search.receiptResultHint')}: ${merchant}`,
+                  dateLine: metaLine,
+                  totalLabel: formatJPY(receipt.total),
+                })}
                 style={({ pressed }) => [
                   styles.card,
                   pressed && { opacity: 0.6 },
                 ]}
               >
-                <View style={styles.row}>
-                  <Text style={styles.merchant}>
-                    {receipt.merchant_raw ||
-                      receipt.merchant_normalized ||
-                      t('common.unknownMerchant')}
-                  </Text>
-                  <Text style={styles.total}>{formatJPY(receipt.total)}</Text>
+                <View style={styles.cardInner}>
+                  <View style={styles.cardBody}>
+                    <Text style={styles.resultTypeHint}>
+                      {t('history.search.receiptResultHint')}
+                    </Text>
+                    <View style={styles.row}>
+                      <Text style={styles.merchant}>{merchant}</Text>
+                      <Text style={styles.total}>{formatJPY(receipt.total)}</Text>
+                    </View>
+                    <Text style={styles.meta}>{metaLine}</Text>
+                    {topCats.length > 0 && (
+                      <Text style={styles.cats}>{topCats.join(' · ')}</Text>
+                    )}
+                  </View>
+                  <IconSymbol name="chevron.right" size={18} color="#999" />
                 </View>
-                <Text style={styles.meta}>
-                  {buildHistoryMetaLine(
-                    receipt.transaction_at,
-                    receipt.created_at,
-                    t('history.detail.taxLabel'),
-                    receipt.tax,
-                    formatDate,
-                    t('history.list.dateUnknown'),
-                    t('common.uncategorizedTag'),
-                    receipt.tax_is_known
-                  )}
-                </Text>
-                {topCats.length > 0 && (
-                  <Text style={styles.cats}>{topCats.join(' · ')}</Text>
-                )}
               </Pressable>
             );
           }}
@@ -457,7 +528,9 @@ export default function HistoryScreen() {
           data={rows}
           keyExtractor={(item) => item.id}
           style={styles.list}
-          contentContainerStyle={selectModeBarVisible ? styles.listContentWithBar : undefined}
+          contentContainerStyle={{ paddingBottom: listBottomPad }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
@@ -470,43 +543,58 @@ export default function HistoryScreen() {
           renderItem={({ item }) => {
             const topCats = buildTopCategories(item.analysis_json, 2);
             const checked = selectedIds.has(item.id);
+            const merchant = formatHistoryMerchantDisplay(
+              item,
+              t('common.unknownMerchant')
+            );
+            const metaLine = buildHistoryMetaLine(
+              item.transaction_at,
+              item.created_at,
+              t('history.detail.taxLabel'),
+              item.tax,
+              formatDate,
+              t('history.list.dateUnknown'),
+              t('common.uncategorizedTag'),
+              item.tax_is_known
+            );
 
             return (
               <Pressable
                 onPress={() => onItemPress(item)}
+                accessibilityRole="button"
+                accessibilityState={selectMode ? { selected: checked } : undefined}
+                accessibilityLabel={buildHistoryReceiptRowA11yLabel({
+                  merchant,
+                  dateLine: metaLine,
+                  totalLabel: formatJPY(item.total),
+                })}
                 style={({ pressed }) => [styles.card, pressed && { opacity: 0.6 }]}
               >
                 <View style={styles.cardInner}>
                   {selectMode && (
-                    <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
+                    <View
+                      style={[styles.checkbox, checked && styles.checkboxChecked]}
+                      accessibilityElementsHidden
+                      importantForAccessibility="no-hide-descendants"
+                    >
                       {checked ? <Text style={styles.checkmark}>✓</Text> : null}
                     </View>
                   )}
                   <View style={styles.cardBody}>
                     <View style={styles.row}>
-                      <Text style={styles.merchant}>
-                        {item.merchant_raw || item.merchant_normalized || t('common.unknownMerchant')}
-                      </Text>
+                      <Text style={styles.merchant}>{merchant}</Text>
                       <Text style={styles.total}>{formatJPY(item.total)}</Text>
                     </View>
-                    <Text style={styles.meta}>
-                      {buildHistoryMetaLine(
-                        item.transaction_at,
-                        item.created_at,
-                        t('history.detail.taxLabel'),
-                        item.tax,
-                        formatDate,
-                        t('history.list.dateUnknown'),
-                        t('common.uncategorizedTag'),
-                        item.tax_is_known
-                      )}
-                    </Text>
+                    <Text style={styles.meta}>{metaLine}</Text>
                     {topCats.length > 0 ? (
                       <Text style={styles.cats}>{topCats.join(' · ')}</Text>
                     ) : (
                       <Text style={styles.catsMuted}>{t('history.list.noCategoryInfo')}</Text>
                     )}
                   </View>
+                  {!selectMode ? (
+                    <IconSymbol name="chevron.right" size={18} color="#999" />
+                  ) : null}
                 </View>
               </Pressable>
             );
@@ -515,10 +603,12 @@ export default function HistoryScreen() {
       )}
 
       {selectModeBarVisible && (
-        <View style={styles.bottomBar}>
+        <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
           <Pressable
             onPress={selectAll}
             disabled={deleting}
+            accessibilityRole="button"
+            accessibilityLabel={t('history.batchDelete.selectAll')}
             style={({ pressed }) => [styles.bottomBarBtn, pressed && { opacity: 0.7 }]}
           >
             <Text style={styles.bottomBarBtnText}>
@@ -528,6 +618,10 @@ export default function HistoryScreen() {
           <Pressable
             onPress={onDeleteSelected}
             disabled={deleting || selectedIds.size === 0}
+            accessibilityRole="button"
+            accessibilityLabel={t('history.batchDelete.deleteSelected', {
+              n: selectedIds.size,
+            })}
             style={({ pressed }) => [
               styles.bottomBarBtn,
               styles.bottomBarBtnDanger,
@@ -547,10 +641,10 @@ export default function HistoryScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    paddingTop: 80,
     paddingHorizontal: 18,
-    paddingBottom: 20,
+    paddingBottom: 8,
     flex: 1,
+    backgroundColor: '#fff',
   },
   headerRow: {
     flexDirection: 'row',
@@ -570,14 +664,27 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
+  subtitleSelecting: {
+    color: '#1677ff',
+    fontWeight: '600',
+  },
   headerBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
     paddingVertical: 8,
     paddingHorizontal: 14,
+  },
+  headerBtnSelecting: {
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
   },
   headerBtnText: {
     fontSize: 16,
     fontWeight: '700',
     color: '#111',
+  },
+  headerBtnTextSelecting: {
+    color: '#1677ff',
   },
   searchBar: {
     minHeight: 44,
@@ -612,9 +719,6 @@ const styles = StyleSheet.create({
   list: {
     flex: 1,
   },
-  listContentWithBar: {
-    paddingBottom: 70,
-  },
   sep: {
     height: 10,
   },
@@ -644,7 +748,7 @@ const styles = StyleSheet.create({
   },
   cardInner: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 12,
   },
   cardBody: {
@@ -673,6 +777,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  resultTypeHint: {
+    marginBottom: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#888',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
   },
   merchant: {
     fontSize: 16,
@@ -724,7 +836,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111',
   },
-  bottomBarBtnDanger: {},
+  bottomBarBtnDanger: {
+    borderRadius: 8,
+    backgroundColor: '#fff0f0',
+  },
   bottomBarBtnDangerText: {
     color: '#c00',
     fontWeight: '800',
