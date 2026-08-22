@@ -22,6 +22,17 @@ import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
 import { listReceipts, saveReceipt } from '@/lib/db';
 import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { stampUserClassificationProvenance } from '@/lib/productTaxonomy';
+import {
+  amountCorrectionInput,
+  appendUserCorrections,
+  buildUserCorrectionEvent,
+  categoryCorrectionInput,
+  nameCorrectionInput,
+  quantityCorrectionInput,
+  receiptFieldCorrectionInput,
+  applyItemFieldCorrections,
+} from '@/lib/userCorrections';
+import { applyUserLineAmountEdit } from '@/lib/receiptDiscountAllocation';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -390,19 +401,69 @@ export default function ScanReviewScreen() {
         : 0;
       const finalName = line.name.trim();
       const classifiedName = typeof s.name === 'string' ? s.name.trim() : '';
-      const finalItem = {
+      const snapCategory =
+        typeof (s as any).category === 'string' ? String((s as any).category) : 'uncategorized';
+      const snapQty = Number((s as any).quantity);
+      const snapAmount = Number((s as any).lineTotal ?? (s as any).line_total);
+      let finalItem: Record<string, unknown> = {
         ...s,
         name: finalName,
         ocr_recognized_name: ocrName,
         category: line.category,
         ...(line.categoryUserOverride ? stampUserClassificationProvenance() : {}),
-
         quantity: line.quantity,
         lineTotal: line.lineTotal,
         unitPrice,
         review_source_index: isUserAdded ? null : line.sourceIndex,
         user_added: isUserAdded,
       };
+
+      if (!isUserAdded) {
+        const beforeQty = Number.isFinite(snapQty) && snapQty > 0 ? snapQty : 1;
+        const beforeAmt = Number.isFinite(snapAmount) ? Math.round(snapAmount) : 0;
+        const afterAmt = Math.round(Number(line.lineTotal) || 0);
+        if (line.quantity !== beforeQty) {
+          finalItem = { ...finalItem, quantityUserEdited: true };
+        }
+        if (afterAmt !== beforeAmt) {
+          finalItem = applyUserLineAmountEdit(finalItem as any, afterAmt) as Record<
+            string,
+            unknown
+          >;
+        }
+        finalItem = applyItemFieldCorrections(finalItem, [
+          nameCorrectionInput({
+            beforeName: ocrName || classifiedName,
+            afterName: finalName,
+            itemSourceIndex: line.sourceIndex,
+          }),
+          quantityCorrectionInput({
+            beforeQuantity: beforeQty,
+            afterQuantity: line.quantity,
+            itemSourceIndex: line.sourceIndex,
+          }),
+          amountCorrectionInput({
+            beforeAmount: beforeAmt,
+            afterAmount: afterAmt,
+            itemSourceIndex: line.sourceIndex,
+          }),
+          ...(line.categoryUserOverride || line.category !== snapCategory
+            ? [
+                categoryCorrectionInput({
+                  beforeCategory: snapCategory,
+                  afterCategory: line.category,
+                  beforeItem: s as {
+                    classification_source?: unknown;
+                    classification_version?: unknown;
+                    taxonomy_version?: unknown;
+                  },
+                  itemSourceIndex: line.sourceIndex,
+                }),
+              ]
+            : []),
+        ]);
+      }
+
       return applyProductIdentityToItem(finalItem, {
         finalName,
         finalCategory: line.category,
@@ -515,16 +576,80 @@ export default function ScanReviewScreen() {
           taxIsKnown = true;
         }
       }
-      const finalAnalysis = {
-        ...snapshot,
-        merchant: merchant.trim() || undefined,
-        transactionDate: dateStr.trim() || undefined,
-        total: toNum(totalStr, 0),
-        tax: taxIsKnown ? taxValue : null,
-        tax_is_known: taxIsKnown,
-        currency: currency.trim() || 'JPY',
-        items: finalItemsForSave,
-        review_meta,
+      const snapMerchant =
+        typeof (snapshot as any)?.merchant === 'string' ? String((snapshot as any).merchant) : '';
+      const snapDate =
+        typeof (snapshot as any)?.transactionDate === 'string'
+          ? String((snapshot as any).transactionDate)
+          : typeof (snapshot as any)?.transaction_date === 'string'
+            ? String((snapshot as any).transaction_date)
+            : '';
+      const snapTotal = Number((snapshot as any)?.total);
+      const snapTax = Number((snapshot as any)?.tax);
+      const receiptCorrectionEvents = [
+        buildUserCorrectionEvent(
+          receiptFieldCorrectionInput({
+            field: 'merchant',
+            originalValue: snapMerchant,
+            correctedValue: merchant.trim(),
+          })
+        ),
+        buildUserCorrectionEvent(
+          receiptFieldCorrectionInput({
+            field: 'transaction_date',
+            originalValue: snapDate,
+            correctedValue: dateStr.trim(),
+          })
+        ),
+        buildUserCorrectionEvent(
+          receiptFieldCorrectionInput({
+            field: 'receipt_total',
+            originalValue: Number.isFinite(snapTotal) ? snapTotal : null,
+            correctedValue: toNum(totalStr, 0),
+          })
+        ),
+        buildUserCorrectionEvent(
+          receiptFieldCorrectionInput({
+            field: 'receipt_tax',
+            originalValue: Number.isFinite(snapTax) ? snapTax : null,
+            correctedValue: taxIsKnown ? taxValue : null,
+          })
+        ),
+        buildUserCorrectionEvent(
+          receiptFieldCorrectionInput({
+            field: 'receipt_note',
+            originalValue:
+              typeof (snapshot as any)?.note === 'string'
+                ? String((snapshot as any).note)
+                : '',
+            correctedValue: note.trim(),
+          })
+        ),
+      ].filter((e): e is NonNullable<typeof e> => e != null);
+
+      const finalAnalysis = appendUserCorrections(
+        {
+          ...snapshot,
+          merchant: merchant.trim() || undefined,
+          transactionDate: dateStr.trim() || undefined,
+          total: toNum(totalStr, 0),
+          tax: taxIsKnown ? taxValue : null,
+          tax_is_known: taxIsKnown,
+          currency: currency.trim() || 'JPY',
+          items: finalItemsForSave,
+          review_meta,
+        } as Record<string, unknown>,
+        receiptCorrectionEvents
+      ) as typeof snapshot & {
+        merchant?: string;
+        transactionDate?: string;
+        total: number;
+        tax: number | null;
+        tax_is_known?: boolean;
+        currency?: string;
+        items?: unknown[];
+        review_meta?: unknown;
+        user_corrections?: unknown;
       };
 
       const source = await getDefaultReceiptSource();

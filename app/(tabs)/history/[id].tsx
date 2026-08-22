@@ -35,6 +35,12 @@ import {
   applyUserLineAmountEdit,
   itemAmountForAnalytics,
 } from '@/lib/receiptDiscountAllocation';
+import {
+  amountCorrectionInput,
+  applyItemFieldCorrections,
+  categoryCorrectionInput,
+  quantityCorrectionInput,
+} from '@/lib/userCorrections';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -271,6 +277,19 @@ export default function ReceiptDetailScreen() {
     const updatedItems = [...displayItems];
     const existingItem = updatedItems[editingItemIndex] as ReceiptItem & Record<string, unknown>;
     const finalCategory = (draftCategory.trim() || 'uncategorized') as ProductCategory;
+    const beforeQuantity = Number(existingItem.quantity);
+    const beforeAmount = itemAmountForAnalytics(existingItem as any);
+    const beforeCategory =
+      typeof existingItem.category === 'string' && existingItem.category.trim()
+        ? existingItem.category.trim()
+        : 'uncategorized';
+    const itemSourceIndex =
+      typeof (existingItem as any).review_source_index === 'number'
+        ? (existingItem as any).review_source_index
+        : typeof (existingItem as any).source_index === 'number'
+          ? (existingItem as any).source_index
+          : editingItemIndex;
+
     const withIdentity = applyProductIdentityToItem({
       ...existingItem,
       quantity: round0(quantity),
@@ -283,13 +302,44 @@ export default function ReceiptDetailScreen() {
       useExistingClassificationEvidence: true,
     });
     // Keep user-layer money fields coherent so analytics prefers the edit (not stale effective).
-    updatedItems[editingItemIndex] = {
+    let nextItem = {
       ...applyUserLineAmountEdit(
         withIdentity as ReceiptItem & Record<string, unknown>,
         round0(lineTotal)
       ),
       ...stampUserClassificationProvenance(),
+      ...(round0(quantity) !==
+      (Number.isFinite(beforeQuantity) && beforeQuantity > 0 ? beforeQuantity : 1)
+        ? { quantityUserEdited: true }
+        : {}),
     } as ReceiptItem & Record<string, unknown>;
+
+    nextItem = applyItemFieldCorrections(nextItem, [
+      quantityCorrectionInput({
+        beforeQuantity: Number.isFinite(beforeQuantity) && beforeQuantity > 0 ? beforeQuantity : 1,
+        afterQuantity: round0(quantity),
+        previouslyUserEdited: (existingItem as any).quantityUserEdited === true,
+        itemSourceIndex,
+      }),
+      amountCorrectionInput({
+        beforeAmount: Number.isFinite(beforeAmount) ? Math.round(beforeAmount) : 0,
+        afterAmount: round0(lineTotal),
+        previouslyUserEdited: (existingItem as any).amountUserEdited === true,
+        itemSourceIndex,
+      }),
+      categoryCorrectionInput({
+        beforeCategory,
+        afterCategory: finalCategory,
+        beforeItem: existingItem as {
+          classification_source?: unknown;
+          classification_version?: unknown;
+          taxonomy_version?: unknown;
+        },
+        itemSourceIndex,
+      }),
+    ]);
+
+    updatedItems[editingItemIndex] = nextItem;
 
     try {
       setSavingItem(true);
