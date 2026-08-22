@@ -21,6 +21,7 @@ import { ReceiptReviewSaveBar } from '@/components/review/ReceiptReviewSaveBar';
 import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
 import { listReceipts, saveReceipt } from '@/lib/db';
 import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
+import { stampUserClassificationProvenance } from '@/lib/productTaxonomy';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -68,6 +69,10 @@ type LineItem = {
   category: ProductCategory;
   quantity: number;
   lineTotal: number;
+  classification_source?: string | null;
+  classification_version?: string | null;
+  taxonomy_version?: string | null;
+  categoryUserOverride?: boolean;
 };
 
 export default function ScanReviewScreen() {
@@ -390,6 +395,8 @@ export default function ScanReviewScreen() {
         name: finalName,
         ocr_recognized_name: ocrName,
         category: line.category,
+        ...(line.categoryUserOverride ? stampUserClassificationProvenance() : {}),
+
         quantity: line.quantity,
         lineTotal: line.lineTotal,
         unitPrice,
@@ -754,7 +761,13 @@ export default function ScanReviewScreen() {
               <Pressable
                 key={cat}
                 onPress={() => {
-                  if (categoryModalIndex >= 0) updateLine(categoryModalIndex, { category: cat });
+                  if (categoryModalIndex >= 0) {
+                    updateLine(categoryModalIndex, {
+                      category: cat,
+                      categoryUserOverride: true,
+                      ...stampUserClassificationProvenance(),
+                    });
+                  }
                   setCategoryModalIndex(-1);
                 }}
                 accessibilityRole="button"

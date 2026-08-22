@@ -18,6 +18,7 @@ import { getCategoryBatchAiTimeoutMs, getCategoryBatchAiMaxItems } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import { V1_ACTIVE_PRODUCT_CATEGORIES, type ProductCategory } from './productCategory';
+import { stampMachineClassificationProvenance } from './productTaxonomy';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from './categoryTaxonomyV1';
 
 export const BATCH_AI_APPLY_THRESHOLD = 0.75;
@@ -65,8 +66,8 @@ const V1_ACTIVE_WRITE_SET = new Set<string>(
 );
 
 /**
- * 严格校验 AI 返回的分类：必须是 V1 ACTIVE 类之一（不含 legacy personal_care/pet_care）。
- * 旧分类名与 legacy → 返回 null（即拒绝），由调用方按 uncategorized 处理。
+ * 严格校验 AI 返回的分类：必须是 V1 spending 类之一（含 personal_care/pet_care，不含 uncategorized）。
+ * 旧分类名 → 返回 null（即拒绝），由调用方按 uncategorized 处理。
  */
 export function sanitizeAiCategory(raw: unknown): ProductCategory | null {
   if (typeof raw !== 'string') return null;
@@ -152,7 +153,7 @@ export function applyBatchAiResults(
       item.category = decision.category;
       item.classification_status = 'ok';
       item.classification_confidence = decision.confidence;
-      item.classification_source = 'ai_batch';
+      Object.assign(item, stampMachineClassificationProvenance('ai_batch'));
       item.classification = {
         category: decision.category,
         status: 'ok',

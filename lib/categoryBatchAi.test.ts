@@ -79,10 +79,10 @@ describe('sanitizeAiCategory: 仅接受 V1 ACTIVE，拒绝 legacy / 旧分类', 
     expect(sanitizeAiCategory('food_ingredients')).toBe('food_ingredients');
     expect(sanitizeAiCategory('other')).toBe('other');
   });
-  it('uncategorized 与 legacy personal_care/pet_care 视为无效（null）', () => {
+  it('uncategorized 无效；personal_care/pet_care 为活跃 V1 spending', () => {
     expect(sanitizeAiCategory('uncategorized')).toBeNull();
-    expect(sanitizeAiCategory('personal_care')).toBeNull();
-    expect(sanitizeAiCategory('pet_care')).toBeNull();
+    expect(sanitizeAiCategory('personal_care')).toBe('personal_care');
+    expect(sanitizeAiCategory('pet_care')).toBe('pet_care');
   });
   it('拒绝旧分类名 → null', () => {
     for (const old of ['meat_seafood', 'snacks_sweets', 'prepared_food', 'beverages', 'snacks', 'ingredients', 'produce']) {

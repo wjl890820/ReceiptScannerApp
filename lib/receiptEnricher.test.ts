@@ -455,10 +455,10 @@ describe('Phase 2: convenience merchant support', () => {
     expect((out.items as any[])[0].category).toBe('food_ingredients');
   });
 
-  it('other merchant（药妆）+ personal_care item → 仍 uncategorized，不调用 Batch AI', async () => {
+  it('other merchant（药妆）+ shampoo → personal_care via name_rule; still no Batch AI', async () => {
     const out = await enrichAtMerchant('マツキヨ', 'シャンプー', 'personal_care', 500);
     expect((out as any).merchant_type).toBe('other');
-    expect((out.items as any[])[0].category).toBe('uncategorized');
+    expect((out.items as any[])[0].category).toBe('personal_care');
     expect(runBatchAiFallback).not.toHaveBeenCalled();
     expect((out as any).classification_telemetry_v1?.batch_ai_called).toBe(false);
   });

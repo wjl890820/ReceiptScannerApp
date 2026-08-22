@@ -236,9 +236,9 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     expect(out.tax).toBe(706);
   });
 
-  it('rejects legacy personal_care OCR categoryKey on sanitize', () => {
-    expect(sanitizeOcrCategoryKey('personal_care')).toBeUndefined();
-    expect(sanitizeOcrCategoryKey('pet_care')).toBeUndefined();
+  it('accepts personal_care/pet_care OCR categoryKey as active V1 spending', () => {
+    expect(sanitizeOcrCategoryKey('personal_care')).toBe('personal_care');
+    expect(sanitizeOcrCategoryKey('pet_care')).toBe('pet_care');
     expect(sanitizeOcrCategoryKey('snacks_drinks')).toBe('snacks_drinks');
   });
 });

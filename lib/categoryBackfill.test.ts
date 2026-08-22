@@ -62,3 +62,20 @@ describe('fixJsonItems', () => {
     expect(fixJsonItems('')).toBeNull();
   });
 });
+
+
+describe('fixJsonItems user override protection (M1-A)', () => {
+  it('user layer does not reclassify explicit other via item name', () => {
+    const json = JSON.stringify({
+      items: [{ name: '豆腐', category: 'other', classification_source: 'user', lineTotal: 50 }],
+    });
+    expect(fixJsonItems(json, { layer: 'user' })).toBeNull();
+  });
+
+  it('analysis layer preserves classification_source=user', () => {
+    const json = JSON.stringify({
+      items: [{ name: '豆腐', category: 'other', classification_source: 'user', lineTotal: 50 }],
+    });
+    expect(fixJsonItems(json, { layer: 'analysis' })).toBeNull();
+  });
+});

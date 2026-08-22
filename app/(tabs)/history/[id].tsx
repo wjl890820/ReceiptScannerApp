@@ -26,6 +26,7 @@ import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { upsertProductDictionary } from '@/lib/productDictionary';
 import { upsertProductNameAlias } from '@/lib/productAlias';
 import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
+import { stampUserClassificationProvenance } from '@/lib/productTaxonomy';
 import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
@@ -282,10 +283,13 @@ export default function ReceiptDetailScreen() {
       useExistingClassificationEvidence: true,
     });
     // Keep user-layer money fields coherent so analytics prefers the edit (not stale effective).
-    updatedItems[editingItemIndex] = applyUserLineAmountEdit(
-      withIdentity as ReceiptItem & Record<string, unknown>,
-      round0(lineTotal)
-    ) as ReceiptItem & Record<string, unknown>;
+    updatedItems[editingItemIndex] = {
+      ...applyUserLineAmountEdit(
+        withIdentity as ReceiptItem & Record<string, unknown>,
+        round0(lineTotal)
+      ),
+      ...stampUserClassificationProvenance(),
+    } as ReceiptItem & Record<string, unknown>;
 
     try {
       setSavingItem(true);

@@ -4,8 +4,18 @@
  * 这是 item.category 的唯一真源：OCR/旧分类/店铺类型词都必须经过本模块归一，
  * 绝不允许"非超市/便利店/超市/コンビニ/スーパー"等店铺类型作为商品分类。
  *
+ * Taxonomy / active-write lists live in productTaxonomy.ts (M1-A SSOT).
  * 纯函数、无副作用、可单测；不依赖 categories.ts（避免循环依赖）。
  */
+
+import {
+  SYSTEM_CATEGORY_STATES,
+  V1_SPENDING_CATEGORIES,
+  V1_WRITABLE_CATEGORIES,
+  isSystemCategoryState,
+  isV1SpendingCategory,
+  isV1WritableCategory,
+} from './productTaxonomy';
 
 export type ProductCategory =
   | 'food_ingredients' // 食材
@@ -14,18 +24,13 @@ export type ProductCategory =
   | 'household' // 日用消耗
   | 'personal_care' // 个人护理
   | 'pet_care' // 宠物用品
-  | 'uncategorized' // 待分类
+  | 'uncategorized' // 系统/待审核状态（非正常消费类别）
   | 'other'; // 其他
 
 /** 全部可选分类（用于审核页/详情页选择列表） */
 export const PRODUCT_CATEGORIES: readonly ProductCategory[] = [
-  'food_ingredients',
-  'ready_to_eat',
-  'snacks_drinks',
-  'household',
-  'personal_care',
-  'pet_care',
-  'uncategorized',
+  ...V1_SPENDING_CATEGORIES.slice(0, 6),
+  ...SYSTEM_CATEGORY_STATES,
   'other',
 ];
 
@@ -40,25 +45,26 @@ export const CORE_PRODUCT_CATEGORIES: readonly ProductCategory[] = [
 ];
 
 /**
- * V1 首发活跃分类（新写入数据的正常消费类别 + 待确认状态）。
- * uncategorized 是状态，不是正常消费类别。
+ * V1 可写入活跃集 = 七个消费类别 + uncategorized 系统状态。
+ * Re-export spending list for Analysis (excludes uncategorized).
  */
-export const V1_ACTIVE_PRODUCT_CATEGORIES: readonly ProductCategory[] = [
-  'food_ingredients',
-  'ready_to_eat',
-  'snacks_drinks',
-  'household',
-  'other',
-  'uncategorized',
-];
+export const V1_SPENDING_PRODUCT_CATEGORIES: readonly ProductCategory[] =
+  V1_SPENDING_CATEGORIES as readonly ProductCategory[];
+
+export const V1_ACTIVE_PRODUCT_CATEGORIES: readonly ProductCategory[] =
+  V1_WRITABLE_CATEGORIES as readonly ProductCategory[];
 
 /**
- * legacy-compatible / inactive-for-new-V1：旧数据可读，新 V1 首发不主动归类到此。
+ * @deprecated M1-A: personal_care / pet_care are active V1 spending categories.
+ * Kept empty for call-site compatibility.
  */
-export const V1_LEGACY_COMPAT_PRODUCT_CATEGORIES: readonly ProductCategory[] = [
-  'personal_care',
-  'pet_care',
-];
+export const V1_LEGACY_COMPAT_PRODUCT_CATEGORIES: readonly ProductCategory[] = [];
+
+export {
+  isSystemCategoryState,
+  isV1SpendingCategory,
+  isV1WritableCategory,
+};
 
 function isProductCategory(v: string): v is ProductCategory {
   return (PRODUCT_CATEGORIES as readonly string[]).includes(v);
@@ -302,8 +308,8 @@ export function classifyItemByName(itemName: string): ProductCategory {
     return 'pet_care';
   }
 
-  // 个人护理（legacy 可读；V1 新写入会再经 sanitizeV1ActiveCategoryWrite）
-  // 含"化粧水"等含"水"词，必须早于饮料。剃须刀归日用（V1 无 personal_care 活跃写入）。
+  // 个人护理（V1 active spending）。含"化粧水"等含"水"词，必须早于饮料。
+  // 剃须刀仍归 household（历史语义；不在本阶段批量改写日用→个护）。
   if (
     has([
       '歯ブラシ', '歯磨き', 'ハミガキ', 'シャンプー', 'リンス', 'コンディショナー', 'ボディソープ',
@@ -645,17 +651,17 @@ export function resolveProductCategoryRuntime(input: {
 }
 
 /**
- * V1 新写入边界：legacy personal_care / pet_care 可读但不可作为新分类结果落库。
- * 不把模型错误永久映射到某一活跃类；统一降为 uncategorized，由 name_rule 等先行命中活跃类。
+ * V1 新写入边界：仅允许七个消费类别 + uncategorized 系统状态落库。
+ * 未知值降为 uncategorized（不静默映射到 other）。
  */
 export function sanitizeV1ActiveCategoryWrite(category: ProductCategory): ProductCategory {
-  if ((V1_ACTIVE_PRODUCT_CATEGORIES as readonly string[]).includes(category)) {
+  if (isV1WritableCategory(category)) {
     return category;
   }
   return 'uncategorized';
 }
 
-/** legacy 兼容读取：保留原值；仅文档/调用方区分读写。 */
+/** @deprecated M1-A: legacy-compat list is empty; personal_care/pet_care are active. */
 export function isV1LegacyCompatCategory(category: string | null | undefined): boolean {
   return (V1_LEGACY_COMPAT_PRODUCT_CATEGORIES as readonly string[]).includes(
     String(category || '')

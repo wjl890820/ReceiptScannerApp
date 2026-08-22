@@ -401,10 +401,11 @@ describe('mapKnownProductCategory / resolveProductCategory', () => {
 });
 
 describe('V1 active write boundary', () => {
-  it('sanitizeV1ActiveCategoryWrite drops legacy personal_care/pet_care', () => {
-    expect(sanitizeV1ActiveCategoryWrite('personal_care')).toBe('uncategorized');
-    expect(sanitizeV1ActiveCategoryWrite('pet_care')).toBe('uncategorized');
+  it('sanitizeV1ActiveCategoryWrite keeps personal_care/pet_care as active V1 spending', () => {
+    expect(sanitizeV1ActiveCategoryWrite('personal_care')).toBe('personal_care');
+    expect(sanitizeV1ActiveCategoryWrite('pet_care')).toBe('pet_care');
     expect(sanitizeV1ActiveCategoryWrite('household')).toBe('household');
+    expect(sanitizeV1ActiveCategoryWrite('uncategorized')).toBe('uncategorized');
   });
 
   it('runtime: OCR personal_care on protein ball → snacks_drinks via name rule', () => {

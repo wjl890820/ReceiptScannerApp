@@ -10,7 +10,11 @@
 
 import * as SQLite from 'expo-sqlite';
 import { initIfNeeded } from './db';
-import { normalizeProductCategory } from './productCategory';
+import {
+  normalizeProductCategory,
+  normalizePersistedProductCategory,
+} from './productCategory';
+import { isExplicitUserCategoryOverride } from './productTaxonomy';
 import {
   rebuildReceiptItemIndex,
   type ReceiptItemIndexReceipt,
@@ -28,7 +32,10 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /** 修复单个 items 数组；返回修复的 item 数与（可能）新数组。 */
-function fixItemsArray(items: unknown): { changed: number; items: any[] } {
+function fixItemsArray(
+  items: unknown,
+  options: { layer: 'analysis' | 'user' }
+): { changed: number; items: any[] } {
   if (!Array.isArray(items)) return { changed: 0, items: [] };
   let changed = 0;
   const next = items.map((it) => {
@@ -36,7 +43,12 @@ function fixItemsArray(items: unknown): { changed: number; items: any[] } {
     const item = it as Record<string, unknown>;
     const name = typeof item.name === 'string' ? item.name : undefined;
     const current = typeof item.category === 'string' ? item.category : '';
-    const fixed = normalizeProductCategory(item.category, name);
+    // User SoT / explicit user override: only map illegal/legacy enums; never re-resolve via name.
+    const preserveUser =
+      options.layer === 'user' || isExplicitUserCategoryOverride(item);
+    const fixed = preserveUser
+      ? normalizePersistedProductCategory(item.category)
+      : normalizeProductCategory(item.category, name);
     if (fixed !== current) {
       changed += 1;
       return { ...item, category: fixed };
@@ -47,7 +59,10 @@ function fixItemsArray(items: unknown): { changed: number; items: any[] } {
 }
 
 /** 修复一个 JSON 字符串里的 items.category；无变化返回 null。（导出供单测） */
-export function fixJsonItems(json: string | null): { json: string; changed: number } | null {
+export function fixJsonItems(
+  json: string | null,
+  options: { layer: 'analysis' | 'user' } = { layer: 'analysis' }
+): { json: string; changed: number } | null {
   if (!json || typeof json !== 'string') return null;
   let parsed: any;
   try {
@@ -58,12 +73,12 @@ export function fixJsonItems(json: string | null): { json: string; changed: numb
 
   // 兼容两种结构：{ items: [...] } 或 直接 [...]
   if (Array.isArray(parsed)) {
-    const { changed, items } = fixItemsArray(parsed);
+    const { changed, items } = fixItemsArray(parsed, options);
     if (changed === 0) return null;
     return { json: JSON.stringify(items), changed };
   }
   if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) {
-    const { changed, items } = fixItemsArray(parsed.items);
+    const { changed, items } = fixItemsArray(parsed.items, options);
     if (changed === 0) return null;
     return { json: JSON.stringify({ ...parsed, items }), changed };
   }
@@ -91,8 +106,8 @@ export async function backfillReceiptItemCategories(): Promise<BackfillResult> {
   let fixedItems = 0;
 
   for (const row of rows) {
-    const analysisFix = fixJsonItems(row.analysis_json);
-    const userFix = fixJsonItems(row.user_items_json);
+    const analysisFix = fixJsonItems(row.analysis_json, { layer: 'analysis' });
+    const userFix = fixJsonItems(row.user_items_json, { layer: 'user' });
     if (!analysisFix && !userFix) continue;
 
     const sets: string[] = [];

@@ -6,7 +6,7 @@
 
 import type { ReceiptRow } from './db';
 import { isV1SupportedReceipt } from './merchantType';
-import { V1_ACTIVE_PRODUCT_CATEGORIES } from './productCategory';
+import { V1_SPENDING_PRODUCT_CATEGORIES } from './productCategory';
 import { getReceiptItems } from './receiptItems';
 import type { WeeklyMonthlyStats, TimeRange } from './statsCalculator';
 import type { BuildInsightsOutput, StoryOutput } from './buildInsights';
@@ -48,7 +48,8 @@ export type AnalysisReleaseViewModel = {
   showLegacyCategoryIndex: boolean;
 };
 
-const ACTIVE_CATEGORY_SET = new Set<string>(V1_ACTIVE_PRODUCT_CATEGORIES);
+/** Spending categories only — uncategorized is a review bucket, not a bar segment. */
+const ACTIVE_CATEGORY_SET = new Set<string>(V1_SPENDING_PRODUCT_CATEGORIES);
 
 export function shouldShowAnalysisProSection(options: {
   comingSoon: boolean;

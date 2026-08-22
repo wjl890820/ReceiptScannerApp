@@ -2,6 +2,9 @@
 import type { ReceiptAnalysis, ReceiptItem } from './receiptAnalyzer';
 import { learnCategoryMapping, getLearnedCategoryEntry } from './categoryLearner';
 import { resolveProductCategoryRuntime, mapKnownProductCategory, classifyItemByName } from './productCategory';
+import {
+  stampMachineClassificationProvenance,
+} from './productTaxonomy';
 import { normalizeReceiptItemName, normalizeMerchantName } from './productNormalizer';
 import { ALL_CATEGORIES, type Category } from './categories';
 import {
@@ -517,7 +520,7 @@ export async function applyCategoriesWithLearning(
       // 新字段：分类状态与置信度（兼容旧数据，读取时需做默认值处理）
       classification_status: classificationStatus,
       classification_confidence: classificationConfidence,
-      classification_source: classificationOut?.source ?? null,
+      ...stampMachineClassificationProvenance(classificationOut?.source ?? null),
       // Compatibility bridge for older modules that still read item.classification.*
       classification: {
         category: productCategory as any,

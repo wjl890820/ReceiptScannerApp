@@ -331,8 +331,8 @@ const VALID_NEW_CATEGORY_KEYS = new Set<string>(
 );
 
 /**
- * 清洗 OCR categoryKey：允许“旧固定枚举 + V1 ACTIVE ProductCategory”；
- * legacy personal_care/pet_care 与店铺类型词一律丢弃（新写入边界）。
+ * 清洗 OCR categoryKey：允许“旧固定枚举 + V1 spending ProductCategory”；
+ * 店铺类型词一律丢弃。personal_care / pet_care 为 V1 活跃消费类别。
  */
 export function sanitizeOcrCategoryKey(
   raw: unknown
@@ -340,7 +340,6 @@ export function sanitizeOcrCategoryKey(
   if (typeof raw !== 'string') return undefined;
   const v = raw.trim().toLowerCase();
   if (!v) return undefined;
-  if (v === 'personal_care' || v === 'pet_care') return undefined;
   if ((VALID_CATEGORY_KEYS as readonly string[]).includes(v)) return v as CategoryKey;
   if (VALID_NEW_CATEGORY_KEYS.has(v)) return v as ProductCategory;
   return undefined;
