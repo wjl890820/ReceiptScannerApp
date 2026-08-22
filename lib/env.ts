@@ -225,6 +225,22 @@ export function isAppleLinkEnabled(): boolean {
 }
 
 /**
+ * Analysis D real-data diagnostics (ENABLE_ANALYSIS_D_DIAGNOSTICS).
+ * Default OFF. When ON in a validation build, Settings may expose a
+ * read-only report generate / summary / manual JSON share action.
+ * Never auto-uploads; never enters Product Analytics / Supabase telemetry.
+ */
+export function isAnalysisDDiagnosticsEnabled(): boolean {
+  const fromEnv =
+    _envVar('ENABLE_ANALYSIS_D_DIAGNOSTICS') ||
+    _envVar('EXPO_PUBLIC_ENABLE_ANALYSIS_D_DIAGNOSTICS');
+  if (fromEnv) return parseEnvBool(fromEnv, false);
+  const fromExtra = getExtraValue('ENABLE_ANALYSIS_D_DIAGNOSTICS', '');
+  if (fromExtra) return parseEnvBool(fromExtra, false);
+  return false;
+}
+
+/**
  * 获取备用反馈邮箱（用于 send-feedback 不可用时的兜底渠道）。
  */
 export function getSupportEmail(): string {
