@@ -9,7 +9,7 @@ Operational map of where analytical truth lives. Prevents Agents from inventing 
 | Taxonomy / spending categories | `lib/productTaxonomy.ts` | `V1_SPENDING_CATEGORIES`; uncategorized is system/review, not a spend bucket |
 | Writable category boundary | `lib/productCategory.ts` | Re-exports / sanitizes against taxonomy |
 | Effective item amount | `lib/receiptDiscountAllocation.ts` (`itemAmountForAnalytics`) | User override > effective > raw |
-| Merchant grouping key | `lib/merchantAnalytics.ts` (`merchantAnalyticsKey`) | Prefer normalized; V1 universe = supermarket + convenience (`merchantType`) |
+| Merchant grouping key | `lib/merchantAnalytics.ts` (`merchantAnalyticsKey`) | Prefer normalized; V1 universe = supermarket + convenience (`merchantType`). Full field contract: `docs/merchant-domain-contract.md` (R1-B1) |
 | Purchase occurrence | one `receipt_items` / analysis item row | Quantity is separate; do not treat qty as occurrence count |
 | Product identity / family | `lib/productIdentity.ts`, `lib/productFamily.ts` | Shared by Product Detail, milestones, ShoppingIntent |
 | Spec / unit normalization | `lib/productSpecification.ts` (M1-B) | purchase_quantity ≠ packCount; reliability gates comparable price |

@@ -1,11 +1,15 @@
 /**
  * Merchant analytics grouping for Analysis V1.
  *
+ * Domain SSOT: docs/merchant-domain-contract.md (R1-B1 freeze).
+ *
  * Contract:
- * - Prefer persisted merchant_normalized (chain key from canonicalizeMerchantChain
- *   at save/review time) over merchant_raw.
+ * - merchantAnalyticsKey is the ONE V1 merchant aggregation identity.
+ * - Prefer persisted merchant_normalized (retailer-ish derived key) over merchant_raw.
  * - Apply normalizeMerchantName for light cleanup (width, trailing 店, case).
- * - Do NOT invent fuzzy merges beyond existing chain aliases.
+ * - Do NOT invent fuzzy merges beyond existing chain aliases (R1-B2 expands rules).
+ * - Do NOT use legacy store mirror columns as branch identity.
+ * - Do NOT use UI display strings as analytics identity.
  * - Store/branch remain distinct when the saved identity does not collapse them.
  */
 

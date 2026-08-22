@@ -1,8 +1,20 @@
 /**
  * 商户类型检测（V1 基础设施）。
  *
- * merchant_type 仅描述商户，不得映射为商品 category。
- * 商品 category 必须逐商品判断。
+ * Domain SSOT: docs/merchant-domain-contract.md (R1-B1 freeze).
+ *
+ * merchant_type = business-format classification:
+ *   supermarket | convenience | other | unknown
+ * V1 shopping analytics eligibility = supermarket + convenience only.
+ *
+ * merchant_type is NOT:
+ * - product category
+ * - shopping intent
+ * - physical store identity
+ * - retailer database id
+ * - a generic grocery boolean (convenience is V1-supported)
+ *
+ * 商品 category 必须逐商品判断，不得从 merchant_type 映射。
  */
 
 import { normalizeMerchantName } from './productNormalizer';
