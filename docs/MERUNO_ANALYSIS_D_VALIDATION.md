@@ -113,9 +113,25 @@ Assigned only after real-device / real-data review. No hard product thresholds i
 - When ON (validation build only):
   - Settings → **Internal / Validation** → **Analysis D Diagnostics**
   - Screen: `app/analysis-d-diagnostics.tsx`
-  - Generate / refresh via `generateAnalysisDReportFromLocalReceipts()` → D0 `buildAnalysisDReport`
+  - Generate / refresh via `generateAnalysisDDiagnosticsBundle()` → D0 `buildAnalysisDReport` + D2-A duplicate audit
   - Concise summary + manual JSON share (`analysis-d-report-YYYYMMDD-HHmmss.json`)
+  - JSON export may nest `{ report, duplicateScanAudit }` when D2-A audit is present
 - No permanent debug menu
 - No auto-upload / Supabase / telemetry
 - Read-only: no receipt / correction / outbox / cloud writes
 - No Shopping UI / Product Analytics / OCR / Data Foundation changes
+
+## D2-A duplicate / re-scan audit (implemented — audit only)
+
+Domain freeze: **Stored Receipt Record ≠ Unique Real-World Purchase**.
+
+- Module: `lib/analysisDDuplicateAudit.ts`
+- Exact fingerprint (deterministic, no fuzzy): merchant key + `transaction_at` + total + tax slot + ordered `(nameCanonical, qty, lineAmount)`
+- Independent of receipt DB id and `created_at`
+- Missing / invalid `transaction_at` → never exact or probable dedupe
+- Probable groups are **diagnostic-only** (structural match with different name canonicals)
+- Impact: before vs exact-deduped via production `buildAnalysisDReport` only — **does not change V1 production formulas**
+- No delete / merge / rewrite / tombstone / UI / Transaction entity
+- Recommended V1 policy: **B_EXCLUDE_EXACT_ONLY** when exact precision remains high; do **not** adopt C without evidence
+- Category conservation gap (composition denominator vs active rows) is **independent** of duplicate scans → D2-B
+- Frequent-product SKU fallback remains blocked until this audit is complete

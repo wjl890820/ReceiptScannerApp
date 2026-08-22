@@ -21,6 +21,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
 import type { AnalysisDReport } from '@/lib/analysisDReport';
+import type { AnalysisDDuplicateScanAudit } from '@/lib/analysisDDuplicateAudit';
 import {
   ANALYSIS_D_EXPORT_PRIVACY_WARNING,
   buildAnalysisDDiagnosticsViewModel,
@@ -29,7 +30,7 @@ import {
   writeAnalysisDJsonExportFile,
   type AnalysisDDiagnosticsViewModel,
 } from '@/lib/analysisDDiagnosticsAccess';
-import { generateAnalysisDReportFromLocalReceipts } from '@/lib/analysisDDiagnosticsGenerate';
+import { generateAnalysisDDiagnosticsBundle } from '@/lib/analysisDDiagnosticsGenerate';
 import { isAnalysisDDiagnosticsEnabled } from '@/lib/env';
 
 export default function AnalysisDDiagnosticsScreen() {
@@ -39,6 +40,8 @@ export default function AnalysisDDiagnosticsScreen() {
 
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AnalysisDReport | null>(null);
+  const [duplicateScanAudit, setDuplicateScanAudit] =
+    useState<AnalysisDDuplicateScanAudit | null>(null);
   const [viewModel, setViewModel] =
     useState<AnalysisDDiagnosticsViewModel | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -57,9 +60,15 @@ export default function AnalysisDDiagnosticsScreen() {
     setLoading(true);
     setErrorMessage(null);
     try {
-      const next = await generateAnalysisDReportFromLocalReceipts();
-      setReport(next);
-      setViewModel(buildAnalysisDDiagnosticsViewModel(next));
+      const next = await generateAnalysisDDiagnosticsBundle();
+      setReport(next.report);
+      setDuplicateScanAudit(next.duplicateScanAudit);
+      setViewModel(
+        buildAnalysisDDiagnosticsViewModel(
+          next.report,
+          next.duplicateScanAudit
+        )
+      );
     } catch (e: unknown) {
       const message =
         e instanceof Error
@@ -67,6 +76,7 @@ export default function AnalysisDDiagnosticsScreen() {
           : `Report generation failed: ${String(e)}`;
       setErrorMessage(message);
       setReport(null);
+      setDuplicateScanAudit(null);
       setViewModel(null);
     } finally {
       setLoading(false);
@@ -87,7 +97,11 @@ export default function AnalysisDDiagnosticsScreen() {
 
   const onExportJson = useCallback(async () => {
     if (!report) return;
-    const payload = buildAnalysisDSharePayload(report);
+    const payload = buildAnalysisDSharePayload(
+      report,
+      Date.now(),
+      duplicateScanAudit
+    );
     Alert.alert('Private data', payload.privacyWarning, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -96,6 +110,7 @@ export default function AnalysisDDiagnosticsScreen() {
           try {
             const written = await writeAnalysisDJsonExportFile({
               report,
+              duplicateScanAudit,
               cacheDirectory: FileSystem.cacheDirectory,
               writeAsStringAsync: FileSystem.writeAsStringAsync,
             });
@@ -114,7 +129,7 @@ export default function AnalysisDDiagnosticsScreen() {
         },
       },
     ]);
-  }, [report]);
+  }, [report, duplicateScanAudit]);
 
   if (!enabled) {
     return (

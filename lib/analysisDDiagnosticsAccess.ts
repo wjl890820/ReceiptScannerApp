@@ -1,8 +1,12 @@
 /**
- * Analysis D1-A — validation-only access helpers (presentation / gating).
- * Does not calculate analytics; formats fields from AnalysisDReport only.
+ * Analysis D1-A / D2-A — validation-only access helpers (presentation / gating).
+ * Does not recalculate analytics; formats fields from report + optional D2-A audit.
  */
 
+import {
+  formatAnalysisDDuplicateAuditSummary,
+  type AnalysisDDuplicateScanAudit,
+} from './analysisDDuplicateAudit';
 import type { AnalysisDReport } from './analysisDReport';
 import {
   formatAnalysisDReportSummary,
@@ -42,11 +46,12 @@ function dayRangeLabel(
 }
 
 /**
- * Thin adapter: all numbers come from the report object.
- * No business-metric recalculation.
+ * Thin adapter: numbers come from the report (+ optional D2-A audit lines).
+ * No business-metric recalculation beyond formatting.
  */
 export function buildAnalysisDDiagnosticsViewModel(
-  report: AnalysisDReport
+  report: AnalysisDReport,
+  duplicateScanAudit?: AnalysisDDuplicateScanAudit | null
 ): AnalysisDDiagnosticsViewModel {
   const exactSpecCount =
     report.specCoverage.volumeExactCount +
@@ -75,88 +80,107 @@ export function buildAnalysisDDiagnosticsViewModel(
     return `${row.window}: ${state}${reason} · current=${row.currentReceiptSampleSize} previous=${row.previousReceiptSampleSize}`;
   });
 
+  const sections: AnalysisDDiagnosticsViewModel['sections'] = [
+    {
+      title: 'Dataset',
+      lines: [
+        `total receipts: ${report.dataset.totalLocalReceiptCount}`,
+        `V1-supported: ${report.dataset.v1SupportedReceiptCount}`,
+        `unsupported: ${report.dataset.unsupportedReceiptCount}`,
+        `item rows: ${report.dataset.totalItemRowCount}`,
+        `date range: ${dayRangeLabel(
+          report.dataset.earliestTransactionAt,
+          report.dataset.latestTransactionAt
+        )}`,
+        `supported spend: ${report.dataset.supportedReceiptSpendTotal}`,
+      ],
+    },
+    {
+      title: 'Coverage',
+      lines: [
+        `category amount: ${pct(report.categoryCoverage.classifiedAmountRate)}`,
+        `category occurrences: ${pct(
+          report.categoryCoverage.classifiedItemOccurrenceRate
+        )}`,
+        `family identity: ${pct(familyIdRate)}`,
+        `canonical identity: ${pct(canonicalIdRate)}`,
+        `exact spec: ${pct(exactSpecRate)} (${exactSpecCount}/${eligibleIdentity})`,
+        `family normalized-price rows: ${report.priceCoverage.familyNormalizedComparableRows}`,
+        `family price coverage: ${pct(report.priceCoverage.familyCoverageRate)}`,
+      ],
+    },
+    {
+      title: 'Merchants',
+      lines: [
+        `distinct supported merchants: ${report.dataset.distinctSupportedMerchantCount}`,
+        ...allMerchants
+          .slice(0, 5)
+          .map(
+            (m) =>
+              `${m.merchant}: visits=${m.visitCount} spend=${m.supportedSpend}`
+          ),
+      ],
+    },
+    {
+      title: 'Products',
+      lines: [
+        `frequent groups (all): ${allFrequent?.frequentProducts.length ?? 0}`,
+        `unresolved identity rows: ${
+          allFrequent?.unresolvedIdentityItemRows ?? 0
+        }`,
+      ],
+    },
+    {
+      title: 'Prices',
+      lines: [
+        `SKU usable rows: ${report.priceCoverage.skuPriceHistoryUsableRows}`,
+        `family comparable rows: ${report.priceCoverage.familyNormalizedComparableRows}`,
+        `family groups ≥2: ${report.priceCoverage.familyGroupsWithAtLeast2Observations}`,
+        `examples: ${report.priceHistoryExamples.length}`,
+      ],
+    },
+    {
+      title: 'Trends',
+      lines: trendLines.length ? trendLines : ['(no trend windows)'],
+    },
+    {
+      title: 'Insights',
+      lines: [`emitted count: ${report.insights.length}`],
+    },
+    {
+      title: 'Corrections',
+      lines: [
+        `correction events: ${report.corrections.totalCorrectionEvents}`,
+        `legacy without provenance: ${report.corrections.legacyEditedRecordsWithoutProvenance}`,
+      ],
+    },
+    {
+      title: 'Quality',
+      lines: [`flag count: ${report.dataQualityFlags.length}`],
+    },
+  ];
+
+  if (duplicateScanAudit) {
+    const groupLines = duplicateScanAudit.groups.slice(0, 8).map((g) => {
+      const ids = g.receiptIds.join(',');
+      return `${g.confidence}: ${g.merchant} total=${g.total} items=${g.itemCount} ids=[${ids}]`;
+    });
+    sections.push({
+      title: 'Duplicate / re-scan (D2-A)',
+      lines: [
+        ...formatAnalysisDDuplicateAuditSummary(duplicateScanAudit),
+        `sweet-potato: ${duplicateScanAudit.sweetPotatoAudit.interpretation}`,
+        ...(groupLines.length
+          ? ['groups (sample):', ...groupLines]
+          : ['groups: (none)']),
+      ],
+    });
+  }
+
   return {
     generatedAtLabel: new Date(report.generatedAt).toISOString(),
     summaryText: formatAnalysisDReportSummary(report),
-    sections: [
-      {
-        title: 'Dataset',
-        lines: [
-          `total receipts: ${report.dataset.totalLocalReceiptCount}`,
-          `V1-supported: ${report.dataset.v1SupportedReceiptCount}`,
-          `unsupported: ${report.dataset.unsupportedReceiptCount}`,
-          `item rows: ${report.dataset.totalItemRowCount}`,
-          `date range: ${dayRangeLabel(
-            report.dataset.earliestTransactionAt,
-            report.dataset.latestTransactionAt
-          )}`,
-          `supported spend: ${report.dataset.supportedReceiptSpendTotal}`,
-        ],
-      },
-      {
-        title: 'Coverage',
-        lines: [
-          `category amount: ${pct(report.categoryCoverage.classifiedAmountRate)}`,
-          `category occurrences: ${pct(
-            report.categoryCoverage.classifiedItemOccurrenceRate
-          )}`,
-          `family identity: ${pct(familyIdRate)}`,
-          `canonical identity: ${pct(canonicalIdRate)}`,
-          `exact spec: ${pct(exactSpecRate)} (${exactSpecCount}/${eligibleIdentity})`,
-          `family normalized-price rows: ${report.priceCoverage.familyNormalizedComparableRows}`,
-          `family price coverage: ${pct(report.priceCoverage.familyCoverageRate)}`,
-        ],
-      },
-      {
-        title: 'Merchants',
-        lines: [
-          `distinct supported merchants: ${report.dataset.distinctSupportedMerchantCount}`,
-          ...allMerchants
-            .slice(0, 5)
-            .map(
-              (m) =>
-                `${m.merchant}: visits=${m.visitCount} spend=${m.supportedSpend}`
-            ),
-        ],
-      },
-      {
-        title: 'Products',
-        lines: [
-          `frequent groups (all): ${allFrequent?.frequentProducts.length ?? 0}`,
-          `unresolved identity rows: ${
-            allFrequent?.unresolvedIdentityItemRows ?? 0
-          }`,
-        ],
-      },
-      {
-        title: 'Prices',
-        lines: [
-          `SKU usable rows: ${report.priceCoverage.skuPriceHistoryUsableRows}`,
-          `family comparable rows: ${report.priceCoverage.familyNormalizedComparableRows}`,
-          `family groups ≥2: ${report.priceCoverage.familyGroupsWithAtLeast2Observations}`,
-          `examples: ${report.priceHistoryExamples.length}`,
-        ],
-      },
-      {
-        title: 'Trends',
-        lines: trendLines.length ? trendLines : ['(no trend windows)'],
-      },
-      {
-        title: 'Insights',
-        lines: [`emitted count: ${report.insights.length}`],
-      },
-      {
-        title: 'Corrections',
-        lines: [
-          `correction events: ${report.corrections.totalCorrectionEvents}`,
-          `legacy without provenance: ${report.corrections.legacyEditedRecordsWithoutProvenance}`,
-        ],
-      },
-      {
-        title: 'Quality',
-        lines: [`flag count: ${report.dataQualityFlags.length}`],
-      },
-    ],
+    sections,
   };
 }
 
@@ -175,14 +199,35 @@ export type AnalysisDSharePayload = {
   autoUpload: false;
 };
 
+/** Export envelope: pure report + optional sibling D2-A audit (no schema mutation). */
+export type AnalysisDExportEnvelope = {
+  report: AnalysisDReport;
+  duplicateScanAudit: AnalysisDDuplicateScanAudit | null;
+};
+
+export function serializeAnalysisDExportEnvelope(
+  envelope: AnalysisDExportEnvelope
+): string {
+  // Keep report JSON identical to serializeAnalysisDReport when audit is absent
+  // by nesting under `report` only when sibling audit is present.
+  if (!envelope.duplicateScanAudit) {
+    return serializeAnalysisDReport(envelope.report);
+  }
+  return `${JSON.stringify({
+    report: JSON.parse(serializeAnalysisDReport(envelope.report)),
+    duplicateScanAudit: envelope.duplicateScanAudit,
+  })}\n`;
+}
+
 /** Build manual share/export payload from an existing report (no recalculation). */
 export function buildAnalysisDSharePayload(
   report: AnalysisDReport,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  duplicateScanAudit: AnalysisDDuplicateScanAudit | null = null
 ): AnalysisDSharePayload {
   return {
     filename: buildAnalysisDExportFilename(nowMs),
-    json: serializeAnalysisDReport(report),
+    json: serializeAnalysisDExportEnvelope({ report, duplicateScanAudit }),
     privacyWarning: ANALYSIS_D_EXPORT_PRIVACY_WARNING,
     autoUpload: false,
   };
@@ -223,10 +268,12 @@ export type WriteAnalysisDJsonExportFileDeps = {
   cacheDirectory: string | null | undefined;
   writeAsStringAsync: (fileUri: string, contents: string) => Promise<void>;
   nowMs?: number;
+  /** Optional D2-A sibling audit included in export envelope. */
+  duplicateScanAudit?: AnalysisDDuplicateScanAudit | null;
 };
 
 /**
- * Write the full serialized report to a cache `.json` file.
+ * Write the full serialized report (optionally + D2-A audit) to a cache `.json` file.
  * Does not share, upload, or mutate domain data.
  */
 export async function writeAnalysisDJsonExportFile(
@@ -237,7 +284,11 @@ export async function writeAnalysisDJsonExportFile(
       'Cache directory unavailable; cannot export Analysis D JSON file.'
     );
   }
-  const payload = buildAnalysisDSharePayload(deps.report, deps.nowMs);
+  const payload = buildAnalysisDSharePayload(
+    deps.report,
+    deps.nowMs,
+    deps.duplicateScanAudit ?? null
+  );
   const fileUri = `${deps.cacheDirectory}${payload.filename}`;
   await deps.writeAsStringAsync(fileUri, payload.json);
   return {

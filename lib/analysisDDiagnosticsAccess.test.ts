@@ -241,6 +241,29 @@ describe('Analysis D1-A diagnostics access', () => {
     const blob = JSON.stringify(vm);
     expect(blob).not.toMatch(/\bUSEFUL\b|\bBAD\b|\bNOISY\b|\bMISLEADING\b/);
   });
+
+  test('D2-A — view-model includes duplicate / re-scan section when audit provided', () => {
+    const { buildAnalysisDDuplicateScanAudit } = require('./analysisDDuplicateAudit');
+    const receipts = [makeReceipt('d2a-vm-1'), makeReceipt('d2a-vm-2')];
+    // Force exact duplicate pair
+    receipts[1]!.id = 'd2a-vm-2';
+    receipts[1]!.created_at = nowMs - 86400000 + 1;
+    receipts[1]!.transaction_at = receipts[0]!.transaction_at;
+    receipts[1]!.analysis_json = receipts[0]!.analysis_json;
+    receipts[1]!.total = receipts[0]!.total;
+    const audit = buildAnalysisDDuplicateScanAudit(receipts, nowMs);
+    const report = analysisDReport.buildAnalysisDReport({ receipts, nowMs });
+    const vm = buildAnalysisDDiagnosticsViewModel(report, audit);
+    expect(vm.sections.map((s) => s.title)).toContain(
+      'Duplicate / re-scan (D2-A)'
+    );
+    const section = vm.sections.find(
+      (s) => s.title === 'Duplicate / re-scan (D2-A)'
+    );
+    expect(section?.lines.some((l) => l.includes('exact duplicate'))).toBe(
+      true
+    );
+  });
 });
 
 
