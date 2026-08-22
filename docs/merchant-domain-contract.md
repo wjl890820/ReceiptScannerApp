@@ -1,6 +1,6 @@
 # Merchant Domain Contract (R1-B1–B3a)
 
-**Status:** R1-B1 frozen; R1-B2 `DerivedRetailerIdentity`; R1-B3a `RetailerProfile` metadata only.
+**Status:** R1-B1 frozen; R1-B2 `DerivedRetailerIdentity`; R1-B3a `RetailerProfile`; R1-B3b merchant-edit consistency.
 **Scope:** No retailer/store DB tables, migrations, backfill, receipt rewrite, analytics wiring, or UI consumption of profile yet.
 
 Analysis D production universe and duplicate fingerprints remain frozen. `merchantAnalyticsKey` outputs must stay byte-identical for existing fixtures.
@@ -193,12 +193,22 @@ Display identity and analytics identity are **intentionally different**.
 
 ---
 
-## 4. Known follow-up (do not fix in B3a)
+## 4. Merchant edit consistency (R1-B3b)
 
-1. Scan-review merchant edits may not reliably re-persist `merchant_type`.
-2. Product Detail / price-history merchant grouping may not always align with `merchantAnalyticsKey`.
+When the merchant observation changes through supported edit paths
+(`saveReceipt` with `reviewedSave`, or `updateReceipt` with a changed `analysis.merchant`):
 
-Handle independently after profile foundation so behavior changes stay isolated.
+1. `merchant_raw` = user-approved observation
+2. `merchant_normalized` = `canonicalizeMerchantChain(merchant_raw)` (same helper as save)
+3. `merchant_type` = redetected via `detectMerchantTypeFromReceipt` (ignore stale analysis type)
+4. `store_raw` / `store_normalized` = placeholder mirrors of merchant_* (not physical store identity)
+5. `analysis_json` merchant / merchant_normalized / merchant_type kept aligned
+
+Non-merchant updates (note / same merchant analysis) must **not** churn merchant-derived columns.
+
+Still open (not B3b):
+
+1. Product Detail / price-history merchant grouping may not always align with `merchantAnalyticsKey`.
 
 ---
 

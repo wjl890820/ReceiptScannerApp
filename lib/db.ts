@@ -2,7 +2,7 @@
 import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
 import { listReceiptsForListParams } from './receiptListQuery';
-import { persistMerchantTypeFromAnalysis, type MerchantType } from './merchantType';
+import { type MerchantType } from './merchantType';
 import {
   clearReceiptItemIndex,
   deleteReceiptItemIndex,
@@ -804,29 +804,25 @@ export async function saveReceipt(
   const id = nanoid();
   const now = Date.now();
 
-  const merchantRaw =
-    typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
-
-  const merchantRawTrimmed = merchantRaw && merchantRaw.trim() ? merchantRaw.trim() : null;
-  // Prefer analysis.merchant_normalized (chain) when present; else canonicalize.
-  const fromAnalysis =
-    typeof (params.analysis as any).merchant_normalized === 'string'
-      ? String((params.analysis as any).merchant_normalized).trim()
-      : '';
-  const { canonicalizeMerchantChain } = await import('./receiptOcrNormalize');
-  const merchantNormalized = merchantRawTrimmed
-    ? fromAnalysis || canonicalizeMerchantChain(merchantRawTrimmed) || merchantRawTrimmed
-    : null;
-
-  const merchantType = persistMerchantTypeFromAnalysis({
-    merchant_type: (params.analysis as { merchant_type?: unknown }).merchant_type,
-    merchant: merchantRawTrimmed,
-    merchant_normalized: merchantNormalized,
-    items: Array.isArray(params.analysis.items) ? params.analysis.items : null,
-    rawText:
-      (params.analysis as { ocr_raw_text?: string | null; rawText?: string | null }).ocr_raw_text ??
-      (params.analysis as { rawText?: string | null }).rawText,
-  });
+  // Merchant observation is SoT: always derive normalized from current merchant text.
+  // On reviewedSave, recompute merchant_type so Scan Review edits cannot keep a stale type.
+  const { resolvePersistedMerchantObservation } = await import('./merchantObservationPersist');
+  const persistedMerchant = resolvePersistedMerchantObservation(
+    {
+      merchant: params.analysis.merchant,
+      merchant_normalized: (params.analysis as { merchant_normalized?: unknown })
+        .merchant_normalized,
+      merchant_type: (params.analysis as { merchant_type?: unknown }).merchant_type,
+      items: Array.isArray(params.analysis.items) ? params.analysis.items : null,
+      ocr_raw_text:
+        (params.analysis as { ocr_raw_text?: string | null }).ocr_raw_text ?? null,
+      rawText: (params.analysis as { rawText?: string | null }).rawText ?? null,
+    },
+    { recomputeType: Boolean(params.reviewedSave) }
+  );
+  const merchantRawTrimmed = persistedMerchant.merchantRaw;
+  const merchantNormalized = persistedMerchant.merchantNormalized;
+  const merchantType = persistedMerchant.merchantType;
 
   // New stable fields
   const source = params.source || 'self';
@@ -848,6 +844,9 @@ export async function saveReceipt(
 
   const analysisJson = JSON.stringify({
     ...params.analysis,
+    merchant: merchantRawTrimmed ?? undefined,
+    merchant_normalized: merchantNormalized,
+    merchant_type: merchantType,
     tax,
     tax_is_known: taxIsKnown === 1,
   });
@@ -1272,16 +1271,26 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
   }
 
   if (params.analysis && typeof params.analysis === 'object') {
-    const merchantRaw =
+    const {
+      resolvePersistedMerchantObservation,
+      merchantObservationEquals,
+    } = await import('./merchantObservationPersist');
+
+    const existingMerchant = await db.getFirstAsync<{
+      merchant_raw: string | null;
+      merchant_normalized: string | null;
+      merchant_type: string | null;
+    }>(
+      `SELECT merchant_raw, merchant_normalized, merchant_type FROM receipts WHERE id = ? LIMIT 1`,
+      [params.id]
+    );
+
+    const incomingRaw =
       typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
-    const fromAnalysis =
-      typeof (params.analysis as any).merchant_normalized === 'string'
-        ? String((params.analysis as any).merchant_normalized).trim()
-        : '';
-    const { canonicalizeMerchantChain } = await import('./receiptOcrNormalize');
-    const merchantNormalized = merchantRaw
-      ? fromAnalysis || canonicalizeMerchantChain(merchantRaw) || merchantRaw
-      : null;
+    const merchantChanged = !merchantObservationEquals(
+      existingMerchant?.merchant_raw,
+      incomingRaw
+    );
 
     const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
     const { persistReceiptTaxFields } = await import('./receiptOcrNormalize');
@@ -1295,11 +1304,62 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
         ? params.analysis.currency
         : 'JPY';
 
-    sets.push(`merchant_raw = ?`);
-    values.push(merchantRaw);
+    let analysisPayload: Record<string, unknown> = {
+      ...params.analysis,
+      tax,
+      tax_is_known: taxIsKnown === 1,
+    };
 
-    sets.push(`merchant_normalized = ?`);
-    values.push(merchantNormalized);
+    if (merchantChanged) {
+      const persistedMerchant = resolvePersistedMerchantObservation(
+        {
+          merchant: params.analysis.merchant,
+          merchant_normalized: (params.analysis as { merchant_normalized?: unknown })
+            .merchant_normalized,
+          merchant_type: (params.analysis as { merchant_type?: unknown }).merchant_type,
+          items: Array.isArray(params.analysis.items) ? params.analysis.items : null,
+          ocr_raw_text:
+            (params.analysis as { ocr_raw_text?: string | null }).ocr_raw_text ?? null,
+          rawText: (params.analysis as { rawText?: string | null }).rawText ?? null,
+        },
+        { recomputeType: true }
+      );
+
+      sets.push(`merchant_raw = ?`);
+      values.push(persistedMerchant.merchantRaw);
+
+      sets.push(`merchant_normalized = ?`);
+      values.push(persistedMerchant.merchantNormalized);
+
+      sets.push(`merchant_type = ?`);
+      values.push(persistedMerchant.merchantType);
+
+      // LEGACY / PLACEHOLDER MIRROR — keep consistent with merchant_* only.
+      sets.push(`store_raw = ?`);
+      values.push(persistedMerchant.merchantRaw);
+
+      sets.push(`store_normalized = ?`);
+      values.push(persistedMerchant.merchantNormalized);
+
+      analysisPayload = {
+        ...analysisPayload,
+        merchant: persistedMerchant.merchantRaw ?? undefined,
+        merchant_normalized: persistedMerchant.merchantNormalized,
+        merchant_type: persistedMerchant.merchantType,
+      };
+    } else {
+      // Non-merchant analysis updates must not churn merchant-derived columns.
+      analysisPayload = {
+        ...analysisPayload,
+        merchant: existingMerchant?.merchant_raw ?? params.analysis.merchant,
+        merchant_normalized:
+          existingMerchant?.merchant_normalized ??
+          (params.analysis as { merchant_normalized?: unknown }).merchant_normalized,
+        merchant_type:
+          existingMerchant?.merchant_type ??
+          (params.analysis as { merchant_type?: unknown }).merchant_type,
+      };
+    }
 
     sets.push(`total = ?`);
     values.push(total);
@@ -1314,14 +1374,9 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
     values.push(currency);
 
     sets.push(`analysis_json = ?`);
-    values.push(
-      JSON.stringify({
-        ...params.analysis,
-        tax,
-        tax_is_known: taxIsKnown === 1,
-      })
-    );
+    values.push(JSON.stringify(analysisPayload));
   }
+
 
   // 支持用户手动编辑字段
   if (params.user_edited !== undefined) {

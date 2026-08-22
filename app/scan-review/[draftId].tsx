@@ -627,10 +627,21 @@ export default function ScanReviewScreen() {
         ),
       ].filter((e): e is NonNullable<typeof e> => e != null);
 
+      const snapshotMerchant =
+        typeof (snapshot as { merchant?: unknown }).merchant === 'string'
+          ? String((snapshot as { merchant: string }).merchant).trim()
+          : '';
+      const editedMerchant = merchant.trim();
+      const merchantObservationChanged = snapshotMerchant !== editedMerchant;
+
       const finalAnalysis = appendUserCorrections(
         {
           ...snapshot,
-          merchant: merchant.trim() || undefined,
+          merchant: editedMerchant || undefined,
+          // Drop stale derived merchant metadata when the user changes the observation.
+          ...(merchantObservationChanged
+            ? { merchant_normalized: undefined, merchant_type: undefined }
+            : {}),
           transactionDate: dateStr.trim() || undefined,
           total: toNum(totalStr, 0),
           tax: taxIsKnown ? taxValue : null,
