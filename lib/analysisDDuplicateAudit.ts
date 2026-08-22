@@ -110,6 +110,17 @@ export type AnalysisDDuplicateImpactMetrics = {
   categoryConservationGap: number;
 };
 
+export type AnalysisDKnownStructuralDuplicateCase = {
+  id: 'costco_2023_07_06_9534';
+  merchantNeedle: string;
+  transactionAtLabel: string;
+  total: number;
+  storedScanCount: number;
+  structuralPurchaseCandidateCount: number;
+  receiptIds: string[];
+  note: string;
+};
+
 export type AnalysisDSweetPotatoAudit = {
   matchedReceiptIds: string[];
   matchedItemLineCount: number;
@@ -125,6 +136,11 @@ export type AnalysisDSweetPotatoAudit = {
     | 'MIXED_OR_UNCLEAR'
     | 'NOT_FOUND';
   notes: string[];
+  /**
+   * Broad ¥698 sweet-potato line audit only. Distinct Costco purchases on
+   * other dates remain separate; do not treat all sweet-potato rows as one group.
+   */
+  scopeNote: string;
 };
 
 export type AnalysisDDuplicateScanAudit = {
@@ -146,6 +162,7 @@ export type AnalysisDDuplicateScanAudit = {
   recommendedExcludeHighConfidenceDuplicatesFromV1Analytics: boolean;
   collisionRiskNotes: string[];
   sweetPotatoAudit: AnalysisDSweetPotatoAudit;
+  knownStructuralDuplicateCases: AnalysisDKnownStructuralDuplicateCase[];
   groups: AnalysisDDuplicateGroup[];
   impact: {
     before: AnalysisDDuplicateImpactMetrics;
@@ -544,7 +561,7 @@ function metricsFromReport(
     })),
     itemOccurrenceCount: report.dataset.totalItemRowCount,
     frequentProductCount: allFrequent?.frequentProducts.length ?? 0,
-    priceHistoryObservationCount: report.priceCoverage.skuPriceHistoryUsableRows,
+    priceHistoryObservationCount: report.priceCoverage.purchaseUnitPriceUsableRows,
     trend7dSampleSize,
     trend30dSampleSize,
     categoryCompositionTotal,
@@ -657,6 +674,10 @@ export function auditSweetPotatoStyleObservations(
     interpretation = 'MIXED_OR_UNCLEAR';
   }
 
+  notes.push(
+    'Scope: ¥698 sweet-potato line matches only. Legitimate distinct Costco sweet-potato purchases on other dates are not one duplicate group.'
+  );
+
   return {
     matchedReceiptIds,
     matchedItemLineCount,
@@ -664,6 +685,46 @@ export function auditSweetPotatoStyleObservations(
     purchaseCandidateCount,
     interpretation,
     notes,
+    scopeNote:
+      'Broad sweet-potato ¥698 audit only — not all Costco sweet-potato receipts form one group.',
+  };
+}
+
+/** Explicit Costco 2023-07-06 11:44 / ¥9534 structural re-scan case. */
+export function auditKnownStructuralCostco9534Case(
+  receipts: ReceiptRow[]
+): AnalysisDKnownStructuralDuplicateCase | null {
+  const targetTotal = 9534;
+  const merchantNeedle = /コストコ|costco/i;
+  const dayStart = Date.parse('2023-07-06T00:00:00+09:00');
+  const dayEnd = Date.parse('2023-07-07T00:00:00+09:00');
+  const matched = receipts.filter((receipt) => {
+    const merchant = `${receipt.merchant_normalized ?? ''} ${
+      receipt.merchant_raw ?? ''
+    }`;
+    if (!merchantNeedle.test(merchant)) return false;
+    if (!hasValidTransactionAt(receipt)) return false;
+    const at = receipt.transaction_at as number;
+    if (at < dayStart || at >= dayEnd) return false;
+    return Math.abs(Number(receipt.total) - targetTotal) < 0.01;
+  });
+  if (matched.length === 0) return null;
+  const summaries = matched.map(summarizeReceiptForDuplicateAudit);
+  const groups = buildHighConfidenceDuplicateGroups(summaries);
+  const structuralPurchaseCandidateCount = countPurchaseCandidatesAmongMatched(
+    matched.map((r) => r.id),
+    groups
+  );
+  return {
+    id: 'costco_2023_07_06_9534',
+    merchantNeedle: 'Costco',
+    transactionAtLabel: '2023-07-06 11:44',
+    total: targetTotal,
+    storedScanCount: matched.length,
+    structuralPurchaseCandidateCount,
+    receiptIds: matched.map((r) => r.id),
+    note:
+      'Known structural duplicate validation case: multiple stored scans of one Costco purchase (total ¥9534 @ 2023-07-06 11:44) should collapse to 1 purchase candidate. Separate from the broad sweet-potato ¥698 audit.',
   };
 }
 
@@ -742,6 +803,9 @@ export function buildAnalysisDDuplicateScanAudit(
       `Weak merchant/day/total collision pairs (NOT_ENOUGH_EVIDENCE, informational only): ${notEnoughEvidencePairCount}`,
     ],
     sweetPotatoAudit: auditSweetPotatoStyleObservations(receipts),
+    knownStructuralDuplicateCases: [
+      auditKnownStructuralCostco9534Case(receipts),
+    ].filter((c): c is AnalysisDKnownStructuralDuplicateCase => c != null),
     groups: [...highConfidenceGroups, ...probableGroups],
     impact: {
       before,
@@ -812,5 +876,10 @@ export function formatAnalysisDDuplicateAuditSummary(
     `category conservation gap (before): ${audit.impact.before.categoryConservationGap}`,
     `sweet-potato storedReceiptCount: ${audit.sweetPotatoAudit.storedReceiptCount}`,
     `sweet-potato purchaseCandidateCount: ${audit.sweetPotatoAudit.purchaseCandidateCount}`,
+    `sweet-potato scope: ${audit.sweetPotatoAudit.scopeNote}`,
+    ...audit.knownStructuralDuplicateCases.map(
+      (c) =>
+        `knownStructural ${c.id}: storedScans=${c.storedScanCount} candidates=${c.structuralPurchaseCandidateCount} total=${c.total} at=${c.transactionAtLabel}`
+    ),
   ];
 }

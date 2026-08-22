@@ -40,6 +40,13 @@ export default function AnalysisDDiagnosticsScreen() {
 
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AnalysisDReport | null>(null);
+  const [storedScanBaseline, setStoredScanBaseline] =
+    useState<AnalysisDReport | null>(null);
+  const [selectionMeta, setSelectionMeta] = useState<{
+    storedReceiptCount: number;
+    analyticsPurchaseCandidateCount: number;
+    highConfidenceDuplicateExtras: number;
+  } | null>(null);
   const [duplicateScanAudit, setDuplicateScanAudit] =
     useState<AnalysisDDuplicateScanAudit | null>(null);
   const [viewModel, setViewModel] =
@@ -61,12 +68,24 @@ export default function AnalysisDDiagnosticsScreen() {
     setErrorMessage(null);
     try {
       const next = await generateAnalysisDDiagnosticsBundle();
-      setReport(next.report);
+      setReport(next.productionAnalytics);
+      setStoredScanBaseline(next.storedScanBaseline);
+      setSelectionMeta(next.selection);
       setDuplicateScanAudit(next.duplicateScanAudit);
       setViewModel(
         buildAnalysisDDiagnosticsViewModel(
-          next.report,
-          next.duplicateScanAudit
+          next.productionAnalytics,
+          next.duplicateScanAudit,
+          {
+            storedScanBaseline: next.storedScanBaseline,
+            selection: {
+              storedReceiptCount: next.selection.storedReceiptCount,
+              analyticsPurchaseCandidateCount:
+                next.selection.analyticsPurchaseCandidateCount,
+              highConfidenceDuplicateExtras:
+                next.selection.highConfidenceDuplicateExtras,
+            },
+          }
         )
       );
     } catch (e: unknown) {
@@ -76,6 +95,8 @@ export default function AnalysisDDiagnosticsScreen() {
           : `Report generation failed: ${String(e)}`;
       setErrorMessage(message);
       setReport(null);
+      setStoredScanBaseline(null);
+      setSelectionMeta(null);
       setDuplicateScanAudit(null);
       setViewModel(null);
     } finally {
@@ -100,7 +121,19 @@ export default function AnalysisDDiagnosticsScreen() {
     const payload = buildAnalysisDSharePayload(
       report,
       Date.now(),
-      duplicateScanAudit
+      duplicateScanAudit,
+      {
+        storedScanBaseline,
+        selection: selectionMeta
+          ? {
+              storedReceiptCount: selectionMeta.storedReceiptCount,
+              analyticsPurchaseCandidateCount:
+                selectionMeta.analyticsPurchaseCandidateCount,
+              highConfidenceDuplicateExtras:
+                selectionMeta.highConfidenceDuplicateExtras,
+            }
+          : null,
+      }
     );
     Alert.alert('Private data', payload.privacyWarning, [
       { text: 'Cancel', style: 'cancel' },
@@ -111,6 +144,16 @@ export default function AnalysisDDiagnosticsScreen() {
             const written = await writeAnalysisDJsonExportFile({
               report,
               duplicateScanAudit,
+              storedScanBaseline,
+              selection: selectionMeta
+                ? {
+                    storedReceiptCount: selectionMeta.storedReceiptCount,
+                    analyticsPurchaseCandidateCount:
+                      selectionMeta.analyticsPurchaseCandidateCount,
+                    highConfidenceDuplicateExtras:
+                      selectionMeta.highConfidenceDuplicateExtras,
+                  }
+                : null,
               cacheDirectory: FileSystem.cacheDirectory,
               writeAsStringAsync: FileSystem.writeAsStringAsync,
             });
@@ -129,7 +172,7 @@ export default function AnalysisDDiagnosticsScreen() {
         },
       },
     ]);
-  }, [report, duplicateScanAudit]);
+  }, [report, duplicateScanAudit, storedScanBaseline, selectionMeta]);
 
   if (!enabled) {
     return (

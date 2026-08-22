@@ -37,7 +37,13 @@ import {
   filterByRollingWindowDays,
   rollingDaysForAnalysisRange,
 } from './rollingTimeWindow';
-import { buildSkuKey, resolveProductIdentity } from './productIdentity';
+import {
+  buildSkuKey,
+  hasPersistedSkuIdentity,
+  isPurchaseUnitPriceUsable,
+  isSkuPurchaseUnitPriceHistoryUsable,
+  resolveProductIdentity,
+} from './productIdentity';
 import {
   isReliableComparableSpec,
   parseProductSpecification,
@@ -66,7 +72,7 @@ import {
 import { buildReceiptItemIndexRows } from './receiptItemIndex';
 
 export const ANALYSIS_D_REPORT_CONTRACT_VERSION =
-  'meruno-analysis-d-report-v1' as const;
+  'meruno-analysis-d-report-v2' as const;
 
 export type AnalysisDWindowId = '7d' | '30d' | 'all';
 
@@ -175,13 +181,26 @@ export type AnalysisDSpecCoverage = {
 
 export type AnalysisDPriceCoverage = {
   eligiblePurchaseItemRows: number;
+  /**
+   * Rows with lineTotal+purchaseQuantity only.
+   * NOT exact-product SKU identity — do not equate to withSku / sku_key.
+   */
+  purchaseUnitPriceUsableRows: number;
+  /** Rows with persisted/derived sku_key (buildSkuKey output). */
+  skuIdentityRows: number;
+  /**
+   * Rows usable for SKU-typed purchase-unit price history:
+   * sku identity AND purchase-unit amounts. Aligns with identityCoverage.withSku.
+   */
   skuPriceHistoryUsableRows: number;
   familyNormalizedComparableRows: number;
+  purchaseUnitCoverageRate: number | null;
   skuCoverageRate: number | null;
   familyCoverageRate: number | null;
   familyGroupsWithAtLeast2Observations: number;
   familyGroupsWithAtLeast3Observations: number;
   suppressionReasons: Record<string, number>;
+  note: string;
 };
 
 export type AnalysisDPriceHistoryExample = {
@@ -698,7 +717,7 @@ function buildIdentityAndSpecCoverage(receipts: ReceiptRow[]): {
       productTypePresent,
       higherSemanticIdentityUnresolved,
       note:
-        'subcategory/productType slots are currently unset in V1; absence is expected. withSku uses existing buildSkuKey only.',
+        'subcategory/productType slots are currently unset in V1; absence is expected. withSku uses existing buildSkuKey only (same contract as sku_key / SKU price-history identity). purchaseUnitPriceUsableRows is NOT sku identity.',
     },
     specCoverage: {
       volumeExactCount,
@@ -716,6 +735,8 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
   priceHistoryExamples: AnalysisDPriceHistoryExample[];
 } {
   const eligible = productRows.filter((row) => isV1SupportedReceipt(row));
+  let purchaseUnitPriceUsableRows = 0;
+  let skuIdentityRows = 0;
   let skuPriceHistoryUsableRows = 0;
   let familyNormalizedComparableRows = 0;
   const suppressionReasons: Record<string, number> = {};
@@ -724,13 +745,17 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
   };
 
   for (const row of eligible) {
-    const purchaseUnitOk =
-      typeof row.lineTotal === 'number' &&
-      row.lineTotal > 0 &&
-      typeof row.purchaseQuantity === 'number' &&
-      row.purchaseQuantity > 0;
-    if (purchaseUnitOk) skuPriceHistoryUsableRows += 1;
-    else bump('sku_missing_line_or_quantity');
+    const purchaseUnitOk = isPurchaseUnitPriceUsable(row);
+    const hasSku = hasPersistedSkuIdentity(row);
+    if (purchaseUnitOk) purchaseUnitPriceUsableRows += 1;
+    else bump('purchase_unit_missing_line_or_quantity');
+    if (hasSku) skuIdentityRows += 1;
+    else bump('sku_identity_absent');
+    if (isSkuPurchaseUnitPriceHistoryUsable(row)) {
+      skuPriceHistoryUsableRows += 1;
+    } else if (hasSku && !purchaseUnitOk) {
+      bump('sku_missing_line_or_quantity');
+    }
 
     const family = row.productFamilyKey?.trim();
     if (!family) {
@@ -802,8 +827,14 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
   return {
     priceCoverage: {
       eligiblePurchaseItemRows: eligible.length,
+      purchaseUnitPriceUsableRows,
+      skuIdentityRows,
       skuPriceHistoryUsableRows,
       familyNormalizedComparableRows,
+      purchaseUnitCoverageRate: ratio(
+        purchaseUnitPriceUsableRows,
+        eligible.length
+      ),
       skuCoverageRate: ratio(skuPriceHistoryUsableRows, eligible.length),
       familyCoverageRate: ratio(
         familyNormalizedComparableRows,
@@ -812,6 +843,8 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
       familyGroupsWithAtLeast2Observations,
       familyGroupsWithAtLeast3Observations,
       suppressionReasons,
+      note:
+        'skuPriceHistoryUsableRows requires buildSkuKey/sku_key + purchase-unit amounts. purchaseUnitPriceUsableRows is lineTotal+qty only and is NOT SKU identity.',
     },
     priceHistoryExamples,
   };

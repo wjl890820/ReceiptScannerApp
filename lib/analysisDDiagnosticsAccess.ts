@@ -49,9 +49,19 @@ function dayRangeLabel(
  * Thin adapter: numbers come from the report (+ optional D2-A audit lines).
  * No business-metric recalculation beyond formatting.
  */
+export type AnalysisDDiagnosticsViewModelExtras = {
+  storedScanBaseline?: AnalysisDReport | null;
+  selection?: {
+    storedReceiptCount: number;
+    analyticsPurchaseCandidateCount: number;
+    highConfidenceDuplicateExtras: number;
+  } | null;
+};
+
 export function buildAnalysisDDiagnosticsViewModel(
   report: AnalysisDReport,
-  duplicateScanAudit?: AnalysisDDuplicateScanAudit | null
+  duplicateScanAudit?: AnalysisDDuplicateScanAudit | null,
+  extras?: AnalysisDDiagnosticsViewModelExtras | null
 ): AnalysisDDiagnosticsViewModel {
   const exactSpecCount =
     report.specCoverage.volumeExactCount +
@@ -80,9 +90,30 @@ export function buildAnalysisDDiagnosticsViewModel(
     return `${row.window}: ${state}${reason} · current=${row.currentReceiptSampleSize} previous=${row.previousReceiptSampleSize}`;
   });
 
+  const selection = extras?.selection ?? null;
+  const storedBaseline = extras?.storedScanBaseline ?? null;
+
   const sections: AnalysisDDiagnosticsViewModel['sections'] = [
     {
-      title: 'Dataset',
+      title: 'Universe',
+      lines: [
+        selection
+          ? `stored scans: ${selection.storedReceiptCount}`
+          : 'stored scans: (n/a)',
+        selection
+          ? `production purchase candidates: ${selection.analyticsPurchaseCandidateCount}`
+          : 'production purchase candidates: (n/a)',
+        selection
+          ? `high-confidence duplicate extras: ${selection.highConfidenceDuplicateExtras}`
+          : 'high-confidence duplicate extras: (n/a)',
+        'primary metrics below = productionAnalytics (selected purchase candidates)',
+        storedBaseline
+          ? `storedScanBaseline V1-supported: ${storedBaseline.dataset.v1SupportedReceiptCount} spend=${storedBaseline.dataset.supportedReceiptSpendTotal}`
+          : 'storedScanBaseline: (not included)',
+      ],
+    },
+    {
+      title: 'Dataset (production)',
       lines: [
         `total receipts: ${report.dataset.totalLocalReceiptCount}`,
         `V1-supported: ${report.dataset.v1SupportedReceiptCount}`,
@@ -133,10 +164,13 @@ export function buildAnalysisDDiagnosticsViewModel(
     {
       title: 'Prices',
       lines: [
-        `SKU usable rows: ${report.priceCoverage.skuPriceHistoryUsableRows}`,
+        `purchase-unit usable rows: ${report.priceCoverage.purchaseUnitPriceUsableRows}`,
+        `sku identity rows: ${report.priceCoverage.skuIdentityRows}`,
+        `SKU price-history usable rows: ${report.priceCoverage.skuPriceHistoryUsableRows}`,
         `family comparable rows: ${report.priceCoverage.familyNormalizedComparableRows}`,
         `family groups ≥2: ${report.priceCoverage.familyGroupsWithAtLeast2Observations}`,
         `examples: ${report.priceHistoryExamples.length}`,
+        `note: ${report.priceCoverage.note}`,
       ],
     },
     {
@@ -172,6 +206,11 @@ export function buildAnalysisDDiagnosticsViewModel(
         `sweet-potato: ${duplicateScanAudit.sweetPotatoAudit.interpretation}`,
         `sweet-potato storedReceiptCount: ${duplicateScanAudit.sweetPotatoAudit.storedReceiptCount}`,
         `sweet-potato purchaseCandidateCount: ${duplicateScanAudit.sweetPotatoAudit.purchaseCandidateCount}`,
+        `sweet-potato scope: ${duplicateScanAudit.sweetPotatoAudit.scopeNote}`,
+        ...duplicateScanAudit.knownStructuralDuplicateCases.map(
+          (c) =>
+            `knownStructural ${c.id}: scans=${c.storedScanCount} candidates=${c.structuralPurchaseCandidateCount} total=${c.total} at=${c.transactionAtLabel}`
+        ),
         ...(groupLines.length
           ? ['groups (sample):', ...groupLines]
           : ['groups: (none)']),
@@ -203,21 +242,38 @@ export type AnalysisDSharePayload = {
 
 /** Export envelope: pure report + optional sibling D2-A audit (no schema mutation). */
 export type AnalysisDExportEnvelope = {
+  /** @deprecated Prefer productionAnalytics — same selected universe. */
   report: AnalysisDReport;
+  productionAnalytics: AnalysisDReport;
+  storedScanBaseline: AnalysisDReport | null;
   duplicateScanAudit: AnalysisDDuplicateScanAudit | null;
+  selection: {
+    storedReceiptCount: number;
+    analyticsPurchaseCandidateCount: number;
+    highConfidenceDuplicateExtras: number;
+  } | null;
 };
 
 export function serializeAnalysisDExportEnvelope(
   envelope: AnalysisDExportEnvelope
 ): string {
-  // Keep report JSON identical to serializeAnalysisDReport when audit is absent
-  // by nesting under `report` only when sibling audit is present.
-  if (!envelope.duplicateScanAudit) {
-    return serializeAnalysisDReport(envelope.report);
+  const production = envelope.productionAnalytics ?? envelope.report;
+  // Legacy: report-only JSON when no audit/baseline siblings are present.
+  if (
+    !envelope.duplicateScanAudit &&
+    !envelope.storedScanBaseline &&
+    !envelope.selection
+  ) {
+    return serializeAnalysisDReport(production);
   }
   return `${JSON.stringify({
-    report: JSON.parse(serializeAnalysisDReport(envelope.report)),
+    productionAnalytics: JSON.parse(serializeAnalysisDReport(production)),
+    storedScanBaseline: envelope.storedScanBaseline
+      ? JSON.parse(serializeAnalysisDReport(envelope.storedScanBaseline))
+      : null,
+    report: JSON.parse(serializeAnalysisDReport(production)),
     duplicateScanAudit: envelope.duplicateScanAudit,
+    selection: envelope.selection,
   })}\n`;
 }
 
@@ -225,11 +281,21 @@ export function serializeAnalysisDExportEnvelope(
 export function buildAnalysisDSharePayload(
   report: AnalysisDReport,
   nowMs: number = Date.now(),
-  duplicateScanAudit: AnalysisDDuplicateScanAudit | null = null
+  duplicateScanAudit: AnalysisDDuplicateScanAudit | null = null,
+  extras?: {
+    storedScanBaseline?: AnalysisDReport | null;
+    selection?: AnalysisDExportEnvelope['selection'];
+  } | null
 ): AnalysisDSharePayload {
   return {
     filename: buildAnalysisDExportFilename(nowMs),
-    json: serializeAnalysisDExportEnvelope({ report, duplicateScanAudit }),
+    json: serializeAnalysisDExportEnvelope({
+      report,
+      productionAnalytics: report,
+      storedScanBaseline: extras?.storedScanBaseline ?? null,
+      duplicateScanAudit,
+      selection: extras?.selection ?? null,
+    }),
     privacyWarning: ANALYSIS_D_EXPORT_PRIVACY_WARNING,
     autoUpload: false,
   };
@@ -272,6 +338,8 @@ export type WriteAnalysisDJsonExportFileDeps = {
   nowMs?: number;
   /** Optional D2-A sibling audit included in export envelope. */
   duplicateScanAudit?: AnalysisDDuplicateScanAudit | null;
+  storedScanBaseline?: AnalysisDReport | null;
+  selection?: AnalysisDExportEnvelope['selection'];
 };
 
 /**
@@ -289,7 +357,11 @@ export async function writeAnalysisDJsonExportFile(
   const payload = buildAnalysisDSharePayload(
     deps.report,
     deps.nowMs,
-    deps.duplicateScanAudit ?? null
+    deps.duplicateScanAudit ?? null,
+    {
+      storedScanBaseline: deps.storedScanBaseline ?? null,
+      selection: deps.selection ?? null,
+    }
   );
   const fileUri = `${deps.cacheDirectory}${payload.filename}`;
   await deps.writeAsStringAsync(fileUri, payload.json);

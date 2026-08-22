@@ -79,7 +79,7 @@ describe('Analysis D1-A diagnostics access', () => {
       listReceiptsFn: async () => receipts,
       nowMs,
     });
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(4); // baseline + production + duplicate audit before/after
     expect(spy.mock.calls[0]?.[0]).toMatchObject({
       receipts,
       nowMs,
@@ -228,7 +228,8 @@ describe('Analysis D1-A diagnostics access', () => {
     expect(vm.summaryText).toContain('receipt');
     const titles = vm.sections.map((s) => s.title);
     expect(titles).toEqual([
-      'Dataset',
+      'Universe',
+      'Dataset (production)',
       'Coverage',
       'Merchants',
       'Products',

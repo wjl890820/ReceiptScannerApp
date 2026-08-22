@@ -192,6 +192,12 @@ export function resolveProductIdentity(input: ResolveProductIdentityInput): Prod
 /**
  * Build a stable SKU key only from a trusted canonical product and a validated
  * family-compatible specification. Legacy normalized names never become SKUs.
+ *
+ * This is the single authoritative exact-product identity for V1:
+ * receipt_items.sku_key persistence, Product Detail `type: 'sku'`,
+ * SKU purchase-unit price history, frequent-product SKU fallback, and
+ * Analysis D identityCoverage.withSku all reuse this function (or its
+ * persisted output). Do not invent a parallel key.
  */
 export function buildSkuKey(identity: ProductIdentity): string | null {
   const canonical = identity.canonicalProductName?.trim();
@@ -219,4 +225,43 @@ export function buildSkuKey(identity: ProductIdentity): string | null {
     return `v1|${canonicalKey}|count:${spec.countBase}|pack:${spec.packCount}`;
   }
   return null;
+}
+
+/** Alias for call sites that need the exact-product identity contract by name. */
+export const resolveExactProductSkuKey = buildSkuKey;
+
+export type SkuPurchaseUnitPriceRow = {
+  skuKey?: string | null;
+  lineTotal?: number | null;
+  purchaseQuantity?: number | null;
+};
+
+/** Persisted / derived sku_key present (output of buildSkuKey). */
+export function hasPersistedSkuIdentity(
+  row: Pick<SkuPurchaseUnitPriceRow, 'skuKey'>
+): boolean {
+  return Boolean(row.skuKey?.trim());
+}
+
+/** Purchase-unit price can be computed (lineTotal / purchaseQuantity). */
+export function isPurchaseUnitPriceUsable(
+  row: Pick<SkuPurchaseUnitPriceRow, 'lineTotal' | 'purchaseQuantity'>
+): boolean {
+  return (
+    typeof row.lineTotal === 'number' &&
+    row.lineTotal > 0 &&
+    typeof row.purchaseQuantity === 'number' &&
+    row.purchaseQuantity > 0
+  );
+}
+
+/**
+ * Row can participate in SKU-typed purchase-unit price history:
+ * requires exact-product sku identity AND usable purchase-unit amounts.
+ * Purchase-unit alone is NOT SKU identity.
+ */
+export function isSkuPurchaseUnitPriceHistoryUsable(
+  row: SkuPurchaseUnitPriceRow
+): boolean {
+  return hasPersistedSkuIdentity(row) && isPurchaseUnitPriceUsable(row);
 }

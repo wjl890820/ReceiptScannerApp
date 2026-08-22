@@ -1,5 +1,5 @@
 /**
- * Analysis D1-A / D2-A — read-only report generation from local receipts.
+ * Analysis D1-A / D2-D — read-only report generation from local receipts.
  * Uses the same listReceipts path as Home / Analysis.
  * Never writes receipts / corrections / outbox / cloud.
  */
@@ -12,6 +12,7 @@ import {
   buildAnalysisDReport,
   type AnalysisDReport,
 } from './analysisDReport';
+import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from './db';
 
 /** Same loader Home/Analysis use; higher limit for validation completeness. */
@@ -22,10 +23,26 @@ export type AnalysisDGenerateDeps = {
   nowMs?: number;
 };
 
+export type AnalysisDDiagnosticsSelectionMeta = {
+  storedReceiptCount: number;
+  analyticsPurchaseCandidateCount: number;
+  highConfidenceDuplicateExtras: number;
+  contentExactDuplicateExtras: number;
+  structuralExactDuplicateExtras: number;
+};
+
 export type AnalysisDDiagnosticsBundle = {
+  /** Raw stored-scan universe (diagnostic baseline only). */
+  storedScanBaseline: AnalysisDReport;
+  /** Selected purchase-candidate universe (matches production analytics). */
+  productionAnalytics: AnalysisDReport;
+  /**
+   * @deprecated Prefer productionAnalytics. Kept as alias for older callers.
+   * Same object reference as productionAnalytics.
+   */
   report: AnalysisDReport;
-  /** D2-A read-only duplicate / re-scan audit (diagnostic only). */
   duplicateScanAudit: AnalysisDDuplicateScanAudit;
+  selection: AnalysisDDiagnosticsSelectionMeta;
 };
 
 async function loadLocalReceipts(
@@ -37,26 +54,44 @@ async function loadLocalReceipts(
 }
 
 /**
- * Load local receipts once and build both the D0 report and D2-A duplicate audit.
+ * Load local receipts once and build stored baseline + production analytics + D2-A audit.
  * Inject listReceiptsFn in tests to prove no write APIs are required.
  */
 export async function generateAnalysisDDiagnosticsBundle(
   deps: AnalysisDGenerateDeps = {}
 ): Promise<AnalysisDDiagnosticsBundle> {
   const { receipts, nowMs } = await loadLocalReceipts(deps);
+  const selection = selectAnalyticsReceipts(receipts);
+  const storedScanBaseline = buildAnalysisDReport({ receipts, nowMs });
+  const productionAnalytics = buildAnalysisDReport({
+    receipts: selection.analyticsReceipts,
+    nowMs,
+  });
+  const duplicateScanAudit = buildAnalysisDDuplicateScanAudit(receipts, nowMs);
   return {
-    report: buildAnalysisDReport({ receipts, nowMs }),
-    duplicateScanAudit: buildAnalysisDDuplicateScanAudit(receipts, nowMs),
+    storedScanBaseline,
+    productionAnalytics,
+    report: productionAnalytics,
+    duplicateScanAudit,
+    selection: {
+      storedReceiptCount: selection.storedReceipts.length,
+      analyticsPurchaseCandidateCount: selection.analyticsPurchaseCandidateCount,
+      highConfidenceDuplicateExtras:
+        selection.contentExactDuplicateExtras +
+        selection.structuralExactDuplicateExtras,
+      contentExactDuplicateExtras: selection.contentExactDuplicateExtras,
+      structuralExactDuplicateExtras: selection.structuralExactDuplicateExtras,
+    },
   };
 }
 
 /**
- * Load local receipts and build AnalysisDReport via D0 harness only.
+ * Load local receipts and build production (selected) AnalysisDReport via D0 harness.
  * Inject listReceiptsFn in tests to prove no write APIs are required.
  */
 export async function generateAnalysisDReportFromLocalReceipts(
   deps: AnalysisDGenerateDeps = {}
 ): Promise<AnalysisDReport> {
-  const { receipts, nowMs } = await loadLocalReceipts(deps);
-  return buildAnalysisDReport({ receipts, nowMs });
+  const bundle = await generateAnalysisDDiagnosticsBundle(deps);
+  return bundle.productionAnalytics;
 }
