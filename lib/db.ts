@@ -10,6 +10,7 @@ import {
   rebuildReceiptItemIndex,
   type ReceiptItemIndexReceipt,
 } from './receiptItemIndex';
+import { ensureShoppingIntentsSchema } from './shoppingIntentSchema';
 import { getReceiptItems } from './receiptItems';
 import {
   runReceiptItemIndexBackfillBatch,
@@ -274,6 +275,7 @@ async function initIfNeeded() {
 
       // Phase 3C: additive derived index schema only. No backfill or mutation hooks.
       await ensureReceiptItemsSchema(db);
+      await ensureShoppingIntentsSchema(db);
 
       // 安全迁移：检查并添加新字段（如果不存在）
       // 使用 PRAGMA table_info 获取现有列，确保幂等性

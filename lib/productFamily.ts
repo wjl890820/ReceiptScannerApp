@@ -46,7 +46,7 @@ const RULES: readonly FamilyRule[] = [
     confidence: 0.98,
     reason: 'explicit milk product name',
     matches: (text) =>
-      /牛乳|おいしい牛乳|オイシイ牛乳|メグミルク/.test(text) ||
+      /牛乳|牛奶|おいしい牛乳|オイシイ牛乳|メグミルク/.test(text) ||
       (/(?:明治|雪印|森永|乳飲料|成分無調整)/.test(text) && /ミルク/.test(text)),
   },
   {
