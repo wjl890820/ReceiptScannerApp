@@ -26,6 +26,11 @@ import {
 import { parseProductDetailTarget } from '@/lib/productDetailTarget';
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
 import {
+  UI_COLORS,
+  UI_LAYOUT,
+  UI_RADIUS,
+} from '@/lib/uiTokens';
+import {
   loadProductPriceHistory,
   type ProductPriceHistoryResult,
 } from '@/lib/productPriceHistory';
@@ -130,7 +135,7 @@ export default function ProductDetailScreen() {
     : [];
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.container, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
       <View style={styles.header}>
         <Pressable
           onPress={onBack}
@@ -334,20 +339,20 @@ export default function ProductDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
   },
   header: {
     minHeight: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#ddd',
   },
   backButton: {
     minWidth: 72,
-    minHeight: 44,
+    minHeight: UI_LAYOUT.controlMinHeight,
     justifyContent: 'center',
     paddingVertical: 10,
   },
@@ -371,7 +376,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   stateText: {
-    color: '#666',
+    color: UI_COLORS.textSecondary,
   },
   stateTitle: {
     color: '#555',
@@ -382,7 +387,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    paddingHorizontal: 18,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingTop: 24,
     paddingBottom: 50,
   },
@@ -402,11 +407,11 @@ const styles = StyleSheet.create({
     fontSize: 25,
     lineHeight: 32,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   scopeNote: {
     marginTop: 8,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
     lineHeight: 19,
   },
@@ -419,11 +424,11 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 94,
     padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#f3f3f3',
+    borderRadius: UI_RADIUS.card,
+    backgroundColor: UI_COLORS.surface,
   },
   summaryLabel: {
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -431,7 +436,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 18,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   summaryDate: {
     marginTop: 10,
@@ -448,7 +453,7 @@ const styles = StyleSheet.create({
   },
   secondarySummary: {
     marginTop: 12,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
   },
   sectionTitle: {
@@ -456,10 +461,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     fontSize: 17,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   sectionCard: {
-    borderRadius: 12,
+    borderRadius: UI_RADIUS.card,
     paddingHorizontal: 14,
     backgroundColor: '#f5f5f5',
   },
@@ -480,12 +485,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   factValue: {
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
   },
   priceLoadError: {
     paddingVertical: 14,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 14,
     lineHeight: 20,
   },
@@ -526,7 +531,7 @@ const styles = StyleSheet.create({
   },
   purchaseMeta: {
     marginTop: 6,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
   },
   purchaseQuantity: {

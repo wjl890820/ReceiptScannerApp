@@ -25,6 +25,12 @@ import { buildStatsSafe } from '@/lib/analysisHelpers';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
 import { type TimeRange } from '@/lib/statsCalculator';
+import {
+  UI_COLORS,
+  UI_LAYOUT,
+  UI_RADIUS,
+  UI_TYPOGRAPHY,
+} from '@/lib/uiTokens';
 
 /**
  * Legacy Price Radar / Category Index helpers remain available in
@@ -111,7 +117,7 @@ export default function AnalysisScreen() {
       style={styles.screen}
       contentContainerStyle={[
         styles.container,
-        { paddingTop: insets.top + 16 },
+        { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap },
       ]}
     >
       <Text style={styles.title}>{t('analysis.title')}</Text>
@@ -143,7 +149,7 @@ export default function AnalysisScreen() {
 
       {loading ? (
         <View style={styles.inlineLoading}>
-          <ActivityIndicator color="#1677ff" />
+          <ActivityIndicator color={UI_COLORS.accent} />
         </View>
       ) : null}
 
@@ -360,14 +366,14 @@ export default function AnalysisScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f7f8fa',
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
   container: {
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 40,
   },
   title: {
-    fontSize: 30,
+    fontSize: UI_TYPOGRAPHY.pageTitle,
     fontWeight: '800',
     color: '#15181c',
     marginBottom: 16,
@@ -375,7 +381,7 @@ const styles = StyleSheet.create({
   timeRangeContainer: {
     flexDirection: 'row',
     backgroundColor: '#eceff3',
-    borderRadius: 12,
+    borderRadius: UI_RADIUS.card,
     padding: 4,
   },
   timeRangeBtn: {
@@ -385,7 +391,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   timeRangeBtnActive: {
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
   },
   timeRangeBtnText: {
     fontSize: 14,
@@ -403,7 +409,7 @@ const styles = StyleSheet.create({
     marginTop: 18,
     padding: 16,
     borderRadius: 16,
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
   },
@@ -431,7 +437,7 @@ const styles = StyleSheet.create({
     minWidth: '46%',
     padding: 14,
     borderRadius: 16,
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
   },
@@ -448,7 +454,7 @@ const styles = StyleSheet.create({
   },
   card: {
     borderRadius: 16,
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
     paddingHorizontal: 14,

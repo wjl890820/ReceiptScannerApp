@@ -48,6 +48,12 @@ import {
 } from '@/lib/homeProgressiveExperience';
 import { t } from '@/lib/i18n';
 import {
+  UI_COLORS,
+  UI_LAYOUT,
+  UI_RADIUS,
+  UI_TYPOGRAPHY,
+} from '@/lib/uiTokens';
+import {
   buildHomeFrequentProductDetailHref,
   HOME_ANALYSIS_HREF,
 } from '@/lib/homeValueHierarchy';
@@ -483,7 +489,7 @@ export default function HomeScreen() {
   // Always keep the last Progressive Home card clear of the bottom tab bar.
   // stickyHeight is measured via onLayout and includes the container's padding.
   const FALLBACK_STICKY_HEIGHT = 88; // Conservative estimate: button (~48) + padding (40)
-  const TAB_BAR_CONTENT_CLEARANCE = 72;
+  const TAB_BAR_CONTENT_CLEARANCE = UI_LAYOUT.tabContentClearance;
   const bottomPadding =
     pendingReview.pendingCount > 0
       ? (stickyHeight || FALLBACK_STICKY_HEIGHT) + 16
@@ -512,7 +518,7 @@ export default function HomeScreen() {
       <ScrollView
         contentContainerStyle={[
           styles.container,
-          { paddingTop: insets.top + 16, paddingBottom: bottomPadding },
+          { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap, paddingBottom: bottomPadding },
         ]}
       >
         <ProgressiveHomeInsights
@@ -561,15 +567,15 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
-    backgroundColor: '#f7f8fa',
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
   container: {
     paddingTop: 16,
-    paddingHorizontal: 20,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 40,
   },
   title: {
-    fontSize: 28,
+    fontSize: UI_TYPOGRAPHY.pageTitle,
     fontWeight: '700',
     marginBottom: 8,
   },
@@ -586,7 +592,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: UI_COLORS.border,
   },
   categoryDot: {
     width: 12,
@@ -603,7 +609,7 @@ const styles = StyleSheet.create({
   categoryAmount: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
     marginRight: 12,
     minWidth: 80,
     textAlign: 'right',
@@ -611,7 +617,7 @@ const styles = StyleSheet.create({
   categoryPercentage: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     minWidth: 50,
     textAlign: 'right',
   },
@@ -629,7 +635,7 @@ const styles = StyleSheet.create({
   insightBadge: {
     width: 20,
     height: 20,
-    borderRadius: 10,
+    borderRadius: UI_RADIUS.control,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
@@ -647,7 +653,7 @@ const styles = StyleSheet.create({
   insightBadgeText: {
     fontSize: 12,
     fontWeight: '900',
-    color: '#fff',
+    color: UI_COLORS.background,
   },
   advancedInsightText: {
     flex: 1,
@@ -665,12 +671,12 @@ const styles = StyleSheet.create({
   },
   kpiCard: {
     backgroundColor: '#f8f8f8',
-    borderRadius: 12,
+    borderRadius: UI_RADIUS.card,
     padding: 16,
     marginTop: 20,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: UI_COLORS.border,
   },
   kpiRow: {
     flexDirection: 'row',
@@ -683,14 +689,14 @@ const styles = StyleSheet.create({
   },
   kpiLabel: {
     fontSize: 12,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     marginBottom: 4,
     fontWeight: '600',
   },
   kpiValue: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
     textAlign: 'center',
   },
   kpiSubValue: {
@@ -702,16 +708,16 @@ const styles = StyleSheet.create({
   },
   uncategorizedHint: {
     fontSize: 12,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
   },
   insightAnalysisContainer: {
     marginTop: 20,
     paddingHorizontal: 12,
     backgroundColor: '#f8f8f8',
-    borderRadius: 12,
+    borderRadius: UI_RADIUS.card,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: UI_COLORS.border,
   },
   insightHeader: {
     flexDirection: 'row',
@@ -722,7 +728,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
     marginLeft: 8,
   },
   insightReasons: {
@@ -737,7 +743,7 @@ const styles = StyleSheet.create({
   insightSuggestion: {
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
+    borderTopColor: UI_COLORS.border,
   },
   insightSuggestionLabel: {
     fontSize: 13,
@@ -747,7 +753,7 @@ const styles = StyleSheet.create({
   },
   insightSuggestionText: {
     fontSize: 14,
-    color: '#111',
+    color: UI_COLORS.textPrimary,
     fontWeight: '600',
     lineHeight: 20,
   },
@@ -756,8 +762,8 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#fff',
-    paddingHorizontal: 20,
+    backgroundColor: UI_COLORS.background,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingTop: 10,
     paddingBottom: 40,
     borderTopWidth: 1,
@@ -794,19 +800,19 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   continueReviewBtn: {
-    backgroundColor: '#1677ff',
-    borderRadius: 10,
+    backgroundColor: UI_COLORS.accent,
+    borderRadius: UI_RADIUS.control,
     paddingVertical: 9,
     paddingHorizontal: 14,
   },
   continueReviewBtnText: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#fff',
+    color: UI_COLORS.background,
   },
   scanButton: {
-    backgroundColor: '#111',
-    borderRadius: 12,
+    backgroundColor: UI_COLORS.textPrimary,
+    borderRadius: UI_RADIUS.card,
     paddingVertical: 16,
     paddingHorizontal: 24,
     alignItems: 'center',
@@ -818,6 +824,6 @@ const styles = StyleSheet.create({
   scanButtonText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#fff',
+    color: UI_COLORS.background,
   },
 });

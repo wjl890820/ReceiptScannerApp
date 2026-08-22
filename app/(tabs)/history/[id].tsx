@@ -39,6 +39,11 @@ import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
 import {
+  UI_COLORS,
+  UI_LAYOUT,
+  UI_RADIUS,
+} from '@/lib/uiTokens';
+import {
   applyUserLineAmountEdit,
   itemAmountForAnalytics,
 } from '@/lib/receiptDiscountAllocation';
@@ -438,7 +443,7 @@ export default function ReceiptDetailScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.screen, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
         <Pressable
           onPress={onBack}
           accessibilityRole="button"
@@ -458,7 +463,7 @@ export default function ReceiptDetailScreen() {
 
   if (!receipt) {
     return (
-      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.screen, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
         <Pressable
           onPress={onBack}
           accessibilityRole="button"
@@ -477,7 +482,7 @@ export default function ReceiptDetailScreen() {
 
   return (
     <>
-      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.screen, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
         <Pressable
           onPress={onBack}
           accessibilityRole="button"
@@ -523,7 +528,7 @@ export default function ReceiptDetailScreen() {
         <View style={styles.summaryCard}>
           {categorySummary.length === 0 ? (
             <View style={{ paddingVertical: 10 }}>
-              <Text style={{ color: '#666' }}>{t('history.detail.noCategoryInfo')}</Text>
+              <Text style={{ color: UI_COLORS.textSecondary }}>{t('history.detail.noCategoryInfo')}</Text>
             </View>
           ) : (
             categorySummary.map((x) => {
@@ -595,7 +600,7 @@ export default function ReceiptDetailScreen() {
                       ]}
                       hitSlop={4}
                     >
-                      <IconSymbol name="chevron.right" size={22} color="#888" />
+                      <IconSymbol name="chevron.right" size={22} color={UI_COLORS.textMuted} />
                     </Pressable>
                   ) : null}
                 </View>
@@ -603,7 +608,7 @@ export default function ReceiptDetailScreen() {
             })}
           </View>
         ) : (
-          <Text style={{ color: '#666' }}>{t('history.detail.noItems')}</Text>
+          <Text style={{ color: UI_COLORS.textSecondary }}>{t('history.detail.noItems')}</Text>
         )}
 
         <View style={{ height: 22 }} />
@@ -613,7 +618,7 @@ export default function ReceiptDetailScreen() {
           <>
             <Text style={styles.h2}>Dev: analysis outputs</Text>
             <View style={styles.summaryCard}>
-              <Text style={{ color: '#666', fontSize: 12, marginBottom: 8 }}>
+              <Text style={{ color: UI_COLORS.textSecondary, fontSize: 12, marginBottom: 8 }}>
                 analysis_level: {String(analysisOutputs?.analysis_level ?? 'n/a')}
               </Text>
               <Text selectable style={{ fontSize: 12, color: '#333' }}>
@@ -662,7 +667,7 @@ export default function ReceiptDetailScreen() {
             {editingItemIndex >= 0 && editingItemIndex < displayItems.length && (
               <>
                 <Text style={styles.label}>{t('history.detail.edit.name')}</Text>
-                <Text style={[styles.input, { color: '#666' }]}>
+                <Text style={[styles.input, { color: UI_COLORS.textSecondary }]}>
                   {displayItems[editingItemIndex].name}
                 </Text>
 
@@ -736,19 +741,19 @@ export default function ReceiptDetailScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
   },
   backButton: {
-    minHeight: 44,
+    minHeight: UI_LAYOUT.controlMinHeight,
     minWidth: 44,
     justifyContent: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     alignSelf: 'flex-start',
   },
   backText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   center: {
     paddingTop: 80,
@@ -756,7 +761,7 @@ const styles = StyleSheet.create({
   },
   container: {
     paddingTop: 8,
-    paddingHorizontal: 18,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 40,
   },
   merchant: {
@@ -766,7 +771,7 @@ const styles = StyleSheet.create({
   },
   date: {
     fontSize: 16,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     marginBottom: 18,
   },
   total: {
@@ -776,7 +781,7 @@ const styles = StyleSheet.create({
   },
   tax: {
     fontSize: 18,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     marginBottom: 18,
   },
   h2: {
@@ -826,11 +831,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingVertical: 12,
-    minHeight: 44,
+    minHeight: UI_LAYOUT.controlMinHeight,
   },
   productDetailHit: {
     width: 44,
-    minHeight: 44,
+    minHeight: UI_LAYOUT.controlMinHeight,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -841,12 +846,12 @@ const styles = StyleSheet.create({
   },
   itemMeta: {
     fontSize: 14,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
   },
   editRowHint: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#1677ff',
+    color: UI_COLORS.accent,
     paddingHorizontal: 4,
   },
   tag: {
@@ -862,25 +867,25 @@ const styles = StyleSheet.create({
     color: '#555',
   },
   primaryBtn: {
-    backgroundColor: '#111',
+    backgroundColor: UI_COLORS.textPrimary,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: UI_RADIUS.card,
     alignItems: 'center',
   },
   primaryBtnText: {
-    color: '#fff',
+    color: UI_COLORS.background,
     fontSize: 16,
     fontWeight: '800',
   },
   deleteBtn: {
     marginTop: 8,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: UI_RADIUS.card,
     alignItems: 'center',
     backgroundColor: '#fff0f0',
   },
   deleteText: {
-    color: '#d33',
+    color: UI_COLORS.destructive,
     fontSize: 18,
     fontWeight: '800',
   },
@@ -888,11 +893,11 @@ const styles = StyleSheet.create({
   // ===== Modal styles =====
   modalContainer: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
   },
   modalHeader: {
     paddingTop: 16,
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e6e6e6',
@@ -903,7 +908,7 @@ const styles = StyleSheet.create({
   modalHeaderBtn: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   modalTitle: {
     fontSize: 16,
@@ -916,13 +921,13 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     marginBottom: 6,
     marginTop: 10,
   },
   input: {
-    backgroundColor: '#f3f3f3',
-    borderRadius: 10,
+    backgroundColor: UI_COLORS.surface,
+    borderRadius: UI_RADIUS.control,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 16,
@@ -930,7 +935,7 @@ const styles = StyleSheet.create({
   hint: {
     marginTop: 6,
     fontSize: 12,
-    color: '#888',
+    color: UI_COLORS.textMuted,
   },
   rowBetween: {
     flexDirection: 'row',
@@ -944,7 +949,7 @@ const styles = StyleSheet.create({
   addBtn: {
     fontSize: 14,
     fontWeight: '900',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   editCard: {
     marginTop: 14,
@@ -961,7 +966,7 @@ const styles = StyleSheet.create({
   removeBtn: {
     fontSize: 14,
     fontWeight: '900',
-    color: '#d33',
+    color: UI_COLORS.destructive,
   },
   grid2: {
     flexDirection: 'row',
@@ -975,7 +980,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f6f6f6',
   },
   totalLabel: {
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
     fontWeight: '700',
     marginBottom: 6,
@@ -992,25 +997,25 @@ const styles = StyleSheet.create({
   },
   editBtn: {
     paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     borderRadius: 8,
-    backgroundColor: '#111',
+    backgroundColor: UI_COLORS.textPrimary,
     alignSelf: 'flex-start',
   },
   editBtnText: {
-    color: '#fff',
+    color: UI_COLORS.background,
     fontSize: 14,
     fontWeight: '800',
   },
   overrideHint: {
     fontSize: 12,
-    color: '#888',
+    color: UI_COLORS.textMuted,
     marginTop: 4,
     marginBottom: 6,
   },
   overrideHintSmall: {
     fontSize: 11,
-    color: '#888',
+    color: UI_COLORS.textMuted,
     marginLeft: 6,
   },
   categoryTag: {
@@ -1034,12 +1039,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     padding: 12,
     backgroundColor: '#f6f6f6',
-    borderRadius: 10,
+    borderRadius: UI_RADIUS.control,
   },
   noteLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     marginBottom: 4,
   },
   noteText: {
@@ -1053,15 +1058,15 @@ const styles = StyleSheet.create({
   },
   categoryOption: {
     paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     borderRadius: 20,
-    backgroundColor: '#f3f3f3',
+    backgroundColor: UI_COLORS.surface,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: UI_COLORS.border,
   },
   categoryOptionSelected: {
-    backgroundColor: '#111',
-    borderColor: '#111',
+    backgroundColor: UI_COLORS.textPrimary,
+    borderColor: UI_COLORS.textPrimary,
   },
   categoryOptionText: {
     fontSize: 14,
@@ -1069,6 +1074,6 @@ const styles = StyleSheet.create({
     color: '#555',
   },
   categoryOptionTextSelected: {
-    color: '#fff',
+    color: UI_COLORS.background,
   },
 });

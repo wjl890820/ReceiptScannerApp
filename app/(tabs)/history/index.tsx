@@ -28,6 +28,12 @@ import {
 import { buildTopCategories, buildHistoryMetaLine } from '@/lib/receiptListHelpers';
 import { formatDate } from '@/lib/formatDate';
 import {
+  UI_COLORS,
+  UI_LAYOUT,
+  UI_RADIUS,
+  UI_TYPOGRAPHY,
+} from '@/lib/uiTokens';
+import {
   normalizeReceiptItemSearchQuery,
   searchHistoryPurchases,
   type ReceiptItemSearchResult,
@@ -42,7 +48,7 @@ import {
 } from '@/lib/productDetailTarget';
 
 /** Matches Home tab content clearance so rows clear the bottom tab bar. */
-const TAB_BAR_CONTENT_CLEARANCE = 72;
+const TAB_BAR_CONTENT_CLEARANCE = UI_LAYOUT.tabContentClearance;
 
 type HistorySearchEntry =
   | { kind: 'item'; result: ReceiptItemSearchResult }
@@ -314,7 +320,7 @@ export default function HistoryScreen() {
   });
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 16 }]}>
+    <View style={[styles.container, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap }]}>
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
           <Text style={styles.title}>{t('history.list.title')}</Text>
@@ -360,7 +366,7 @@ export default function HistoryScreen() {
           onChangeText={onSearchQueryChange}
           onSubmitEditing={onSubmitSearch}
           placeholder={t('history.search.placeholder')}
-          placeholderTextColor="#888"
+          placeholderTextColor={UI_COLORS.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
@@ -641,10 +647,10 @@ export default function HistoryScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    paddingHorizontal: 18,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 8,
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
   },
   headerRow: {
     flexDirection: 'row',
@@ -656,20 +662,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   title: {
-    fontSize: 26,
+    fontSize: UI_TYPOGRAPHY.pageTitle,
     fontWeight: '700',
     marginBottom: 6,
   },
   subtitle: {
     fontSize: 14,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
   },
   subtitleSelecting: {
-    color: '#1677ff',
+    color: UI_COLORS.accent,
     fontWeight: '600',
   },
   headerBtn: {
-    minHeight: 44,
+    minHeight: UI_LAYOUT.controlMinHeight,
     justifyContent: 'center',
     paddingVertical: 8,
     paddingHorizontal: 14,
@@ -681,18 +687,18 @@ const styles = StyleSheet.create({
   headerBtnText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   headerBtnTextSelecting: {
-    color: '#1677ff',
+    color: UI_COLORS.accent,
   },
   searchBar: {
-    minHeight: 44,
+    minHeight: UI_LAYOUT.controlMinHeight,
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 14,
     paddingHorizontal: 13,
-    borderRadius: 12,
+    borderRadius: UI_RADIUS.card,
     backgroundColor: '#f1f1f1',
   },
   searchInput: {
@@ -700,7 +706,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
     paddingVertical: 10,
     fontSize: 16,
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   searchClear: {
     width: 28,
@@ -730,7 +736,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     fontSize: 13,
     fontWeight: '700',
-    color: '#666',
+    color: UI_COLORS.textSecondary,
   },
   emptyState: {
     paddingTop: 30,
@@ -738,11 +744,11 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   emptyText: {
-    color: '#666',
+    color: UI_COLORS.textSecondary,
   },
   card: {
-    backgroundColor: '#f3f3f3',
-    borderRadius: 12,
+    backgroundColor: UI_COLORS.surface,
+    borderRadius: UI_RADIUS.card,
     paddingVertical: 12,
     paddingHorizontal: 14,
   },
@@ -765,11 +771,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   checkboxChecked: {
-    backgroundColor: '#111',
-    borderColor: '#111',
+    backgroundColor: UI_COLORS.textPrimary,
+    borderColor: UI_COLORS.textPrimary,
   },
   checkmark: {
-    color: '#fff',
+    color: UI_COLORS.background,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -782,7 +788,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     fontSize: 11,
     fontWeight: '700',
-    color: '#888',
+    color: UI_COLORS.textMuted,
     letterSpacing: 0.2,
     textTransform: 'uppercase',
   },
@@ -804,7 +810,7 @@ const styles = StyleSheet.create({
   meta: {
     marginTop: 6,
     fontSize: 13,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
   },
   cats: {
     marginTop: 6,
@@ -822,26 +828,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 12,
-    paddingHorizontal: 18,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e0e0e0',
-    backgroundColor: '#fff',
+    borderTopColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.background,
   },
   bottomBarBtn: {
     paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
   },
   bottomBarBtnText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   bottomBarBtnDanger: {
     borderRadius: 8,
     backgroundColor: '#fff0f0',
   },
   bottomBarBtnDangerText: {
-    color: '#c00',
+    color: UI_COLORS.destructive,
     fontWeight: '800',
   },
 });

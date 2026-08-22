@@ -41,6 +41,11 @@ import {
 } from '@/lib/productDictionary';
 import { reclassifyReceiptsMissingCategories } from '@/lib/reclassifyReceipts';
 import {
+  UI_COLORS,
+  UI_LAYOUT,
+  UI_TYPOGRAPHY,
+} from '@/lib/uiTokens';
+import {
   getDefaultReceiptSource,
   setDefaultReceiptSource,
   type ReceiptSource,
@@ -936,15 +941,15 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f7f8fa',
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
   container: {
     paddingTop: 72,
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 40,
   },
   title: {
-    fontSize: 30,
+    fontSize: UI_TYPOGRAPHY.pageTitle,
     fontWeight: '800',
     color: '#15181c',
     marginBottom: 22,
@@ -953,7 +958,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#68707a',
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingTop: 14,
     paddingBottom: 4,
   },
@@ -961,11 +966,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#68707a',
     lineHeight: 18,
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 12,
   },
   group: {
-    backgroundColor: '#fff',
+    backgroundColor: UI_COLORS.background,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
@@ -974,7 +979,7 @@ const styles = StyleSheet.create({
   },
   row: {
     minHeight: 64,
-    paddingHorizontal: 16,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -999,7 +1004,7 @@ const styles = StyleSheet.create({
     marginRight: 6,
     fontSize: 14,
     fontWeight: '600',
-    color: '#1677ff',
+    color: UI_COLORS.accent,
     textAlign: 'right',
   },
   chevron: {

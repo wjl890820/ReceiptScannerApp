@@ -1,17 +1,25 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
+ * Expo template theme (light/dark Colors + Fonts).
+ *
+ * Production screen visual SSOT is `@/lib/uiTokens` (R2-B5).
+ * Do not add new production layout/typography/surface tokens here —
+ * that would create a competing system.
+ *
+ * `Colors` remains for template hooks (`hooks/use-theme-color.ts`) and
+ * any Expo scaffold components; it is not the app design-system layer.
  */
 
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
+import { UI_COLORS } from '@/lib/uiTokens';
+
+const tintColorLight = UI_COLORS.accent;
 const tintColorDark = '#fff';
 
 export const Colors = {
   light: {
-    text: '#11181C',
-    background: '#fff',
+    text: UI_COLORS.textPrimary,
+    background: UI_COLORS.background,
     tint: tintColorLight,
     icon: '#687076',
     tabIconDefault: '#687076',
