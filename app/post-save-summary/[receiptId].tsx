@@ -112,7 +112,7 @@ export default function PostSaveSummaryScreen() {
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: 40 + Math.max(insets.bottom, 0) }]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.successIcon}>
@@ -199,6 +199,12 @@ export default function PostSaveSummaryScreen() {
         <View style={styles.actions}>
           <Pressable
             onPress={finish}
+            accessibilityRole="button"
+            accessibilityLabel={
+              routeContext?.nextDraftId
+                ? t('postSaveSummary.continueReview')
+                : t('postSaveSummary.done')
+            }
             style={({ pressed }) => [
               styles.primaryButton,
               pressed && styles.pressed,
@@ -218,6 +224,8 @@ export default function PostSaveSummaryScreen() {
                   `/history/${encodeURIComponent(routeContext.receiptId)}` as Href
                 )
               }
+              accessibilityRole="button"
+              accessibilityLabel={t('postSaveSummary.viewReceipt')}
               style={({ pressed }) => [
                 styles.secondaryButton,
                 pressed && styles.pressed,
@@ -232,6 +240,8 @@ export default function PostSaveSummaryScreen() {
           {milestoneViewModel.profileEstablished && (
             <Pressable
               onPress={() => router.push('/analysis')}
+              accessibilityRole="button"
+              accessibilityLabel={t('postSaveSummary.viewAnalysis')}
               style={({ pressed }) => [
                 styles.secondaryButton,
                 pressed && styles.pressed,

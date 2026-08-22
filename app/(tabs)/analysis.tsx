@@ -117,7 +117,11 @@ export default function AnalysisScreen() {
       style={styles.screen}
       contentContainerStyle={[
         styles.container,
-        { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap },
+        {
+          paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap,
+          paddingBottom:
+            UI_LAYOUT.tabContentClearance + Math.max(insets.bottom, 0),
+        },
       ]}
     >
       <Text style={styles.title}>{t('analysis.title')}</Text>
@@ -370,7 +374,7 @@ const styles = StyleSheet.create({
   },
   container: {
     paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
-    paddingBottom: 40,
+    paddingBottom: UI_LAYOUT.tabContentClearance,
   },
   title: {
     fontSize: UI_TYPOGRAPHY.pageTitle,

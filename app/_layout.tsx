@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { initI18n, subscribeLocaleChange } from '@/lib/i18n';
 import { runCategoryBackfillOnceOnStartup } from '@/lib/categoryBackfill';
@@ -56,6 +57,9 @@ export default function RootLayout() {
   }
 
   return (
-    <Stack key={localeEpoch} screenOptions={{ headerShown: false }} />
+    <>
+      <StatusBar style="dark" />
+      <Stack key={localeEpoch} screenOptions={{ headerShown: false }} />
+    </>
   );
 }

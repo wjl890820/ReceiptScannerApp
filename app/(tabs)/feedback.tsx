@@ -4,7 +4,9 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,13 +14,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { t } from '@/lib/i18n';
 import { submitFeedback } from '@/lib/feedbackService';
 import { getSupportEmail } from '@/lib/env';
+import { UI_COLORS, UI_LAYOUT, UI_RADIUS, UI_TYPOGRAPHY } from '@/lib/uiTokens';
 
 export default function FeedbackScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [feedback, setFeedback] = useState('');
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -112,8 +117,28 @@ export default function FeedbackScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Pressable style={styles.backButton} onPress={() => router.back()}>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={insets.top}
+    >
+    <ScrollView
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={[
+        styles.container,
+        {
+          paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap,
+          paddingBottom: 40 + Math.max(insets.bottom, 0),
+        },
+      ]}
+    >
+      <Pressable
+        style={styles.backButton}
+        onPress={() => router.back()}
+        accessibilityRole="button"
+        accessibilityLabel={t('feedback.back')}
+        hitSlop={8}
+      >
         <Text style={styles.backButtonText}>← {t('feedback.back')}</Text>
       </Pressable>
 
@@ -142,10 +167,13 @@ export default function FeedbackScreen() {
           onChangeText={setEmail}
         />
 
-        <Pressable 
-          style={[styles.submitButton, submitting && styles.submitButtonDisabled]} 
+        <Pressable
+          style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
           onPress={handleSubmit}
           disabled={submitting}
+          accessibilityRole="button"
+          accessibilityLabel={submitting ? t('feedback.submitting') : t('feedback.submit')}
+          accessibilityState={{ disabled: submitting, busy: submitting }}
         >
           <Text style={styles.submitButtonText}>
             {submitting ? t('feedback.submitting') : t('feedback.submit')}
@@ -153,16 +181,19 @@ export default function FeedbackScreen() {
         </Pressable>
       </View>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1, backgroundColor: UI_COLORS.background },
   container: {
-    paddingTop: 60,
-    paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
+    paddingBottom: 0,
   },
   backButton: {
+    minHeight: UI_LAYOUT.controlMinHeight,
+    justifyContent: 'center',
     marginBottom: 20,
   },
   backButtonText: {
@@ -171,8 +202,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   title: {
-    fontSize: 28,
+    fontSize: UI_TYPOGRAPHY.pageTitle,
     fontWeight: '700',
+    color: UI_COLORS.textPrimary,
     marginBottom: 8,
   },
   subtitle: {
@@ -200,8 +232,9 @@ const styles = StyleSheet.create({
     minHeight: 120,
   },
   submitButton: {
-    backgroundColor: '#111',
-    borderRadius: 12,
+    backgroundColor: UI_COLORS.textPrimary,
+    borderRadius: UI_RADIUS.card,
+    minHeight: UI_LAYOUT.controlMinHeight,
     paddingVertical: 16,
     paddingHorizontal: 24,
     alignItems: 'center',

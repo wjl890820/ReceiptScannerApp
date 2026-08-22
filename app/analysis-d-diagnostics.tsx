@@ -215,10 +215,15 @@ export default function AnalysisDDiagnosticsScreen() {
 
   if (!enabled) {
     return (
-      <View style={[styles.screen, { paddingTop: insets.top + 24 }]}>
+      <View style={[styles.screen, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
         <Text style={styles.title}>Analysis D Diagnostics</Text>
         <Text style={styles.body}>Disabled in this build.</Text>
-        <Pressable style={styles.button} onPress={() => router.back()}>
+        <Pressable
+          style={styles.button}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Text style={styles.buttonText}>Back</Text>
         </Pressable>
       </View>

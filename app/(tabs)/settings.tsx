@@ -13,6 +13,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PRIVACY_POLICY_URL } from '@/constants/privacy';
 import { getAccountProtectionStatus } from '@/lib/accountProtectionStatus';
@@ -132,6 +133,7 @@ function SettingsRow({
 }
 
 export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const [devToolsEnabled, setDevToolsEnabled] = useState(false);
   const [currentVersion, setCurrentVersion] = useState<string>('—');
@@ -699,7 +701,13 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[
+        styles.container,
+        {
+          paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap,
+          paddingBottom: UI_LAYOUT.tabContentClearance + Math.max(insets.bottom, 0),
+        },
+      ]}
       style={styles.screen}
     >
       <Text style={styles.title}>{t('settings.title')}</Text>
@@ -944,9 +952,8 @@ const styles = StyleSheet.create({
     backgroundColor: UI_COLORS.surfaceMuted,
   },
   container: {
-    paddingTop: 72,
     paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
-    paddingBottom: 40,
+    paddingBottom: 0,
   },
   title: {
     fontSize: UI_TYPOGRAPHY.pageTitle,
@@ -1000,7 +1007,8 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   rowValue: {
-    maxWidth: 120,
+    maxWidth: 160,
+    flexShrink: 1,
     marginRight: 6,
     fontSize: 14,
     fontWeight: '600',

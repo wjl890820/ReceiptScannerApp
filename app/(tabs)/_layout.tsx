@@ -6,24 +6,10 @@ import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { subscribeLocaleChange, t } from '@/lib/i18n';
 import { TAB_BAR_PRESENTATION } from '@/lib/tabBarPresentation';
+import { resolveTabTitles } from '@/lib/tabTitles';
 
 function readTabTitles() {
-  try {
-    return {
-      home: t('tabs.home'),
-      history: t('tabs.history'),
-      settings: t('tabs.settings'),
-      analysis: t('tabs.analysis'),
-    };
-  } catch (e) {
-    console.warn('[TabLayout] Translation failed, using fallback:', e);
-    return {
-      home: '首页',
-      history: '历史',
-      settings: '设置',
-      analysis: '分析',
-    };
-  }
+  return resolveTabTitles(t);
 }
 
 export default function TabLayout() {
