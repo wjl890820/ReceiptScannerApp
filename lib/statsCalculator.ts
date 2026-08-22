@@ -2,7 +2,7 @@
 import type { ReceiptItem } from './receiptAnalyzer';
 import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { getReceiptItems } from './receiptItems';
-import { normalizeMerchantName } from './productNormalizer';
+import { merchantAnalyticsKey } from './merchantAnalytics';
 import { isGroceryCategory, isExcludedFromAnalytics } from './categories';
 import { isGroceryMerchant } from './groceryDetector';
 import { isV1SupportedReceipt } from './merchantType';
@@ -131,12 +131,11 @@ export function calculateStats(
   );
   const topCategories = allCategoryRows.slice(0, 3);
 
-  // 商家统计
+  // Merchant analytics (V1 supported receipts only — same universe as overview).
+  // Spend uses authoritative receipt.total; grouping prefers merchant_normalized.
   const merchantMap = new Map<string, { count: number; total: number }>();
-  for (const receipt of filteredReceipts) {
-    const merchantKey = normalizeMerchantName(
-      receipt.merchant_normalized || receipt.merchant_raw || ''
-    );
+  for (const receipt of supportedReceipts) {
+    const merchantKey = merchantAnalyticsKey(receipt);
     if (!merchantKey) continue;
 
     const existing = merchantMap.get(merchantKey) || { count: 0, total: 0 };
@@ -150,15 +149,13 @@ export function calculateStats(
     .sort((a, b) => b.count - a.count)
     .slice(0, 3);
 
-  // 最高单笔收据
+  // Highest single receipt within V1 supported universe
   let highestSingleReceipt: { amount: number; merchant: string; date: number } | null = null;
-  for (const receipt of filteredReceipts) {
+  for (const receipt of supportedReceipts) {
     const amount = receipt.total || 0;
     if (!highestSingleReceipt || amount > highestSingleReceipt.amount) {
-      const merchantKey = normalizeMerchantName(
-        receipt.merchant_normalized || receipt.merchant_raw || ''
-      );
-      // Use transaction_at with fallback to created_at for date field
+      const merchantKey = merchantAnalyticsKey(receipt);
+      // Prefer transaction_at; fall back to created_at (never invent "now")
       highestSingleReceipt = {
         amount,
         merchant: merchantKey || 'Unknown',
@@ -167,7 +164,7 @@ export function calculateStats(
     }
   }
 
-  // 最频繁商家
+  // Most frequent merchant (V1 supported only)
   let mostFrequentMerchant: { merchant: string; count: number } | null = null;
   for (const [merchant, data] of merchantMap.entries()) {
     if (!mostFrequentMerchant || data.count > mostFrequentMerchant.count) {

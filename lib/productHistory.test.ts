@@ -153,7 +153,7 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
       >();
       for (const item of matching) {
         const receipt = this.receipts.get(item.receiptId)!;
-        const merchantName = receipt.merchantRaw || receipt.merchantNormalized;
+        const merchantName = receipt.merchantNormalized || receipt.merchantRaw;
         const current = merchants.get(merchantName) ?? {
           purchaseOccurrenceCount: 0,
           lastPurchasedAt: 0,
@@ -255,7 +255,7 @@ function addReceipt(
     createdAt: date,
     transactionAt,
     merchantRaw: merchant,
-    merchantNormalized: merchant.toLowerCase(),
+    merchantNormalized: merchant,
     currency: 'JPY',
   });
 }
@@ -441,6 +441,29 @@ describe('Product History grouping', () => {
   it('aggregates merchants by occurrence count then latest purchase', async () => {
     const summary = await load(fixtureDb(), { type: 'family', key: 'milk' });
 
+    expect(summary.merchants.map((merchant) => merchant.merchantName)).toEqual([
+      'York',
+      'FamilyMart',
+      'AEON',
+    ]);
+    expect(
+      summary.merchants.map((merchant) => merchant.purchaseOccurrenceCount)
+    ).toEqual([3, 2, 1]);
+  });
+
+  it('collapses raw OCR merchant variants that share merchant_normalized', async () => {
+    const db = fixtureDb();
+    // Mutate two York receipts to different raw spellings with same normalized identity.
+    const yorkIds = ['r1', 'r2', 'r3'];
+    for (const id of yorkIds) {
+      const receipt = db.receipts.get(id)!;
+      db.receipts.set(id, {
+        ...receipt,
+        merchantRaw: id === 'r1' ? 'York Benimaru Furukawa' : 'YORK BENIMARU',
+        merchantNormalized: 'York',
+      });
+    }
+    const summary = await load(db, { type: 'family', key: 'milk' });
     expect(summary.merchants.map((merchant) => merchant.merchantName)).toEqual([
       'York',
       'FamilyMart',

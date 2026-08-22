@@ -106,6 +106,11 @@ function positiveFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+/** Transaction/occurrence timestamp suitable for price history (never invent "now"). */
+function hasValidOccurredAt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 function knownCurrency(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const currency = value.trim();
@@ -179,7 +184,7 @@ function finalizeCandidates(
     (
       candidate
     ): candidate is ComparableCandidate & { currency: string } =>
-      candidate.currency != null
+      candidate.currency != null && hasValidOccurredAt(candidate.row.occurredAt)
   );
   const currencies = new Set(
     knownCandidates.map((candidate) => candidate.currency)

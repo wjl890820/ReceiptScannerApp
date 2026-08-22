@@ -303,8 +303,8 @@ export async function loadProductHistoryWithDb(
   const merchants = await db.getAllAsync<ProductMerchantSummary>(
     `SELECT
        COALESCE(
-         NULLIF(TRIM(receipts.merchant_raw), ''),
-         NULLIF(TRIM(receipts.merchant_normalized), '')
+         NULLIF(TRIM(receipts.merchant_normalized), ''),
+         NULLIF(TRIM(receipts.merchant_raw), '')
        ) AS merchantName,
        COUNT(*) AS purchaseOccurrenceCount,
        MAX(COALESCE(receipts.transaction_at, receipts.created_at)) AS lastPurchasedAt
