@@ -9,10 +9,12 @@ jest.mock('./db', () => ({
 }));
 
 import {
+  aggregateProductMerchantsByAnalyticsKey,
   formatProductSpecification,
   loadProductHistoryWithDb,
   type ProductHistoryDatabase,
 } from './productHistory';
+import { merchantAnalyticsKey } from './merchantAnalytics';
 import type { AggregatableProductDetailTarget } from './productDetailTarget';
 
 type ReceiptFixture = {
@@ -146,32 +148,20 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([currency, totalSpend]) => ({ currency, totalSpend })) as T[];
     }
-    if (/GROUP BY merchantName/i.test(source)) {
-      const merchants = new Map<
-        string,
-        { purchaseOccurrenceCount: number; lastPurchasedAt: number }
-      >();
-      for (const item of matching) {
+    if (
+      /AS merchantRaw/i.test(source) &&
+      /AS purchasedAt/i.test(source) &&
+      !/AS receiptId/i.test(source)
+    ) {
+      // R1-B3c: merchant evidence rows; grouping happens via merchantAnalyticsKey in app layer.
+      return matching.map((item) => {
         const receipt = this.receipts.get(item.receiptId)!;
-        const merchantName = receipt.merchantNormalized || receipt.merchantRaw;
-        const current = merchants.get(merchantName) ?? {
-          purchaseOccurrenceCount: 0,
-          lastPurchasedAt: 0,
+        return {
+          merchantRaw: receipt.merchantRaw,
+          merchantNormalized: receipt.merchantNormalized,
+          purchasedAt: this.purchasedAt(item),
         };
-        current.purchaseOccurrenceCount += 1;
-        current.lastPurchasedAt = Math.max(
-          current.lastPurchasedAt,
-          this.purchasedAt(item)
-        );
-        merchants.set(merchantName, current);
-      }
-      return [...merchants.entries()]
-        .map(([merchantName, value]) => ({ merchantName, ...value }))
-        .sort(
-          (left, right) =>
-            right.purchaseOccurrenceCount - left.purchaseOccurrenceCount ||
-            right.lastPurchasedAt - left.lastPurchasedAt
-        ) as T[];
+      }) as T[];
     }
     if (/GROUP BY\s+receipt_items\.spec_size_value/i.test(source)) {
       const variants = new Map<string, ItemFixture & { count: number }>();
@@ -464,8 +454,9 @@ describe('Product History grouping', () => {
       });
     }
     const summary = await load(db, { type: 'family', key: 'milk' });
+    // Display uses latest observation's raw||normalized (r2), not the analytics key.
     expect(summary.merchants.map((merchant) => merchant.merchantName)).toEqual([
-      'York',
+      'YORK BENIMARU',
       'FamilyMart',
       'AEON',
     ]);
@@ -563,5 +554,144 @@ describe('formatProductSpecification', () => {
         sourceText: '10個',
       }, 'ja')
     ).toBe('10個');
+  });
+});
+
+describe('R1-B3c product merchant grouping via merchantAnalyticsKey', () => {
+  it('applies normalizeMerchantName so trailing 店 / case collapse', () => {
+    const merchants = aggregateProductMerchantsByAnalyticsKey([
+      {
+        merchantRaw: 'セブン-イレブン渋谷店',
+        merchantNormalized: 'セブン-イレブン',
+        purchasedAt: 1,
+      },
+      {
+        merchantRaw: 'セブン-イレブン',
+        merchantNormalized: 'セブン-イレブン',
+        purchasedAt: 2,
+      },
+    ]);
+    expect(merchants).toHaveLength(1);
+    expect(merchants[0].purchaseOccurrenceCount).toBe(2);
+    // Same SSOT as Analysis.
+    expect(
+      merchantAnalyticsKey({
+        merchant_raw: 'セブン-イレブン渋谷店',
+        merchant_normalized: 'セブン-イレブン',
+      })
+    ).toBe(
+      merchantAnalyticsKey({
+        merchant_raw: 'セブン-イレブン',
+        merchant_normalized: 'セブン-イレブン',
+      })
+    );
+  });
+
+  it('keeps Gyomu / York branch-looking analytics keys distinct', () => {
+    const furukawa = merchantAnalyticsKey({
+      merchant_raw: '業務スーパー古川',
+      merchant_normalized: '業務スーパー古川',
+    });
+    const sendai = merchantAnalyticsKey({
+      merchant_raw: '業務スーパー仙台',
+      merchant_normalized: '業務スーパー仙台',
+    });
+    expect(furukawa).not.toBe(sendai);
+
+    const merchants = aggregateProductMerchantsByAnalyticsKey([
+      {
+        merchantRaw: '業務スーパー古川',
+        merchantNormalized: '業務スーパー古川',
+        purchasedAt: 1,
+      },
+      {
+        merchantRaw: '業務スーパー仙台',
+        merchantNormalized: '業務スーパー仙台',
+        purchasedAt: 2,
+      },
+      {
+        merchantRaw: 'ヨークベニマル古川店',
+        merchantNormalized: 'ヨークベニマル古川店',
+        purchasedAt: 3,
+      },
+    ]);
+    expect(merchants).toHaveLength(3);
+    expect(merchants.map((m) => m.merchantName).sort()).toEqual(
+      [
+        '業務スーパー古川',
+        '業務スーパー仙台',
+        'ヨークベニマル古川店',
+      ].sort()
+    );
+  });
+
+  it('groups same-key observations and keeps different keys separate', () => {
+    const merchants = aggregateProductMerchantsByAnalyticsKey([
+      {
+        merchantRaw: 'FamilyMart A',
+        merchantNormalized: 'ファミリーマート',
+        purchasedAt: 1,
+      },
+      {
+        merchantRaw: 'ファミリーマート 駅前店',
+        merchantNormalized: 'ファミリーマート',
+        purchasedAt: 3,
+      },
+      {
+        merchantRaw: 'ローソン',
+        merchantNormalized: 'ローソン',
+        purchasedAt: 2,
+      },
+    ]);
+    expect(merchants).toHaveLength(2);
+    const family = merchants.find((m) =>
+      (m.merchantName ?? '').includes('ファミリー')
+    );
+    expect(family?.purchaseOccurrenceCount).toBe(2);
+    expect(family?.merchantName).toBe('ファミリーマート 駅前店'); // latest display
+  });
+
+  it('display can differ from merchantAnalyticsKey', () => {
+    const merchants = aggregateProductMerchantsByAnalyticsKey([
+      {
+        merchantRaw: 'ヨークベニマル古川店',
+        merchantNormalized: 'ヨークベニマル',
+        purchasedAt: 5,
+      },
+    ]);
+    const key = merchantAnalyticsKey({
+      merchant_raw: 'ヨークベニマル古川店',
+      merchant_normalized: 'ヨークベニマル',
+    });
+    expect(merchants[0].merchantName).toBe('ヨークベニマル古川店');
+    expect(merchants[0].merchantName).not.toBe(key);
+  });
+
+  it('B3b-edited merchant evidence composes into Product Detail grouping', () => {
+    // Simulate persisted fields after B3b edit to セブン-イレブン.
+    const edited = {
+      merchant_raw: 'セブン-イレブン',
+      merchant_normalized: 'セブン-イレブン',
+    };
+    const key = merchantAnalyticsKey(edited);
+    const merchants = aggregateProductMerchantsByAnalyticsKey([
+      {
+        merchantRaw: edited.merchant_raw,
+        merchantNormalized: edited.merchant_normalized,
+        purchasedAt: 10,
+      },
+      {
+        merchantRaw: 'セブンイレブン 渋谷店',
+        merchantNormalized: 'セブン-イレブン',
+        purchasedAt: 11,
+      },
+    ]);
+    expect(merchants).toHaveLength(1);
+    expect(
+      merchantAnalyticsKey({
+        merchant_raw: merchants[0].merchantName,
+        merchant_normalized: 'セブン-イレブン',
+      })
+    ).toBe(key);
   });
 });

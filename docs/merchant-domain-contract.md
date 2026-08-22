@@ -1,6 +1,6 @@
 # Merchant Domain Contract (R1-B1–B3a)
 
-**Status:** R1-B1 frozen; R1-B2 `DerivedRetailerIdentity`; R1-B3a `RetailerProfile`; R1-B3b merchant-edit consistency.
+**Status:** R1-B1 frozen; R1-B2 `DerivedRetailerIdentity`; R1-B3a `RetailerProfile`; R1-B3b merchant-edit consistency; R1-B3c Product Detail merchant grouping via merchantAnalyticsKey.
 **Scope:** No retailer/store DB tables, migrations, backfill, receipt rewrite, analytics wiring, or UI consumption of profile yet.
 
 Analysis D production universe and duplicate fingerprints remain frozen. `merchantAnalyticsKey` outputs must stay byte-identical for existing fixtures.
@@ -208,7 +208,9 @@ Non-merchant updates (note / same merchant analysis) must **not** churn merchant
 
 Still open (not B3b):
 
-1. Product Detail / price-history merchant grouping may not always align with `merchantAnalyticsKey`.
+~~1. Product Detail / price-history merchant grouping may not always align with `merchantAnalyticsKey`.~~
+
+**R1-B3c:** Product Detail merchant stores list now groups via `merchantAnalyticsKey` in the application layer (`aggregateProductMerchantsByAnalyticsKey`). Display remains `merchant_raw || merchant_normalized` from the latest observation. Price history still does not group by merchant (raw evidence only). RetailerIdentity / RetailerProfile are not used for Product Detail grouping.
 
 ---
 

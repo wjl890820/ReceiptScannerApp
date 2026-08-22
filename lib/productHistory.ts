@@ -2,6 +2,7 @@ import type * as SQLite from 'expo-sqlite';
 import * as ExpoSQLite from 'expo-sqlite';
 
 import { initIfNeeded } from './db';
+import { merchantAnalyticsKey } from './merchantAnalytics';
 import type {
   AggregatableProductDetailTarget,
   ProductDetailTarget,
@@ -110,6 +111,70 @@ function nullableTimestamp(value: unknown): number | null {
   return Number.isFinite(numberValue) && numberValue > 0
     ? numberValue
     : null;
+}
+
+export type ProductMerchantEvidenceRow = {
+  merchantRaw: string | null;
+  merchantNormalized: string | null;
+  purchasedAt: number;
+};
+
+/**
+ * Group product-history merchant observations by the frozen production identity
+ * `merchantAnalyticsKey` (R1-B3c).
+ *
+ * Display (`merchantName`) stays historical evidence:
+ * `merchant_raw || merchant_normalized` from the latest observation in the group.
+ * Do NOT show the analytics key as the store label.
+ */
+export function aggregateProductMerchantsByAnalyticsKey(
+  rows: readonly ProductMerchantEvidenceRow[]
+): ProductMerchantSummary[] {
+  type Acc = {
+    merchantName: string | null;
+    purchaseOccurrenceCount: number;
+    lastPurchasedAt: number;
+  };
+  const byKey = new Map<string, Acc>();
+
+  for (const row of rows) {
+    const key = merchantAnalyticsKey({
+      merchant_raw: row.merchantRaw,
+      merchant_normalized: row.merchantNormalized,
+    });
+    // Preserve empty-merchant bucket as one group (matches prior COALESCE null group).
+    const mapKey = key;
+    const purchasedAt = finiteNumber(row.purchasedAt);
+    const display =
+      (typeof row.merchantRaw === 'string' && row.merchantRaw.trim()
+        ? row.merchantRaw.trim()
+        : null) ||
+      (typeof row.merchantNormalized === 'string' && row.merchantNormalized.trim()
+        ? row.merchantNormalized.trim()
+        : null);
+
+    const current = byKey.get(mapKey);
+    if (!current) {
+      byKey.set(mapKey, {
+        merchantName: display,
+        purchaseOccurrenceCount: 1,
+        lastPurchasedAt: purchasedAt,
+      });
+      continue;
+    }
+    current.purchaseOccurrenceCount += 1;
+    if (purchasedAt >= current.lastPurchasedAt) {
+      current.lastPurchasedAt = purchasedAt;
+      // Prefer latest observation's display evidence.
+      current.merchantName = display;
+    }
+  }
+
+  return [...byKey.values()].sort(
+    (left, right) =>
+      right.purchaseOccurrenceCount - left.purchaseOccurrenceCount ||
+      right.lastPurchasedAt - left.lastPurchasedAt
+  );
 }
 
 /** SQL fragment to exclude high-confidence duplicate receipt ids from product history. */
@@ -321,21 +386,19 @@ export async function loadProductHistoryWithDb(
     whereParams
   );
 
-  const merchants = await db.getAllAsync<ProductMerchantSummary>(
+  // R1-B3c: read merchant evidence, group by merchantAnalyticsKey in app layer
+  // (SQL cannot safely replicate normalizeMerchantName). Display stays raw||normalized.
+  const merchantEvidence = await db.getAllAsync<ProductMerchantEvidenceRow>(
     `SELECT
-       COALESCE(
-         NULLIF(TRIM(receipts.merchant_normalized), ''),
-         NULLIF(TRIM(receipts.merchant_raw), '')
-       ) AS merchantName,
-       COUNT(*) AS purchaseOccurrenceCount,
-       MAX(COALESCE(receipts.transaction_at, receipts.created_at)) AS lastPurchasedAt
+       receipts.merchant_raw AS merchantRaw,
+       receipts.merchant_normalized AS merchantNormalized,
+       COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${whereSql}
-     GROUP BY merchantName
-     ORDER BY purchaseOccurrenceCount DESC, lastPurchasedAt DESC`,
+     WHERE ${whereSql}`,
     whereParams
   );
+  const merchants = aggregateProductMerchantsByAnalyticsKey(merchantEvidence);
 
   const specificationVariants = await db.getAllAsync<ProductSpecificationVariant>(
     `SELECT
