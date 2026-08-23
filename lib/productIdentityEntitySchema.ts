@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS merchant_products (
   normalized_name TEXT,
   brand TEXT,
   attributes_json TEXT,
+  semantic_json TEXT,
+  semantic_status TEXT,
+  semantic_confidence REAL,
+  semantic_resolver_version TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   resolver_version TEXT NOT NULL
@@ -107,6 +111,10 @@ CREATE INDEX IF NOT EXISTS idx_receipt_item_identity_links_fingerprint
  */
 export const PRODUCT_IDENTITY_ENTITY_SCHEMA_ALTER_SQL = [
   `ALTER TABLE merchant_products ADD COLUMN comparison_key TEXT`,
+  `ALTER TABLE merchant_products ADD COLUMN semantic_json TEXT`,
+  `ALTER TABLE merchant_products ADD COLUMN semantic_status TEXT`,
+  `ALTER TABLE merchant_products ADD COLUMN semantic_confidence REAL`,
+  `ALTER TABLE merchant_products ADD COLUMN semantic_resolver_version TEXT`,
 ];
 
 export async function ensureProductIdentityEntitySchema(

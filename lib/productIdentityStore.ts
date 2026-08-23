@@ -12,6 +12,8 @@ import {
   type ProductIdentityLevel,
   type ReceiptItemIdentityLink,
 } from './productIdentityContract';
+import type { MerchantProductSemanticCache } from './productIdentitySemanticContract';
+import type { SemanticStatus } from './productIdentitySemanticGate';
 
 export type MerchantProductRecord = {
   id: string;
@@ -24,6 +26,11 @@ export type MerchantProductRecord = {
   createdAt: string;
   updatedAt: string;
   resolverVersion: string;
+  /** Batch 4 — cached semantic enrichment (derived; not receipt SoT). */
+  semanticStatus?: SemanticStatus | null;
+  semanticJson?: MerchantProductSemanticCache | null;
+  semanticConfidence?: number | null;
+  semanticResolverVersion?: string | null;
 };
 
 export type ReceiptItemIdentityLinkRecord = ReceiptItemIdentityLink & {
@@ -45,6 +52,10 @@ export type UpsertMerchantProductInput = {
   normalizedName: string | null;
   brand: string | null;
   attributes: ProductAttributes | null;
+  semanticStatus?: SemanticStatus | null;
+  semanticJson?: MerchantProductSemanticCache | null;
+  semanticConfidence?: number | null;
+  semanticResolverVersion?: string | null;
 };
 
 export type ProductIdentityStore = {
@@ -54,6 +65,11 @@ export type ProductIdentityStore = {
     comparisonKey: string
   ): MerchantProductRecord | null;
   upsertMerchantProduct(input: UpsertMerchantProductInput): MerchantProductRecord;
+  /** Persist AI semantic cache on MerchantProduct (Batch 4). */
+  saveMerchantProductSemantic(
+    merchantProductId: string,
+    cache: MerchantProductSemanticCache
+  ): MerchantProductRecord | null;
   getCanonicalProduct(id: string): CanonicalProduct | null;
   upsertCanonicalProduct(
     input: Omit<CanonicalProduct, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
@@ -109,8 +125,41 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         resolverVersion: PRODUCT_IDENTITY_RESOLVER_VERSION,
+        semanticStatus:
+          input.semanticStatus !== undefined
+            ? input.semanticStatus
+            : existing?.semanticStatus ?? null,
+        semanticJson:
+          input.semanticJson !== undefined
+            ? input.semanticJson
+            : existing?.semanticJson ?? null,
+        semanticConfidence:
+          input.semanticConfidence !== undefined
+            ? input.semanticConfidence
+            : existing?.semanticConfidence ?? null,
+        semanticResolverVersion:
+          input.semanticResolverVersion !== undefined
+            ? input.semanticResolverVersion
+            : existing?.semanticResolverVersion ?? null,
       };
       merchants.set(id, row);
+      return row;
+    },
+
+    saveMerchantProductSemantic(merchantProductId, cache) {
+      const existing = merchants.get(merchantProductId);
+      if (!existing) return null;
+      const row: MerchantProductRecord = {
+        ...existing,
+        semanticStatus: cache.status,
+        semanticJson: cache,
+        semanticConfidence: cache.confidence,
+        semanticResolverVersion: cache.semanticResolverVersion,
+        brand: cache.brand ?? existing.brand,
+        attributes: cache.attributes ?? existing.attributes,
+        updatedAt: nowIso(),
+      };
+      merchants.set(merchantProductId, row);
       return row;
     },
 

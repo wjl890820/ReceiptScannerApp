@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS public.merchant_products (
   normalized_name TEXT,
   brand TEXT,
   attributes_json TEXT,
+  semantic_json TEXT,
+  semantic_status TEXT,
+  semantic_confidence REAL,
+  semantic_resolver_version TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolver_version TEXT NOT NULL,
@@ -30,6 +34,11 @@ CREATE TABLE IF NOT EXISTS public.merchant_products (
     CHECK (
       attributes_json IS NULL
       OR attributes_json::json IS NOT NULL
+    ),
+  CONSTRAINT merchant_products_semantic_json_valid
+    CHECK (
+      semantic_json IS NULL
+      OR semantic_json::json IS NOT NULL
     )
 );
 

@@ -195,17 +195,20 @@ describe('applyBatchAiResults: 应用/建议/保护本地结果', () => {
 });
 
 describe('runBatchAiFallback: 编排 + 单次请求 + 容错', () => {
-  it('无 uncategorized → 不发请求', async () => {
-    const items = [item({ category: 'food_ingredients' }), item({ category: 'snacks_drinks' })];
+  it('无 uncategorized 且语义充足 → 不发请求', async () => {
+    const items = [
+      item({ name: '豆腐', normalized_name: '豆腐', category: 'food_ingredients' }),
+      item({ name: '牛乳1L', normalized_name: '牛乳1L', category: 'food_ingredients' }),
+    ];
     const classify = jest.fn();
     const r = await runBatchAiFallback(items, {}, { classify });
     expect(r.called).toBe(false);
     expect(classify).not.toHaveBeenCalled();
   });
 
-  it('多个 uncategorized 只触发一次 batch，且只发送 uncategorized', async () => {
+  it('多个 uncategorized 只触发一次 batch；代码已理解的商品不送 semantic', async () => {
     const items = [
-      item({ name: '豆腐', category: 'food_ingredients' }),
+      item({ name: '豆腐', normalized_name: '豆腐', category: 'food_ingredients' }),
       item({ name: 'A', category: 'uncategorized' }),
       item({ name: 'B', category: 'uncategorized' }),
       item({ name: 'C', category: 'uncategorized' }),
@@ -218,6 +221,7 @@ describe('runBatchAiFallback: 编排 + 单次请求 + 容错', () => {
     const sentArg = classify.mock.calls[0][0] as BatchAiInputItem[];
     expect(sentArg.map((s) => s.index)).toEqual([1, 2, 3]);
     expect(r.appliedCount).toBe(3);
+    expect(r.semantic).toBeDefined();
   });
 
   it('AI timeout（classify 返回 null）→ 不抛错，保持 uncategorized', async () => {
@@ -253,7 +257,7 @@ describe('runBatchAiFallback: 编排 + 单次请求 + 容错', () => {
 
   it('batch 成功后“待确认”数量减少', async () => {
     const items = [
-      item({ name: '豆腐', category: 'food_ingredients' }),
+      item({ name: '豆腐', normalized_name: '豆腐', category: 'food_ingredients' }),
       item({ name: 'A', category: 'uncategorized' }),
       item({ name: 'B', category: 'uncategorized' }),
       item({ name: 'C', category: 'uncategorized' }),
