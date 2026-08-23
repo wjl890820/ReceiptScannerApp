@@ -22,9 +22,12 @@ import type { ProductSpecification } from './productSpecification';
 export const PRODUCT_IDENTITY_CONTRACT_VERSION =
   'meruno-product-identity-contract-v1' as const;
 
-/** Future resolver stamp — unused by live enrichment in Batch 1. */
+/**
+ * Resolver stamp. Batch 3 shadow resolver uses v1.
+ * Live Analysis enrichment still does not consume these links.
+ */
 export const PRODUCT_IDENTITY_RESOLVER_VERSION =
-  'meruno-product-identity-resolver-v0' as const;
+  'meruno-product-identity-resolver-v1' as const;
 
 /**
  * Identity strength ladder. Lower rows do not imply higher ones.
@@ -55,7 +58,17 @@ export type ProductIdentitySourceV1 =
   | 'unknown'
   | 'resolver_v1'
   | 'semantic_enrichment'
-  | 'manual';
+  | 'manual'
+  /** Batch 3 resolution provenance (no AI). */
+  | 'cache'
+  | 'merchant_exact'
+  | 'alias_exact'
+  | 'dictionary_exact'
+  | 'normalized_exact'
+  | 'fuzzy_exact'
+  | 'family_spec'
+  | 'family_only'
+  | 'unresolved';
 
 /** Known physical / pack attribute dimensions (open set — string allows growth). */
 export type ProductAttributeDimension =
@@ -94,6 +107,8 @@ export type ProductAttributes = {
 export type MerchantProduct = {
   id: string;
   merchantKey: string;
+  /** Deterministic same-merchant lookup key (from universal normalizer). */
+  comparisonKey: string | null;
   canonicalDisplayName: string | null;
   normalizedName: string | null;
   brand: string | null;

@@ -192,11 +192,16 @@ describe('productIdentityEntitySchema (Batch 1 additive)', () => {
     };
     await ensureProductIdentityEntitySchema(db);
     await ensureProductIdentityEntitySchema(db);
-    expect(executed).toHaveLength(2);
+    // CREATE SQL + optional ALTER comparison_key (idempotent retries).
+    expect(executed.length).toBeGreaterThanOrEqual(2);
     expect(PRODUCT_IDENTITY_ENTITY_SCHEMA_SQL).toContain('merchant_products');
     expect(PRODUCT_IDENTITY_ENTITY_SCHEMA_SQL).toContain('canonical_products');
     expect(PRODUCT_IDENTITY_ENTITY_SCHEMA_SQL).toContain('product_variants');
     expect(PRODUCT_IDENTITY_ENTITY_SCHEMA_SQL).toContain('attributes_json');
+    expect(PRODUCT_IDENTITY_ENTITY_SCHEMA_SQL).toContain('comparison_key');
+    expect(PRODUCT_IDENTITY_ENTITY_SCHEMA_SQL).toContain(
+      'receipt_item_identity_links'
+    );
     expect(PRODUCT_IDENTITY_ENTITY_SCHEMA_SQL).toMatch(/jan_code TEXT/);
   });
 });
