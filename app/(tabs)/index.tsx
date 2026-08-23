@@ -514,11 +514,16 @@ export default function HomeScreen() {
   }, [router]);
 
   return (
-    <View style={styles.screenContainer}>
+    <View
+      style={[
+        styles.screenContainer,
+        { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap },
+      ]}
+    >
       <ScrollView
         contentContainerStyle={[
           styles.container,
-          { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap, paddingBottom: bottomPadding },
+          { paddingBottom: bottomPadding },
         ]}
       >
         <ProgressiveHomeInsights
@@ -570,7 +575,7 @@ const styles = StyleSheet.create({
     backgroundColor: UI_COLORS.surfaceMuted,
   },
   container: {
-    paddingTop: 16,
+    paddingTop: 0,
     paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingBottom: 40,
   },

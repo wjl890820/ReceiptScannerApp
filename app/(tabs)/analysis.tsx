@@ -113,12 +113,17 @@ export default function AnalysisScreen() {
   };
 
   return (
+    <View
+      style={[
+        styles.screen,
+        { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap },
+      ]}
+    >
     <ScrollView
-      style={styles.screen}
+      style={styles.scroll}
       contentContainerStyle={[
         styles.container,
         {
-          paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap,
           paddingBottom:
             UI_LAYOUT.tabContentClearance + Math.max(insets.bottom, 0),
         },
@@ -364,6 +369,7 @@ export default function AnalysisScreen() {
         ? null
         : null}
     </ScrollView>
+    </View>
   );
 }
 
@@ -371,6 +377,9 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: UI_COLORS.surfaceMuted,
+  },
+  scroll: {
+    flex: 1,
   },
   container: {
     paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
