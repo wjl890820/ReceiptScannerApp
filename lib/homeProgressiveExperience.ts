@@ -1,4 +1,5 @@
 import type { ReceiptRow } from './db';
+import type { EngagementProductRow } from './engagementMilestones';
 import {
   buildReceiptShoppingSummary,
   buildThreeReceiptMilestone,
@@ -11,6 +12,12 @@ import {
   type TenReceiptMilestone,
   type ThreeReceiptMilestone,
 } from './engagementMilestones';
+import {
+  buildLongTermFrequentProductProfiles,
+  mapFrequentProductProfileToHomeFrequentProduct,
+  sumPurchaseQuantityForProfile,
+  takeHomeLongTermFrequentProducts,
+} from './frequentProductProfile';
 import { filterV1SupportedReceipts } from './merchantType';
 
 export type ProgressiveHomeStage =
@@ -26,6 +33,12 @@ export type HomeProgressiveExperience = {
   status: EngagementMilestoneStatus;
   latestPurchase: ReceiptShoppingSummary | null;
   recentInsight: ThreeReceiptMilestone | null;
+  /**
+   * Home「常购商品」— long-term FrequentProductProfile (distinct receipts),
+   * mapped onto MilestoneFrequentProduct for existing UI/href contracts.
+   * purchaseOccurrenceCount = distinctReceiptCount.
+   * Milestone recent-window frequentProducts remain on milestone results only.
+   */
   frequentProducts: MilestoneFrequentProduct[];
   profile: TenReceiptMilestone | null;
   dataCoverageIncomplete: boolean;
@@ -50,10 +63,36 @@ function receiptTimestamp(receipt: ReceiptRow): number {
     : 0;
 }
 
+function buildHomeLongTermFrequentProducts(
+  analyticsReceipts: ReceiptRow[],
+  productRows: readonly EngagementProductRow[]
+): MilestoneFrequentProduct[] {
+  const supported = filterV1SupportedReceipts(analyticsReceipts);
+  const profiles = takeHomeLongTermFrequentProducts(
+    buildLongTermFrequentProductProfiles(supported, productRows)
+  );
+  return profiles.map((profile) =>
+    mapFrequentProductProfileToHomeFrequentProduct(profile, {
+      totalPurchaseQuantity: sumPurchaseQuantityForProfile(
+        profile,
+        productRows
+      ),
+    })
+  ) as MilestoneFrequentProduct[];
+}
+
+/**
+ * @param receipts Already analytics-selected purchase candidates (Home passes
+ *   selectAnalyticsReceipts(...).analyticsReceipts).
+ * @param productRows Analytics-filtered engagement product rows (optional).
+ *   When omitted / empty and stage is unlocked, frequent list is empty rather
+ *   than falling back to milestone recent-window frequentProducts.
+ */
 export function buildHomeProgressiveExperience(
   receipts: ReceiptRow[],
   evaluation: CurrentEngagementMilestoneEvaluation | null,
-  analyticsUnavailable = false
+  analyticsUnavailable = false,
+  productRows: readonly EngagementProductRow[] = []
 ): HomeProgressiveExperience {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const localCount = countSupportedReceipts(receipts);
@@ -73,10 +112,11 @@ export function buildHomeProgressiveExperience(
       ? buildThreeReceiptMilestone(supportedReceipts)
       : null;
   const currentResult = evaluation?.currentResult ?? null;
-  const frequentProducts =
-    currentResult?.milestone === 5 || currentResult?.milestone === 10
-      ? currentResult.frequentProducts
-      : [];
+  // Stage gate unchanged (frequent | profile). Data source = long-term SSOT.
+  const frequentUnlocked = stage === 'frequent' || stage === 'profile';
+  const frequentProducts = frequentUnlocked
+    ? buildHomeLongTermFrequentProducts(receipts, productRows)
+    : [];
   const profile =
     currentResult?.milestone === 10 ? currentResult : null;
   const dataCoverageIncomplete =

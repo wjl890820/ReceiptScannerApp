@@ -40,6 +40,7 @@ import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from '@/lib/db';
 import {
   evaluateCurrentEngagementMilestone,
+  loadEngagementProductInsightContext,
   type MilestoneFrequentProduct,
 } from '@/lib/engagementMilestones';
 import {
@@ -86,9 +87,17 @@ export default function HomeScreen() {
         selectAnalyticsReceipts(allReceipts).analyticsReceipts;
       setHomeExperience(buildHomeProgressiveExperience(analyticsReceipts, null));
       try {
-        const evaluation = await evaluateCurrentEngagementMilestone();
+        const [evaluation, productContext] = await Promise.all([
+          evaluateCurrentEngagementMilestone(),
+          loadEngagementProductInsightContext(),
+        ]);
         setHomeExperience(
-          buildHomeProgressiveExperience(analyticsReceipts, evaluation)
+          buildHomeProgressiveExperience(
+            analyticsReceipts,
+            evaluation,
+            false,
+            productContext.rows
+          )
         );
       } catch (analyticsError) {
         logger.warn('Home', 'progressive analytics failed', {

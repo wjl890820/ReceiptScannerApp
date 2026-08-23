@@ -1207,6 +1207,20 @@ export async function evaluateSavedReceiptMilestone(
   return evaluateSavedReceiptMilestoneWithDb(db, savedReceiptId, options);
 }
 
+
+/**
+ * Load analytics-deduped product insight rows for long-term Home frequent
+ * profiles. Reuses the same selectAnalyticsReceipts exclusion set as
+ * evaluateCurrentEngagementMilestone — no second duplicate policy.
+ */
+export async function loadEngagementProductInsightContext(): Promise<MilestoneProductInsightContext> {
+  const db = await getEngagementMilestoneDb();
+  const receipts = await readAllReceipts(db);
+  const { excludedDuplicateReceiptIds } =
+    await selectEngagementAnalyticsReceipts(receipts);
+  return readProductInsightContext(db, excludedDuplicateReceiptIds);
+}
+
 export async function evaluateCurrentEngagementMilestone(
   options: { generatedAt?: number } = {}
 ): Promise<CurrentEngagementMilestoneEvaluation> {
