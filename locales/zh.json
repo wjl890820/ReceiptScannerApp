@@ -413,7 +413,8 @@
     "subtitle": {
       "sku": "同一规格的购买价格记录",
       "canonical": "已按规格换算为统一单位",
-      "family": "不同品牌按统一规格单位展示"
+      "family": "不同品牌按统一规格单位展示",
+      "merchantProduct": "同一商店中该商品的购买价格记录"
     },
     "kind": {
       "purchase_unit": "每件价格",
@@ -434,7 +435,9 @@
       "ambiguousDimension": "购买记录包含不兼容的规格，暂时无法安全合并比较。",
       "mixedCurrency": "存在不同币种记录，暂不合并比较。",
       "unknownCurrency": "部分购买记录缺少明确币种，暂时无法安全比较。"
-    }
+    },
+    "titleMerchantLocal": "在这家店的购买价格历史",
+    "qualityNote": "部分记录已从价格比较中排除。"
   },
   "postSaveSummary": {
     "saved": "购物记录已保存",

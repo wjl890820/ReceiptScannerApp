@@ -84,7 +84,7 @@ export type FrequentProductPriceSummary = {
 };
 
 export type MilestoneFrequentProduct = {
-  groupingType: 'canonical' | 'family' | 'sku';
+  groupingType: 'canonical' | 'family' | 'sku' | 'merchant_product';
   key: string;
   displayLabel: string;
   displayLabelKey: string | null;

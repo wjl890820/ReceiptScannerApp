@@ -413,7 +413,8 @@
     "subtitle": {
       "sku": "Purchase prices for the same specification",
       "canonical": "Specifications are normalized to a common unit",
-      "family": "Different brands shown using a common specification unit"
+      "family": "Different brands shown using a common specification unit",
+      "merchantProduct": "Prices for this product at the same store"
     },
     "kind": {
       "purchase_unit": "Price per purchase unit",
@@ -434,7 +435,9 @@
       "ambiguousDimension": "The purchases contain incompatible specifications and cannot be safely combined.",
       "mixedCurrency": "Purchases in different currencies cannot be combined.",
       "unknownCurrency": "Some purchases do not have a known currency and cannot be safely compared."
-    }
+    },
+    "titleMerchantLocal": "Price history at this store",
+    "qualityNote": "Some records were excluded from price comparison."
   },
   "postSaveSummary": {
     "saved": "Shopping record saved",

@@ -2,6 +2,7 @@ export type ProductDetailTarget =
   | { type: 'sku'; key: string }
   | { type: 'canonical'; key: string }
   | { type: 'family'; key: string }
+  | { type: 'merchant_product'; key: string }
   | { type: 'occurrence'; receiptId: string; itemId: string };
 
 export type AggregatableProductDetailTarget = Exclude<
@@ -100,7 +101,8 @@ export function parseProductDetailTarget(
   if (
     targetType !== 'sku' &&
     targetType !== 'canonical' &&
-    targetType !== 'family'
+    targetType !== 'family' &&
+    targetType !== 'merchant_product'
   ) {
     return null;
   }

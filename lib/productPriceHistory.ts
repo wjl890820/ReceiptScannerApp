@@ -46,6 +46,18 @@ export type ProductPriceComparisonEligibility = {
 export type ProductPriceHistoryResult = ProductPriceComparisonEligibility & {
   target: ProductDetailTarget;
   points: ProductPriceHistoryPoint[];
+  /**
+   * Batch 5B — when identity merchant-local path wins.
+   * UI should prefer these copy keys over legacy subtitle by target type.
+   */
+  identityPresentation?: {
+    strategy: 'same_merchant_product';
+    titleKey: 'priceHistory.titleMerchantLocal';
+    subtitleKey: 'priceHistory.subtitle.merchantProduct';
+    trendInsightEligible: boolean;
+    qualityExcludedCount: number;
+    merchantProductId: string;
+  } | null;
 };
 
 export type ProductPriceHistoryRow = {
@@ -364,6 +376,10 @@ function filterForTarget(target: Exclude<ProductDetailTarget, { type: 'occurrenc
       params: [target.key],
     };
   }
+  if (target.type === 'merchant_product') {
+    // Resolve across merchant items, then filter by MerchantProduct id in memory.
+    return { sql: '1 = 1', params: [] };
+  }
   return {
     sql: 'receipt_items.product_family_key = ?',
     params: [target.key],
@@ -423,6 +439,85 @@ export async function loadProductPriceHistoryWithDb(
     excluded && excluded.size > 0
       ? rows.filter((row) => !excluded.has(row.receiptId))
       : rows;
+
+  // Batch 5B: identity merchant-local path (flagged), else legacy.
+  try {
+    const { isProductIdentityPriceHistoryV1Enabled } = await import('./env');
+    if (isProductIdentityPriceHistoryV1Enabled()) {
+      const { tryBuildIdentityPriceHistoryForRows } = await import(
+        './productIdentityConsumer'
+      );
+      const preferredMpId =
+        target.type === 'merchant_product' ? target.key : null;
+      const identityView = tryBuildIdentityPriceHistoryForRows(
+        filtered,
+        preferredMpId
+      );
+      if (identityView) {
+        const currency =
+          filtered.find((r) => typeof r.currency === 'string' && r.currency.trim())
+            ?.currency ?? 'JPY';
+        const points: ProductPriceHistoryPoint[] = identityView.historyPoints.map(
+          (p) => {
+            const src =
+              filtered.find(
+                (r) =>
+                  r.receiptId === p.receiptId &&
+                  r.sourceIndex === p.itemSourceIndex
+              ) ?? null;
+            return {
+              receiptId: p.receiptId,
+              itemId: src?.itemId ?? `${p.receiptId}:${p.itemSourceIndex}`,
+              sourceIndex: p.itemSourceIndex,
+              occurredAt: p.occurredAt,
+              merchantRaw: src?.merchantRaw ?? null,
+              merchantNormalized: src?.merchantNormalized ?? identityView.merchantKey,
+              displayName: p.rawName,
+              currency: currency || 'JPY',
+              lineTotal: src?.lineTotal ?? p.purchaseUnitPrice,
+              purchaseQuantity: src?.purchaseQuantity ?? 1,
+              priceValue: p.purchaseUnitPrice,
+              priceKind: 'purchase_unit' as const,
+            };
+          }
+        );
+        return {
+          target,
+          status: points.length >= 2 ? 'ready' : 'not_enough_points',
+          priceKind: 'purchase_unit',
+          currency: currency || 'JPY',
+          totalOccurrenceCount: filtered.length,
+          comparableOccurrenceCount: points.length,
+          excludedOccurrenceCount: Math.max(0, filtered.length - points.length),
+          points,
+          identityPresentation: {
+            strategy: 'same_merchant_product',
+            titleKey: 'priceHistory.titleMerchantLocal',
+            subtitleKey: 'priceHistory.subtitle.merchantProduct',
+            trendInsightEligible: identityView.trendInsightEligible,
+            qualityExcludedCount: identityView.stats.qualityExcludedCount,
+            merchantProductId: identityView.merchantProductId,
+          },
+        };
+      }
+      if (target.type === 'merchant_product') {
+        return {
+          target,
+          status: 'not_enough_points',
+          priceKind: 'purchase_unit',
+          currency: null,
+          totalOccurrenceCount: filtered.length,
+          comparableOccurrenceCount: 0,
+          excludedOccurrenceCount: filtered.length,
+          points: [],
+          identityPresentation: null,
+        };
+      }
+    }
+  } catch {
+    // Fall through to legacy on any identity-path failure.
+  }
+
   return buildProductPriceHistory(target, filtered);
 }
 

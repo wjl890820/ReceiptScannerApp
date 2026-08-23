@@ -68,6 +68,45 @@ function buildHomeLongTermFrequentProducts(
   productRows: readonly EngagementProductRow[]
 ): MilestoneFrequentProduct[] {
   const supported = filterV1SupportedReceipts(analyticsReceipts);
+
+  try {
+    // Lazy require keeps env/identity graph out of cold home path when disabled.
+    const { isProductIdentityPriceHistoryV1Enabled } = require('./env') as typeof import('./env');
+    if (isProductIdentityPriceHistoryV1Enabled()) {
+      const {
+        buildIdentityFrequentProductGroups,
+      } = require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
+      const observations = productRows.map((row) => ({
+        receiptId: row.receiptId,
+        itemSourceIndex: row.sourceIndex,
+        rawName: row.displayName,
+        merchantKey:
+          (row.merchantNormalized || row.merchantRaw || '').trim() ||
+          'unknown_merchant',
+        occurredAt: row.occurredAt,
+        lineTotal: row.lineTotal,
+        quantity: row.purchaseQuantity,
+        displayName: row.displayName,
+      }));
+      const { groups } = buildIdentityFrequentProductGroups(observations);
+      const capped = groups.slice(0, 5);
+      if (capped.length > 0) {
+        return capped.map((g) => ({
+          groupingType: 'merchant_product' as const,
+          key: g.key,
+          displayLabel: g.displayName,
+          displayLabelKey: null,
+          purchaseOccurrenceCount: g.distinctReceiptCount,
+          totalPurchaseQuantity: 0,
+          lastPurchasedAt: g.latestPurchaseAt ?? 0,
+          priceSummary: null,
+        }));
+      }
+    }
+  } catch {
+    // Fall through to legacy grouping.
+  }
+
   const profiles = takeHomeLongTermFrequentProducts(
     buildLongTermFrequentProductProfiles(supported, productRows)
   );

@@ -5,6 +5,26 @@
 
 import { nanoid } from 'nanoid/non-secure';
 
+/** Stable MerchantProduct ids for consumer hrefs (no SQLite required). */
+export function deterministicMerchantProductId(
+  merchantKey: string,
+  comparisonKey: string
+): string {
+  const raw = `${merchantKey}\0${comparisonKey}`;
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hex = (hash >>> 0).toString(16).padStart(8, '0');
+  let hash2 = 5381;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash2 = (hash2 * 33) ^ raw.charCodeAt(i);
+  }
+  const hex2 = (hash2 >>> 0).toString(16).padStart(8, '0');
+  return `mp_${hex}${hex2}`;
+}
+
 import {
   PRODUCT_IDENTITY_RESOLVER_VERSION,
   type CanonicalProduct,
@@ -112,8 +132,24 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
 
     upsertMerchantProduct(input) {
       const now = nowIso();
-      const existing = input.id ? merchants.get(input.id) : undefined;
-      const id = existing?.id ?? input.id ?? nanoid();
+      const existingById = input.id ? merchants.get(input.id) : undefined;
+      let existingByKey: MerchantProductRecord | undefined;
+      if (!existingById && input.comparisonKey) {
+        for (const m of merchants.values()) {
+          if (
+            m.merchantKey === input.merchantKey &&
+            m.comparisonKey === input.comparisonKey
+          ) {
+            existingByKey = m;
+            break;
+          }
+        }
+      }
+      const existing = existingById ?? existingByKey;
+      const id =
+        existing?.id ??
+        input.id ??
+        deterministicMerchantProductId(input.merchantKey, input.comparisonKey);
       const row: MerchantProductRecord = {
         id,
         merchantKey: input.merchantKey,

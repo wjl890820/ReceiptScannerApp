@@ -241,6 +241,21 @@ export function isAnalysisDDiagnosticsEnabled(): boolean {
 }
 
 /**
+ * Product Identity Batch 5B — identity-backed price history + frequent products.
+ * Default ON for this branch; set ENABLE_PRODUCT_IDENTITY_PRICE_HISTORY_V1=0 to
+ * force legacy consumers immediately.
+ */
+export function isProductIdentityPriceHistoryV1Enabled(): boolean {
+  const fromEnv =
+    _envVar('ENABLE_PRODUCT_IDENTITY_PRICE_HISTORY_V1') ||
+    _envVar('EXPO_PUBLIC_ENABLE_PRODUCT_IDENTITY_PRICE_HISTORY_V1');
+  if (fromEnv) return parseEnvBool(fromEnv, true);
+  const fromExtra = getExtraValue('ENABLE_PRODUCT_IDENTITY_PRICE_HISTORY_V1', '');
+  if (fromExtra) return parseEnvBool(fromExtra, true);
+  return true;
+}
+
+/**
  * 获取备用反馈邮箱（用于 send-feedback 不可用时的兜底渠道）。
  */
 export function getSupportEmail(): string {

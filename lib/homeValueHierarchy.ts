@@ -46,9 +46,14 @@ export function homeValueSurfaceFlags(
  */
 export function buildHomeFrequentProductDetailHref(
   product: Pick<MilestoneFrequentProduct, 'groupingType' | 'key'>
-): `/product/${'sku' | 'canonical' | 'family'}?key=${string}` | null {
+): `/product/${'sku' | 'canonical' | 'family' | 'merchant_product'}?key=${string}` | null {
   const type = product.groupingType;
-  if (type !== 'sku' && type !== 'canonical' && type !== 'family') {
+  if (
+    type !== 'sku' &&
+    type !== 'canonical' &&
+    type !== 'family' &&
+    type !== 'merchant_product'
+  ) {
     return null;
   }
   const key = typeof product.key === 'string' ? product.key.trim() : '';

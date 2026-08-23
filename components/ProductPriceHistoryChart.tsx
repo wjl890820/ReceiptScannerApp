@@ -67,11 +67,16 @@ export function ProductPriceHistoryChart({
     [chartWidth, result.points]
   );
   const subtitleKey =
-    result.target.type === 'sku'
+    result.identityPresentation?.subtitleKey ??
+    (result.target.type === 'sku'
       ? 'priceHistory.subtitle.sku'
       : result.target.type === 'canonical'
         ? 'priceHistory.subtitle.canonical'
-        : 'priceHistory.subtitle.family';
+        : result.target.type === 'merchant_product'
+          ? 'priceHistory.subtitle.merchantProduct'
+          : 'priceHistory.subtitle.family');
+  const titleKey =
+    result.identityPresentation?.titleKey ?? 'priceHistory.title';
   const latest = result.points[result.points.length - 1];
   const minimumPoint =
     result.points.length > 0
@@ -88,7 +93,7 @@ export function ProductPriceHistoryChart({
 
   return (
     <>
-      <Text style={styles.title}>{t('priceHistory.title')}</Text>
+      <Text style={styles.title}>{t(titleKey)}</Text>
       <Text style={styles.subtitle}>{t(subtitleKey)}</Text>
 
       {result.status !== 'ready' ? (

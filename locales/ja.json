@@ -413,7 +413,8 @@
     "subtitle": {
       "sku": "同一規格の購入価格記録",
       "canonical": "規格を共通単位に換算しています",
-      "family": "異なるブランドを共通規格単位で表示します"
+      "family": "異なるブランドを共通規格単位で表示します",
+      "merchantProduct": "同じ店舗で購入した同一商品の価格記録"
     },
     "kind": {
       "purchase_unit": "購入単位価格",
@@ -434,7 +435,9 @@
       "ambiguousDimension": "互換性のない規格が含まれているため、安全に統合して比較できません。",
       "mixedCurrency": "異なる通貨の記録があるため、まとめて比較できません。",
       "unknownCurrency": "通貨が明確でない購入記録があるため、安全に比較できません。"
-    }
+    },
+    "titleMerchantLocal": "この店舗での価格履歴",
+    "qualityNote": "一部の記録は価格比較から除外されています。"
   },
   "postSaveSummary": {
     "saved": "買い物記録を保存しました",
