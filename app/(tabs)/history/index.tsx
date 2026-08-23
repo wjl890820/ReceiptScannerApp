@@ -20,6 +20,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { deleteReceipts, listReceiptsForList, type ReceiptListRow } from '@/lib/db';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
+import { getCategoryLabel } from '@/lib/categoryPalette';
 import {
   buildHistoryReceiptRowA11yLabel,
   buildHistorySelectModeSubtitle,
@@ -437,7 +438,9 @@ export default function HistoryScreen() {
                 result.purchaseQuantity > 1
                   ? `×${result.purchaseQuantity}`
                   : null,
-                result.category,
+                result.category
+                  ? getCategoryLabel(result.category)
+                  : null,
               ].filter((value): value is string => Boolean(value));
               const totalLabel =
                 result.lineTotal == null ? '—' : formatJPY(result.lineTotal);
