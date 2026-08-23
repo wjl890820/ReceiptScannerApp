@@ -45,7 +45,8 @@ const COPY: Record<PriceComparisonStrategy, PricePresentationCopy> = {
   family_spec: {
     strategy: 'family_spec',
     titleKey: 'priceHistory.title',
-    subtitleKey: 'priceHistory.subtitle.familySpecReference',
+    // Reuse existing reference copy — never stronger than 「参考」.
+    subtitleKey: 'priceHistory.subtitle.family',
     strength: 'reference',
     allowsTrendInsight: false,
     allowsCrossMerchantClaim: false,
@@ -53,7 +54,7 @@ const COPY: Record<PriceComparisonStrategy, PricePresentationCopy> = {
   unit_price: {
     strategy: 'unit_price',
     titleKey: 'priceHistory.title',
-    subtitleKey: 'priceHistory.subtitle.unitPriceReference',
+    subtitleKey: 'priceHistory.subtitle.family',
     strength: 'reference',
     allowsTrendInsight: false,
     allowsCrossMerchantClaim: false,
