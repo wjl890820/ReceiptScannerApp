@@ -37,7 +37,11 @@ import { getScanErrorMessage } from '@/lib/scanError';
 import { logger } from '@/lib/logger';
 
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
-import { listReceipts, type ReceiptRow } from '@/lib/db';
+import {
+  getDatabaseInitializationTiming,
+  listReceipts,
+  type ReceiptRow,
+} from '@/lib/db';
 import {
   evaluateCurrentEngagementMilestone,
   loadEngagementProductInsightContext,
@@ -64,6 +68,16 @@ import {
 import {
   buildHomeFrequentProductDetailHref,
 } from '@/lib/homeValueHierarchy';
+import {
+  beginHomeColdStartTiming,
+  failHomeColdStartTiming,
+  finishHomeColdStartTimingAfterFrame,
+  markHomeColdStartSnapshotPublished,
+  measureHomeColdStartAsync,
+  measureHomeColdStartSync,
+  recordHomeColdStartPhase,
+  type HomeColdStartTimingHandle,
+} from '@/lib/homeColdStartTiming';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 export default function HomeScreen() {
   const router = useRouter();
@@ -74,6 +88,7 @@ export default function HomeScreen() {
   );
   const hasCompleteSnapshotRef = useRef(false);
   const refreshGenerationRef = useRef(0);
+  const coldStartTimingRef = useRef<HomeColdStartTimingHandle | null>(null);
   const [homeExperience, setHomeExperience] =
     useState<HomeProgressiveExperience>(() =>
       buildHomeProgressiveExperience([], null)
@@ -91,32 +106,82 @@ export default function HomeScreen() {
   const loadReceipts = useCallback(async () => {
     const requestGeneration = ++refreshGenerationRef.current;
     const hadCompleteSnapshot = hasCompleteSnapshotRef.current;
+    const coldStartTiming = hadCompleteSnapshot
+      ? null
+      : coldStartTimingRef.current ?? beginHomeColdStartTiming();
+    if (coldStartTiming && !coldStartTimingRef.current) {
+      coldStartTimingRef.current = coldStartTiming;
+    }
     setHomeRefreshState((state) => beginHomeRefresh(state));
     try {
-      const allReceipts = await listReceipts();
-      const analyticsReceipts =
-        selectAnalyticsReceipts(allReceipts).analyticsReceipts;
+      const allReceipts = await measureHomeColdStartAsync(
+        'initialReceiptRead',
+        () => listReceipts(),
+        (result) => ({ receiptCount: result.length })
+      );
+      const databaseInitialization = getDatabaseInitializationTiming();
+      if (databaseInitialization) {
+        recordHomeColdStartPhase(
+          'sqliteInitialization',
+          databaseInitialization.durationMs
+        );
+      }
+      const analyticsSelection = measureHomeColdStartSync(
+        'initialAnalyticsSelection',
+        () => selectAnalyticsReceipts(allReceipts),
+        (result) => ({
+          duplicateExtraCount: result.excludedDuplicateReceiptIds.size,
+          purchaseCandidateCount: result.analyticsReceipts.length,
+        })
+      );
+      const analyticsReceipts = analyticsSelection.analyticsReceipts;
       let finalCompleteExperience: HomeProgressiveExperience;
       try {
         const [evaluation, productContext] = await Promise.all([
-          evaluateCurrentEngagementMilestone(),
-          loadEngagementProductInsightContext(),
+          measureHomeColdStartAsync(
+            'engagementTotal',
+            () => evaluateCurrentEngagementMilestone(),
+            (result) => ({
+              supportedReceiptCount: result.status.supportedReceiptCount,
+            })
+          ),
+          measureHomeColdStartAsync(
+            'productContextTotal',
+            () => loadEngagementProductInsightContext(),
+            (result) => ({ productObservationCount: result.rows.length })
+          ),
         ]);
-        finalCompleteExperience = buildHomeProgressiveExperience(
-          analyticsReceipts,
-          evaluation,
-          false,
-          productContext.rows
+        finalCompleteExperience = measureHomeColdStartSync(
+          'homeBuildTotal',
+          () =>
+            buildHomeProgressiveExperience(
+              analyticsReceipts,
+              evaluation,
+              false,
+              productContext.rows
+            ),
+          (result) => ({
+            frequentGroupCount: result.frequentProducts.length,
+            profileAvailable: result.profile ? 1 : 0,
+          })
         );
       } catch (analyticsError) {
         if (hadCompleteSnapshot) throw analyticsError;
         logger.warn('Home', 'progressive analytics failed', {
           error: analyticsError,
         });
-        finalCompleteExperience = buildHomeProgressiveExperience(
-          analyticsReceipts,
-          null,
-          true
+        finalCompleteExperience = measureHomeColdStartSync(
+          'homeBuildTotal',
+          () =>
+            buildHomeProgressiveExperience(
+              analyticsReceipts,
+              null,
+              true
+            ),
+          (result) => ({
+            frequentGroupCount: result.frequentProducts.length,
+            profileAvailable: result.profile ? 1 : 0,
+          })
         );
       }
       if (
@@ -131,6 +196,12 @@ export default function HomeScreen() {
       setHomeExperience(finalCompleteExperience);
       hasCompleteSnapshotRef.current = true;
       setHomeRefreshState(completeHomeRefresh());
+      markHomeColdStartSnapshotPublished(coldStartTiming, {
+        receiptCount: allReceipts.length,
+        purchaseCandidateCount: analyticsReceipts.length,
+        frequentGroupCount: finalCompleteExperience.frequentProducts.length,
+      });
+      finishHomeColdStartTimingAfterFrame(coldStartTiming);
     } catch (e: any) {
       if (
         !isLatestHomeRefresh(
@@ -145,6 +216,7 @@ export default function HomeScreen() {
       } else {
         console.error('加载收据失败:', e);
         setHomeExperience(buildHomeProgressiveExperience([], null, true));
+        failHomeColdStartTiming(coldStartTiming);
       }
       setHomeRefreshState((state) => failHomeRefresh(state));
     }

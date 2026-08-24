@@ -19,6 +19,7 @@ import {
   takeHomeLongTermFrequentProducts,
 } from './frequentProductProfile';
 import { filterV1SupportedReceipts } from './merchantType';
+import { measureHomeColdStartSync } from './homeColdStartTiming';
 
 export type ProgressiveHomeStage =
   | 'empty'
@@ -88,7 +89,14 @@ function buildHomeLongTermFrequentProducts(
         quantity: row.purchaseQuantity,
         displayName: row.displayName,
       }));
-      const { groups } = buildIdentityFrequentProductGroups(observations);
+      const { groups } = measureHomeColdStartSync(
+        'identityFrequentTotal',
+        () => buildIdentityFrequentProductGroups(observations),
+        (result) => ({
+          observationCount: observations.length,
+          frequentGroupCount: result.groups.length,
+        })
+      );
       const capped = groups.slice(0, 5);
       if (capped.length > 0) {
         return capped.map((g) => ({
