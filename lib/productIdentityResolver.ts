@@ -18,6 +18,8 @@ import { normalizeProductForIdentity } from './normalizeProductForIdentity';
 import { buildItemIdentityFingerprint } from './productIdentityFingerprint';
 import {
   attributesAreCompatible,
+  hasStemStructuralEvidence,
+  stemStructuralEvidenceBalanced,
   type StructuralConflict,
 } from './productIdentityStructuralConflict';
 import { combinedNameSimilarity } from './productIdentitySimilarity';
@@ -182,11 +184,34 @@ function finishMatch(args: {
  * Resolve a receipt line to MerchantProduct (+ optional trusted Canonical).
  * Never auto-merges across merchants into Canonical without trusted evidence.
  */
+/** Bare missing-merchant bucket — must never be shared across receipts. */
+export const UNKNOWN_MERCHANT_KEY = 'unknown_merchant';
+
+/**
+ * Scope merchant identity for MP keys.
+ * Missing merchant evidence → per-receipt unknown scope (or unresolved orphan).
+ */
+export function scopeMerchantKeyForIdentity(
+  merchantKey: string | null | undefined,
+  receiptId?: string | null
+): string {
+  const trimmed = typeof merchantKey === 'string' ? merchantKey.trim() : '';
+  if (trimmed && trimmed !== UNKNOWN_MERCHANT_KEY) return trimmed;
+  const rid = typeof receiptId === 'string' ? receiptId.trim() : '';
+  if (rid) return `${UNKNOWN_MERCHANT_KEY}:receipt:${rid}`;
+  return `${UNKNOWN_MERCHANT_KEY}:orphan`;
+}
+
+export function isUnknownMerchantScopeKey(merchantKey: string | null | undefined): boolean {
+  const k = typeof merchantKey === 'string' ? merchantKey.trim() : '';
+  return !k || k === UNKNOWN_MERCHANT_KEY || k.startsWith(`${UNKNOWN_MERCHANT_KEY}:`);
+}
+
 export function resolveReceiptItemIdentity(
   input: ResolveIdentityInput,
   store: ProductIdentityStore
 ): ResolveIdentityResult {
-  const merchantKey = (input.merchantKey || '').trim() || 'unknown_merchant';
+  const merchantKey = scopeMerchantKeyForIdentity(input.merchantKey, input.receiptId);
   const rawName = typeof input.rawName === 'string' ? input.rawName : '';
   const norm = normalizeProductForIdentity(rawName);
   const attributes = norm.attributes ?? emptyProductAttributes();
@@ -209,10 +234,16 @@ export function resolveReceiptItemIdentity(
     evidence.dictionaryCanonicalName?.trim() ||
     null;
 
-  // 1) Cache hit
+  // 1) Cache hit — bind to merchant + resolverVersion (never reuse across merchants/versions)
   if (input.receiptId != null && input.itemSourceIndex != null) {
     const cached = store.getLink(input.receiptId, input.itemSourceIndex);
-    if (cached && !cached.stale && cached.itemFingerprint === fingerprint) {
+    if (
+      cached &&
+      !cached.stale &&
+      cached.itemFingerprint === fingerprint &&
+      cached.merchantKey === merchantKey &&
+      cached.resolverVersion === PRODUCT_IDENTITY_RESOLVER_VERSION
+    ) {
       return {
         link: {
           merchantProductId: cached.merchantProductId,
@@ -233,7 +264,12 @@ export function resolveReceiptItemIdentity(
         reason: 'cache_hit',
       };
     }
-    if (cached && cached.itemFingerprint !== fingerprint) {
+    if (
+      cached &&
+      (cached.itemFingerprint !== fingerprint ||
+        cached.merchantKey !== merchantKey ||
+        cached.resolverVersion !== PRODUCT_IDENTITY_RESOLVER_VERSION)
+    ) {
       store.markLinkStale(input.receiptId, input.itemSourceIndex);
     }
   }
@@ -282,6 +318,7 @@ export function resolveReceiptItemIdentity(
 
   // 2b) Exact identity stem + compatible attributes (same merchant).
   // Bridges unit aliases like 1L ↔ 1000ml without fuzzy merge.
+  // Underspecified anchors must NOT bridge conflicting specified variants.
   if (inquiryStem.length >= 2) {
     for (const candidate of catalog) {
       const candStem = buildIdentityNameStem(
@@ -290,9 +327,22 @@ export function resolveReceiptItemIdentity(
           candidate.comparisonKey
       );
       if (!candStem || candStem !== inquiryStem) continue;
+      const candAttrs = candidate.attributes ?? emptyProductAttributes();
+      if (!stemStructuralEvidenceBalanced(attributes, candAttrs)) {
+        conflictsRejected.push({
+          kind: 'pack_structure',
+          left: hasStemStructuralEvidence(attributes)
+            ? 'specified_structural'
+            : 'underspecified',
+          right: hasStemStructuralEvidence(candAttrs)
+            ? 'specified_structural'
+            : 'underspecified',
+        });
+        continue;
+      }
       const compat = attributesAreCompatible(
         attributes,
-        candidate.attributes ?? emptyProductAttributes(),
+        candAttrs,
         variantText,
         `${candidate.canonicalDisplayName ?? ''} ${candidate.normalizedName ?? ''}`
       );

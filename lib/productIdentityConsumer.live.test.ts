@@ -203,8 +203,8 @@ describe('Product Identity Batch 5B — 932 consumer integration audit', () => {
         ],
       };
 
-      expect(report.baseline5a.distinctMerchantProducts).toBe(608);
-      expect(report.baseline5a.mpGe2).toBe(167);
+      expect(report.baseline5a.distinctMerchantProducts).toBe(610); // RC hardening: was 608
+      expect(report.baseline5a.mpGe2).toBe(165); // RC hardening: was 167
       expect(report.consumer.priceHistoryEligibleMps).toBeGreaterThan(0);
       expect(report.geminiAdditionalCalls).toBe(0);
 

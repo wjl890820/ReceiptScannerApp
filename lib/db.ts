@@ -757,6 +757,22 @@ async function bestEffortRebuildReceiptItemIndexIfChanged(
       receipt_id: receiptId,
       error,
     });
+    // Items changed but index rebuild failed — drop stale indexed rows so
+    // consumers fall back to receipt SoT (analysis_json / user_items_json)
+    // instead of silently reading pre-edit name/qty/price.
+    try {
+      await deleteReceiptItemIndex(db, receiptId);
+      logger.warn('ReceiptItemIndex', 'receipt_item_index_marked_stale_deleted', {
+        operation: 'delete_after_rebuild_failure',
+        receipt_id: receiptId,
+      });
+    } catch (deleteError) {
+      logger.warn('ReceiptItemIndex', 'receipt_item_index_stale_delete_failed', {
+        operation: 'delete_after_rebuild_failure',
+        receipt_id: receiptId,
+        error: deleteError,
+      });
+    }
   }
 }
 

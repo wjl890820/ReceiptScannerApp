@@ -43,7 +43,7 @@ describe('Product Identity Batch 4.1 — semantic gate dry-run + receipt cost', 
       const semantic = runSemanticShadowSelectionAudit(observations);
       expect(semantic.geminiLiveCalls).toBe(0);
       expect(semantic.eligibleObservations).toBe(932);
-      expect(semantic.distinctMerchantProducts).toBe(608);
+      expect(semantic.distinctMerchantProducts).toBe(610); // RC hardening: was 608
       expect(semantic.ratioDistinctNeedingAi).toBeLessThan(0.55);
 
       const receiptCost = runReceiptSemanticCostSimulation(payload);

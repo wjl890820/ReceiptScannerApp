@@ -238,6 +238,34 @@ export function hasValidTransactionAt(receipt: ReceiptRow): boolean {
   return typeof t === 'number' && Number.isFinite(t) && t > 0;
 }
 
+/**
+ * True when transaction_at carries clock-time evidence.
+ * Date-only parsers emit Asia/Tokyo midnight (00:00:00) — that is NOT exact time.
+ */
+export function hasExactTransactionTime(receipt: ReceiptRow): boolean {
+  if (!hasValidTransactionAt(receipt)) return false;
+  const t = receipt.transaction_at as number;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Tokyo',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(t));
+    const hour = parts.find((p) => p.type === 'hour')?.value ?? '';
+    const minute = parts.find((p) => p.type === 'minute')?.value ?? '';
+    const second = parts.find((p) => p.type === 'second')?.value ?? '';
+    if (hour === '00' && minute === '00' && second === '00') {
+      return false;
+    }
+  } catch {
+    return true;
+  }
+  return true;
+}
+
+
 function asItemRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object'
     ? (raw as Record<string, unknown>)
@@ -296,7 +324,7 @@ export function extractDuplicateItemEvidence(
 export function buildContentReceiptFingerprint(
   receipt: ReceiptRow
 ): string | null {
-  if (!hasValidTransactionAt(receipt)) return null;
+  if (!hasExactTransactionTime(receipt)) return null;
   const merchant = merchantAnalyticsKey(receipt);
   const tax = taxSlot(receipt);
   const items = extractDuplicateItemEvidence(receipt);
@@ -333,7 +361,7 @@ export function buildExactReceiptFingerprint(
 export function buildStructuralReceiptFingerprint(
   receipt: ReceiptRow
 ): string | null {
-  if (!hasValidTransactionAt(receipt)) return null;
+  if (!hasExactTransactionTime(receipt)) return null;
   const merchant = merchantAnalyticsKey(receipt);
   const tax = taxSlot(receipt);
   const items = extractDuplicateItemEvidence(receipt);

@@ -28,9 +28,11 @@ import {
 import {
   applySemanticEnrichmentEvidence,
   buildSemanticCacheRecord,
+  buildSemanticInputFingerprint,
   type MerchantProductSemanticCache,
   type SemanticEnrichmentAiItem,
 } from './productIdentitySemanticContract';
+import { normalizeProductForIdentity } from './normalizeProductForIdentity';
 import type { ProductAttributes } from './productIdentityContract';
 
 export const BATCH_AI_APPLY_THRESHOLD = 0.75;
@@ -192,8 +194,15 @@ export function applySemanticFieldsToItem(
   ignoredSemantic: boolean;
   cache: MerchantProductSemanticCache;
 } {
-  const codeAttrs =
+  const existingAttrs =
     (item?.product_attributes as ProductAttributes | null | undefined) ?? null;
+  // Deterministic structural attrs must already be available (or parsed here)
+  // before AI merge so code volume/etc. always beat conflicting Gemini values.
+  const codeAttrs =
+    existingAttrs ??
+    (typeof item?.name === 'string' && item.name.trim()
+      ? normalizeProductForIdentity(item.name).attributes
+      : null);
   const aiItem: SemanticEnrichmentAiItem = {
     index: result.index,
     categoryId: result.category,
@@ -212,7 +221,14 @@ export function applySemanticFieldsToItem(
     barcode: result.barcode,
   };
   const applied = applySemanticEnrichmentEvidence(aiItem, codeAttrs);
-  const cache = buildSemanticCacheRecord(applied, opts?.modelVersion ?? null);
+  const inputFingerprint = buildSemanticInputFingerprint({
+    rawName: String(item?.name ?? item?.raw_name ?? ''),
+    merchantKey: typeof item?.merchant_key === 'string' ? item.merchant_key : null,
+    attributes: codeAttrs,
+    semanticResolverVersion: applied.semanticResolverVersion,
+    modelVersion: opts?.modelVersion ?? null,
+  });
+  const cache = buildSemanticCacheRecord(applied, opts?.modelVersion ?? null, inputFingerprint);
 
   item.semantic_status = applied.status;
   item.semantic_confidence = applied.overallConfidence;
@@ -288,36 +304,41 @@ export function applyBatchAiResults(
     const idx = Number(r?.index);
     if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) continue;
     const item = items[idx];
-    if (!item || item.category !== 'uncategorized') continue; // 本地结果优先，绝不覆盖
+    if (!item) continue;
 
-    const decision = decideFromAi(r?.category, r?.confidence);
-    if (decision.action === 'apply') {
-      const v1 = mapLegacyCategoryToV1(decision.category);
-      item.category = decision.category;
-      item.classification_status = 'ok';
-      item.classification_confidence = decision.confidence;
-      Object.assign(item, stampMachineClassificationProvenance('ai_batch'));
-      item.classification = {
-        category: decision.category,
-        status: 'ok',
-        confidence: decision.confidence,
-      };
-      item.category_main = v1.main;
-      item.category_sub = v1.sub;
-      item.analysis_tags = buildAnalysisTags(v1);
-      // 应用后清除任何残留建议
-      if ('suggestedCategory' in item) item.suggestedCategory = null;
-      if ('suggestedConfidence' in item) item.suggestedConfidence = null;
-      appliedCount++;
-    } else if (decision.action === 'suggest') {
-      // 保持 uncategorized，仅记录建议，供审核页展示/一键采纳
-      item.suggestedCategory = decision.category;
-      item.suggestedConfidence = decision.confidence;
-      item.suggestedSource = 'ai_batch';
-      item.suggestedAt = now();
-      suggestedCount++;
+    // Category mutation stays protected: only uncategorized items may receive
+    // AI category apply/suggest. Semantic metadata may still apply when local
+    // category already exists.
+    if (item.category === 'uncategorized') {
+      const decision = decideFromAi(r?.category, r?.confidence);
+      if (decision.action === 'apply') {
+        const v1 = mapLegacyCategoryToV1(decision.category);
+        item.category = decision.category;
+        item.classification_status = 'ok';
+        item.classification_confidence = decision.confidence;
+        Object.assign(item, stampMachineClassificationProvenance('ai_batch'));
+        item.classification = {
+          category: decision.category,
+          status: 'ok',
+          confidence: decision.confidence,
+        };
+        item.category_main = v1.main;
+        item.category_sub = v1.sub;
+        item.analysis_tags = buildAnalysisTags(v1);
+        // 应用后清除任何残留建议
+        if ('suggestedCategory' in item) item.suggestedCategory = null;
+        if ('suggestedConfidence' in item) item.suggestedConfidence = null;
+        appliedCount++;
+      } else if (decision.action === 'suggest') {
+        // 保持 uncategorized，仅记录建议，供审核页展示/一键采纳
+        item.suggestedCategory = decision.category;
+        item.suggestedConfidence = decision.confidence;
+        item.suggestedSource = 'ai_batch';
+        item.suggestedAt = now();
+        suggestedCount++;
+      }
+      // keep: 不做任何修改
     }
-    // keep: 不做任何修改
 
     try {
       const hasSemanticPayload =

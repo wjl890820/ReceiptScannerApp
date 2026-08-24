@@ -15,7 +15,11 @@ import {
   type PriceObservationQualityLevel,
 } from './productIdentityPriceObservationQuality';
 import { resolveMerchantProductDisplayName } from './productIdentityPresentationContract';
-import { resolveReceiptItemIdentity } from './productIdentityResolver';
+import {
+  isUnknownMerchantScopeKey,
+  resolveReceiptItemIdentity,
+} from './productIdentityResolver';
+import { classifyLineKind } from './receiptOcrNormalize';
 import {
   createMemoryProductIdentityStore,
   type MerchantProductRecord,
@@ -31,6 +35,8 @@ export type IdentityConsumerObservation = {
   lineTotal: number | null | undefined;
   quantity: number | null | undefined;
   displayName?: string | null;
+  /** Discount/tax/subtotal/payment — never frequent/history. */
+  isNonProductRow?: boolean;
 };
 
 export type QualifiedIdentityObservation = IdentityConsumerObservation & {
@@ -115,6 +121,13 @@ function listMerchantProductsForKeys(
   return [...out.values()];
 }
 
+
+function observationIsNonProductRow(obs: IdentityConsumerObservation): boolean {
+  if (obs.isNonProductRow === true) return true;
+  const kind = classifyLineKind(obs.rawName || '', Number(obs.lineTotal) || 0);
+  return kind !== 'item';
+}
+
 export function resolveIdentityConsumerObservations(
   observations: readonly IdentityConsumerObservation[],
   store: ProductIdentityStore = createMemoryProductIdentityStore()
@@ -172,6 +185,7 @@ export function resolveIdentityConsumerObservations(
       peerPurchaseUnitPrices: peerPrices,
       attributes: attrs,
       rawName: row.rawName,
+      isNonProductRow: observationIsNonProductRow(row),
     });
     qualified.push({
       ...row,
@@ -196,6 +210,9 @@ export function buildIdentityMerchantProductHistoryView(
     (o) => o.merchantProductId === merchantProductId
   );
   if (!rows.length) return null;
+  if (isUnknownMerchantScopeKey(rows[0]?.merchantKey)) {
+    return null;
+  }
 
   const eligibility = evaluateMerchantProductHistoryEligibility({
     merchantProductId,
@@ -301,9 +318,16 @@ export function buildIdentityFrequentProductGroups(
 
   const groups: IdentityFrequentProductGroup[] = [];
   for (const [mpId, rows] of byMp) {
-    const receiptIds = new Set(rows.map((r) => r.receiptId));
+    if (isUnknownMerchantScopeKey(rows[0]?.merchantKey)) continue;
+    if (rows.every((r) => observationIsNonProductRow(r))) continue;
+    const purchaseRows = rows.filter(
+      (r) => r.quality !== 'invalid' && !observationIsNonProductRow(r)
+    );
+    if (purchaseRows.length < 2) continue;
+
+    const receiptIds = new Set(purchaseRows.map((r) => r.receiptId));
     if (receiptIds.size < 2) continue;
-    const sorted = [...rows].sort(
+    const sorted = [...purchaseRows].sort(
       (a, b) =>
         a.occurredAt - b.occurredAt ||
         a.receiptId.localeCompare(b.receiptId) ||
@@ -421,7 +445,13 @@ export function buildRawMerchantProductPricePoints(
   rows: readonly QualifiedIdentityObservation[]
 ): MerchantProductPricePoint[] {
   return rows
-    .filter((r) => r.purchaseUnitPrice != null)
+    .filter(
+      (r) =>
+        r.purchaseUnitPrice != null &&
+        typeof r.quantity === 'number' &&
+        Number.isFinite(r.quantity) &&
+        r.quantity > 0
+    )
     .map((r) => ({
       receiptId: r.receiptId,
       itemSourceIndex: r.itemSourceIndex,
@@ -430,7 +460,7 @@ export function buildRawMerchantProductPricePoints(
       merchantKey: r.merchantKey,
       merchantProductId: r.merchantProductId,
       lineTotal: (r.lineTotal as number) ?? 0,
-      quantity: (r.quantity as number) ?? 1,
+      quantity: r.quantity as number,
       purchaseUnitPrice: r.purchaseUnitPrice!,
       normalizedUnitPrice: null,
     }));

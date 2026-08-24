@@ -42,7 +42,7 @@ describe('Product Identity Batch 5A — price comparison shadow audit', () => {
 
       expect(report.geminiAdditionalCalls).toBe(0);
       expect(report.userVisibleBehaviorChange).toBe(false);
-      expect(report.identityBaseline.distinctMerchantProducts).toBe(608);
+      expect(report.identityBaseline.distinctMerchantProducts).toBe(610); // RC hardening: was 608
       expect(report.identityBaseline.productExact).toBe(0);
       expect(report.identityBaseline.skuExact).toBe(0);
       expect(report.examples.length).toBeGreaterThanOrEqual(20);

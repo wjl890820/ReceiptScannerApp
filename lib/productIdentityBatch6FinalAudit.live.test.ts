@@ -130,8 +130,8 @@ describe('Product Identity Batch 6 — final production audit', () => {
               : 'unexpected_filter',
         }));
 
-      expect(mpGe2.length).toBe(167);
-      expect(frequentGroups.length).toBe(162);
+      expect(mpGe2.length).toBe(165); // RC hardening: was 167
+      expect(frequentGroups.length).toBe(160); // RC hardening: was 162
       expect(discrepancy.length).toBe(5);
       expect(
         discrepancy.every(
@@ -457,10 +457,10 @@ describe('Product Identity Batch 6 — final production audit', () => {
         featureFreeze: 'PRODUCT IDENTITY V1 FEATURE FREEZE',
       };
 
-      expect(report.kpis.distinctMerchantProducts).toBe(608);
-      expect(report.kpis.mpGe2).toBe(167);
-      expect(report.frequentVsMpGe2.identityFrequentGroupsGe2).toBe(162);
-      expect(report.priceHistoryFinal.historyEligibleMps).toBe(167);
+      expect(report.kpis.distinctMerchantProducts).toBe(610); // RC hardening: was 608
+      expect(report.kpis.mpGe2).toBe(165); // RC hardening: was 167
+      expect(report.frequentVsMpGe2.identityFrequentGroupsGe2).toBe(160); // RC hardening: was 162
+      expect(report.priceHistoryFinal.historyEligibleMps).toBe(165); // RC hardening: was 167
       expect(report.geminiAdditionalCalls).toBe(0);
       expect(
         report.anomalySpotChecks.yokohama?.suspected ?? 0

@@ -201,3 +201,39 @@ export function attributesAreCompatible(
   }
   return { ok: conflicts.length === 0, conflicts };
 }
+
+/** Dimensions that distinguish pack/size variants for stem bridging. */
+const STEM_STRUCTURAL_DIMS = [
+  'volume',
+  'mass',
+  'count',
+  'pack_count',
+  'roll_count',
+  'length',
+  'total_volume',
+] as const;
+
+/**
+ * True when attributes carry identity-relevant size/pack evidence.
+ * Used to prevent underspecified names (e.g. 「コーラ」) from stem-bridging
+ * incompatible specified variants (500ml vs 1.5L).
+ */
+export function hasStemStructuralEvidence(attrs: ProductAttributes | null | undefined): boolean {
+  if (!attrs) return false;
+  for (const dim of STEM_STRUCTURAL_DIMS) {
+    if (num(attrs, dim) != null) return true;
+  }
+  return false;
+}
+
+/**
+ * Stem match is only safe when both sides are underspecified, or both carry
+ * structural evidence (then findStructuralConflicts applies). One-sided
+ * evidence must not silently bridge.
+ */
+export function stemStructuralEvidenceBalanced(
+  left: ProductAttributes | null | undefined,
+  right: ProductAttributes | null | undefined
+): boolean {
+  return hasStemStructuralEvidence(left) === hasStemStructuralEvidence(right);
+}

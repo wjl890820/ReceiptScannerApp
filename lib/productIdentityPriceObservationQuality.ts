@@ -213,7 +213,7 @@ export function evaluatePriceObservationQuality(
     if (peerCv <= MAX_PEER_CV_FOR_ANOMALY && med > 0) {
       const ratio = rawPurchaseUnitPrice / med;
       const multiple = nearIntegerMultiple(ratio);
-      if (multiple != null && multiple >= 2) {
+      if (multiple != null && (multiple >= 2 || multiple <= 0.5)) {
         suspectedIntegerMultiple = multiple;
         reasons.push('suspected_quantity_ocr_anomaly');
         quality = 'suspected_anomaly';

@@ -454,9 +454,44 @@ export async function loadProductPriceHistoryWithDb(
         preferredMpId
       );
       if (identityView) {
-        const currency =
-          filtered.find((r) => typeof r.currency === 'string' && r.currency.trim())
-            ?.currency ?? 'JPY';
+        const identityCurrencies = new Set<string>();
+        for (const p of identityView.historyPoints) {
+          const src = filtered.find(
+            (r) =>
+              r.receiptId === p.receiptId &&
+              r.sourceIndex === p.itemSourceIndex
+          );
+          const c =
+            typeof src?.currency === 'string' ? src.currency.trim() : '';
+          if (c && c.toLowerCase() !== 'unknown') identityCurrencies.add(c);
+        }
+        if (identityCurrencies.size > 1) {
+          return {
+            target,
+            status: 'mixed_currency',
+            priceKind: 'purchase_unit',
+            currency: null,
+            totalOccurrenceCount: filtered.length,
+            comparableOccurrenceCount: 0,
+            excludedOccurrenceCount: filtered.length,
+            points: [],
+            identityPresentation: null,
+          };
+        }
+        if (identityCurrencies.size === 0) {
+          return {
+            target,
+            status: 'unknown_currency',
+            priceKind: 'purchase_unit',
+            currency: null,
+            totalOccurrenceCount: filtered.length,
+            comparableOccurrenceCount: 0,
+            excludedOccurrenceCount: filtered.length,
+            points: [],
+            identityPresentation: null,
+          };
+        }
+        const currency = [...identityCurrencies][0]!;
         const points: ProductPriceHistoryPoint[] = identityView.historyPoints.map(
           (p) => {
             const src =
@@ -473,7 +508,7 @@ export async function loadProductPriceHistoryWithDb(
               merchantRaw: src?.merchantRaw ?? null,
               merchantNormalized: src?.merchantNormalized ?? identityView.merchantKey,
               displayName: p.rawName,
-              currency: currency || 'JPY',
+              currency,
               lineTotal: src?.lineTotal ?? p.purchaseUnitPrice,
               purchaseQuantity: src?.purchaseQuantity ?? 1,
               priceValue: p.purchaseUnitPrice,
@@ -485,7 +520,7 @@ export async function loadProductPriceHistoryWithDb(
           target,
           status: points.length >= 2 ? 'ready' : 'not_enough_points',
           priceKind: 'purchase_unit',
-          currency: currency || 'JPY',
+          currency,
           totalOccurrenceCount: filtered.length,
           comparableOccurrenceCount: points.length,
           excludedOccurrenceCount: Math.max(0, filtered.length - points.length),

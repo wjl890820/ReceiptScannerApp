@@ -224,12 +224,36 @@ export type MerchantProductSemanticCache = {
   conflicts: SemanticAttributeConflict[];
   semanticResolverVersion: string;
   modelVersion: string | null;
+  /** Binds cache to name/merchant/attrs/version — rename/edit must miss. */
+  inputFingerprint: string;
   enrichedAt: string;
 };
 
+
+export function buildSemanticInputFingerprint(input: {
+  rawName: string;
+  merchantKey?: string | null;
+  attributes?: ProductAttributes | null;
+  semanticResolverVersion: string;
+  modelVersion?: string | null;
+}): string {
+  const attrsKey = (input.attributes?.entries ?? [])
+    .map((e) => `${e.dimension}:${e.value ?? ''}:${e.unit ?? ''}`)
+    .sort()
+    .join('|');
+  return [
+    (input.rawName || '').trim().toLowerCase(),
+    (input.merchantKey || '').trim().toLowerCase(),
+    attrsKey,
+    input.semanticResolverVersion,
+    input.modelVersion ?? '',
+  ].join('\u001f');
+}
+
 export function buildSemanticCacheRecord(
   applied: AppliedSemanticEnrichment,
-  modelVersion: string | null
+  modelVersion: string | null,
+  inputFingerprint: string = ''
 ): MerchantProductSemanticCache {
   return {
     status: applied.status,
@@ -245,6 +269,18 @@ export function buildSemanticCacheRecord(
     conflicts: applied.conflicts,
     semanticResolverVersion: applied.semanticResolverVersion,
     modelVersion,
+    inputFingerprint,
     enrichedAt: new Date().toISOString(),
   };
+}
+
+export function semanticCacheMatchesInput(
+  cache: MerchantProductSemanticCache | null | undefined,
+  inputFingerprint: string,
+  semanticResolverVersion: string = PRODUCT_IDENTITY_SEMANTIC_VERSION
+): boolean {
+  if (!cache) return false;
+  if (cache.semanticResolverVersion !== semanticResolverVersion) return false;
+  if (!inputFingerprint || cache.inputFingerprint !== inputFingerprint) return false;
+  return cache.status === 'enriched' || cache.status === 'sufficient';
 }

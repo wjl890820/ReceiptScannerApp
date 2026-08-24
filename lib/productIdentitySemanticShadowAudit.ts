@@ -89,6 +89,7 @@ function cacheRecord(
     reason,
     conflicts: [],
     semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
+    inputFingerprint: '',
     modelVersion: null,
     enrichedAt: new Date().toISOString(),
   };

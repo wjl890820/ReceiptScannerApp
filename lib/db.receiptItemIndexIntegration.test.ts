@@ -532,7 +532,9 @@ describe('receipt mutation derived-index integration', () => {
     expect(JSON.parse((await getReceipt(id))?.user_items_json ?? '[]')).toMatchObject([
       { name: '明治 おいしい牛乳 450ml', quantity: 2 },
     ]);
-    expect(indexedRows.get(id)?.[0].volume_base_ml).toBe(900);
+    // Rebuild failed after item edit → drop stale index rows (do not keep 900ml).
+    // Consumers must fall back to receipt SoT, not silently read pre-edit index.
+    expect(indexedRows.get(id) ?? []).toEqual([]);
     expect(warnSpy).toHaveBeenCalledWith(
       'ReceiptItemIndex',
       'receipt_item_index_rebuild_failed',
