@@ -14,9 +14,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { CategoryIdentity } from '@/components/CategoryIdentity';
+import { CategoryIdentityIcon } from '@/components/CategoryIdentityIcon';
 import { CategoryRatioRow } from '@/components/CategoryRatioRow';
+import { MerunoDisclosureIndicator } from '@/components/MerunoDisclosureIndicator';
+import {
+  MerunoGroupedList,
+  MerunoGroupedRow,
+} from '@/components/MerunoGroupedList';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import {
   deleteReceipts,
@@ -556,19 +560,18 @@ export default function ReceiptDetailScreen() {
 
         {/* 分类汇总 */}
         <Text style={styles.h2}>{t('history.detail.categorySummaryTitle')}</Text>
-        <View style={styles.summaryCard}>
+        <MerunoGroupedList>
           {categorySummary.length === 0 ? (
-            <View style={{ paddingVertical: 10 }}>
+            <View style={styles.emptyGroupedRow}>
               <Text style={{ color: UI_COLORS.textSecondary }}>{t('history.detail.noCategoryInfo')}</Text>
             </View>
           ) : (
             categorySummary.map((x, index) => (
-              <View
+              <MerunoGroupedRow
                 key={x.category}
-                style={[
-                  styles.summaryRow,
-                  index > 0 && styles.summaryRowDivider,
-                ]}
+                showDivider={index < categorySummary.length - 1}
+                dividerInset={58}
+                minHeight={76}
               >
                 <CategoryRatioRow
                   category={x.category}
@@ -579,16 +582,16 @@ export default function ReceiptDetailScreen() {
                       : 0
                   }
                 />
-              </View>
+              </MerunoGroupedRow>
             ))
           )}
-        </View>
+        </MerunoGroupedList>
 
         {/* 商品明细 */}
         <Text style={styles.h2}>{t('history.detail.itemsTitle')}</Text>
 
         {displayItems.length > 0 ? (
-          <View style={styles.itemsWrap}>
+          <MerunoGroupedList>
             {displayItems.map((it, idx) => {
               const productHref = buildAggregatableProductDetailHref(
                 productDetailTargetSourceFromReceiptItem(
@@ -597,57 +600,84 @@ export default function ReceiptDetailScreen() {
                   idx
                 )
               );
+              const tag = getItemTagDisplay(it as any);
               return (
-                <View key={`${it.name}-${idx}`} style={styles.itemRow}>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.itemEditHit,
-                      pressed && { backgroundColor: '#f5f5f5' },
-                    ]}
-                    onPress={() => openItemEditor(idx)}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('history.detail.edit.title')}
-                  >
-                    <CategoryIdentity
-                      category={it.category ?? 'uncategorized'}
-                      compact
-                      showLabel={false}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.itemName}>{it.name}</Text>
-                      <Text style={styles.itemMeta}>
-                        {t('history.detail.quantityShort')} {it.quantity} · {t('history.detail.subtotalShort')} {formatJPY(it.lineTotal)}
-                      </Text>
-                    </View>
-                    {(() => {
-                      const tag = getItemTagDisplay(it as any);
-                      if (!tag.visible) return null;
-                      return (
+                <MerunoGroupedRow
+                  key={`${it.name}-${idx}`}
+                  showDivider={idx < displayItems.length - 1}
+                  dividerInset={58}
+                  minHeight={92}
+                >
+                  <View style={styles.itemRow}>
+                    {productHref ? (
+                      <Pressable
+                        onPress={() => router.push(productHref as Href)}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('history.detail.viewProductHistory')}
+                        style={({ pressed }) => [
+                          styles.itemProductLink,
+                          pressed && styles.itemProductLinkPressed,
+                        ]}
+                      >
+                        {({ pressed }) => (
+                          <>
+                            <CategoryIdentityIcon
+                              category={it.category ?? 'uncategorized'}
+                              size={30}
+                            />
+                            <View style={styles.itemText}>
+                              <Text style={styles.itemName}>{it.name}</Text>
+                              <Text style={styles.itemMeta}>
+                                {t('history.detail.quantityShort')} {it.quantity} · {t('history.detail.subtotalShort')} {formatJPY(it.lineTotal)}
+                              </Text>
+                            </View>
+                            <MerunoDisclosureIndicator
+                              kind="crossEntity"
+                              pressed={pressed}
+                            />
+                          </>
+                        )}
+                      </Pressable>
+                    ) : (
+                      <View style={styles.itemProductLink}>
+                        <CategoryIdentityIcon
+                          category={it.category ?? 'uncategorized'}
+                          size={30}
+                        />
+                        <View style={styles.itemText}>
+                          <Text style={styles.itemName}>{it.name}</Text>
+                          <Text style={styles.itemMeta}>
+                            {t('history.detail.quantityShort')} {it.quantity} · {t('history.detail.subtotalShort')} {formatJPY(it.lineTotal)}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                    <View style={styles.itemActions}>
+                      {tag.visible ? (
                         <View style={styles.tag}>
                           <Text style={styles.tagText}>{tag.label}</Text>
                         </View>
-                      );
-                    })()}
-                    <Text style={styles.editRowHint}>{t('history.detail.editRowHint')}</Text>
-                  </Pressable>
-                  {productHref ? (
-                    <Pressable
-                      onPress={() => router.push(productHref as Href)}
-                      accessibilityRole="button"
-                      accessibilityLabel={t('history.detail.viewProductHistory')}
-                      style={({ pressed }) => [
-                        styles.productDetailHit,
-                        pressed && { opacity: 0.55 },
-                      ]}
-                      hitSlop={4}
-                    >
-                      <IconSymbol name="chevron.right" size={22} color={UI_COLORS.textMuted} />
-                    </Pressable>
-                  ) : null}
-                </View>
+                      ) : null}
+                      <Pressable
+                        onPress={() => openItemEditor(idx)}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('history.detail.edit.title')}
+                        hitSlop={6}
+                        style={({ pressed }) => [
+                          styles.editAction,
+                          pressed && styles.editActionPressed,
+                        ]}
+                      >
+                        <Text style={styles.editRowHint}>
+                          {t('history.detail.editRowHint')}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                </MerunoGroupedRow>
               );
             })}
-          </View>
+          </MerunoGroupedList>
         ) : (
           <Text style={{ color: UI_COLORS.textSecondary }}>{t('history.detail.noItems')}</Text>
         )}
@@ -860,12 +890,10 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     paddingHorizontal: 16,
   },
-  summaryRow: {
-    paddingVertical: 13,
-  },
-  summaryRowDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: UI_COLORS.borderSubtle,
+  emptyGroupedRow: {
+    minHeight: 64,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
   },
   summaryLabelRow: {
     flexDirection: 'row',
@@ -905,38 +933,29 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: UI_COLORS.accent,
   },
-  itemsWrap: {
-    backgroundColor: UI_COLORS.surface,
-    borderRadius: UI_RADIUS.panel,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: UI_COLORS.border,
-    overflow: 'hidden',
-  },
   itemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: UI_COLORS.borderSubtle,
-    paddingLeft: 16,
+    gap: 8,
   },
-  itemEditHit: {
-    flex: 1,
+  itemProductLink: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 14,
     minHeight: UI_LAYOUT.controlMinHeight,
+    marginHorizontal: -6,
+    paddingHorizontal: 6,
+    borderRadius: UI_RADIUS.control,
   },
-  productDetailHit: {
-    width: 44,
-    minHeight: UI_LAYOUT.controlMinHeight,
-    alignItems: 'center',
-    justifyContent: 'center',
+  itemProductLinkPressed: {
+    backgroundColor: UI_COLORS.surfaceMuted,
+  },
+  itemText: {
+    flex: 1,
+    minWidth: 0,
   },
   itemName: {
     fontSize: 16,
     lineHeight: 21,
-    fontWeight: '800',
+    fontWeight: '600',
     marginBottom: 4,
     color: UI_COLORS.textPrimary,
   },
@@ -944,11 +963,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: UI_COLORS.textSecondary,
   },
+  itemActions: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  editAction: {
+    minWidth: 44,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderRadius: UI_RADIUS.control,
+  },
+  editActionPressed: {
+    backgroundColor: UI_COLORS.accentSoft,
+  },
   editRowHint: {
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '600',
     color: UI_COLORS.accent,
-    paddingHorizontal: 4,
   },
   tag: {
     alignSelf: 'center',

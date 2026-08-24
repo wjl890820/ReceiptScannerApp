@@ -119,8 +119,9 @@ describe('History / Receipt Detail freeze proofs (R2-B4)', () => {
     );
     expect(detail).toContain('openItemEditor');
     expect(detail).toContain('buildAggregatableProductDetailHref');
-    expect(detail).toContain('itemEditHit');
-    expect(detail).toContain('productDetailHit');
+    expect(detail).toContain('styles.editAction');
+    expect(detail).toContain('styles.itemProductLink');
+    expect(detail).toContain('kind="crossEntity"');
     expect(detail).toContain('navigateBackOrHistory');
   });
 });

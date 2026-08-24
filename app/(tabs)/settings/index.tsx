@@ -8,7 +8,6 @@ import {
   Alert,
   Linking,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,6 +15,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { MerunoDisclosureIndicator } from '@/components/MerunoDisclosureIndicator';
+import { MerunoGroupedRow } from '@/components/MerunoGroupedList';
 import { PRIVACY_POLICY_URL } from '@/constants/privacy';
 import { getAccountProtectionStatus } from '@/lib/accountProtectionStatus';
 import { protectCurrentAccountWithApple } from '@/lib/appleAccountProtect';
@@ -111,6 +112,7 @@ function SettingsRow({
   icon,
   onPress,
   accessibilityLabel,
+  showDisclosure = true,
 }: {
   title: string;
   subtitle?: string;
@@ -118,26 +120,31 @@ function SettingsRow({
   icon?: React.ComponentProps<typeof MaterialIcons>['name'];
   onPress: () => void;
   accessibilityLabel: string;
+  showDisclosure?: boolean;
 }) {
   return (
-    <Pressable
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+    <MerunoGroupedRow
       onPress={onPress}
-      accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      showDivider={false}
+      minHeight={64}
     >
-      {icon ? (
-        <View style={styles.rowIcon} importantForAccessibility="no">
-          <MaterialIcons name={icon} size={19} color={UI_COLORS.accent} />
+      <View style={styles.rowContent}>
+        {icon ? (
+          <View style={styles.rowIcon} importantForAccessibility="no">
+            <MaterialIcons name={icon} size={19} color={UI_COLORS.accent} />
+          </View>
+        ) : null}
+        <View style={styles.rowText}>
+          <Text style={styles.rowTitle}>{title}</Text>
+          {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
         </View>
-      ) : null}
-      <View style={styles.rowText}>
-        <Text style={styles.rowTitle}>{title}</Text>
-        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+        {value ? <Text style={styles.rowValue}>{value}</Text> : null}
+        <MerunoDisclosureIndicator
+          kind={showDisclosure ? 'settings' : 'none'}
+        />
       </View>
-      {value ? <Text style={styles.rowValue}>{value}</Text> : null}
-      <Text style={styles.chevron}>›</Text>
-    </Pressable>
+    </MerunoGroupedRow>
   );
 }
 
@@ -736,6 +743,7 @@ export default function SettingsScreen() {
                   icon="shield"
                   onPress={onPressProtectWithApple}
                   accessibilityLabel={t('settings.account.protectAction')}
+                  showDisclosure={false}
                 />
               </>
             ) : null}
@@ -767,6 +775,7 @@ export default function SettingsScreen() {
                   icon="cloud-download"
                   onPress={onPressRestoreExisting}
                   accessibilityLabel={t('settings.account.restoreAction')}
+                  showDisclosure={false}
                 />
               </>
             ) : null}
@@ -778,6 +787,7 @@ export default function SettingsScreen() {
                   icon="cloud-download"
                   onPress={onPressRestoreExisting}
                   accessibilityLabel={t('settings.account.restoreAction')}
+                  showDisclosure={false}
                 />
               </>
             ) : null}
@@ -1013,10 +1023,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 26,
   },
-  row: {
-    minHeight: 64,
-    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
-    paddingVertical: 14,
+  rowContent: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -1053,18 +1061,10 @@ const styles = StyleSheet.create({
     color: UI_COLORS.accent,
     textAlign: 'right',
   },
-  chevron: {
-    fontSize: 24,
-    color: '#9aa2ad',
-    lineHeight: 26,
-  },
   separator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: UI_COLORS.borderSubtle,
     marginLeft: 16,
-  },
-  pressed: {
-    opacity: 0.72,
   },
   devGroup: {
     marginTop: 28,

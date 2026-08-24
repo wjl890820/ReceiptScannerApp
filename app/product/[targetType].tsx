@@ -11,10 +11,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CategoryIdentity } from '@/components/CategoryIdentity';
+import { CategoryIdentityIcon } from '@/components/CategoryIdentityIcon';
+import { MerunoDisclosureIndicator } from '@/components/MerunoDisclosureIndicator';
+import {
+  MerunoGroupedList,
+  MerunoGroupedRow,
+} from '@/components/MerunoGroupedList';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { navigateBackOrHome } from '@/lib/navigationBack';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
@@ -174,9 +178,9 @@ export default function ProductDetailScreen() {
         >
           <View style={styles.productHeading}>
             {productCategory ? (
-              <CategoryIdentity
+              <CategoryIdentityIcon
                 category={productCategory}
-                showLabel={false}
+                size={34}
               />
             ) : (
               <View style={styles.productIconTile} importantForAccessibility="no">
@@ -297,30 +301,31 @@ export default function ProductDetailScreen() {
           ) : null}
 
           <SectionTitle title={t('productDetail.stores')} />
-          <View style={styles.sectionCard}>
+          <MerunoGroupedList>
             {summary.merchants.map((merchant, index) => (
-              <View
+              <MerunoGroupedRow
                 key={`${merchant.merchantName ?? 'unknown'}:${index}`}
-                style={[
-                  styles.factRow,
-                  index > 0 && styles.factRowBorder,
-                ]}
+                showDivider={index < summary.merchants.length - 1}
+                dividerInset={62}
+                minHeight={60}
               >
-                <MerchantIdentityTile
-                  merchant={merchant.merchantName}
-                  size={34}
-                />
-                <Text style={styles.factName}>
-                  {merchant.merchantName || t('common.unknownMerchant')}
-                </Text>
-                <Text style={styles.factValue}>
-                  {t('productDetail.purchaseCountValue', {
-                    count: merchant.purchaseOccurrenceCount,
-                  })}
-                </Text>
-              </View>
+                <View style={styles.factRow}>
+                  <MerchantIdentityTile
+                    merchant={merchant.merchantName}
+                    size={34}
+                  />
+                  <Text style={styles.factName}>
+                    {merchant.merchantName || t('common.unknownMerchant')}
+                  </Text>
+                  <Text style={styles.factValue}>
+                    {t('productDetail.purchaseCountValue', {
+                      count: merchant.purchaseOccurrenceCount,
+                    })}
+                  </Text>
+                </View>
+              </MerunoGroupedRow>
             ))}
-          </View>
+          </MerunoGroupedList>
 
           {specificationLabels.length > 0 && (
             <>
@@ -336,49 +341,50 @@ export default function ProductDetailScreen() {
           )}
 
           <SectionTitle title={t('productDetail.recentPurchases')} />
-          <View style={styles.sectionCard}>
+          <MerunoGroupedList>
             {summary.recentPurchases.map((purchase, index) => {
               const merchant =
                 purchase.merchantRaw ||
                 purchase.merchantNormalized ||
                 t('common.unknownMerchant');
               return (
-                <Pressable
+                <MerunoGroupedRow
                   key={purchase.itemId}
                   onPress={() => router.push(`/history/${purchase.receiptId}`)}
-                  style={({ pressed }) => [
-                    styles.purchaseRow,
-                    index > 0 && styles.factRowBorder,
-                    pressed && { opacity: 0.55 },
-                  ]}
+                  showDivider={index < summary.recentPurchases.length - 1}
+                  dividerInset={14}
+                  minHeight={88}
                 >
-                  <View style={styles.purchaseTopRow}>
-                    <Text style={styles.purchaseName} numberOfLines={2}>
-                      {purchase.displayName}
-                    </Text>
-                    <Text style={styles.purchaseAmount}>
-                      {purchase.lineTotal == null
-                        ? '—'
-                        : formatCurrency(purchase.lineTotal, purchase.currency)}
-                    </Text>
-                  </View>
-                  <Text style={styles.purchaseMeta}>
-                    {merchant} · {formatDate(purchase.purchasedAt)}
-                  </Text>
-                  <Text style={styles.purchaseQuantity}>
-                    ×{purchase.purchaseQuantity}
-                  </Text>
-                  <View style={styles.purchaseChevron}>
-                    <IconSymbol
-                      name="chevron.right"
-                      size={18}
-                      color={UI_COLORS.textMuted}
-                    />
-                  </View>
-                </Pressable>
+                  {({ pressed }) => (
+                    <View style={styles.purchaseRow}>
+                      <View style={styles.purchaseContent}>
+                        <View style={styles.purchaseTopRow}>
+                          <Text style={styles.purchaseName} numberOfLines={2}>
+                            {purchase.displayName}
+                          </Text>
+                          <Text style={styles.purchaseAmount}>
+                            {purchase.lineTotal == null
+                              ? '—'
+                              : formatCurrency(purchase.lineTotal, purchase.currency)}
+                          </Text>
+                        </View>
+                        <Text style={styles.purchaseMeta}>
+                          {merchant} · {formatDate(purchase.purchasedAt)}
+                        </Text>
+                        <Text style={styles.purchaseQuantity}>
+                          ×{purchase.purchaseQuantity}
+                        </Text>
+                      </View>
+                      <MerunoDisclosureIndicator
+                        kind="crossEntity"
+                        pressed={pressed}
+                      />
+                    </View>
+                  )}
+                </MerunoGroupedRow>
               );
             })}
-          </View>
+          </MerunoGroupedList>
         </ScrollView>
       )}
     </View>
@@ -560,15 +566,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   factRow: {
-    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-  },
-  factRowBorder: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: UI_COLORS.borderSubtle,
   },
   factName: {
     flex: 1,
@@ -602,9 +603,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   purchaseRow: {
-    position: 'relative',
-    paddingVertical: 14,
-    paddingRight: 26,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  purchaseContent: {
+    flex: 1,
+    minWidth: 0,
   },
   purchaseTopRow: {
     flexDirection: 'row',
@@ -630,15 +635,8 @@ const styles = StyleSheet.create({
   },
   purchaseQuantity: {
     marginTop: 5,
-    color: '#444',
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
-    fontWeight: '700',
-  },
-  purchaseChevron: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
-    justifyContent: 'center',
+    fontWeight: '600',
   },
 });

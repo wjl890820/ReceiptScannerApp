@@ -25,7 +25,8 @@ describe('Build 56 Concept A composition contracts', () => {
     const history = source('app/(tabs)/history/index.tsx');
     const receipt = source('app/(tabs)/history/[id].tsx');
     expect(history).toContain('MerchantIdentityTile');
-    expect(receipt).toContain('styles.summaryRowDivider');
+    expect(receipt).toContain('<MerunoGroupedRow');
+    expect(receipt).toContain('showDivider={index < categorySummary.length - 1}');
     expect(receipt).toContain('backgroundColor: UI_COLORS.surfaceMuted');
   });
 

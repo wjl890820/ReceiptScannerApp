@@ -23,7 +23,7 @@ export function MerunoGroupedRow({
   minHeight = 92,
   disabled = false,
   accessibilityLabel,
-  accessibilityRole = 'button',
+  accessibilityRole,
   accessibilityState,
   style,
 }: {
@@ -38,11 +38,36 @@ export function MerunoGroupedRow({
   accessibilityState?: AccessibilityState;
   style?: StyleProp<ViewStyle>;
 }) {
+  const content = (pressed: boolean) => (
+    <>
+      {typeof children === 'function' ? children({ pressed }) : children}
+      {showDivider ? (
+        <View
+          pointerEvents="none"
+          style={[styles.divider, { left: dividerInset }]}
+        />
+      ) : null}
+    </>
+  );
+
+  if (!onPress) {
+    return (
+      <View
+        accessibilityRole={accessibilityRole}
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={accessibilityState}
+        style={[styles.row, { minHeight }, style]}
+      >
+        {content(false)}
+      </View>
+    );
+  }
+
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      accessibilityRole={accessibilityRole}
+      accessibilityRole={accessibilityRole ?? 'button'}
       accessibilityLabel={accessibilityLabel}
       accessibilityState={accessibilityState}
       style={({ pressed }) => [
@@ -53,17 +78,7 @@ export function MerunoGroupedRow({
         style,
       ]}
     >
-      {({ pressed }) => (
-        <>
-          {typeof children === 'function' ? children({ pressed }) : children}
-          {showDivider ? (
-            <View
-              pointerEvents="none"
-              style={[styles.divider, { left: dividerInset }]}
-            />
-          ) : null}
-        </>
-      )}
+      {({ pressed }) => content(pressed)}
     </Pressable>
   );
 }

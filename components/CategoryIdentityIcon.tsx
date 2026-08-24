@@ -3,7 +3,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { getCategoryPresentation } from '@/lib/categoryPalette';
-import { UI_COLORS, UI_RADIUS } from '@/lib/uiTokens';
+import { UI_RADIUS } from '@/lib/uiTokens';
 
 export function CategoryIdentityIcon({
   category,
@@ -20,7 +20,12 @@ export function CategoryIdentityIcon({
       importantForAccessibility="no-hide-descendants"
       style={[
         styles.iconTile,
-        { width: size, height: size, borderColor: presentation.color },
+        {
+          width: size,
+          height: size,
+          borderColor: `${presentation.color}38`,
+          backgroundColor: `${presentation.color}14`,
+        },
       ]}
     >
       <MaterialIcons
@@ -39,6 +44,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: UI_RADIUS.control,
     borderWidth: StyleSheet.hairlineWidth,
-    backgroundColor: UI_COLORS.surface,
   },
 });
