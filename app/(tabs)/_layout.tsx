@@ -1,5 +1,6 @@
 // app/(tabs)/_layout.tsx
 import { Tabs } from 'expo-router';
+import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import React, { useEffect, useState } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
@@ -11,6 +12,15 @@ import { resolveTabTitles } from '@/lib/tabTitles';
 function readTabTitles() {
   return resolveTabTitles(t);
 }
+
+const ROOT_TAB_BAR_STYLE = {
+  backgroundColor: TAB_BAR_PRESENTATION.background,
+  borderTopColor: TAB_BAR_PRESENTATION.border,
+};
+
+const HIDDEN_TAB_BAR_STYLE = {
+  display: 'none' as const,
+};
 
 export default function TabLayout() {
   // Refresh labels on locale change (also covers root Stack remount races).
@@ -29,10 +39,7 @@ export default function TabLayout() {
         tabBarShowLabel: true,
         tabBarActiveTintColor: TAB_BAR_PRESENTATION.active,
         tabBarInactiveTintColor: TAB_BAR_PRESENTATION.inactive,
-        tabBarStyle: {
-          backgroundColor: TAB_BAR_PRESENTATION.background,
-          borderTopColor: TAB_BAR_PRESENTATION.border,
-        },
+        tabBarStyle: ROOT_TAB_BAR_STYLE,
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '500',
@@ -64,24 +71,38 @@ export default function TabLayout() {
           {/* Nested History stack: index + [id] (edge-swipe + correct goBack) */}
       <Tabs.Screen
         name="history"
-        options={{
-          title: tabTitles.history,
-          tabBarLabel: tabTitles.history,
-          tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="clock.fill" color={color} />
-          ),
+        options={({ route }) => {
+          const focusedRoute = getFocusedRouteNameFromRoute(route) ?? 'index';
+          return {
+            title: tabTitles.history,
+            tabBarLabel: tabTitles.history,
+            tabBarStyle:
+              focusedRoute === 'index'
+                ? ROOT_TAB_BAR_STYLE
+                : HIDDEN_TAB_BAR_STYLE,
+            tabBarIcon: ({ color }) => (
+              <IconSymbol size={28} name="clock.fill" color={color} />
+            ),
+          };
         }}
       />
 
       {/* Nested Stack: settings/index + subordinate pages */}
       <Tabs.Screen
         name="settings"
-        options={{
-          title: tabTitles.settings,
-          tabBarLabel: tabTitles.settings,
-          tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="gearshape.fill" color={color} />
-          ),
+        options={({ route }) => {
+          const focusedRoute = getFocusedRouteNameFromRoute(route) ?? 'index';
+          return {
+            title: tabTitles.settings,
+            tabBarLabel: tabTitles.settings,
+            tabBarStyle:
+              focusedRoute === 'index'
+                ? ROOT_TAB_BAR_STYLE
+                : HIDDEN_TAB_BAR_STYLE,
+            tabBarIcon: ({ color }) => (
+              <IconSymbol size={28} name="gearshape.fill" color={color} />
+            ),
+          };
         }}
       />
     </Tabs>

@@ -110,6 +110,23 @@ describe('Build 53 navigation wiring', () => {
     expect(rootLayout).toContain('gestureEnabled: true');
   });
 
+  it('hides tabs on nested details without changing stack ownership', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const tabsLayout = fs.readFileSync(
+      path.join(__dirname, '../app/(tabs)/_layout.tsx'),
+      'utf8'
+    );
+    const settingsLayout = fs.readFileSync(
+      path.join(__dirname, '../app/(tabs)/settings/_layout.tsx'),
+      'utf8'
+    );
+    expect(tabsLayout).toContain('getFocusedRouteNameFromRoute');
+    expect(tabsLayout).toContain("display: 'none'");
+    expect(settingsLayout).toContain('gestureEnabled: true');
+    expect(settingsLayout).toContain('Stack');
+  });
+
   it('Product Detail prefers stack back; deep-link fallback is Home', () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');

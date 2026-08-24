@@ -10,9 +10,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
+import { SectionTitle } from '@/components/SectionTitle';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { navigateBackOrHome } from '@/lib/navigationBack';
-import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
@@ -20,6 +20,7 @@ import { listReceipts } from '@/lib/db';
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { getCurrentLocale, t } from '@/lib/i18n';
+import { merchantAccentColor } from '@/lib/merchantAccent';
 import {
   formatProductSpecification,
   loadProductHistory,
@@ -27,12 +28,7 @@ import {
 } from '@/lib/productHistory';
 import { parseProductDetailTarget } from '@/lib/productDetailTarget';
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
-import {
-  INDUSTRIAL_UI,
-  UI_COLORS,
-  UI_LAYOUT,
-  UI_RADIUS,
-} from '@/lib/uiTokens';
+import { UI_COLORS, UI_LAYOUT, UI_RADIUS } from '@/lib/uiTokens';
 import {
   loadProductPriceHistory,
   type ProductPriceHistoryResult,
@@ -133,6 +129,8 @@ export default function ProductDetailScreen() {
         ),
       ]
     : [];
+  const primaryMerchant =
+    summary?.merchants.length === 1 ? summary.merchants[0] : null;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
@@ -170,6 +168,23 @@ export default function ProductDetailScreen() {
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.productTitle}>{title}</Text>
+          {primaryMerchant ? (
+            <View style={styles.productMerchantRow}>
+              <View
+                style={[
+                  styles.productMerchantAccent,
+                  {
+                    backgroundColor: merchantAccentColor(
+                      primaryMerchant.merchantName
+                    ),
+                  },
+                ]}
+              />
+              <Text style={styles.productMerchantName} numberOfLines={2}>
+                {primaryMerchant.merchantName || t('common.unknownMerchant')}
+              </Text>
+            </View>
+          ) : null}
           {target.type === 'canonical' && (
             <Text style={styles.scopeNote}>
               {t('productDetail.seriesScopeNote')}
@@ -181,8 +196,8 @@ export default function ProductDetailScreen() {
             </Text>
           )}
 
-          <View style={styles.summaryGrid}>
-            <View style={styles.summaryCard}>
+          <View style={styles.summaryPanel}>
+            <View style={[styles.summaryCell, styles.summaryCellRightBorder]}>
               <Text style={styles.summaryLabel}>
                 {t('productDetail.purchaseCount')}
               </Text>
@@ -192,7 +207,23 @@ export default function ProductDetailScreen() {
                 })}
               </Text>
             </View>
-            <View style={styles.summaryCard}>
+            <View style={styles.summaryCell}>
+              <Text style={styles.summaryLabel}>
+                {t('productDetail.totalQuantityLabel')}
+              </Text>
+              <Text style={styles.summaryValue}>
+                {t('productDetail.totalQuantityValue', {
+                  count: summary.totalPurchaseQuantity,
+                })}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.summaryCell,
+                styles.summaryCellTopBorder,
+                styles.summaryCellRightBorder,
+              ]}
+            >
               <Text style={styles.summaryLabel}>
                 {t('productDetail.totalSpend')}
               </Text>
@@ -214,7 +245,7 @@ export default function ProductDetailScreen() {
                 ))
               )}
             </View>
-            <View style={styles.summaryCard}>
+            <View style={[styles.summaryCell, styles.summaryCellTopBorder]}>
               <Text style={styles.summaryLabel}>
                 {t('productDetail.lastPurchase')}
               </Text>
@@ -227,10 +258,6 @@ export default function ProductDetailScreen() {
           </View>
 
           <Text style={styles.secondarySummary}>
-            {t('productDetail.totalQuantity', {
-              count: summary.totalPurchaseQuantity,
-            })}
-            {' · '}
             {t('productDetail.firstPurchaseValue', {
               date: summary.firstPurchasedAt
                 ? formatDate(summary.firstPurchasedAt)
@@ -253,10 +280,7 @@ export default function ProductDetailScreen() {
             </>
           ) : null}
 
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.product.records}
-            title={t('productDetail.stores')}
-          />
+          <SectionTitle title={t('productDetail.stores')} />
           <View style={styles.sectionCard}>
             {summary.merchants.map((merchant, index) => (
               <View
@@ -266,6 +290,16 @@ export default function ProductDetailScreen() {
                   index > 0 && styles.factRowBorder,
                 ]}
               >
+                <View
+                  style={[
+                    styles.factAccent,
+                    {
+                      backgroundColor: merchantAccentColor(
+                        merchant.merchantName
+                      ),
+                    },
+                  ]}
+                />
                 <Text style={styles.factName}>
                   {merchant.merchantName || t('common.unknownMerchant')}
                 </Text>
@@ -280,9 +314,7 @@ export default function ProductDetailScreen() {
 
           {specificationLabels.length > 0 && (
             <>
-              <Text style={styles.sectionTitle}>
-                {t('productDetail.specificationVariants')}
-              </Text>
+              <SectionTitle title={t('productDetail.specificationVariants')} />
               <View style={styles.chips}>
                 {specificationLabels.map((label) => (
                   <View key={label} style={styles.chip}>
@@ -293,9 +325,7 @@ export default function ProductDetailScreen() {
             </>
           )}
 
-          <Text style={styles.sectionTitle}>
-            {t('productDetail.recentPurchases')}
-          </Text>
+          <SectionTitle title={t('productDetail.recentPurchases')} />
           <View style={styles.sectionCard}>
             {summary.recentPurchases.map((purchase, index) => {
               const merchant =
@@ -328,6 +358,13 @@ export default function ProductDetailScreen() {
                   <Text style={styles.purchaseQuantity}>
                     ×{purchase.purchaseQuantity}
                   </Text>
+                  <View style={styles.purchaseChevron}>
+                    <IconSymbol
+                      name="chevron.right"
+                      size={18}
+                      color={UI_COLORS.textMuted}
+                    />
+                  </View>
                 </Pressable>
               );
             })}
@@ -394,11 +431,29 @@ const styles = StyleSheet.create({
     paddingBottom: 50,
   },
   productTitle: {
-    marginTop: 12,
+    marginTop: 8,
     fontSize: 25,
     lineHeight: 32,
     fontWeight: '800',
     color: UI_COLORS.textPrimary,
+  },
+  productMerchantRow: {
+    marginTop: 12,
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  productMerchantAccent: {
+    width: 4,
+    borderRadius: 2,
+  },
+  productMerchantName: {
+    flex: 1,
+    paddingLeft: 10,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: UI_COLORS.textSecondary,
   },
   scopeNote: {
     marginTop: 8,
@@ -406,17 +461,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
-  summaryGrid: {
+  summaryPanel: {
     flexDirection: 'row',
-    gap: 10,
+    flexWrap: 'wrap',
     marginTop: 22,
-  },
-  summaryCard: {
-    flex: 1,
-    minHeight: 94,
-    padding: 12,
-    borderRadius: UI_RADIUS.card,
     backgroundColor: UI_COLORS.surface,
+    borderRadius: UI_RADIUS.panel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    overflow: 'hidden',
+  },
+  summaryCell: {
+    width: '50%',
+    minHeight: 88,
+    padding: 14,
+  },
+  summaryCellRightBorder: {
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: UI_COLORS.borderSubtle,
+  },
+  summaryCellTopBorder: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.borderSubtle,
   },
   summaryLabel: {
     color: UI_COLORS.textSecondary,
@@ -424,10 +490,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   summaryValue: {
-    marginTop: 10,
+    marginTop: 8,
     fontSize: 18,
     fontWeight: '800',
     color: UI_COLORS.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
   summaryDate: {
     marginTop: 10,
@@ -455,9 +522,12 @@ const styles = StyleSheet.create({
     color: UI_COLORS.textPrimary,
   },
   sectionCard: {
-    borderRadius: UI_RADIUS.card,
-    paddingHorizontal: 14,
-    backgroundColor: '#f5f5f5',
+    borderRadius: UI_RADIUS.panel,
+    paddingHorizontal: 16,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    overflow: 'hidden',
   },
   factRow: {
     minHeight: 48,
@@ -468,7 +538,12 @@ const styles = StyleSheet.create({
   },
   factRowBorder: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#d6d6d6',
+    borderTopColor: UI_COLORS.borderSubtle,
+  },
+  factAccent: {
+    width: 4,
+    height: 24,
+    borderRadius: 2,
   },
   factName: {
     flex: 1,
@@ -502,7 +577,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   purchaseRow: {
+    position: 'relative',
     paddingVertical: 14,
+    paddingRight: 26,
   },
   purchaseTopRow: {
     flexDirection: 'row',
@@ -519,6 +596,7 @@ const styles = StyleSheet.create({
   purchaseAmount: {
     fontSize: 15,
     fontWeight: '800',
+    fontVariant: ['tabular-nums'],
   },
   purchaseMeta: {
     marginTop: 6,
@@ -530,5 +608,12 @@ const styles = StyleSheet.create({
     color: '#444',
     fontSize: 13,
     fontWeight: '700',
+  },
+  purchaseChevron: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
   },
 });

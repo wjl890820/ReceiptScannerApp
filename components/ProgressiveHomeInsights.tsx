@@ -7,7 +7,8 @@ import {
   View,
 } from 'react-native';
 
-import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
+import { RatioBar } from '@/components/RatioBar';
+import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import type {
   MilestoneCategoryComposition,
@@ -18,13 +19,13 @@ import { formatJPY } from '@/lib/formatJPY';
 import type { HomeProgressiveExperience } from '@/lib/homeProgressiveExperience';
 import { t } from '@/lib/i18n';
 import { merchantAccentColor } from '@/lib/merchantAccent';
+import { normalizeMerchantName } from '@/lib/productNormalizer';
 import {
   formatFrequentProductLabel,
   formatMilestoneRecentChange,
   formatMilestoneSummary,
 } from '@/lib/milestonePresentation';
-import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
-import { INDUSTRIAL_UI, UI_RADIUS } from '@/lib/uiTokens';
+import { EDITORIAL_UI, UI_COLORS, UI_RADIUS } from '@/lib/uiTokens';
 
 import { MilestoneProgressCard } from './MilestoneProgressCard';
 
@@ -46,10 +47,6 @@ function formatAmount(amount: number, currency: string): string {
   return currency === 'JPY'
     ? formatJPY(amount)
     : `${currency} ${amount.toLocaleString()}`;
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <Text style={styles.sectionTitle}>{children}</Text>;
 }
 
 function FrequentProductList({
@@ -117,19 +114,11 @@ function CategoryBars({
           (category.spend > 0 ? category.spendShare : category.itemShare) * 100
         );
         return (
-          <View key={category.category} style={styles.barRow}>
-            <View style={styles.barLabelRow}>
-              <Text style={styles.barLabel}>
-                {categoryLabel(category.category)}
-              </Text>
-              <Text style={styles.barPct}>{pct}%</Text>
-            </View>
-            <View style={styles.barTrack}>
-              <View
-                style={[styles.barFill, { width: `${Math.max(pct, 2)}%` as any }]}
-              />
-            </View>
-          </View>
+          <RatioBar
+            key={category.category}
+            label={categoryLabel(category.category)}
+            percent={pct}
+          />
         );
       })}
     </View>
@@ -167,11 +156,8 @@ export function ProgressiveHomeInsights({
       </Text>
 
       <View style={styles.scanHero}>
-        <IndustrialSectionHeader
-          microLabel={SECTION_MICRO.home.quickScan}
-          title={t('home.progressive.scan.title')}
-          showRule
-        />
+        <Text style={styles.scanEyebrow}>{t('home.progressive.scan.eyebrow')}</Text>
+        <Text style={styles.scanTitle}>{t('home.progressive.scan.title')}</Text>
         <Text style={styles.scanSubtitle}>
           {t('home.progressive.scan.subtitle')}
         </Text>
@@ -190,6 +176,7 @@ export function ProgressiveHomeInsights({
             <ActivityIndicator size="small" color="#fff" />
           )}
           <Text style={styles.scanButtonText}>{scanLabel}</Text>
+          {!scanning ? <Text style={styles.scanArrow}>→</Text> : null}
         </Pressable>
         <Text style={styles.scanSupport}>
           {t('home.progressive.scan.support')}
@@ -209,10 +196,7 @@ export function ProgressiveHomeInsights({
 
       {showRecent && experience.latestPurchase && (
         <>
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.home.recent}
-            title={t('home.progressive.recent.title')}
-          />
+          <SectionTitle title={t('home.progressive.recent.title')} />
           <Pressable
             onPress={() =>
               onRecentPurchasePress(experience.latestPurchase!.receiptId)
@@ -223,9 +207,11 @@ export function ProgressiveHomeInsights({
               styles.panel,
               styles.recentCard,
               {
-                borderLeftWidth: INDUSTRIAL_UI.merchantBarWidth,
+                borderLeftWidth: EDITORIAL_UI.merchantBarWidth,
                 borderLeftColor: merchantAccentColor(
-                  experience.latestPurchase!.merchant
+                  normalizeMerchantName(
+                    experience.latestPurchase!.merchant || ''
+                  )
                 ),
               },
               pressed && styles.pressed,
@@ -233,7 +219,7 @@ export function ProgressiveHomeInsights({
           >
             <View style={styles.recentTop}>
               <View style={styles.recentText}>
-                <Text style={styles.merchant} numberOfLines={1}>
+                <Text style={styles.merchant} numberOfLines={2}>
                   {experience.latestPurchase.merchant ||
                     t('common.unknownMerchant')}
                 </Text>
@@ -260,9 +246,7 @@ export function ProgressiveHomeInsights({
           {/* Mature users: hide permanent "profile established" progress block. */}
           {experience.status.nextMilestone != null ? (
             <>
-              <SectionTitle>
-                {t('home.progressive.progress.section')}
-              </SectionTitle>
+              <SectionTitle title={t('home.progressive.progress.section')} />
               <MilestoneProgressCard status={experience.status} />
             </>
           ) : null}
@@ -277,10 +261,7 @@ export function ProgressiveHomeInsights({
 
       {showRecentInsight && experience.recentInsight && (
         <>
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.home.profile}
-            title={t('home.progressive.insight.title')}
-          />
+          <SectionTitle title={t('home.progressive.insight.title')} />
           <View style={styles.panel}>
             <View style={styles.metricRow}>
               <View style={styles.metric}>
@@ -323,10 +304,7 @@ export function ProgressiveHomeInsights({
 
       {experience.stage === 'frequent' && (
         <>
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.home.frequent}
-            title={t('home.progressive.frequent.title')}
-          />
+          <SectionTitle title={t('home.progressive.frequent.title')} />
           {experience.frequentProducts.length > 0 ? (
             <FrequentProductList
               products={experience.frequentProducts}
@@ -344,14 +322,11 @@ export function ProgressiveHomeInsights({
 
       {experience.stage === 'profile' && experience.profile && (
         <>
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.home.profile}
+          <SectionTitle
             title={t('home.progressive.profile.title')}
+            subtitle={t('home.progressive.profile.category')}
           />
           <View style={styles.panel}>
-            <Text style={styles.profileHeading}>
-              {t('home.progressive.profile.category')}
-            </Text>
             <CategoryBars
               categories={experience.profile.categoryStructure.categories}
             />
@@ -378,10 +353,7 @@ export function ProgressiveHomeInsights({
           </View>
           {experience.frequentProducts.length > 0 && (
             <>
-              <IndustrialSectionHeader
-                microLabel={SECTION_MICRO.home.frequent}
-                title={t('home.progressive.frequent.title')}
-              />
+              <SectionTitle title={t('home.progressive.frequent.title')} />
               <FrequentProductList
                 products={experience.frequentProducts}
                 onPress={onProductPress}
@@ -418,15 +390,15 @@ const styles = StyleSheet.create({
     marginTop: 22,
     padding: 18,
     borderRadius: UI_RADIUS.hero,
-    backgroundColor: INDUSTRIAL_UI.metricWash,
+    backgroundColor: EDITORIAL_UI.panelBackground,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: INDUSTRIAL_UI.panelBorder,
-    borderLeftWidth: INDUSTRIAL_UI.accentRuleWidth,
-    borderLeftColor: INDUSTRIAL_UI.accentRule,
+    borderColor: EDITORIAL_UI.panelBorder,
+    borderLeftWidth: EDITORIAL_UI.accentRuleWidth,
+    borderLeftColor: EDITORIAL_UI.accentRule,
   },
   scanEyebrow: {
-    color: '#1677ff',
-    fontSize: 12,
+    color: UI_COLORS.accent,
+    fontSize: 13,
     fontWeight: '800',
   },
   scanTitle: {
@@ -444,18 +416,25 @@ const styles = StyleSheet.create({
   },
   scanButton: {
     marginTop: 18,
-    minHeight: 52,
+    minHeight: 48,
+    minWidth: 156,
+    alignSelf: 'flex-end',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 9,
-    borderRadius: 14,
-    backgroundColor: '#1677ff',
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.accent,
   },
   scanButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '800',
+  },
+  scanArrow: {
+    color: UI_COLORS.background,
+    fontSize: 18,
+    fontWeight: '700',
   },
   scanSupport: {
     marginTop: 10,
@@ -478,28 +457,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
-  sectionTitle: {
-    marginTop: 26,
-    marginBottom: 10,
-    color: '#171a1f',
-    fontSize: 17,
-    fontWeight: '800',
-  },
-  card: {
-    borderRadius: UI_RADIUS.panel,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: INDUSTRIAL_UI.panelBorder,
-    backgroundColor: INDUSTRIAL_UI.panelBackground,
-  },
   panel: {
     borderRadius: UI_RADIUS.panel,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: INDUSTRIAL_UI.panelBorder,
-    backgroundColor: INDUSTRIAL_UI.panelBackground,
+    borderColor: EDITORIAL_UI.panelBorder,
+    backgroundColor: EDITORIAL_UI.panelBackground,
     overflow: 'hidden',
   },
   recentCard: {
-    padding: 16,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
   },
   recentTop: {
     flexDirection: 'row',
@@ -530,6 +497,8 @@ const styles = StyleSheet.create({
   },
   metricRow: {
     flexDirection: 'row',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: UI_COLORS.borderSubtle,
   },
   metric: {
     flex: 1,
@@ -600,42 +569,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   bars: {
-    marginTop: 10,
-    gap: 10,
-  },
-  barRow: {
-    gap: 5,
-  },
-  barLabelRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  barLabel: {
-    color: '#3f4751',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  barPct: {
-    color: '#68707a',
-    fontSize: 12,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  barTrack: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#e8ecf1',
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: INDUSTRIAL_UI.accentRule,
+    padding: 16,
+    gap: 14,
   },
   profileFact: {
     marginHorizontal: 16,
     marginBottom: 16,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.borderSubtle,
     color: '#3f4751',
     fontSize: 14,
     lineHeight: 21,

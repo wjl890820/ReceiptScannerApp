@@ -33,8 +33,6 @@ import {
   t,
   type LocalePreference,
 } from '@/lib/i18n';
-import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
-import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
 import { getMissingInProductDictionaryTop100 } from '@/lib/missingDictionaryCandidates';
 import { getCanonicalNamePriceStats } from '@/lib/priceStats';
 import {
@@ -46,6 +44,7 @@ import { reclassifyReceiptsMissingCategories } from '@/lib/reclassifyReceipts';
 import {
   UI_COLORS,
   UI_LAYOUT,
+  UI_RADIUS,
   UI_TYPOGRAPHY,
 } from '@/lib/uiTokens';
 import {
@@ -715,67 +714,67 @@ export default function SettingsScreen() {
       <Text style={styles.title}>{t('settings.title')}</Text>
 
       {showAppleAccount ? (
-        <View style={styles.group}>
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.settings.account}
-            title={t('settings.account.title')}
-          />
-          {accountBusy ? (
-            <Text style={styles.accountBody}>{t('settings.account.busy')}</Text>
-          ) : null}
-          {accountUi?.uiState === 'anonymous' ? (
-            <>
-              <Text style={styles.accountBody}>{t('settings.account.anonymousBody')}</Text>
-              <SettingsRow
-                title={t('settings.account.protectAction')}
-                onPress={onPressProtectWithApple}
-                accessibilityLabel={t('settings.account.protectAction')}
-              />
-            </>
-          ) : null}
-          {accountUi?.uiState === 'apple_linked_backup_pending' ? (
-            <>
+        <View>
+          <Text style={styles.sectionLabel}>{t('settings.account.title')}</Text>
+          <View style={styles.group}>
+            {accountBusy ? (
+              <Text style={styles.accountBody}>{t('settings.account.busy')}</Text>
+            ) : null}
+            {accountUi?.uiState === 'anonymous' ? (
+              <>
+                <Text style={styles.accountBody}>{t('settings.account.anonymousBody')}</Text>
+                <SettingsRow
+                  title={t('settings.account.protectAction')}
+                  onPress={onPressProtectWithApple}
+                  accessibilityLabel={t('settings.account.protectAction')}
+                />
+              </>
+            ) : null}
+            {accountUi?.uiState === 'apple_linked_backup_pending' ? (
               <Text style={styles.accountBody}>
-                {t('settings.account.linkedPendingTitle')}
+                <Text style={styles.accountBodyTitle}>
+                  {t('settings.account.linkedPendingTitle')}
+                </Text>
                 {'\n'}
                 {t('settings.account.linkedPendingBody')}
               </Text>
-            </>
-          ) : null}
-          {accountUi?.uiState === 'apple_linked_protected' ? (
-            <>
+            ) : null}
+            {accountUi?.uiState === 'apple_linked_protected' ? (
               <Text style={styles.accountBody}>
-                {t('settings.account.protectedTitle')}
+                <Text style={styles.accountBodyTitle}>
+                  {t('settings.account.protectedTitle')}
+                </Text>
                 {'\n'}
                 {t('settings.account.protectedBody')}
               </Text>
-            </>
-          ) : null}
-          {accountUi?.uiState === 'empty_install' ||
-          accountUi?.uiState === 'auth_unavailable' ||
-          accountUi == null ? (
-            <>
-              <Text style={styles.accountBody}>{t('settings.account.emptyBody')}</Text>
-              <SettingsRow
-                title={t('settings.account.restoreAction')}
-                onPress={onPressRestoreExisting}
-                accessibilityLabel={t('settings.account.restoreAction')}
-              />
-            </>
-          ) : null}
-          {accountUi?.uiState === 'anonymous' ? (
-            <>
-              <View style={styles.separator} />
-              <SettingsRow
-                title={t('settings.account.restoreAction')}
-                onPress={onPressRestoreExisting}
-                accessibilityLabel={t('settings.account.restoreAction')}
-              />
-            </>
-          ) : null}
+            ) : null}
+            {accountUi?.uiState === 'empty_install' ||
+            accountUi?.uiState === 'auth_unavailable' ||
+            accountUi == null ? (
+              <>
+                <Text style={styles.accountBody}>{t('settings.account.emptyBody')}</Text>
+                <SettingsRow
+                  title={t('settings.account.restoreAction')}
+                  onPress={onPressRestoreExisting}
+                  accessibilityLabel={t('settings.account.restoreAction')}
+                />
+              </>
+            ) : null}
+            {accountUi?.uiState === 'anonymous' ? (
+              <>
+                <View style={styles.separator} />
+                <SettingsRow
+                  title={t('settings.account.restoreAction')}
+                  onPress={onPressRestoreExisting}
+                  accessibilityLabel={t('settings.account.restoreAction')}
+                />
+              </>
+            ) : null}
+          </View>
         </View>
       ) : null}
 
+      <Text style={styles.sectionLabel}>{t('settings.sections.preferences')}</Text>
       <View style={styles.group}>
         <SettingsRow
           title={t('settings.language.title')}
@@ -795,7 +794,10 @@ export default function SettingsScreen() {
             />
           </>
         ) : null}
-        <View style={styles.separator} />
+      </View>
+
+      <Text style={styles.sectionLabel}>{t('settings.sections.support')}</Text>
+      <View style={styles.group}>
         <SettingsRow
           title={t('settings.feedback.title')}
           subtitle={t('settings.feedback.subtitle')}
@@ -954,7 +956,7 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: UI_COLORS.surfaceMuted,
+    backgroundColor: UI_COLORS.background,
   },
   container: {
     paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
@@ -964,30 +966,32 @@ const styles = StyleSheet.create({
     fontSize: UI_TYPOGRAPHY.pageTitle,
     fontWeight: '800',
     color: '#15181c',
-    marginBottom: 22,
+    marginBottom: 26,
   },
   sectionLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#68707a',
-    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
-    paddingTop: 14,
-    paddingBottom: 4,
+    fontSize: 17,
+    fontWeight: '800',
+    color: UI_COLORS.textPrimary,
+    marginBottom: 10,
   },
   accountBody: {
-    fontSize: 13,
-    color: '#68707a',
-    lineHeight: 18,
-    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
-    paddingBottom: 12,
+    fontSize: 14,
+    color: UI_COLORS.textSecondary,
+    lineHeight: 21,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  accountBodyTitle: {
+    color: UI_COLORS.textPrimary,
+    fontWeight: '800',
   },
   group: {
-    backgroundColor: UI_COLORS.background,
-    borderRadius: 16,
+    backgroundColor: UI_COLORS.surface,
+    borderRadius: UI_RADIUS.panel,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
+    borderColor: UI_COLORS.border,
     overflow: 'hidden',
-    marginBottom: 16,
+    marginBottom: 26,
   },
   row: {
     minHeight: 64,
@@ -1027,7 +1031,7 @@ const styles = StyleSheet.create({
   },
   separator: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#e7e9ec',
+    backgroundColor: UI_COLORS.borderSubtle,
     marginLeft: 16,
   },
   pressed: {

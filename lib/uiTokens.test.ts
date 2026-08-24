@@ -68,7 +68,7 @@ describe('uiTokens contract (R2-B5)', () => {
     expect(UI_LAYOUT.pageHorizontalPadding).toBe(18);
     expect(UI_LAYOUT.tabContentClearance).toBe(72);
     expect(UI_LAYOUT.controlMinHeight).toBe(44);
-    expect(UI_RADIUS.card).toBe(12);
+    expect(UI_RADIUS.card).toBe(10);
     expect(UI_TYPOGRAPHY.pageTitle).toBeGreaterThanOrEqual(24);
     expect(UI_TYPOGRAPHY.pageTitle).toBeLessThanOrEqual(32);
     expect(UI_SPACING.md).toBe(12);

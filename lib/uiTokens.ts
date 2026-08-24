@@ -10,16 +10,16 @@
  */
 
 export const UI_COLORS = {
-  background: '#ffffff',
-  /** List/card surfaces on white pages */
-  surface: '#f3f3f3',
-  /** Soft page/section wash (Analysis / Settings) */
-  surfaceMuted: '#f7f8fa',
+  background: '#f6f7f9',
+  /** Primary information surface */
+  surface: '#ffffff',
+  /** Secondary controls / quiet information wash */
+  surfaceMuted: '#f0f2f5',
   textPrimary: '#111111',
   textSecondary: '#666666',
   textMuted: '#888888',
-  border: '#e0e0e0',
-  borderSubtle: '#e8eaed',
+  border: '#dce1e7',
+  borderSubtle: '#e8ebef',
   /** Dominant action / link accent across production screens */
   accent: '#1677ff',
   destructive: '#dd3333',
@@ -34,32 +34,26 @@ export const UI_SPACING = {
 } as const;
 
 export const UI_RADIUS = {
-  card: 12,
-  /** Build 53 — structured data panels (less soft than card) */
-  panel: 8,
-  /** Build 53 — hero / primary CTA surfaces */
-  hero: 14,
-  control: 10,
-  input: 12,
+  card: 10,
+  panel: 9,
+  hero: 11,
+  control: 9,
+  input: 9,
   pill: 999,
 } as const;
 
 /**
- * Build 53 — Meruno / industrial-data visual language (Arknights-lite ~30%).
- * Additive tokens only — not a full redesign system.
+ * Build 54 — restrained industrial-editorial structure.
+ * Identity comes from flat surfaces, rules, and hierarchy—not ornament.
  */
-export const INDUSTRIAL_UI = {
-  /** Cool gray for micro English section labels */
-  microLabel: '#6B7A8A',
-  microLabelSize: 10,
-  microLabelTracking: 1.4,
-  structureLine: '#D7DDE5',
+export const EDITORIAL_UI = {
+  structureLine: '#DCE1E7',
   accentRule: '#1677ff',
   accentRuleWidth: 3,
   merchantBarWidth: 4,
-  panelBorder: '#D9DEE6',
+  panelBorder: '#DCE1E7',
   panelBackground: '#FFFFFF',
-  metricWash: '#F4F6F8',
+  metricWash: '#F0F2F5',
 } as const;
 
 /** Font sizes only — weights stay local to screens. */
@@ -79,7 +73,7 @@ export const UI_TYPOGRAPHY = {
  */
 export const UI_LAYOUT = {
   pageHorizontalPadding: 18,
-  sectionGap: 16,
+  sectionGap: 26,
   /** Common gap after safe-area on tab roots (Home / Analysis / History). */
   safeAreaTopGap: 16,
   /** Compact gap after safe-area (Detail / Product Detail). */

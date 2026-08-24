@@ -751,8 +751,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
     paddingHorizontal: 13,
-    borderRadius: UI_RADIUS.card,
-    backgroundColor: '#f1f1f1',
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
   },
   searchInput: {
     flex: 1,
@@ -777,9 +779,15 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
+    backgroundColor: UI_COLORS.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
   },
   sep: {
-    height: 10,
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 16,
+    backgroundColor: UI_COLORS.borderSubtle,
   },
   sectionSep: {
     height: 8,
@@ -801,9 +809,8 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: UI_COLORS.surface,
-    borderRadius: UI_RADIUS.card,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
   },
   cardInner: {
     flexDirection: 'row',
@@ -847,7 +854,7 @@ const styles = StyleSheet.create({
   },
   merchant: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
     flexShrink: 1,
   },
   itemName: {
@@ -858,7 +865,8 @@ const styles = StyleSheet.create({
   },
   total: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
   },
   meta: {
     marginTop: 6,

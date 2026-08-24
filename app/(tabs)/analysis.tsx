@@ -13,7 +13,8 @@ import {
 } from 'react-native';
 
 import { AnalysisEmptyState } from '@/components/analysis/AnalysisEmptyState';
-import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
+import { RatioBar } from '@/components/RatioBar';
+import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from '@/lib/db';
@@ -25,11 +26,9 @@ import {
 import { buildStatsSafe } from '@/lib/analysisHelpers';
 import { formatJPY } from '@/lib/formatJPY';
 import { merchantAccentColor } from '@/lib/merchantAccent';
-import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
 import { t } from '@/lib/i18n';
 import { type TimeRange } from '@/lib/statsCalculator';
 import {
-  INDUSTRIAL_UI,
   UI_COLORS,
   UI_LAYOUT,
   UI_RADIUS,
@@ -194,72 +193,41 @@ export default function AnalysisScreen() {
       (viewModel.stage === 'low' || viewModel.stage === 'ready') &&
       viewModel.overview ? (
         <>
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.analysis.overview}
-            title={t('analysis.release.overviewTitle')}
-          />
-          <View style={styles.overviewGrid}>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>
-                {t('analysis.release.totalSpend')}
-              </Text>
-              <Text style={styles.metricValue}>
-                {formatJPY(viewModel.overview.supportedSpend)}
-              </Text>
-            </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>
-                {t('analysis.release.receiptCount')}
-              </Text>
-              <Text style={styles.metricValue}>
-                {viewModel.overview.supportedReceiptCount}
-              </Text>
-            </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>
-                {t('analysis.release.averageSpend')}
-              </Text>
-              <Text style={styles.metricValue}>
-                {formatJPY(viewModel.overview.averageSpendPerReceipt)}
-              </Text>
-            </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>
-                {t('analysis.release.itemCount')}
-              </Text>
-              <Text style={styles.metricValue}>
-                {viewModel.overview.itemCount}
-              </Text>
+          <SectionTitle title={t('analysis.release.overviewTitle')} />
+          <View style={styles.overviewPanel}>
+            <Text style={styles.overviewPrimaryLabel}>
+              {t('analysis.release.totalSpend')}
+            </Text>
+            <Text style={styles.overviewPrimaryValue}>
+              {formatJPY(viewModel.overview.supportedSpend)}
+            </Text>
+            <View style={styles.metricStrip}>
+              <View style={styles.stripMetric}>
+                <Text style={styles.stripValue}>{viewModel.overview.supportedReceiptCount}</Text>
+                <Text style={styles.stripLabel}>{t('analysis.release.receiptCount')}</Text>
+              </View>
+              <View style={[styles.stripMetric, styles.stripMetricBorder]}>
+                <Text style={styles.stripValue}>{formatJPY(viewModel.overview.averageSpendPerReceipt)}</Text>
+                <Text style={styles.stripLabel}>{t('analysis.release.averageSpend')}</Text>
+              </View>
+              <View style={[styles.stripMetric, styles.stripMetricBorder]}>
+                <Text style={styles.stripValue}>{viewModel.overview.itemCount}</Text>
+                <Text style={styles.stripLabel}>{t('analysis.release.itemCount')}</Text>
+              </View>
             </View>
           </View>
 
           {viewModel.categories.length > 0 ? (
             <>
-              <IndustrialSectionHeader
-                microLabel={SECTION_MICRO.analysis.category}
-                title={t('analysis.release.categoryTitle')}
-              />
-              <View style={styles.card}>
+              <SectionTitle title={t('analysis.release.categoryTitle')} />
+              <View style={[styles.card, styles.categoryPanel]}>
                 {viewModel.categories.map((row) => (
-                  <View key={row.category} style={styles.categoryRow}>
-                    <Text style={styles.categoryName}>
-                      {getCategoryLabel(row.category)}
-                    </Text>
-                    <Text style={styles.categoryAmount}>
-                      {formatJPY(row.amount)}
-                    </Text>
-                    <Text style={styles.categoryShare}>
-                      {Math.round(row.share * 100)}%
-                    </Text>
-                    <View style={styles.categoryTrack}>
-                      <View
-                        style={[
-                          styles.categoryFill,
-                          { width: `${Math.max(Math.round(row.share * 100), 2)}%` },
-                        ]}
-                      />
-                    </View>
-                  </View>
+                  <RatioBar
+                    key={row.category}
+                    label={getCategoryLabel(row.category)}
+                    value={formatJPY(row.amount)}
+                    percent={row.share * 100}
+                  />
                 ))}
                 {viewModel.uncategorized ? (
                   <Text style={styles.uncategorizedHint}>
@@ -275,15 +243,21 @@ export default function AnalysisScreen() {
 
           {viewModel.merchants.length > 0 ? (
             <>
-              <IndustrialSectionHeader
-                microLabel={SECTION_MICRO.analysis.merchant}
-                title={t('analysis.release.merchantsTitle')}
-              />
+              <SectionTitle title={t('analysis.release.merchantsTitle')} />
               <View style={styles.card}>
-                {viewModel.merchants.map((row) => (
-                  <View key={row.merchantKey} style={styles.merchantRow}>
+                {viewModel.merchants.map((row, index) => (
+                  <View
+                    key={row.merchantKey}
+                    style={[styles.merchantRow, index > 0 && styles.rowDivider]}
+                  >
+                    <View
+                      style={[
+                        styles.merchantAccent,
+                        { backgroundColor: merchantAccentColor(row.merchantKey) },
+                      ]}
+                    />
                     <View style={styles.merchantTextCol}>
-                      <Text style={styles.merchantName} numberOfLines={1}>
+                      <Text style={styles.merchantName} numberOfLines={2}>
                         {row.displayName}
                       </Text>
                       <Text style={styles.merchantMeta}>
@@ -301,11 +275,8 @@ export default function AnalysisScreen() {
             </>
           ) : null}
 
-          <IndustrialSectionHeader
-            microLabel={SECTION_MICRO.analysis.change}
-            title={t('analysis.release.spendChangeTitle')}
-          />
-          <View style={styles.card}>
+          <SectionTitle title={t('analysis.release.spendChangeTitle')} />
+          <View style={[styles.card, styles.changePanel]}>
             {viewModel.spendChange.status === 'available' ? (
               <>
                 <Text style={styles.changeCompared}>
@@ -355,10 +326,7 @@ export default function AnalysisScreen() {
 
           {viewModel.insight ? (
             <>
-              <IndustrialSectionHeader
-                microLabel={SECTION_MICRO.analysis.insight}
-                title={t(viewModel.insight.titleKey)}
-              />
+              <SectionTitle title={t(viewModel.insight.titleKey)} />
               <View style={styles.insightCard}>
                 <Text style={styles.insightText}>{renderInsightBody()}</Text>
               </View>
@@ -393,7 +361,7 @@ export default function AnalysisScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: UI_COLORS.surfaceMuted,
+    backgroundColor: UI_COLORS.background,
   },
   scroll: {
     flex: 1,
@@ -449,82 +417,83 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     textAlign: 'center',
   },
-  sectionTitle: {
-    marginTop: 24,
-    marginBottom: 10,
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#171a1f',
-  },
-  overviewGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  metricCard: {
-    width: '48%',
-    flexGrow: 1,
-    minWidth: '46%',
-    padding: 14,
-    borderRadius: 8,
-    backgroundColor: UI_COLORS.background,
+  overviewPanel: {
+    overflow: 'hidden',
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surface,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
+    borderColor: UI_COLORS.border,
   },
-  metricLabel: {
-    color: '#747d88',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  metricValue: {
-    marginTop: 8,
-    color: '#15181c',
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  card: {
-    borderRadius: 8,
-    backgroundColor: UI_COLORS.background,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
-    paddingHorizontal: 14,
-    paddingVertical: 4,
-  },
-  categoryRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eef1f4',
-  },
-  categoryName: {
-    flex: 1,
-    color: '#15181c',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  categoryAmount: {
-    minWidth: 72,
-    textAlign: 'right',
-    color: '#15181c',
-    fontSize: 14,
-    fontWeight: '800',
-    marginRight: 10,
-  },
-  categoryShare: {
-    minWidth: 40,
-    textAlign: 'right',
-    color: '#68707a',
+  overviewPrimaryLabel: {
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
     fontWeight: '700',
+  },
+  overviewPrimaryValue: {
+    paddingHorizontal: 18,
+    paddingTop: 7,
+    paddingBottom: 18,
+    color: UI_COLORS.textPrimary,
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  metricStrip: {
+    flexDirection: 'row',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.border,
+  },
+  stripMetric: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 8,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  stripMetricBorder: {
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: UI_COLORS.border,
+  },
+  stripValue: {
+    color: UI_COLORS.textPrimary,
+    fontSize: 17,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  stripLabel: {
+    marginTop: 5,
+    color: UI_COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  card: {
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    paddingHorizontal: 16,
+  },
+  categoryPanel: {
+    paddingVertical: 16,
+    gap: 16,
   },
   merchantRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eef1f4',
+    paddingVertical: 14,
+  },
+  merchantAccent: {
+    width: 4,
+    height: 34,
+    marginRight: 12,
+  },
+  rowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.borderSubtle,
   },
   merchantTextCol: {
     flex: 1,
@@ -546,6 +515,11 @@ const styles = StyleSheet.create({
     color: '#15181c',
     fontSize: 14,
     fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  changePanel: {
+    paddingHorizontal: 18,
+    paddingVertical: 4,
   },
   changeCompared: {
     paddingTop: 12,
@@ -579,10 +553,12 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   insightCard: {
-    borderRadius: 8,
+    borderRadius: UI_RADIUS.panel,
     backgroundColor: '#eef5ff',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#cfe1fb',
+    borderLeftWidth: 3,
+    borderLeftColor: UI_COLORS.accent,
     padding: 16,
   },
   insightText: {
@@ -590,19 +566,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     fontWeight: '600',
-  },
-  categoryTrack: {
-    marginTop: 8,
-    width: '100%',
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: INDUSTRIAL_UI.metricWash,
-    overflow: 'hidden',
-  },
-  categoryFill: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: INDUSTRIAL_UI.accentRule,
   },
   lowDataNote: {
     marginTop: 14,

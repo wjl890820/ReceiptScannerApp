@@ -372,6 +372,8 @@
     "noHistory": "購入履歴がありません",
     "purchaseCount": "購入記録",
     "purchaseCountValue": "{count}回",
+    "totalQuantityLabel": "累計数量",
+    "totalQuantityValue": "{count}点",
     "totalQuantity": "累計数量 {count}",
     "totalSpend": "合計支出",
     "firstPurchase": "初回購入",
@@ -506,6 +508,10 @@
   },
   "settings": {
     "title": "設定",
+    "sections": {
+      "preferences": "環境設定",
+      "support": "サポート"
+    },
     "language": {
       "title": "言語",
       "subtitle": "アプリの表示言語を選択",

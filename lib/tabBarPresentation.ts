@@ -1,6 +1,6 @@
 /**
- * Bottom tab presentation tokens — contrast-safe on a white tab bar.
- * Keep independent of system dark/light so active never becomes white-on-white.
+ * Bottom tab presentation tokens — contrast-safe on the shared near-white tab bar.
+ * Keep independent of system dark/light so active never disappears into the surface.
  *
  * Accent is sourced from `UI_COLORS.accent` (R2-B5). Inactive / border stay
  * tab-specific for contrast and are not remapped onto generic text tokens.

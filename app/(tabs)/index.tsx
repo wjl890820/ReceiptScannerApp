@@ -575,7 +575,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
-    backgroundColor: UI_COLORS.surfaceMuted,
+    backgroundColor: UI_COLORS.background,
   },
   container: {
     paddingTop: 0,
@@ -788,7 +788,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f6ff',
     borderWidth: 1,
     borderColor: '#d4e4fb',
-    borderRadius: 14,
+    borderRadius: UI_RADIUS.panel,
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginBottom: 12,

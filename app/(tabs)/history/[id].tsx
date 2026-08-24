@@ -30,6 +30,7 @@ import {
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
+import { merchantAccentColor } from '@/lib/merchantAccent';
 import { navigateBackOrHistory } from '@/lib/navigationBack';
 import {
   buildAggregatableProductDetailHref,
@@ -40,7 +41,7 @@ import { upsertProductDictionary } from '@/lib/productDictionary';
 import { upsertProductNameAlias } from '@/lib/productAlias';
 import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { stampUserClassificationProvenance } from '@/lib/productTaxonomy';
-import { getCategoryColor, getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
+import { getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
@@ -510,32 +511,43 @@ export default function ReceiptDetailScreen() {
         contentContainerStyle={[styles.container, { paddingBottom: 28 + Math.max(insets.bottom, 0) }]}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.headerRow}>
-          <View style={{ flex: 1 }}>
+        <View style={styles.receiptHero}>
+          <View
+            style={[
+              styles.merchantAccent,
+              {
+                backgroundColor: merchantAccentColor(
+                  receipt.merchant_normalized || receipt.merchant_raw
+                ),
+              },
+            ]}
+          />
+          <View style={styles.receiptHeroBody}>
             <Text style={styles.merchant}>{merchant}</Text>
             <Text style={styles.date}>
               {receipt.transaction_at
                 ? formatDate(receipt.transaction_at)
                 : t('history.detail.dateUnknown')}
             </Text>
+            <View style={styles.totalRow}>
+              <View>
+                <Text style={styles.total} accessibilityRole="text">
+                  {formatJPY(displayTotal)}
+                </Text>
+                <Text style={styles.totalLabel}>{t('history.detail.totalLabel')}</Text>
+              </View>
+              <Text style={styles.tax}>
+                {t('history.detail.taxLabel')}{' '}
+                {receipt.tax_is_known === 1 && receipt.tax != null && Number.isFinite(receipt.tax)
+                  ? formatJPY(receipt.tax)
+                  : t('common.uncategorizedTag')}
+              </Text>
+            </View>
+            {receipt.user_edited === 1 && receipt.user_items_json && (
+              <Text style={styles.overrideHint}>{t('history.detail.editedHint')}</Text>
+            )}
           </View>
         </View>
-
-        <Text style={styles.totalLabel}>{t('history.detail.totalLabel')}</Text>
-        <Text style={styles.total} accessibilityRole="text">
-          {formatJPY(displayTotal)}
-        </Text>
-        {receipt.user_edited === 1 && receipt.user_items_json && (
-          <Text style={styles.overrideHint}>
-            {t('history.detail.editedHint')}
-          </Text>
-        )}
-        <Text style={styles.tax}>
-          {t('history.detail.taxLabel')}{' '}
-          {receipt.tax_is_known === 1 && receipt.tax != null && Number.isFinite(receipt.tax)
-            ? receipt.tax
-            : t('common.uncategorizedTag')}
-        </Text>
 
         {/* 分类汇总 */}
         <Text style={styles.h2}>{t('history.detail.categorySummaryTitle')}</Text>
@@ -545,20 +557,31 @@ export default function ReceiptDetailScreen() {
               <Text style={{ color: UI_COLORS.textSecondary }}>{t('history.detail.noCategoryInfo')}</Text>
             </View>
           ) : (
-            categorySummary.map((x) => {
-              const color = getCategoryColor(x.category);
-              return (
-                <View key={x.category} style={styles.summaryRow}>
-                  <View style={[styles.categoryColorBar, { backgroundColor: color }]} />
-                  <Text style={styles.summaryLeft}>
-                    {getCategoryLabel(x.category)}
-                  </Text>
-                  <Text style={styles.summaryRight}>
-                    {formatJPY(x.amount)}
-                  </Text>
+            categorySummary.map((x) => (
+              <View key={x.category} style={styles.summaryRow}>
+                <View style={styles.summaryLabelRow}>
+                  <Text style={styles.summaryLeft}>{getCategoryLabel(x.category)}</Text>
+                  <Text style={styles.summaryRight}>{formatJPY(x.amount)}</Text>
                 </View>
-              );
-            })
+                <View style={styles.categoryTrack}>
+                  <View
+                    style={[
+                      styles.categoryFill,
+                      {
+                        width: `${
+                          displayTotal > 0
+                            ? Math.max(
+                                1,
+                                Math.min(100, Math.round((x.amount / displayTotal) * 100))
+                              )
+                            : 0
+                        }%` as any,
+                      },
+                    ]}
+                  />
+                </View>
+              </View>
+            ))
           )}
         </View>
 
@@ -779,72 +802,97 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   merchant: {
-    fontSize: 34,
+    fontSize: 23,
+    lineHeight: 29,
     fontWeight: '800',
-    marginBottom: 6,
+    color: UI_COLORS.textPrimary,
   },
   date: {
-    fontSize: 16,
+    marginTop: 3,
+    fontSize: 13,
     color: UI_COLORS.textSecondary,
-    marginBottom: 18,
   },
   total: {
-    fontSize: 40,
+    fontSize: 32,
+    lineHeight: 38,
     fontWeight: '900',
-    marginBottom: 6,
+    color: UI_COLORS.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
   tax: {
-    fontSize: 18,
+    flexShrink: 1,
+    fontSize: 13,
     color: UI_COLORS.textSecondary,
-    marginBottom: 18,
+    textAlign: 'right',
   },
   h2: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '800',
-    marginTop: 10,
-    marginBottom: 10,
+    color: UI_COLORS.textPrimary,
+    marginTop: 26,
+    marginBottom: 12,
   },
   summaryCard: {
-    backgroundColor: '#f6f6f6',
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    backgroundColor: UI_COLORS.surface,
+    borderRadius: UI_RADIUS.panel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    paddingVertical: 5,
+    paddingHorizontal: 16,
   },
   summaryRow: {
+    paddingVertical: 11,
+  },
+  summaryLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 6,
-    gap: 8,
-  },
-  categoryColorBar: {
-    width: 4,
-    height: 20,
-    borderRadius: 2,
+    gap: 12,
   },
   summaryLeft: {
-    fontSize: 16,
+    flex: 1,
+    fontSize: 15,
     fontWeight: '700',
+    color: UI_COLORS.textPrimary,
   },
   summaryRight: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
+    color: UI_COLORS.textPrimary,
+    fontVariant: ['tabular-nums'],
+  },
+  categoryTrack: {
+    height: 5,
+    marginTop: 8,
+    borderRadius: 3,
+    overflow: 'hidden',
+    backgroundColor: UI_COLORS.surfaceMuted,
+  },
+  categoryFill: {
+    height: '100%',
+    borderRadius: 3,
+    backgroundColor: UI_COLORS.accent,
   },
   itemsWrap: {
-    marginTop: 4,
+    backgroundColor: UI_COLORS.surface,
+    borderRadius: UI_RADIUS.panel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    overflow: 'hidden',
   },
   itemRow: {
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e3e3e3',
+    borderBottomColor: UI_COLORS.borderSubtle,
+    paddingLeft: 16,
   },
   itemEditHit: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
     minHeight: UI_LAYOUT.controlMinHeight,
   },
   productDetailHit: {
@@ -854,9 +902,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   itemName: {
-    fontSize: 18,
+    fontSize: 16,
+    lineHeight: 21,
     fontWeight: '800',
     marginBottom: 4,
+    color: UI_COLORS.textPrimary,
   },
   itemMeta: {
     fontSize: 14,
@@ -870,9 +920,9 @@ const styles = StyleSheet.create({
   },
   tag: {
     alignSelf: 'center',
-    backgroundColor: '#eee',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    backgroundColor: UI_COLORS.surfaceMuted,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
     borderRadius: 999,
   },
   tagText: {
@@ -892,15 +942,19 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   deleteBtn: {
-    marginTop: 8,
-    paddingVertical: 14,
-    borderRadius: UI_RADIUS.card,
+    marginTop: 12,
+    minHeight: UI_LAYOUT.controlMinHeight,
+    paddingVertical: 12,
+    borderRadius: UI_RADIUS.control,
     alignItems: 'center',
-    backgroundColor: '#fff0f0',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e8a8a8',
+    backgroundColor: '#fffafa',
   },
   deleteText: {
     color: UI_COLORS.destructive,
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '800',
   },
 
@@ -997,17 +1051,36 @@ const styles = StyleSheet.create({
     color: UI_COLORS.textSecondary,
     fontSize: 13,
     fontWeight: '700',
-    marginBottom: 6,
+    marginTop: 1,
   },
   totalValue: {
     fontSize: 22,
     fontWeight: '900',
   },
-  headerRow: {
+  receiptHero: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    backgroundColor: UI_COLORS.surface,
+    borderRadius: UI_RADIUS.hero,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    overflow: 'hidden',
+  },
+  merchantAccent: {
+    width: 4,
+  },
+  receiptHeroBody: {
+    flex: 1,
+    padding: 16,
+  },
+  totalRow: {
+    marginTop: 18,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.borderSubtle,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    gap: 16,
   },
   editBtn: {
     paddingVertical: 8,

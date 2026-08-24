@@ -4,8 +4,8 @@ import {
 } from './tabBarPresentation';
 
 describe('tab bar presentation contrast', () => {
-  it('uses blue active and gray inactive on a white tab bar', () => {
-    expect(TAB_BAR_PRESENTATION.background.toLowerCase()).toBe('#ffffff');
+  it('uses blue active and gray inactive on the shared near-white background', () => {
+    expect(TAB_BAR_PRESENTATION.background.toLowerCase()).toBe('#f6f7f9');
     expect(TAB_BAR_PRESENTATION.active.toLowerCase()).not.toBe('#ffffff');
     expect(TAB_BAR_PRESENTATION.active.toLowerCase()).not.toBe('#fff');
     expect(TAB_BAR_PRESENTATION.inactive.toLowerCase()).not.toBe(

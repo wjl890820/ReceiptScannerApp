@@ -27,7 +27,7 @@
         "subtitle": "记录越完整，越容易发现近期的购物变化。"
       },
       "recent": {
-        "title": "近期购物",
+        "title": "最近购物",
         "items": "{count} 件商品",
         "openA11y": "打开最近一笔购物"
       },
@@ -372,6 +372,8 @@
     "noHistory": "暂无购买记录",
     "purchaseCount": "购买记录",
     "purchaseCountValue": "{count} 次",
+    "totalQuantityLabel": "累计数量",
+    "totalQuantityValue": "{count} 件",
     "totalQuantity": "累计数量 {count}",
     "totalSpend": "总支出",
     "firstPurchase": "首次购买",
@@ -506,6 +508,10 @@
   },
   "settings": {
     "title": "设置",
+    "sections": {
+      "preferences": "偏好设置",
+      "support": "支持"
+    },
     "language": {
       "title": "语言",
       "subtitle": "选择应用显示语言",

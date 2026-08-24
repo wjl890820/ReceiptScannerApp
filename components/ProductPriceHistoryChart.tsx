@@ -14,6 +14,7 @@ import type {
   ProductPriceHistoryResult,
   ProductPriceKind,
 } from '@/lib/productPriceHistory';
+import { UI_COLORS, UI_RADIUS } from '@/lib/uiTokens';
 
 function numberLabel(value: number): string {
   return Number.isInteger(value)
@@ -179,9 +180,9 @@ export function ProductPriceHistoryChart({
           </View>
           {latest && minimumPoint && maximumPoint && result.priceKind && result.currency && (
             <View style={styles.factGrid}>
-              <View style={styles.fact}>
+              <View style={[styles.fact, styles.latestFact]}>
                 <Text style={styles.factLabel}>{t('priceHistory.latest')}</Text>
-                <Text style={styles.factValue}>
+                <Text style={[styles.factValue, styles.latestFactValue]}>
                   {priceLabel(
                     latest.priceValue,
                     result.currency,
@@ -189,7 +190,7 @@ export function ProductPriceHistoryChart({
                   )}
                 </Text>
               </View>
-              <View style={styles.fact}>
+              <View style={[styles.fact, styles.factBorder]}>
                 <Text style={styles.factLabel}>{t('priceHistory.minimum')}</Text>
                 <Text style={styles.factValue}>
                   {priceLabel(
@@ -199,7 +200,7 @@ export function ProductPriceHistoryChart({
                   )}
                 </Text>
               </View>
-              <View style={styles.fact}>
+              <View style={[styles.fact, styles.factBorder]}>
                 <Text style={styles.factLabel}>{t('priceHistory.maximum')}</Text>
                 <Text style={styles.factValue}>
                   {priceLabel(
@@ -233,19 +234,21 @@ const styles = StyleSheet.create({
     marginTop: 26,
     fontSize: 17,
     fontWeight: '800',
-    color: '#111',
+    color: UI_COLORS.textPrimary,
   },
   subtitle: {
     marginTop: 6,
-    color: '#666',
+    color: UI_COLORS.textSecondary,
     fontSize: 13,
     lineHeight: 19,
   },
   statusCard: {
     marginTop: 12,
-    padding: 14,
-    borderRadius: 12,
-    backgroundColor: '#f3f3f3',
+    padding: 16,
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
   },
   statusText: {
     color: '#555',
@@ -276,8 +279,10 @@ const styles = StyleSheet.create({
   chart: {
     marginTop: 6,
     height: PRODUCT_PRICE_CHART_HEIGHT,
-    borderRadius: 12,
-    backgroundColor: '#f7f7f7',
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
     overflow: 'hidden',
   },
   dateRange: {
@@ -292,13 +297,24 @@ const styles = StyleSheet.create({
   factGrid: {
     marginTop: 14,
     flexDirection: 'row',
-    gap: 8,
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    overflow: 'hidden',
   },
   fact: {
     flex: 1,
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: '#f3f3f3',
+    minHeight: 72,
+    padding: 12,
+    justifyContent: 'center',
+  },
+  latestFact: {
+    flex: 1.2,
+  },
+  factBorder: {
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: UI_COLORS.borderSubtle,
   },
   factLabel: {
     color: '#777',
@@ -306,9 +322,14 @@ const styles = StyleSheet.create({
   },
   factValue: {
     marginTop: 5,
-    color: '#222',
+    color: UI_COLORS.textPrimary,
     fontSize: 13,
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  latestFactValue: {
+    fontSize: 17,
+    fontWeight: '800',
   },
   coverage: {
     marginTop: 10,

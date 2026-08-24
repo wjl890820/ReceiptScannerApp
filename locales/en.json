@@ -372,6 +372,8 @@
     "noHistory": "No purchase history",
     "purchaseCount": "Purchase records",
     "purchaseCountValue": "{count} times",
+    "totalQuantityLabel": "Total quantity",
+    "totalQuantityValue": "{count} items",
     "totalQuantity": "Total quantity {count}",
     "totalSpend": "Total spend",
     "firstPurchase": "First purchase",
@@ -506,6 +508,10 @@
   },
   "settings": {
     "title": "Settings",
+    "sections": {
+      "preferences": "Preferences",
+      "support": "Support"
+    },
     "language": {
       "title": "Language",
       "subtitle": "Choose the app display language",
