@@ -186,8 +186,6 @@ Output ONLY a valid JSON object, no markdown, no code fences:
 Include exactly one result object per input item, preserving the input index.
 Do not include janCode, barcode, skuId, identityLevel, or canonicalProductId.`;
 }
-Include exactly one result object per input item, preserving the input index.`;
-}
 
 async function callGemini(prompt: string, t0: number): Promise<string> {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
