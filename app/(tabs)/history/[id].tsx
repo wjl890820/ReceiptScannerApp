@@ -15,6 +15,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { CategoryIdentity } from '@/components/CategoryIdentity';
+import { CategoryRatioRow } from '@/components/CategoryRatioRow';
+import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import {
   deleteReceipts,
   getReceipt,
@@ -30,7 +33,6 @@ import {
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
-import { merchantAccentColor } from '@/lib/merchantAccent';
 import { navigateBackOrHistory } from '@/lib/navigationBack';
 import {
   buildAggregatableProductDetailHref,
@@ -459,15 +461,19 @@ export default function ReceiptDetailScreen() {
   if (loading) {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
-        <Pressable
-          onPress={onBack}
-          accessibilityRole="button"
-          accessibilityLabel={t('history.detail.back')}
-          style={({ pressed }) => [styles.backButton, pressed && { opacity: 0.55 }]}
-          hitSlop={8}
-        >
-          <Text style={styles.backText}>{t('history.detail.back')}</Text>
-        </Pressable>
+        <View style={styles.navigationHeader}>
+          <Pressable
+            onPress={onBack}
+            accessibilityRole="button"
+            accessibilityLabel={t('history.detail.back')}
+            style={({ pressed }) => [styles.backButton, pressed && { opacity: 0.55 }]}
+            hitSlop={8}
+          >
+            <Text style={styles.backText}>{t('history.detail.back')}</Text>
+          </Pressable>
+          <Text style={styles.navigationTitle}>{t('history.detail.title')}</Text>
+          <View style={styles.navigationSpacer} />
+        </View>
         <View style={styles.center}>
           <ActivityIndicator />
           <Text style={{ marginTop: 10 }}>{t('history.detail.loading')}</Text>
@@ -512,23 +518,22 @@ export default function ReceiptDetailScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.receiptHero}>
-          <View
-            style={[
-              styles.merchantAccent,
-              {
-                backgroundColor: merchantAccentColor(
-                  receipt.merchant_normalized || receipt.merchant_raw
-                ),
-              },
-            ]}
-          />
           <View style={styles.receiptHeroBody}>
-            <Text style={styles.merchant}>{merchant}</Text>
-            <Text style={styles.date}>
-              {receipt.transaction_at
-                ? formatDate(receipt.transaction_at)
-                : t('history.detail.dateUnknown')}
-            </Text>
+            <View style={styles.merchantSummaryRow}>
+              <MerchantIdentityTile
+                merchant={merchant}
+                merchantKey={receipt.merchant_normalized}
+                size={42}
+              />
+              <View style={styles.merchantSummaryText}>
+                <Text style={styles.merchant}>{merchant}</Text>
+                <Text style={styles.date}>
+                  {receipt.transaction_at
+                    ? formatDate(receipt.transaction_at)
+                    : t('history.detail.dateUnknown')}
+                </Text>
+              </View>
+            </View>
             <View style={styles.totalRow}>
               <View>
                 <Text style={styles.total} accessibilityRole="text">
@@ -565,32 +570,15 @@ export default function ReceiptDetailScreen() {
                   index > 0 && styles.summaryRowDivider,
                 ]}
               >
-                <View style={styles.summaryLabelRow}>
-                  <Text style={styles.summaryLeft}>{getCategoryLabel(x.category)}</Text>
-                  <Text style={styles.summaryRight}>{formatJPY(x.amount)}</Text>
-                  <Text style={styles.summaryPercent}>
-                    {displayTotal > 0
-                      ? `${Math.max(0, Math.round((x.amount / displayTotal) * 100))}%`
-                      : '0%'}
-                  </Text>
-                </View>
-                <View style={styles.categoryTrack}>
-                  <View
-                    style={[
-                      styles.categoryFill,
-                      {
-                        width: `${
-                          displayTotal > 0
-                            ? Math.max(
-                                1,
-                                Math.min(100, Math.round((x.amount / displayTotal) * 100))
-                              )
-                            : 0
-                        }%` as any,
-                      },
-                    ]}
-                  />
-                </View>
+                <CategoryRatioRow
+                  category={x.category}
+                  amount={formatJPY(x.amount)}
+                  percent={
+                    displayTotal > 0
+                      ? Math.max(0, (x.amount / displayTotal) * 100)
+                      : 0
+                  }
+                />
               </View>
             ))
           )}
@@ -620,6 +608,11 @@ export default function ReceiptDetailScreen() {
                     accessibilityRole="button"
                     accessibilityLabel={t('history.detail.edit.title')}
                   >
+                    <CategoryIdentity
+                      category={it.category ?? 'uncategorized'}
+                      compact
+                      showLabel={false}
+                    />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.itemName}>{it.name}</Text>
                       <Text style={styles.itemMeta}>
@@ -795,13 +788,29 @@ const styles = StyleSheet.create({
     minHeight: UI_LAYOUT.controlMinHeight,
     minWidth: 44,
     justifyContent: 'center',
-    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
-    alignSelf: 'flex-start',
+    paddingHorizontal: 0,
+    alignSelf: 'center',
   },
   backText: {
     fontSize: 16,
     fontWeight: '700',
     color: UI_COLORS.textPrimary,
+  },
+  navigationHeader: {
+    height: UI_LAYOUT.controlMinHeight,
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  navigationTitle: {
+    flex: 1,
+    color: UI_COLORS.textPrimary,
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  navigationSpacer: {
+    width: 44,
   },
   center: {
     paddingTop: 80,
@@ -1081,20 +1090,25 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   receiptHero: {
-    flexDirection: 'row',
     backgroundColor: UI_COLORS.surface,
     borderRadius: UI_RADIUS.hero,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
     overflow: 'hidden',
   },
-  merchantAccent: {
-    width: 4,
-  },
   receiptHeroBody: {
     flex: 1,
-    paddingTop: 16,
+    paddingTop: 15,
     paddingHorizontal: 16,
+  },
+  merchantSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  merchantSummaryText: {
+    flex: 1,
+    minWidth: 0,
   },
   totalRow: {
     marginTop: 18,

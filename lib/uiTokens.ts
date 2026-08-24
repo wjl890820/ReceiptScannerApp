@@ -10,24 +10,25 @@
  */
 
 export const UI_COLORS = {
-  background: '#f6f7f9',
+  background: '#F6F7F9',
   /** Primary information surface */
-  surface: '#ffffff',
+  surface: '#FFFFFF',
   /** Secondary controls / quiet information wash */
-  surfaceMuted: '#f0f2f5',
-  textPrimary: '#111111',
-  textSecondary: '#666666',
-  textMuted: '#888888',
+  surfaceMuted: '#F1F3F6',
+  textPrimary: '#111318',
+  textSecondary: '#6F7680',
+  textMuted: '#969DA6',
   /** Restrained structural anchor; never a page background. */
-  charcoal: '#181b20',
-  border: '#dce1e7',
-  borderSubtle: '#e8ebef',
+  charcoal: '#17191D',
+  border: '#E5E8EC',
+  borderSubtle: '#E5E8EC',
   /** Dominant action / link accent across production screens */
-  accent: '#1677ff',
+  accent: '#1683FF',
+  accentDark: '#096AE8',
   /** Quiet information emphasis; not a second page background. */
-  accentSoft: '#edf4ff',
+  accentSoft: '#EAF4FF',
   /** Optional micro-signal only. */
-  signal: '#d8792b',
+  signal: '#F39228',
   destructive: '#dd3333',
 } as const;
 
@@ -53,20 +54,20 @@ export const UI_RADIUS = {
  * Identity comes from flat surfaces, rules, and hierarchy—not ornament.
  */
 export const EDITORIAL_UI = {
-  structureLine: '#DCE1E7',
-  accentRule: '#1677ff',
+  structureLine: '#E5E8EC',
+  accentRule: '#1683FF',
   accentRuleWidth: 3,
   merchantBarWidth: 4,
-  panelBorder: '#DCE1E7',
+  panelBorder: '#E5E8EC',
   panelBackground: '#FFFFFF',
-  metricWash: '#F0F2F5',
-  darkAnchor: '#181B20',
+  metricWash: '#F1F3F6',
+  darkAnchor: '#17191D',
   darkAnchorMuted: '#AEB7C3',
 } as const;
 
 /** Font sizes only — weights stay local to screens. */
 export const UI_TYPOGRAPHY = {
-  pageTitle: 28,
+  pageTitle: 32,
   sectionTitle: 22,
   cardTitle: 16,
   body: 16,
@@ -80,7 +81,7 @@ export const UI_TYPOGRAPHY = {
  * use these as additives (e.g. `insets.top + UI_LAYOUT.safeAreaTopGap`).
  */
 export const UI_LAYOUT = {
-  pageHorizontalPadding: 18,
+  pageHorizontalPadding: 16,
   sectionGap: 26,
   /** Common gap after safe-area on tab roots (Home / Analysis / History). */
   safeAreaTopGap: 16,

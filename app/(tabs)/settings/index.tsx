@@ -1,5 +1,6 @@
 // app/(tabs)/settings.tsx
 
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, type Href } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -107,12 +108,14 @@ function SettingsRow({
   title,
   subtitle,
   value,
+  icon,
   onPress,
   accessibilityLabel,
 }: {
   title: string;
   subtitle?: string;
   value?: string;
+  icon?: React.ComponentProps<typeof MaterialIcons>['name'];
   onPress: () => void;
   accessibilityLabel: string;
 }) {
@@ -123,6 +126,11 @@ function SettingsRow({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
     >
+      {icon ? (
+        <View style={styles.rowIcon} importantForAccessibility="no">
+          <MaterialIcons name={icon} size={19} color={UI_COLORS.accent} />
+        </View>
+      ) : null}
       <View style={styles.rowText}>
         <Text style={styles.rowTitle}>{title}</Text>
         {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
@@ -725,6 +733,7 @@ export default function SettingsScreen() {
                 <Text style={styles.accountBody}>{t('settings.account.anonymousBody')}</Text>
                 <SettingsRow
                   title={t('settings.account.protectAction')}
+                  icon="shield"
                   onPress={onPressProtectWithApple}
                   accessibilityLabel={t('settings.account.protectAction')}
                 />
@@ -755,6 +764,7 @@ export default function SettingsScreen() {
                 <Text style={styles.accountBody}>{t('settings.account.emptyBody')}</Text>
                 <SettingsRow
                   title={t('settings.account.restoreAction')}
+                  icon="cloud-download"
                   onPress={onPressRestoreExisting}
                   accessibilityLabel={t('settings.account.restoreAction')}
                 />
@@ -765,6 +775,7 @@ export default function SettingsScreen() {
                 <View style={styles.separator} />
                 <SettingsRow
                   title={t('settings.account.restoreAction')}
+                  icon="cloud-download"
                   onPress={onPressRestoreExisting}
                   accessibilityLabel={t('settings.account.restoreAction')}
                 />
@@ -778,6 +789,7 @@ export default function SettingsScreen() {
       <View style={styles.group}>
         <SettingsRow
           title={t('settings.language.title')}
+          icon="language"
           subtitle={t('settings.language.subtitle')}
           value={t(localePreferenceLabelKey(localePreference))}
           onPress={onPressLanguage}
@@ -788,6 +800,7 @@ export default function SettingsScreen() {
             <View style={styles.separator} />
             <SettingsRow
               title={t('settings.pro.title')}
+              icon="insights"
               subtitle={t('settings.pro.subtitle')}
               onPress={() => router.push('/(tabs)/settings/pro-insight' as any)}
               accessibilityLabel={t('settings.pro.title')}
@@ -800,6 +813,7 @@ export default function SettingsScreen() {
       <View style={styles.group}>
         <SettingsRow
           title={t('settings.feedback.title')}
+          icon="chat-bubble-outline"
           subtitle={t('settings.feedback.subtitle')}
           onPress={() => router.push('/(tabs)/settings/feedback' as any)}
           accessibilityLabel={t('settings.feedback.title')}
@@ -807,6 +821,7 @@ export default function SettingsScreen() {
         <View style={styles.separator} />
         <SettingsRow
           title={t('settings.privacy.title')}
+          icon="lock-outline"
           subtitle={t('settings.privacy.subtitle')}
           onPress={async () => {
             try {
@@ -833,6 +848,7 @@ export default function SettingsScreen() {
         <View style={styles.separator} />
         <SettingsRow
           title={t('settings.about.title')}
+          icon="info-outline"
           subtitle={`${currentName} · ${aboutVersionLine}`}
           onPress={onPressVersionArea}
           accessibilityLabel={`${t('settings.about.title')}, ${aboutVersionLine}`}
@@ -1007,6 +1023,15 @@ const styles = StyleSheet.create({
   rowText: {
     flex: 1,
     paddingRight: 10,
+  },
+  rowIcon: {
+    width: 32,
+    height: 32,
+    marginRight: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: UI_COLORS.accentSoft,
   },
   rowTitle: {
     fontSize: 16,

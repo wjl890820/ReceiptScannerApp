@@ -42,14 +42,35 @@ const CATEGORY_COLOR_MAP: Record<Category, string> = {
  * 新分类的颜色（item.category 统一为新 enum 后使用；旧值经归一映射到这里）。
  */
 const PRODUCT_CATEGORY_COLOR: Record<ProductCategory, string> = {
-  food_ingredients: '#4CAF50', // Green
-  ready_to_eat: '#00BCD4', // Cyan
-  snacks_drinks: '#E91E63', // Pink
-  household: '#607D8B', // BlueGrey
-  personal_care: '#AB47BC', // Purple
-  pet_care: '#FF9800', // Orange
-  uncategorized: '#BDBDBD', // Grey
-  other: '#78909C', // BlueGrey
+  food_ingredients: '#1683FF',
+  ready_to_eat: '#31B8A6',
+  snacks_drinks: '#F39228',
+  household: '#775BC7',
+  personal_care: '#775BC7',
+  pet_care: '#9CA3AC',
+  uncategorized: '#9CA3AC',
+  other: '#9CA3AC',
+};
+
+export type CategoryIconName =
+  | 'shopping-basket'
+  | 'restaurant'
+  | 'local-drink'
+  | 'inventory-2'
+  | 'spa'
+  | 'pets'
+  | 'help-outline'
+  | 'category';
+
+const PRODUCT_CATEGORY_ICON: Record<ProductCategory, CategoryIconName> = {
+  food_ingredients: 'shopping-basket',
+  ready_to_eat: 'restaurant',
+  snacks_drinks: 'local-drink',
+  household: 'inventory-2',
+  personal_care: 'spa',
+  pet_care: 'pets',
+  uncategorized: 'help-outline',
+  other: 'category',
 };
 
 /**
@@ -58,6 +79,21 @@ const PRODUCT_CATEGORY_COLOR: Record<ProductCategory, string> = {
 export function getCategoryColor(categoryId: string): string {
   const c = normalizeProductCategory(categoryId);
   return PRODUCT_CATEGORY_COLOR[c] || PRODUCT_CATEGORY_COLOR.other;
+}
+
+export function getCategoryPresentation(categoryId: string): {
+  category: ProductCategory;
+  color: string;
+  icon: CategoryIconName;
+  label: string;
+} {
+  const category = normalizeProductCategory(categoryId);
+  return {
+    category,
+    color: PRODUCT_CATEGORY_COLOR[category],
+    icon: PRODUCT_CATEGORY_ICON[category],
+    label: getCategoryLabel(category),
+  };
 }
 
 /**

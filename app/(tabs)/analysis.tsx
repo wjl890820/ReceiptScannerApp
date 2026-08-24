@@ -1,4 +1,5 @@
 // app/(tabs)/analysis.tsx
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -13,7 +14,8 @@ import {
 } from 'react-native';
 
 import { AnalysisEmptyState } from '@/components/analysis/AnalysisEmptyState';
-import { RatioBar } from '@/components/RatioBar';
+import { CategoryRatioRow } from '@/components/CategoryRatioRow';
+import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
@@ -25,7 +27,6 @@ import {
 } from '@/lib/analysisPresentation';
 import { buildStatsSafe } from '@/lib/analysisHelpers';
 import { formatJPY } from '@/lib/formatJPY';
-import { merchantAccentColor } from '@/lib/merchantAccent';
 import { t } from '@/lib/i18n';
 import { type TimeRange } from '@/lib/statsCalculator';
 import {
@@ -195,7 +196,8 @@ export default function AnalysisScreen() {
         <>
           <SectionTitle title={t('analysis.release.overviewTitle')} />
           <View style={styles.overviewPanel}>
-            <View style={styles.overviewDarkAnchor}>
+            <View style={styles.overviewBlueHero}>
+              <View style={styles.overviewMotif} />
               <Text style={styles.overviewPrimaryLabel}>
                 {t('analysis.release.totalSpend')}
               </Text>
@@ -231,9 +233,9 @@ export default function AnalysisScreen() {
                       index > 0 && styles.categoryRowDivider,
                     ]}
                   >
-                    <RatioBar
-                      label={getCategoryLabel(row.category)}
-                      value={formatJPY(row.amount)}
+                    <CategoryRatioRow
+                      category={row.category}
+                      amount={formatJPY(row.amount)}
                       percent={row.share * 100}
                     />
                   </View>
@@ -259,11 +261,10 @@ export default function AnalysisScreen() {
                     key={row.merchantKey}
                     style={[styles.merchantRow, index > 0 && styles.rowDivider]}
                   >
-                    <View
-                      style={[
-                        styles.merchantAccent,
-                        { backgroundColor: merchantAccentColor(row.merchantKey) },
-                      ]}
+                    <MerchantIdentityTile
+                      merchant={row.displayName}
+                      merchantKey={row.merchantKey}
+                      size={38}
                     />
                     <View style={styles.merchantTextCol}>
                       <Text style={styles.merchantName} numberOfLines={2}>
@@ -337,6 +338,13 @@ export default function AnalysisScreen() {
             <>
               <SectionTitle title={t(viewModel.insight.titleKey)} />
               <View style={styles.insightCard}>
+                <View style={styles.insightIcon} importantForAccessibility="no">
+                  <MaterialIcons
+                    name="lightbulb-outline"
+                    size={18}
+                    color={UI_COLORS.accent}
+                  />
+                </View>
                 <Text style={styles.insightText}>{renderInsightBody()}</Text>
               </View>
             </>
@@ -435,19 +443,27 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
   },
-  overviewDarkAnchor: {
+  overviewBlueHero: {
     position: 'relative',
     minHeight: 122,
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 20,
-    backgroundColor: UI_COLORS.charcoal,
-    borderLeftWidth: 4,
-    borderLeftColor: UI_COLORS.accent,
+    backgroundColor: UI_COLORS.accent,
     overflow: 'hidden',
   },
+  overviewMotif: {
+    position: 'absolute',
+    right: -28,
+    top: -42,
+    width: 126,
+    height: 126,
+    borderRadius: 63,
+    borderWidth: 18,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
   overviewPrimaryLabel: {
-    color: '#b7c0ca',
+    color: 'rgba(255,255,255,0.82)',
     fontSize: 13,
     fontWeight: '700',
   },
@@ -510,11 +526,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 14,
   },
-  merchantAccent: {
-    width: 4,
-    height: 34,
-    marginRight: 12,
-  },
   rowDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: UI_COLORS.borderSubtle,
@@ -522,7 +533,7 @@ const styles = StyleSheet.create({
   merchantTextCol: {
     flex: 1,
     minWidth: 0,
-    marginRight: 12,
+    marginHorizontal: 12,
   },
   merchantName: {
     color: '#15181c',
@@ -579,6 +590,9 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   insightCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 11,
     borderRadius: UI_RADIUS.panel,
     backgroundColor: UI_COLORS.accentSoft,
     borderWidth: StyleSheet.hairlineWidth,
@@ -587,7 +601,17 @@ const styles = StyleSheet.create({
     borderLeftColor: UI_COLORS.accent,
     padding: 16,
   },
+  insightIcon: {
+    width: 30,
+    height: 30,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: UI_COLORS.surface,
+  },
   insightText: {
+    flex: 1,
     color: '#1f3655',
     fontSize: 15,
     lineHeight: 22,

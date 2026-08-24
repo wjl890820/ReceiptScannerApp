@@ -323,6 +323,7 @@
     },
     "detail": {
       "back": "Back",
+      "title": "Receipt details",
       "viewProductHistory": "View product purchase history",
       "notFound": "Record not found",
       "loadMessage": "Could not load this record",

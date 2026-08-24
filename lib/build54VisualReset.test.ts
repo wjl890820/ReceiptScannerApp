@@ -32,7 +32,7 @@ describe('Build 54 visual reset contracts', () => {
     const history = source('app/(tabs)/history/index.tsx');
     expect(home).toContain('index > 0 && styles.borderTop');
     expect(history).toContain('ItemSeparatorComponent');
-    expect(history).toContain('merchantAccentColor');
+    expect(history).toContain('MerchantIdentityTile');
   });
 
   it('uses grouped Product metrics and localized Settings sections', () => {

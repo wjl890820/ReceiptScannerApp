@@ -6,13 +6,13 @@ function source(relativePath: string): string {
 }
 
 describe('Build 55 Concept A production contracts', () => {
-  it('uses one restrained dark anchor on Home and Analysis', () => {
+  it('uses the approved blue primary modules on Home and Analysis', () => {
     const home = source('components/ProgressiveHomeInsights.tsx');
     const analysis = source('app/(tabs)/analysis.tsx');
-    expect(home).toContain('styles.scanAnchor');
-    expect(home).toContain('EDITORIAL_UI.darkAnchor');
-    expect(analysis).toContain('styles.overviewDarkAnchor');
-    expect(analysis).toContain('UI_COLORS.charcoal');
+    expect(home).toContain('styles.scanHero');
+    expect(home).toContain('backgroundColor: UI_COLORS.accent');
+    expect(analysis).toContain('styles.overviewBlueHero');
+    expect(analysis).not.toContain('styles.overviewDarkAnchor');
   });
 
   it('does not call the deprecated price unit translation path', () => {
@@ -25,7 +25,7 @@ describe('Build 55 Concept A production contracts', () => {
   it('keeps History and Review as light grouped lists', () => {
     const history = source('app/(tabs)/history/index.tsx');
     const review = source('app/scan-review/[draftId].tsx');
-    expect(history).toContain('borderRadius: UI_RADIUS.panel');
+    expect(history).toContain('buildHistoryMonthSections');
     expect(review).toContain('styles.itemList');
     expect(review).not.toMatch(/backgroundColor:\s*['"]#181[bB]20['"]/);
   });

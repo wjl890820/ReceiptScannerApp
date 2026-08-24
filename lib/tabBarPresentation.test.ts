@@ -11,7 +11,7 @@ describe('tab bar presentation contrast', () => {
     expect(TAB_BAR_PRESENTATION.inactive.toLowerCase()).not.toBe(
       TAB_BAR_PRESENTATION.background.toLowerCase()
     );
-    expect(TAB_BAR_PRESENTATION.active.toLowerCase()).toBe('#1677ff');
+    expect(TAB_BAR_PRESENTATION.active.toLowerCase()).toBe('#1683ff');
     expect(TAB_BAR_PRESENTATION.inactive.toLowerCase()).toBe('#687076');
   });
 

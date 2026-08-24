@@ -2,7 +2,7 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { getCategoryLabel } from '@/lib/categoryPalette';
+import { getCategoryLabel, getCategoryPresentation } from '@/lib/categoryPalette';
 import { t } from '@/lib/i18n';
 import type { ProductCategory } from '@/lib/productCategory';
 import {
@@ -39,6 +39,7 @@ export function ReceiptItemCard({
 }: ReceiptItemCardProps) {
   const original = normalizeRecognizedName(recognizedName);
   const showOriginal = shouldShowRecognizedNameHint(name, recognizedName);
+  const categoryPresentation = getCategoryPresentation(category);
 
   return (
     <View style={styles.card}>
@@ -80,11 +81,21 @@ export function ReceiptItemCard({
         accessibilityLabel={`${t('scanReview.category')}: ${getCategoryLabel(category)}`}
         style={({ pressed }) => [
           styles.categoryPill,
+          { borderColor: categoryPresentation.color },
           !editable && styles.disabled,
           pressed && styles.pressed,
         ]}
       >
-        <Text style={styles.categoryPillText}>{getCategoryLabel(category)}</Text>
+        <MaterialIcons
+          name={categoryPresentation.icon}
+          size={15}
+          color={categoryPresentation.color}
+        />
+        <Text
+          style={[styles.categoryPillText, { color: categoryPresentation.color }]}
+        >
+          {getCategoryLabel(category)}
+        </Text>
       </Pressable>
 
       <View style={styles.metricsRow}>
@@ -151,13 +162,16 @@ const styles = StyleSheet.create({
   categoryPill: {
     marginTop: 10,
     alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: '#eef5ff',
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: '#FFFFFF',
   },
   categoryPillText: {
-    color: '#1677ff',
     fontSize: 13,
     fontWeight: '800',
   },

@@ -1,3 +1,4 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -10,6 +11,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { CategoryIdentity } from '@/components/CategoryIdentity';
+import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { navigateBackOrHome } from '@/lib/navigationBack';
@@ -20,7 +23,6 @@ import { listReceipts } from '@/lib/db';
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { getCurrentLocale, t } from '@/lib/i18n';
-import { merchantAccentColor } from '@/lib/merchantAccent';
 import {
   formatProductSpecification,
   loadProductHistory,
@@ -131,6 +133,9 @@ export default function ProductDetailScreen() {
     : [];
   const primaryMerchant =
     summary?.merchants.length === 1 ? summary.merchants[0] : null;
+  const productCategory = summary?.recentPurchases.find(
+    (purchase) => purchase.category
+  )?.category;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
@@ -168,20 +173,27 @@ export default function ProductDetailScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.productHeading}>
-            <View style={styles.productHeaderRule} />
+            {productCategory ? (
+              <CategoryIdentity
+                category={productCategory}
+                showLabel={false}
+              />
+            ) : (
+              <View style={styles.productIconTile} importantForAccessibility="no">
+                <MaterialIcons
+                  name="inventory-2"
+                  size={19}
+                  color={UI_COLORS.textSecondary}
+                />
+              </View>
+            )}
             <Text style={styles.productTitle}>{title}</Text>
           </View>
           {primaryMerchant ? (
             <View style={styles.productMerchantRow}>
-              <View
-                style={[
-                  styles.productMerchantAccent,
-                  {
-                    backgroundColor: merchantAccentColor(
-                      primaryMerchant.merchantName
-                    ),
-                  },
-                ]}
+              <MerchantIdentityTile
+                merchant={primaryMerchant.merchantName}
+                size={32}
               />
               <Text style={styles.productMerchantName} numberOfLines={2}>
                 {primaryMerchant.merchantName || t('common.unknownMerchant')}
@@ -200,7 +212,8 @@ export default function ProductDetailScreen() {
           )}
 
           <View style={styles.summaryPanel}>
-            <View style={[styles.summaryCell, styles.summaryCellRightBorder]}>
+            <View style={styles.summaryMetricStrip}>
+            <View style={styles.summaryCell}>
               <Text style={styles.summaryLabel}>
                 {t('productDetail.purchaseCount')}
               </Text>
@@ -210,7 +223,7 @@ export default function ProductDetailScreen() {
                 })}
               </Text>
             </View>
-            <View style={styles.summaryCell}>
+            <View style={[styles.summaryCell, styles.summaryCellBorder]}>
               <Text style={styles.summaryLabel}>
                 {t('productDetail.totalQuantityLabel')}
               </Text>
@@ -223,8 +236,7 @@ export default function ProductDetailScreen() {
             <View
               style={[
                 styles.summaryCell,
-                styles.summaryCellTopBorder,
-                styles.summaryCellRightBorder,
+                styles.summaryCellBorder,
               ]}
             >
               <Text style={styles.summaryLabel}>
@@ -248,13 +260,14 @@ export default function ProductDetailScreen() {
                 ))
               )}
             </View>
-            <View style={[styles.summaryCell, styles.summaryCellTopBorder]}>
+            </View>
+            <View style={styles.summaryLatestRow}>
               <Text style={styles.summaryLabel}>
                 {t('productDetail.lastPurchase')}
               </Text>
               <Text style={styles.summaryDate}>
                 {summary.lastPurchasedAt
-                  ? formatDate(summary.lastPurchasedAt)
+                  ? formatDate(summary.lastPurchasedAt).slice(0, 10)
                   : '—'}
               </Text>
             </View>
@@ -293,15 +306,9 @@ export default function ProductDetailScreen() {
                   index > 0 && styles.factRowBorder,
                 ]}
               >
-                <View
-                  style={[
-                    styles.factAccent,
-                    {
-                      backgroundColor: merchantAccentColor(
-                        merchant.merchantName
-                      ),
-                    },
-                  ]}
+                <MerchantIdentityTile
+                  merchant={merchant.merchantName}
+                  size={34}
                 />
                 <Text style={styles.factName}>
                   {merchant.merchantName || t('common.unknownMerchant')}
@@ -441,29 +448,30 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: UI_COLORS.textPrimary,
   },
-  productHeaderRule: {
-    width: 4,
-    minHeight: 34,
-    backgroundColor: UI_COLORS.charcoal,
-  },
   productHeading: {
     flexDirection: 'row',
-    alignItems: 'stretch',
+    alignItems: 'center',
     gap: 12,
+  },
+  productIconTile: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: UI_COLORS.surfaceMuted,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
   },
   productMerchantRow: {
     marginTop: 12,
     minHeight: 28,
     flexDirection: 'row',
-    alignItems: 'stretch',
-  },
-  productMerchantAccent: {
-    width: 4,
-    borderRadius: 2,
+    alignItems: 'center',
+    gap: 10,
   },
   productMerchantName: {
     flex: 1,
-    paddingLeft: 10,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '700',
@@ -476,8 +484,6 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   summaryPanel: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
     marginTop: 22,
     backgroundColor: UI_COLORS.surface,
     borderRadius: UI_RADIUS.panel,
@@ -485,16 +491,27 @@ const styles = StyleSheet.create({
     borderColor: UI_COLORS.border,
     overflow: 'hidden',
   },
+  summaryMetricStrip: {
+    flexDirection: 'row',
+  },
   summaryCell: {
-    width: '50%',
-    minHeight: 88,
-    padding: 14,
+    flex: 1,
+    minWidth: 0,
+    minHeight: 76,
+    paddingHorizontal: 10,
+    paddingVertical: 13,
   },
-  summaryCellRightBorder: {
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: UI_COLORS.borderSubtle,
+  summaryCellBorder: {
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: UI_COLORS.borderSubtle,
   },
-  summaryCellTopBorder: {
+  summaryLatestRow: {
+    minHeight: 48,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: UI_COLORS.borderSubtle,
   },
@@ -505,13 +522,12 @@ const styles = StyleSheet.create({
   },
   summaryValue: {
     marginTop: 8,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: UI_COLORS.textPrimary,
     fontVariant: ['tabular-nums'],
   },
   summaryDate: {
-    marginTop: 10,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
@@ -553,11 +569,6 @@ const styles = StyleSheet.create({
   factRowBorder: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: UI_COLORS.borderSubtle,
-  },
-  factAccent: {
-    width: 4,
-    height: 24,
-    borderRadius: 2,
   },
   factName: {
     flex: 1,

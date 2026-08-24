@@ -233,6 +233,7 @@ describe('R2-B6 release UX contracts', () => {
       'utf8'
     );
     expect(chart).toContain('priceHistory.coverageComparable');
+    expect(chart).not.toContain('priceHistory.coverageExcludedCurrent');
     expect(chart).not.toMatch(/t\(['"]priceHistory\.coverage['"]/);
   });
 

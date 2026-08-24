@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { t } from '@/lib/i18n';
+import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 
 type ReceiptSummaryCardProps = {
   merchant: string;
@@ -55,22 +56,27 @@ export function ReceiptSummaryCard({
         </View>
       ) : null}
 
-      <TextInput
-        value={merchant}
-        onChangeText={onMerchantChange}
-        style={styles.merchantInput}
-        editable={editable}
-        placeholder={t('scanReview.merchantPlaceholder')}
-        accessibilityLabel={t('scanReview.merchant')}
-      />
-      <TextInput
-        value={dateStr}
-        onChangeText={onDateChange}
-        style={styles.dateInput}
-        editable={editable}
-        placeholder={t('scanReview.datePlaceholder')}
-        accessibilityLabel={t('scanReview.date')}
-      />
+      <View style={styles.merchantRow}>
+        <MerchantIdentityTile merchant={merchant} size={40} />
+        <View style={styles.merchantInputs}>
+          <TextInput
+            value={merchant}
+            onChangeText={onMerchantChange}
+            style={styles.merchantInput}
+            editable={editable}
+            placeholder={t('scanReview.merchantPlaceholder')}
+            accessibilityLabel={t('scanReview.merchant')}
+          />
+          <TextInput
+            value={dateStr}
+            onChangeText={onDateChange}
+            style={styles.dateInput}
+            editable={editable}
+            placeholder={t('scanReview.datePlaceholder')}
+            accessibilityLabel={t('scanReview.date')}
+          />
+        </View>
+      </View>
 
       <View style={styles.metricsRow}>
         <View style={styles.metric}>
@@ -149,6 +155,15 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     paddingVertical: 2,
+  },
+  merchantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  merchantInputs: {
+    flex: 1,
+    minWidth: 0,
   },
   dateInput: {
     marginTop: 6,

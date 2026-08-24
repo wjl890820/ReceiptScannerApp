@@ -1,3 +1,4 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React from 'react';
 import {
   ActivityIndicator,
@@ -6,8 +7,9 @@ import {
   Text,
   View,
 } from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
 
+import { CategoryDonut } from '@/components/CategoryDonut';
+import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import type {
@@ -18,8 +20,6 @@ import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import type { HomeProgressiveExperience } from '@/lib/homeProgressiveExperience';
 import { t } from '@/lib/i18n';
-import { merchantAccentColor } from '@/lib/merchantAccent';
-import { normalizeMerchantName } from '@/lib/productNormalizer';
 import {
   formatFrequentProductLabel,
   formatMilestoneRecentChange,
@@ -74,6 +74,13 @@ function FrequentProductList({
               pressed && styles.pressed,
             ]}
           >
+            <View style={styles.productIconTile} importantForAccessibility="no">
+              <MaterialIcons
+                name="inventory-2"
+                size={17}
+                color={UI_COLORS.textSecondary}
+              />
+            </View>
             <View style={styles.productText}>
               <Text style={styles.productName} numberOfLines={2}>
                 {label}
@@ -99,12 +106,6 @@ function FrequentProductList({
   );
 }
 
-const PROFILE_RING_SIZE = 116;
-const PROFILE_RING_STROKE = 10;
-const PROFILE_RING_RADIUS =
-  (PROFILE_RING_SIZE - PROFILE_RING_STROKE) / 2;
-const PROFILE_RING_CIRCUMFERENCE = 2 * Math.PI * PROFILE_RING_RADIUS;
-
 function ProfileComposition({
   categories,
 }: {
@@ -117,82 +118,14 @@ function ProfileComposition({
     category,
     share: category.spend > 0 ? category.spendShare : category.itemShare,
   }));
-  const totalShare = shares.reduce((total, entry) => total + entry.share, 0);
-  const normalized = shares.map((entry) => ({
-    ...entry,
-    share: totalShare > 0 ? entry.share / totalShare : 0,
-  }));
-  const dominant = normalized.reduce<(typeof normalized)[number] | null>(
-    (current, entry) =>
-      current == null || entry.share > current.share ? entry : current,
-    null
-  );
-  let consumedShare = 0;
-
   return (
     <View style={styles.profileComposition}>
-      <View style={styles.profileRingWrap}>
-        <Svg width={PROFILE_RING_SIZE} height={PROFILE_RING_SIZE}>
-          <Circle
-            cx={PROFILE_RING_SIZE / 2}
-            cy={PROFILE_RING_SIZE / 2}
-            r={PROFILE_RING_RADIUS}
-            fill="none"
-            stroke={UI_COLORS.surfaceMuted}
-            strokeWidth={PROFILE_RING_STROKE}
-          />
-          {normalized.map((entry, index) => {
-            const segmentLength =
-              PROFILE_RING_CIRCUMFERENCE * entry.share;
-            const gap = Math.min(3, segmentLength * 0.18);
-            const offset = PROFILE_RING_CIRCUMFERENCE * consumedShare;
-            consumedShare += entry.share;
-            return (
-              <Circle
-                key={entry.category.category}
-                cx={PROFILE_RING_SIZE / 2}
-                cy={PROFILE_RING_SIZE / 2}
-                r={PROFILE_RING_RADIUS}
-                fill="none"
-                stroke={UI_COLORS.accent}
-                strokeWidth={PROFILE_RING_STROKE}
-                strokeDasharray={`${Math.max(0, segmentLength - gap)} ${PROFILE_RING_CIRCUMFERENCE}`}
-                strokeDashoffset={-offset}
-                strokeLinecap="butt"
-                opacity={Math.max(0.4, 1 - index * 0.16)}
-                rotation={-90}
-                origin={`${PROFILE_RING_SIZE / 2}, ${PROFILE_RING_SIZE / 2}`}
-              />
-            );
-          })}
-        </Svg>
-        <View style={styles.profileRingCenter} pointerEvents="none">
-          <Text style={styles.profileRingValue}>
-            {dominant ? `${Math.round(dominant.share * 100)}%` : '—'}
-          </Text>
-          <Text style={styles.profileRingLabel} numberOfLines={1}>
-            {dominant ? categoryLabel(dominant.category.category) : ''}
-          </Text>
-        </View>
-      </View>
-      <View style={styles.profileLegend}>
-        {normalized.map((entry, index) => (
-          <View key={entry.category.category} style={styles.profileLegendRow}>
-            <View
-              style={[
-                styles.profileLegendMark,
-                { opacity: Math.max(0.4, 1 - index * 0.16) },
-              ]}
-            />
-            <Text style={styles.profileLegendLabel} numberOfLines={1}>
-              {categoryLabel(entry.category.category)}
-            </Text>
-            <Text style={styles.profileLegendValue}>
-              {Math.round(entry.share * 100)}%
-            </Text>
-          </View>
-        ))}
-      </View>
+      <CategoryDonut
+        entries={shares.map((entry) => ({
+          category: entry.category.category,
+          share: entry.share,
+        }))}
+      />
     </View>
   );
 }
@@ -227,43 +160,41 @@ export function ProgressiveHomeInsights({
         {t('home.progressive.subtitle')}
       </Text>
 
-      <View style={styles.scanHero}>
-        <View style={styles.scanAnchor}>
-          <Text style={styles.scanAnchorLabel}>
-            {t('home.progressive.scan.eyebrow')}
-          </Text>
-          <View style={styles.scanAnchorCut} />
+      <Pressable
+        onPress={onScan}
+        disabled={scanning}
+        accessibilityRole="button"
+        accessibilityLabel={scanLabel}
+        style={({ pressed }) => [
+          styles.scanHero,
+          scanning && styles.disabled,
+          pressed && styles.scanHeroPressed,
+        ]}
+      >
+        <View style={styles.scanIconTile} importantForAccessibility="no">
+          {scanning && !processingProgress ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <MaterialIcons name="document-scanner" size={30} color="#FFFFFF" />
+          )}
         </View>
-        <View style={styles.scanHeroContent}>
+        <View style={styles.scanCopy}>
           <Text style={styles.scanTitle}>{t('home.progressive.scan.title')}</Text>
           <Text style={styles.scanSubtitle}>
             {t('home.progressive.scan.subtitle')}
           </Text>
-          <Pressable
-            onPress={onScan}
-            disabled={scanning}
-            accessibilityRole="button"
-            accessibilityLabel={scanLabel}
-            style={({ pressed }) => [
-              styles.scanButton,
-              scanning && styles.disabled,
-              pressed && styles.pressed,
-            ]}
-          >
-            {scanning && !processingProgress && (
-              <ActivityIndicator size="small" color="#fff" />
-            )}
-            <Text style={styles.scanButtonText}>{scanLabel}</Text>
-            {!scanning ? <Text style={styles.scanArrow}>→</Text> : null}
-          </Pressable>
-          <View style={styles.scanSupportRow}>
-            <View style={styles.scanSupportRule} />
-            <Text style={styles.scanSupport}>
-              {t('home.progressive.scan.support')}
-            </Text>
-          </View>
+          <Text style={styles.scanSupport}>
+            {t('home.progressive.scan.support')}
+          </Text>
         </View>
-      </View>
+        <View style={styles.scanActionRow}>
+          <Text style={styles.scanActionLabel}>{scanLabel}</Text>
+          {!scanning ? (
+            <MaterialIcons name="arrow-forward" size={18} color="#FFFFFF" />
+          ) : null}
+        </View>
+        <View style={styles.scanCornerDetail} />
+      </Pressable>
 
       {experience.stage === 'empty' && (
         <View style={styles.emptyValue}>
@@ -288,18 +219,14 @@ export function ProgressiveHomeInsights({
             style={({ pressed }) => [
               styles.panel,
               styles.recentCard,
-              {
-                borderLeftWidth: EDITORIAL_UI.merchantBarWidth,
-                borderLeftColor: merchantAccentColor(
-                  normalizeMerchantName(
-                    experience.latestPurchase!.merchant || ''
-                  )
-                ),
-              },
               pressed && styles.pressed,
             ]}
           >
             <View style={styles.recentTop}>
+              <MerchantIdentityTile
+                merchant={experience.latestPurchase.merchant}
+                size={38}
+              />
               <View style={styles.recentText}>
                 <Text style={styles.merchant} numberOfLines={2}>
                   {experience.latestPurchase.merchant ||
@@ -457,106 +384,85 @@ export function ProgressiveHomeInsights({
 
 const styles = StyleSheet.create({
   pageTitle: {
-    color: '#111418',
-    fontSize: 30,
-    lineHeight: 36,
-    fontWeight: '800',
+    color: UI_COLORS.textPrimary,
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '900',
   },
   pageSubtitle: {
     marginTop: 5,
-    color: '#68707a',
+    color: UI_COLORS.textSecondary,
     fontSize: 15,
     lineHeight: 21,
   },
   scanHero: {
-    marginTop: 22,
-    minHeight: 196,
-    flexDirection: 'row',
-    borderRadius: UI_RADIUS.hero,
-    backgroundColor: EDITORIAL_UI.panelBackground,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: EDITORIAL_UI.panelBorder,
-    overflow: 'hidden',
-  },
-  scanAnchor: {
     position: 'relative',
-    width: 96,
-    paddingHorizontal: 16,
-    paddingVertical: 19,
-    backgroundColor: EDITORIAL_UI.darkAnchor,
+    marginTop: 20,
+    minHeight: 148,
+    borderRadius: UI_RADIUS.hero,
+    backgroundColor: UI_COLORS.accent,
+    borderWidth: 1,
+    borderColor: UI_COLORS.accentDark,
+    padding: 18,
     overflow: 'hidden',
   },
-  scanAnchorLabel: {
-    color: '#ffffff',
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: '800',
-  },
-  scanAnchorCut: {
+  scanCornerDetail: {
     position: 'absolute',
-    right: -18,
-    bottom: -18,
-    width: 36,
-    height: 36,
-    backgroundColor: EDITORIAL_UI.panelBackground,
-    transform: [{ rotate: '45deg' }],
+    right: 12,
+    top: 12,
+    width: 17,
+    height: 17,
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(255,255,255,0.72)',
   },
-  scanHeroContent: {
-    flex: 1,
-    minWidth: 0,
-    padding: 17,
+  scanIconTile: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.45)',
+  },
+  scanCopy: {
+    marginTop: 13,
+    maxWidth: '82%',
   },
   scanTitle: {
-    color: '#111418',
+    color: '#FFFFFF',
     fontSize: 22,
     lineHeight: 28,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   scanSubtitle: {
-    marginTop: 7,
-    color: '#5d6875',
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.9)',
     fontSize: 14,
     lineHeight: 20,
   },
-  scanButton: {
-    marginTop: 16,
-    minHeight: 48,
-    width: '48%',
-    minWidth: 138,
-    alignSelf: 'flex-end',
+  scanSupport: {
+    marginTop: 1,
+    color: 'rgba(255,255,255,0.74)',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  scanActionRow: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 9,
-    borderRadius: UI_RADIUS.control,
-    backgroundColor: UI_COLORS.accent,
+    gap: 5,
   },
-  scanButtonText: {
-    color: '#fff',
-    fontSize: 16,
+  scanActionLabel: {
+    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '800',
   },
-  scanArrow: {
-    color: UI_COLORS.background,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  scanSupport: {
-    flex: 1,
-    color: '#697584',
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  scanSupportRow: {
-    marginTop: 11,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  scanSupportRule: {
-    width: 16,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: UI_COLORS.textMuted,
+  scanHeroPressed: {
+    backgroundColor: UI_COLORS.accentDark,
   },
   emptyValue: {
     marginTop: 18,
@@ -654,6 +560,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  productIconTile: {
+    width: 34,
+    height: 34,
+    marginRight: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: UI_COLORS.surfaceMuted,
+  },
   borderTop: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e1e4e8',
@@ -687,72 +602,10 @@ const styles = StyleSheet.create({
   profileComposition: {
     paddingHorizontal: 16,
     paddingVertical: 17,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 18,
-  },
-  profileRingWrap: {
-    width: PROFILE_RING_SIZE,
-    height: PROFILE_RING_SIZE,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileRingCenter: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 18,
-  },
-  profileRingValue: {
-    color: UI_COLORS.textPrimary,
-    fontSize: 23,
-    lineHeight: 28,
-    fontWeight: '900',
-    fontVariant: ['tabular-nums'],
-  },
-  profileRingLabel: {
-    marginTop: 1,
-    color: UI_COLORS.textSecondary,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  profileLegend: {
-    flex: 1,
-    minWidth: 0,
-    gap: 11,
-  },
-  profileLegendRow: {
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  profileLegendMark: {
-    width: 12,
-    height: 3,
-    marginRight: 8,
-    backgroundColor: UI_COLORS.accent,
-  },
-  profileLegendLabel: {
-    flex: 1,
-    minWidth: 0,
-    color: UI_COLORS.textPrimary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  profileLegendValue: {
-    marginLeft: 8,
-    color: UI_COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: '800',
-    fontVariant: ['tabular-nums'],
   },
   profilePanel: {
     borderTopWidth: 3,
-    borderTopColor: UI_COLORS.charcoal,
+    borderTopColor: UI_COLORS.accent,
   },
   profileFact: {
     marginHorizontal: 16,

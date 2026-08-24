@@ -19,6 +19,7 @@ describe('uiTokens contract (R2-B5)', () => {
     expect(Object.keys(UI_COLORS).sort()).toEqual(
       [
         'accent',
+        'accentDark',
         'accentSoft',
         'background',
         'border',
@@ -66,9 +67,9 @@ describe('uiTokens contract (R2-B5)', () => {
     for (const value of Object.values(UI_COLORS)) {
       expect(isHexColor(value)).toBe(true);
     }
-    expect(UI_COLORS.accent.toLowerCase()).toBe('#1677ff');
-    expect(UI_COLORS.textPrimary.toLowerCase()).toBe('#111111');
-    expect(UI_LAYOUT.pageHorizontalPadding).toBe(18);
+    expect(UI_COLORS.accent.toLowerCase()).toBe('#1683ff');
+    expect(UI_COLORS.textPrimary.toLowerCase()).toBe('#111318');
+    expect(UI_LAYOUT.pageHorizontalPadding).toBe(16);
     expect(UI_LAYOUT.tabContentClearance).toBe(72);
     expect(UI_LAYOUT.controlMinHeight).toBe(44);
     expect(UI_RADIUS.card).toBe(10);

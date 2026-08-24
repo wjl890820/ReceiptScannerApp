@@ -8,7 +8,6 @@ import {
   buildPriceChartCoordinates,
   PRODUCT_PRICE_CHART_HEIGHT,
   PRODUCT_PRICE_CHART_PADDING_X,
-  PRODUCT_PRICE_CHART_PADDING_Y,
 } from '@/lib/productPriceChart';
 import type {
   ProductPriceHistoryResult,
@@ -45,9 +44,11 @@ export function ProductPriceHistoryChart({
   result: ProductPriceHistoryResult;
 }) {
   const [chartWidth, setChartWidth] = useState(0);
+  const chartHeight =
+    result.points.length === 2 ? 112 : PRODUCT_PRICE_CHART_HEIGHT;
   const coordinates = useMemo(
-    () => buildPriceChartCoordinates(result.points, chartWidth),
-    [chartWidth, result.points]
+    () => buildPriceChartCoordinates(result.points, chartWidth, chartHeight),
+    [chartHeight, chartWidth, result.points]
   );
   const subtitleKey =
     result.identityPresentation?.subtitleKey ??
@@ -146,25 +147,22 @@ export function ProductPriceHistoryChart({
           ) : (
             <>
               <View
-                style={styles.chart}
+                style={[styles.chart, { height: chartHeight }]}
                 onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
               >
                 {chartWidth > 0 && coordinates.length > 0 && (
-                  <Svg width={chartWidth} height={PRODUCT_PRICE_CHART_HEIGHT}>
-                    <Line
-                      x1={PRODUCT_PRICE_CHART_PADDING_X}
-                      y1={
-                        PRODUCT_PRICE_CHART_HEIGHT -
-                        PRODUCT_PRICE_CHART_PADDING_Y
-                      }
-                      x2={chartWidth - PRODUCT_PRICE_CHART_PADDING_X}
-                      y2={
-                        PRODUCT_PRICE_CHART_HEIGHT -
-                        PRODUCT_PRICE_CHART_PADDING_Y
-                      }
-                      stroke="#d8d8d8"
-                      strokeWidth={1}
-                    />
+                  <Svg width={chartWidth} height={chartHeight}>
+                    {[0.25, 0.5, 0.75].map((ratio) => (
+                      <Line
+                        key={ratio}
+                        x1={PRODUCT_PRICE_CHART_PADDING_X}
+                        y1={chartHeight * ratio}
+                        x2={chartWidth - PRODUCT_PRICE_CHART_PADDING_X}
+                        y2={chartHeight * ratio}
+                        stroke={UI_COLORS.borderSubtle}
+                        strokeWidth={1}
+                      />
+                    ))}
                     <Polyline
                       points={coordinates
                         .map((coordinate) => `${coordinate.x},${coordinate.y}`)
@@ -180,8 +178,12 @@ export function ProductPriceHistoryChart({
                         key={result.points[index].itemId}
                         cx={coordinate.x}
                         cy={coordinate.y}
-                        r={3.5}
-                        fill="#fff"
+                        r={index === coordinates.length - 1 ? 5 : 3.5}
+                        fill={
+                          index === coordinates.length - 1
+                            ? UI_COLORS.accent
+                            : UI_COLORS.surface
+                        }
                         stroke={UI_COLORS.accent}
                         strokeWidth={2}
                       />
@@ -240,11 +242,6 @@ export function ProductPriceHistoryChart({
         {t('priceHistory.coverageComparable', {
           comparable: result.comparableOccurrenceCount,
         })}
-        {result.excludedOccurrenceCount > 0
-          ? ` ${t('priceHistory.coverageExcludedCurrent', {
-              excluded: result.excludedOccurrenceCount,
-            })}`
-          : ''}
       </Text>
     </>
   );
@@ -299,13 +296,10 @@ const styles = StyleSheet.create({
   },
   chart: {
     marginTop: 6,
-    height: PRODUCT_PRICE_CHART_HEIGHT,
     borderRadius: UI_RADIUS.panel,
     backgroundColor: UI_COLORS.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
-    borderTopWidth: 3,
-    borderTopColor: UI_COLORS.accent,
     overflow: 'hidden',
   },
   flatPricePanel: {
@@ -346,7 +340,7 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: 4,
-    backgroundColor: UI_COLORS.charcoal,
+    backgroundColor: UI_COLORS.accent,
   },
   flatLine: {
     flex: 1,

@@ -323,6 +323,7 @@
     },
     "detail": {
       "back": "返回",
+      "title": "收据详情",
       "viewProductHistory": "查看商品购买记录",
       "notFound": "未找到该记录",
       "loadMessage": "无法读取该记录",

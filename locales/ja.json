@@ -323,6 +323,7 @@
     },
     "detail": {
       "back": "戻る",
+      "title": "レシート詳細",
       "viewProductHistory": "商品の購入履歴を見る",
       "notFound": "この記録は見つかりませんでした",
       "loadMessage": "この記録を読み込めませんでした",

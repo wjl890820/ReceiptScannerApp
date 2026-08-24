@@ -1,10 +1,10 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter, type Href } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Keyboard,
   Pressable,
   RefreshControl,
@@ -17,10 +17,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { CategoryIdentity } from '@/components/CategoryIdentity';
+import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { deleteReceipts, listReceipts, type ReceiptListRow } from '@/lib/db';
 import type { AnalysisDDuplicateGroup } from '@/lib/analysisDDuplicateAudit';
 import { formatJPY } from '@/lib/formatJPY';
-import { t } from '@/lib/i18n';
+import { getCurrentLocale, t } from '@/lib/i18n';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import {
   buildHistoryReceiptRowA11yLabel,
@@ -33,7 +35,7 @@ import {
   HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
   projectHistorySearchToPurchaseTruth,
 } from '@/lib/historyPurchaseTruth';
-import { merchantAccentColor } from '@/lib/merchantAccent';
+import { buildHistoryMonthSections } from '@/lib/historyMonthPresentation';
 import { buildTopCategories, buildHistoryMetaLine } from '@/lib/receiptListHelpers';
 import { formatDate } from '@/lib/formatDate';
 import {
@@ -360,6 +362,10 @@ export default function HistoryScreen() {
     defaultSubtitle: t('history.list.subtitle'),
     selectingSubtitle: t('history.list.selectingSubtitle'),
   });
+  const historySections = useMemo(
+    () => buildHistoryMonthSections(rows, getCurrentLocale()),
+    [rows]
+  );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGap }]}>
@@ -403,6 +409,12 @@ export default function HistoryScreen() {
       </View>
 
       <View style={styles.searchBar}>
+        <MaterialIcons
+          name="search"
+          size={20}
+          color={UI_COLORS.textMuted}
+          importantForAccessibility="no"
+        />
         <TextInput
           value={searchQuery}
           onChangeText={onSearchQueryChange}
@@ -496,16 +508,17 @@ export default function HistoryScreen() {
                   })}
                   style={({ pressed }) => [
                     styles.card,
-                    {
-                      borderLeftWidth: 4,
-                      borderLeftColor: merchantAccentColor(
-                        result.merchantNormalized || result.merchantRaw
-                      ),
-                    },
                     pressed && { opacity: 0.6 },
                   ]}
                 >
                   <View style={styles.cardInner}>
+                    {result.category ? (
+                      <CategoryIdentity
+                        category={result.category}
+                        compact
+                        showLabel={false}
+                      />
+                    ) : null}
                     <View style={styles.cardBody}>
                       <Text style={styles.resultTypeHint}>
                         {t('history.search.productResultHint')}
@@ -556,16 +569,15 @@ export default function HistoryScreen() {
                 })}
                 style={({ pressed }) => [
                   styles.card,
-                  {
-                    borderLeftWidth: 4,
-                    borderLeftColor: merchantAccentColor(
-                      receipt.merchant_normalized || receipt.merchant_raw
-                    ),
-                  },
                   pressed && { opacity: 0.6 },
                 ]}
               >
                 <View style={styles.cardInner}>
+                  <MerchantIdentityTile
+                    merchant={merchant}
+                    merchantKey={receipt.merchant_normalized}
+                    size={36}
+                  />
                   <View style={styles.cardBody}>
                     <Text style={styles.resultTypeHint}>
                       {t('history.search.receiptResultHint')}
@@ -586,8 +598,8 @@ export default function HistoryScreen() {
           }}
         />
       ) : (
-        <FlatList
-          data={rows}
+        <SectionList
+          sections={historySections}
           keyExtractor={(item) => item.id}
           style={styles.list}
           contentContainerStyle={{ paddingBottom: listBottomPad }}
@@ -596,6 +608,11 @@ export default function HistoryScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
+          stickySectionHeadersEnabled={false}
+          renderSectionHeader={({ section }) => (
+            <Text style={styles.monthTitle}>{section.title}</Text>
+          )}
+          SectionSeparatorComponent={() => <View style={styles.monthGap} />}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
           ListEmptyComponent={
             <View style={styles.emptyState}>
@@ -632,12 +649,6 @@ export default function HistoryScreen() {
                 })}
                 style={({ pressed }) => [
                   styles.card,
-                  {
-                    borderLeftWidth: 4,
-                    borderLeftColor: merchantAccentColor(
-                      item.merchant_normalized || item.merchant_raw
-                    ),
-                  },
                   pressed && { opacity: 0.6 },
                 ]}
               >
@@ -651,6 +662,11 @@ export default function HistoryScreen() {
                       {checked ? <Text style={styles.checkmark}>✓</Text> : null}
                     </View>
                   )}
+                  <MerchantIdentityTile
+                    merchant={merchant}
+                    merchantKey={item.merchant_normalized}
+                    size={38}
+                  />
                   <View style={styles.cardBody}>
                     <View style={styles.row}>
                       <Text style={styles.merchant}>{merchant}</Text>
@@ -767,6 +783,7 @@ const styles = StyleSheet.create({
     backgroundColor: UI_COLORS.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
+    gap: 9,
   },
   searchInput: {
     flex: 1,
@@ -791,15 +808,11 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
-    backgroundColor: UI_COLORS.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: UI_COLORS.border,
-    borderRadius: UI_RADIUS.panel,
-    overflow: 'hidden',
+    backgroundColor: UI_COLORS.background,
   },
   sep: {
     height: StyleSheet.hairlineWidth,
-    marginLeft: 16,
+    marginLeft: 54,
     backgroundColor: UI_COLORS.borderSubtle,
   },
   sectionSep: {
@@ -812,6 +825,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: UI_COLORS.textSecondary,
   },
+  monthTitle: {
+    paddingTop: 4,
+    paddingBottom: 10,
+    backgroundColor: UI_COLORS.background,
+    color: UI_COLORS.textPrimary,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  monthGap: {
+    height: 12,
+    backgroundColor: UI_COLORS.background,
+  },
   emptyState: {
     paddingTop: 30,
     alignItems: 'center',
@@ -822,8 +847,8 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: UI_COLORS.surface,
-    paddingVertical: 15,
-    paddingHorizontal: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
   },
   cardInner: {
     flexDirection: 'row',
