@@ -170,7 +170,7 @@ export function ProductPriceHistoryChart({
                         .map((coordinate) => `${coordinate.x},${coordinate.y}`)
                         .join(' ')}
                       fill="none"
-                      stroke={UI_COLORS.charcoal}
+                      stroke={UI_COLORS.accent}
                       strokeWidth={2}
                       strokeLinejoin="round"
                       strokeLinecap="round"
@@ -182,7 +182,7 @@ export function ProductPriceHistoryChart({
                         cy={coordinate.y}
                         r={3.5}
                         fill="#fff"
-                        stroke={UI_COLORS.charcoal}
+                        stroke={UI_COLORS.accent}
                         strokeWidth={2}
                       />
                     ))}
@@ -304,6 +304,8 @@ const styles = StyleSheet.create({
     backgroundColor: UI_COLORS.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
+    borderTopWidth: 3,
+    borderTopColor: UI_COLORS.accent,
     overflow: 'hidden',
   },
   flatPricePanel: {
@@ -313,6 +315,8 @@ const styles = StyleSheet.create({
     backgroundColor: UI_COLORS.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
+    borderLeftWidth: 3,
+    borderLeftColor: UI_COLORS.accent,
   },
   flatPriceTopRow: {
     flexDirection: 'row',

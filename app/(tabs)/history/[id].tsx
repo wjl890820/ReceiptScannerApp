@@ -557,8 +557,14 @@ export default function ReceiptDetailScreen() {
               <Text style={{ color: UI_COLORS.textSecondary }}>{t('history.detail.noCategoryInfo')}</Text>
             </View>
           ) : (
-            categorySummary.map((x) => (
-              <View key={x.category} style={styles.summaryRow}>
+            categorySummary.map((x, index) => (
+              <View
+                key={x.category}
+                style={[
+                  styles.summaryRow,
+                  index > 0 && styles.summaryRowDivider,
+                ]}
+              >
                 <View style={styles.summaryLabelRow}>
                   <Text style={styles.summaryLeft}>{getCategoryLabel(x.category)}</Text>
                   <Text style={styles.summaryRight}>{formatJPY(x.amount)}</Text>
@@ -846,7 +852,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   summaryRow: {
-    paddingVertical: 11,
+    paddingVertical: 13,
+  },
+  summaryRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.borderSubtle,
   },
   summaryLabelRow: {
     flexDirection: 'row',
@@ -1083,13 +1093,17 @@ const styles = StyleSheet.create({
   },
   receiptHeroBody: {
     flex: 1,
-    padding: 16,
+    paddingTop: 16,
+    paddingHorizontal: 16,
   },
   totalRow: {
     marginTop: 18,
-    paddingTop: 14,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: UI_COLORS.borderSubtle,
+    backgroundColor: UI_COLORS.surfaceMuted,
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',

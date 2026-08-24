@@ -496,6 +496,12 @@ export default function HistoryScreen() {
                   })}
                   style={({ pressed }) => [
                     styles.card,
+                    {
+                      borderLeftWidth: 4,
+                      borderLeftColor: merchantAccentColor(
+                        result.merchantNormalized || result.merchantRaw
+                      ),
+                    },
                     pressed && { opacity: 0.6 },
                   ]}
                 >
@@ -550,6 +556,12 @@ export default function HistoryScreen() {
                 })}
                 style={({ pressed }) => [
                   styles.card,
+                  {
+                    borderLeftWidth: 4,
+                    borderLeftColor: merchantAccentColor(
+                      receipt.merchant_normalized || receipt.merchant_raw
+                    ),
+                  },
                   pressed && { opacity: 0.6 },
                 ]}
               >

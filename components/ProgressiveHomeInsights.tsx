@@ -6,8 +6,8 @@ import {
   Text,
   View,
 } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 
-import { RatioBar } from '@/components/RatioBar';
 import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import type {
@@ -99,7 +99,13 @@ function FrequentProductList({
   );
 }
 
-function CategoryBars({
+const PROFILE_RING_SIZE = 116;
+const PROFILE_RING_STROKE = 10;
+const PROFILE_RING_RADIUS =
+  (PROFILE_RING_SIZE - PROFILE_RING_STROKE) / 2;
+const PROFILE_RING_CIRCUMFERENCE = 2 * Math.PI * PROFILE_RING_RADIUS;
+
+function ProfileComposition({
   categories,
 }: {
   categories: MilestoneCategoryComposition[];
@@ -107,20 +113,86 @@ function CategoryBars({
   const visible = categories.filter(
     (category) => category.itemCount > 0 || category.spend > 0
   );
+  const shares = visible.map((category) => ({
+    category,
+    share: category.spend > 0 ? category.spendShare : category.itemShare,
+  }));
+  const totalShare = shares.reduce((total, entry) => total + entry.share, 0);
+  const normalized = shares.map((entry) => ({
+    ...entry,
+    share: totalShare > 0 ? entry.share / totalShare : 0,
+  }));
+  const dominant = normalized.reduce<(typeof normalized)[number] | null>(
+    (current, entry) =>
+      current == null || entry.share > current.share ? entry : current,
+    null
+  );
+  let consumedShare = 0;
+
   return (
-    <View style={styles.bars}>
-      {visible.map((category) => {
-        const pct = Math.round(
-          (category.spend > 0 ? category.spendShare : category.itemShare) * 100
-        );
-        return (
-          <RatioBar
-            key={category.category}
-            label={categoryLabel(category.category)}
-            percent={pct}
+    <View style={styles.profileComposition}>
+      <View style={styles.profileRingWrap}>
+        <Svg width={PROFILE_RING_SIZE} height={PROFILE_RING_SIZE}>
+          <Circle
+            cx={PROFILE_RING_SIZE / 2}
+            cy={PROFILE_RING_SIZE / 2}
+            r={PROFILE_RING_RADIUS}
+            fill="none"
+            stroke={UI_COLORS.surfaceMuted}
+            strokeWidth={PROFILE_RING_STROKE}
           />
-        );
-      })}
+          {normalized.map((entry, index) => {
+            const segmentLength =
+              PROFILE_RING_CIRCUMFERENCE * entry.share;
+            const gap = Math.min(3, segmentLength * 0.18);
+            const offset = PROFILE_RING_CIRCUMFERENCE * consumedShare;
+            consumedShare += entry.share;
+            return (
+              <Circle
+                key={entry.category.category}
+                cx={PROFILE_RING_SIZE / 2}
+                cy={PROFILE_RING_SIZE / 2}
+                r={PROFILE_RING_RADIUS}
+                fill="none"
+                stroke={UI_COLORS.accent}
+                strokeWidth={PROFILE_RING_STROKE}
+                strokeDasharray={`${Math.max(0, segmentLength - gap)} ${PROFILE_RING_CIRCUMFERENCE}`}
+                strokeDashoffset={-offset}
+                strokeLinecap="butt"
+                opacity={Math.max(0.4, 1 - index * 0.16)}
+                rotation={-90}
+                origin={`${PROFILE_RING_SIZE / 2}, ${PROFILE_RING_SIZE / 2}`}
+              />
+            );
+          })}
+        </Svg>
+        <View style={styles.profileRingCenter} pointerEvents="none">
+          <Text style={styles.profileRingValue}>
+            {dominant ? `${Math.round(dominant.share * 100)}%` : '—'}
+          </Text>
+          <Text style={styles.profileRingLabel} numberOfLines={1}>
+            {dominant ? categoryLabel(dominant.category.category) : ''}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.profileLegend}>
+        {normalized.map((entry, index) => (
+          <View key={entry.category.category} style={styles.profileLegendRow}>
+            <View
+              style={[
+                styles.profileLegendMark,
+                { opacity: Math.max(0.4, 1 - index * 0.16) },
+              ]}
+            />
+            <Text style={styles.profileLegendLabel} numberOfLines={1}>
+              {categoryLabel(entry.category.category)}
+            </Text>
+            <Text style={styles.profileLegendValue}>
+              {Math.round(entry.share * 100)}%
+            </Text>
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
@@ -157,11 +229,10 @@ export function ProgressiveHomeInsights({
 
       <View style={styles.scanHero}>
         <View style={styles.scanAnchor}>
-          <View style={styles.scanAnchorSignal} />
           <Text style={styles.scanAnchorLabel}>
             {t('home.progressive.scan.eyebrow')}
           </Text>
-          <View style={styles.scanAnchorRule} />
+          <View style={styles.scanAnchorCut} />
         </View>
         <View style={styles.scanHeroContent}>
           <Text style={styles.scanTitle}>{t('home.progressive.scan.title')}</Text>
@@ -297,7 +368,7 @@ export function ProgressiveHomeInsights({
             <Text style={styles.insightCategoryTitle}>
               {t('home.progressive.insight.category')}
             </Text>
-            <CategoryBars
+            <ProfileComposition
               categories={
                 experience.recentInsight.categoryStructure.categories
               }
@@ -338,7 +409,7 @@ export function ProgressiveHomeInsights({
             subtitle={t('home.progressive.profile.category')}
           />
           <View style={styles.panel}>
-            <CategoryBars
+            <ProfileComposition
               categories={experience.profile.categoryStructure.categories}
             />
             {experience.profile.shoppingFrequency && (
@@ -399,7 +470,7 @@ const styles = StyleSheet.create({
   },
   scanHero: {
     marginTop: 22,
-    minHeight: 188,
+    minHeight: 196,
     flexDirection: 'row',
     borderRadius: UI_RADIUS.hero,
     backgroundColor: EDITORIAL_UI.panelBackground,
@@ -408,29 +479,27 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   scanAnchor: {
-    width: 82,
-    paddingHorizontal: 14,
-    paddingVertical: 17,
+    position: 'relative',
+    width: 96,
+    paddingHorizontal: 16,
+    paddingVertical: 19,
     backgroundColor: EDITORIAL_UI.darkAnchor,
-  },
-  scanAnchorSignal: {
-    width: 14,
-    height: 3,
-    backgroundColor: UI_COLORS.accent,
+    overflow: 'hidden',
   },
   scanAnchorLabel: {
-    marginTop: 15,
     color: '#ffffff',
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 15,
+    lineHeight: 21,
     fontWeight: '800',
   },
-  scanAnchorRule: {
-    width: 1,
-    flex: 1,
-    minHeight: 34,
-    marginTop: 14,
-    backgroundColor: '#434951',
+  scanAnchorCut: {
+    position: 'absolute',
+    right: -18,
+    bottom: -18,
+    width: 36,
+    height: 36,
+    backgroundColor: EDITORIAL_UI.panelBackground,
+    transform: [{ rotate: '45deg' }],
   },
   scanHeroContent: {
     flex: 1,
@@ -615,9 +684,71 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  bars: {
-    padding: 16,
-    gap: 14,
+  profileComposition: {
+    paddingHorizontal: 16,
+    paddingVertical: 17,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+  },
+  profileRingWrap: {
+    width: PROFILE_RING_SIZE,
+    height: PROFILE_RING_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileRingCenter: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  profileRingValue: {
+    color: UI_COLORS.textPrimary,
+    fontSize: 23,
+    lineHeight: 28,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  profileRingLabel: {
+    marginTop: 1,
+    color: UI_COLORS.textSecondary,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  profileLegend: {
+    flex: 1,
+    minWidth: 0,
+    gap: 11,
+  },
+  profileLegendRow: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  profileLegendMark: {
+    width: 12,
+    height: 3,
+    marginRight: 8,
+    backgroundColor: UI_COLORS.accent,
+  },
+  profileLegendLabel: {
+    flex: 1,
+    minWidth: 0,
+    color: UI_COLORS.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  profileLegendValue: {
+    marginLeft: 8,
+    color: UI_COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
   },
   profilePanel: {
     borderTopWidth: 3,

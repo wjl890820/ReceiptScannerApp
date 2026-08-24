@@ -716,7 +716,7 @@ export default function SettingsScreen() {
       {showAppleAccount ? (
         <View>
           <Text style={styles.sectionLabel}>{t('settings.account.title')}</Text>
-          <View style={styles.group}>
+          <View style={[styles.group, styles.accountGroup]}>
             {accountBusy ? (
               <Text style={styles.accountBody}>{t('settings.account.busy')}</Text>
             ) : null}
@@ -984,6 +984,10 @@ const styles = StyleSheet.create({
   accountBodyTitle: {
     color: UI_COLORS.textPrimary,
     fontWeight: '800',
+  },
+  accountGroup: {
+    borderTopWidth: 3,
+    borderTopColor: UI_COLORS.accent,
   },
   group: {
     backgroundColor: UI_COLORS.surface,

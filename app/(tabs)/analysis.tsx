@@ -196,16 +196,12 @@ export default function AnalysisScreen() {
           <SectionTitle title={t('analysis.release.overviewTitle')} />
           <View style={styles.overviewPanel}>
             <View style={styles.overviewDarkAnchor}>
-              <View style={styles.overviewLabelRow}>
-                <View style={styles.overviewSignal} />
-                <Text style={styles.overviewPrimaryLabel}>
-                  {t('analysis.release.totalSpend')}
-                </Text>
-              </View>
+              <Text style={styles.overviewPrimaryLabel}>
+                {t('analysis.release.totalSpend')}
+              </Text>
               <Text style={styles.overviewPrimaryValue}>
                 {formatJPY(viewModel.overview.supportedSpend)}
               </Text>
-              <View style={styles.overviewTechnicalRule} />
             </View>
             <View style={styles.metricStrip}>
               <View style={styles.stripMetric}>
@@ -227,13 +223,20 @@ export default function AnalysisScreen() {
             <>
               <SectionTitle title={t('analysis.release.categoryTitle')} />
               <View style={[styles.card, styles.categoryPanel]}>
-                {viewModel.categories.map((row) => (
-                  <RatioBar
+                {viewModel.categories.map((row, index) => (
+                  <View
                     key={row.category}
-                    label={getCategoryLabel(row.category)}
-                    value={formatJPY(row.amount)}
-                    percent={row.share * 100}
-                  />
+                    style={[
+                      styles.categoryRow,
+                      index > 0 && styles.categoryRowDivider,
+                    ]}
+                  >
+                    <RatioBar
+                      label={getCategoryLabel(row.category)}
+                      value={formatJPY(row.amount)}
+                      percent={row.share * 100}
+                    />
+                  </View>
                 ))}
                 {viewModel.uncategorized ? (
                   <Text style={styles.uncategorizedHint}>
@@ -435,21 +438,13 @@ const styles = StyleSheet.create({
   overviewDarkAnchor: {
     position: 'relative',
     minHeight: 122,
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 20,
     backgroundColor: UI_COLORS.charcoal,
+    borderLeftWidth: 4,
+    borderLeftColor: UI_COLORS.accent,
     overflow: 'hidden',
-  },
-  overviewLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-  },
-  overviewSignal: {
-    width: 14,
-    height: 3,
-    backgroundColor: UI_COLORS.accent,
   },
   overviewPrimaryLabel: {
     color: '#b7c0ca',
@@ -463,14 +458,6 @@ const styles = StyleSheet.create({
     lineHeight: 43,
     fontWeight: '900',
     fontVariant: ['tabular-nums'],
-  },
-  overviewTechnicalRule: {
-    position: 'absolute',
-    right: 0,
-    bottom: 14,
-    width: 54,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#505760',
   },
   metricStrip: {
     flexDirection: 'row',
@@ -509,8 +496,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   categoryPanel: {
-    paddingVertical: 16,
-    gap: 16,
+    paddingVertical: 2,
+  },
+  categoryRow: {
+    paddingVertical: 14,
+  },
+  categoryRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.borderSubtle,
   },
   merchantRow: {
     flexDirection: 'row',
