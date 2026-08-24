@@ -4,9 +4,12 @@
  */
 
 import { getCategoryBatchAiMaxItems } from './env';
+import { normalizeProductForIdentity } from './normalizeProductForIdentity';
 import type { ProductAttributes } from './productIdentityContract';
 import {
   buildSemanticInputFingerprint,
+  getActiveSemanticModelVersion,
+  isSemanticModelVersionCompatible,
   type MerchantProductSemanticCache,
 } from './productIdentitySemanticContract';
 import {
@@ -68,39 +71,105 @@ function readSemanticCache(it: any): MerchantProductSemanticCache | null {
   return raw as MerchantProductSemanticCache;
 }
 
+function itemMerchantKey(it: any): string | null {
+  if (typeof it?.merchant_key === 'string' && it.merchant_key.trim()) {
+    return it.merchant_key;
+  }
+  if (typeof it?.merchantName === 'string' && it.merchantName.trim()) {
+    return it.merchantName;
+  }
+  if (typeof it?.merchant_name === 'string' && it.merchant_name.trim()) {
+    return it.merchant_name;
+  }
+  return null;
+}
+
 /**
- * Clear stale enriched/sufficient cache when input fingerprint no longer matches.
+ * Deterministic attrs for fingerprinting — never AI-merged product_attributes /
+ * semantic_json.attributes (those would self-invalidate the cache key).
+ */
+export function deterministicAttributesForSemanticFingerprint(
+  it: any
+): ProductAttributes | null {
+  if (
+    it?.deterministic_product_attributes &&
+    typeof it.deterministic_product_attributes === 'object'
+  ) {
+    return it.deterministic_product_attributes as ProductAttributes;
+  }
+  const raw = itemRawName(it);
+  if (!raw.trim()) return null;
+  return normalizeProductForIdentity(raw).attributes;
+}
+
+function clearSemanticEvidenceFields(it: any): void {
+  it.semantic_status = 'needs_enrichment';
+  it.semantic_json = null;
+  it.semantic_confidence = null;
+  it.semantic_conflicts = null;
+  it.semantic_canonical_name = null;
+  it.suggested_canonical_name = null;
+  it.suggestedBrand = null;
+  it.semantic_product_type = null;
+  it.semantic_tags = null;
+  // Restore deterministic attrs; never delete them.
+  const det = deterministicAttributesForSemanticFingerprint(it);
+  if (det) {
+    it.deterministic_product_attributes = det;
+    it.product_attributes = det;
+  }
+}
+
+/**
+ * Clear stale enriched/sufficient cache when input fingerprint / versions mismatch.
  * Mutates item in place so production selection does not trust semantic_status alone.
  */
-export function invalidateStaleSemanticCacheOnItem(it: any): boolean {
+export function invalidateStaleSemanticCacheOnItem(
+  it: any,
+  opts?: { activeModelVersion?: string | null }
+): boolean {
   if (!it || typeof it !== 'object') return false;
   const status = it.semantic_status as SemanticStatus | null | undefined;
   if (status !== 'enriched' && status !== 'sufficient') return false;
   const cache = readSemanticCache(it);
-  const attrs =
-    (it.product_attributes as ProductAttributes | null) ??
-    cache?.attributes ??
-    null;
+  const attrs = deterministicAttributesForSemanticFingerprint(it);
   const currentFp = buildSemanticInputFingerprint({
     rawName: itemRawName(it),
-    merchantKey:
-      typeof it.merchant_key === 'string'
-        ? it.merchant_key
-        : typeof it.merchantName === 'string'
-          ? it.merchantName
-          : null,
+    merchantKey: itemMerchantKey(it),
     attributes: attrs,
     semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
-    modelVersion: cache?.modelVersion ?? null,
   });
-  const cachedFp = typeof cache?.inputFingerprint === 'string' ? cache.inputFingerprint : '';
+  const cachedFp =
+    typeof cache?.inputFingerprint === 'string' ? cache.inputFingerprint : '';
   const versionOk =
     !cache?.semanticResolverVersion ||
     cache.semanticResolverVersion === PRODUCT_IDENTITY_SEMANTIC_VERSION;
-  if (cachedFp && cachedFp === currentFp && versionOk) return false;
-  it.semantic_status = 'needs_enrichment';
-  it.semantic_json = null;
+  const activeModel =
+    opts?.activeModelVersion !== undefined
+      ? opts.activeModelVersion
+      : getActiveSemanticModelVersion();
+  const modelOk = isSemanticModelVersionCompatible(
+    cache?.modelVersion,
+    activeModel
+  );
+  if (cachedFp && cachedFp === currentFp && versionOk && modelOk) return false;
+  clearSemanticEvidenceFields(it);
   return true;
+}
+
+/**
+ * Bind receipt-level merchant into the item before fingerprint checks, then
+ * invalidate stale semantic evidence. Used by scan-review persist path.
+ */
+export function bindMerchantAndInvalidateSemanticCache(
+  it: any,
+  merchantKey: string | null | undefined,
+  opts?: { activeModelVersion?: string | null }
+): boolean {
+  if (!it || typeof it !== 'object') return false;
+  const mk = (merchantKey || '').trim();
+  if (mk) it.merchant_key = mk;
+  return invalidateStaleSemanticCacheOnItem(it, opts);
 }
 
 function gateInputFromItem(it: any): SemanticGateInput {
@@ -124,34 +193,30 @@ function gateInputFromItem(it: any): SemanticGateInput {
           : null;
 
   const cache = readSemanticCache(it);
-  const attrs =
-    (it?.product_attributes as ProductAttributes | null) ??
-    cache?.attributes ??
-    null;
+  const attrs = deterministicAttributesForSemanticFingerprint(it);
   const rawName = itemRawName(it);
-  const merchantKey =
-    typeof it?.merchant_key === 'string'
-      ? it.merchant_key
-      : typeof it?.merchantName === 'string'
-        ? it.merchantName
-        : null;
+  const merchantKey = itemMerchantKey(it);
+  const activeSemanticModelVersion = getActiveSemanticModelVersion();
   const currentSemanticInputFingerprint = buildSemanticInputFingerprint({
     rawName,
     merchantKey,
     attributes: attrs,
     semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
-    modelVersion: cache?.modelVersion ?? null,
   });
 
   return {
     rawName,
     normalizedName: (() => {
-      const n = typeof it?.normalized_name === 'string' ? it.normalized_name.trim() : '';
+      const n =
+        typeof it?.normalized_name === 'string' ? it.normalized_name.trim() : '';
       const raw = itemRawName(it);
-      if (!n || (n.length <= 1 && /[A-Za-z]/.test(n) && raw && raw !== n)) return raw || null;
+      if (!n || (n.length <= 1 && /[A-Za-z]/.test(n) && raw && raw !== n)) {
+        return raw || null;
+      }
       return n;
     })(),
-    comparisonKey: typeof it?.comparison_key === 'string' ? it.comparison_key : null,
+    comparisonKey:
+      typeof it?.comparison_key === 'string' ? it.comparison_key : null,
     merchantKey,
     existingMerchantProductMatch: !!it?.merchant_product_existing_match,
     createdMerchantProduct: !!it?.merchant_product_created,
@@ -166,7 +231,10 @@ function gateInputFromItem(it: any): SemanticGateInput {
       typeof cache?.semanticResolverVersion === 'string'
         ? cache.semanticResolverVersion
         : null,
+    cachedSemanticModelVersion:
+      typeof cache?.modelVersion === 'string' ? cache.modelVersion : null,
     currentSemanticInputFingerprint,
+    activeSemanticModelVersion,
     identityLevel: typeof it?.identity_level === 'string' ? it.identity_level : null,
     identityConfidence:
       typeof it?.identity_confidence === 'number' ? it.identity_confidence : null,
@@ -188,30 +256,33 @@ export function selectBatchSemanticItems(
 
     const reasons: Array<'uncategorized' | 'needs_enrichment'> = [];
     if (it.category === 'uncategorized') reasons.push('uncategorized');
-    if (needsSemanticEnrichment(gateInputFromItem(it))) reasons.push('needs_enrichment');
+    if (needsSemanticEnrichment(gateInputFromItem(it))) {
+      reasons.push('needs_enrichment');
+    }
     if (!reasons.length) continue;
 
     out.push({
       index: i,
       rawName,
-      normalizedName: typeof it.normalized_name === 'string' ? it.normalized_name : undefined,
-      merchantName: typeof it.merchant_name === 'string' ? it.merchant_name : null,
+      normalizedName:
+        typeof it.normalized_name === 'string' ? it.normalized_name : undefined,
+      merchantName: itemMerchantKey(it),
       knownCategory:
-        typeof it.category === 'string' && it.category !== 'uncategorized' ? it.category : null,
+        typeof it.category === 'string' && it.category !== 'uncategorized'
+          ? it.category
+          : null,
       knownFamily:
-        typeof it.family === 'string'
-          ? it.family
-          : typeof it.product_family === 'string'
-            ? it.product_family
-            : null,
-      knownAttributes: (it.product_attributes as ProductAttributes | null) ?? null,
+        typeof it.product_family_key === 'string' ? it.product_family_key : null,
+      knownAttributes: deterministicAttributesForSemanticFingerprint(it),
       selectReasons: reasons,
     });
-    if (out.length >= maxItems) break;
   }
+
   return out;
 }
 
 export function semanticSelectWouldCallAi(items: any[]): boolean {
-  return selectBatchSemanticItems(items, 1).length > 0;
+  return selectBatchSemanticItems(items).some((s) =>
+    s.selectReasons.includes('needs_enrichment')
+  );
 }

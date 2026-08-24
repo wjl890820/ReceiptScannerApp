@@ -12,6 +12,7 @@ import {
 import {
   evaluateMerchantProductHistoryEligibility,
   evaluatePriceObservationQuality,
+  resolveQuantityOcrCorroboration,
   type PriceObservationQualityLevel,
 } from './productIdentityPriceObservationQuality';
 import { resolveMerchantProductDisplayName } from './productIdentityPresentationContract';
@@ -37,6 +38,14 @@ export type IdentityConsumerObservation = {
   displayName?: string | null;
   /** Discount/tax/subtotal/payment — never frequent/history. */
   isNonProductRow?: boolean;
+  /**
+   * Independent quantity-OCR mismatch evidence (never inferred from price ratio alone).
+   * When absent/false, low-side reciprocal prices stay usable_with_caution (V1 safe).
+   */
+  quantityOcrCorroborated?: boolean;
+  /** Optional provenance: only 'ocr' + mismatchEvidence may corroborate. */
+  quantitySource?: 'ocr' | 'user' | 'default' | null;
+  quantityMismatchEvidence?: boolean;
 };
 
 export type QualifiedIdentityObservation = IdentityConsumerObservation & {
@@ -186,6 +195,7 @@ export function resolveIdentityConsumerObservations(
       attributes: attrs,
       rawName: row.rawName,
       isNonProductRow: observationIsNonProductRow(row),
+      quantityOcrCorroborated: resolveQuantityOcrCorroboration(row),
     });
     qualified.push({
       ...row,

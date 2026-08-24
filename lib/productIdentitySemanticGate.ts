@@ -41,8 +41,11 @@ export type SemanticGateInput = {
   /** Stored cache fingerprint (from semantic_json.inputFingerprint). */
   cachedSemanticInputFingerprint?: string | null;
   cachedSemanticResolverVersion?: string | null;
-  /** Fresh fingerprint from current name/merchant/attrs/version contract. */
+  cachedSemanticModelVersion?: string | null;
+  /** Fresh fingerprint from current name/merchant/deterministic-attrs/version contract. */
   currentSemanticInputFingerprint?: string | null;
+  /** Active model pin for cache validation — never taken from the cache itself. */
+  activeSemanticModelVersion?: string | null;
   identityLevel?: string | null;
   identityConfidence?: number | null;
 };
@@ -169,8 +172,16 @@ export function evaluateSemanticSufficiency(
     const versionOk =
       !input.cachedSemanticResolverVersion ||
       input.cachedSemanticResolverVersion === PRODUCT_IDENTITY_SEMANTIC_VERSION;
+    const activeModel = (input.activeSemanticModelVersion ?? '').trim();
+    const modelOk =
+      !activeModel ||
+      (input.cachedSemanticModelVersion ?? '').trim() === activeModel;
     const fingerprintOk =
-      !!fpCurrent && !!fpCached && fpCurrent === fpCached && versionOk;
+      !!fpCurrent &&
+      !!fpCached &&
+      fpCurrent === fpCached &&
+      versionOk &&
+      modelOk;
     if (fingerprintOk) {
       return {
         status: cached,

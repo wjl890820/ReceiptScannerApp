@@ -195,15 +195,13 @@ export function applySemanticFieldsToItem(
   ignoredSemantic: boolean;
   cache: MerchantProductSemanticCache;
 } {
-  const existingAttrs =
-    (item?.product_attributes as ProductAttributes | null | undefined) ?? null;
-  // Deterministic structural attrs must already be available (or parsed here)
-  // before AI merge so code volume/etc. always beat conflicting Gemini values.
+  // Deterministic structural attrs must come from name parse / stored deterministic
+  // snapshot — never from AI-merged product_attributes (that would poison fingerprints).
   const codeAttrs =
-    existingAttrs ??
+    (item?.deterministic_product_attributes as ProductAttributes | null | undefined) ??
     (typeof item?.name === 'string' && item.name.trim()
       ? normalizeProductForIdentity(item.name).attributes
-      : null);
+      : (item?.product_attributes as ProductAttributes | null | undefined) ?? null);
   const aiItem: SemanticEnrichmentAiItem = {
     index: result.index,
     categoryId: result.category,
@@ -222,12 +220,20 @@ export function applySemanticFieldsToItem(
     barcode: result.barcode,
   };
   const applied = applySemanticEnrichmentEvidence(aiItem, codeAttrs);
+  // Persist deterministic attrs separately so cache fingerprints never include AI merges.
+  item.deterministic_product_attributes = codeAttrs;
+  if (typeof item.merchant_key !== 'string' || !item.merchant_key.trim()) {
+    if (typeof item.merchant_name === 'string' && item.merchant_name.trim()) {
+      item.merchant_key = item.merchant_name.trim();
+    } else if (typeof item.merchantName === 'string' && item.merchantName.trim()) {
+      item.merchant_key = item.merchantName.trim();
+    }
+  }
   const inputFingerprint = buildSemanticInputFingerprint({
     rawName: String(item?.name ?? item?.raw_name ?? ''),
     merchantKey: typeof item?.merchant_key === 'string' ? item.merchant_key : null,
     attributes: codeAttrs,
     semanticResolverVersion: applied.semanticResolverVersion,
-    modelVersion: opts?.modelVersion ?? null,
   });
   const cache = buildSemanticCacheRecord(applied, opts?.modelVersion ?? null, inputFingerprint);
 

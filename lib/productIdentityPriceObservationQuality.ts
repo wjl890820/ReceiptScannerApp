@@ -39,6 +39,27 @@ export type PriceObservationQualityInput = {
   quantityOcrCorroborated?: boolean;
 };
 
+/**
+ * Resolve independent quantity-OCR corroboration for the quality gate.
+ * Never invents evidence from price ratios alone (V1 safe).
+ * True only when the caller supplies explicit provenance/mismatch evidence.
+ */
+export function resolveQuantityOcrCorroboration(input: {
+  quantityOcrCorroborated?: boolean | null;
+  quantitySource?: 'ocr' | 'user' | 'default' | null;
+  quantityMismatchEvidence?: boolean | null;
+}): boolean {
+  if (input.quantityOcrCorroborated === true) return true;
+  // Explicit OCR provenance + independent mismatch flag (not price-derived).
+  if (
+    input.quantitySource === 'ocr' &&
+    input.quantityMismatchEvidence === true
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export type PriceObservationQualityResult = {
   usable: boolean;
   /** Chart / history list (trusted | usable_with_caution). */

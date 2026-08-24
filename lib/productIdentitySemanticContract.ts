@@ -233,9 +233,9 @@ export type MerchantProductSemanticCache = {
 export function buildSemanticInputFingerprint(input: {
   rawName: string;
   merchantKey?: string | null;
+  /** Deterministic ProductAttributes only — never AI-enriched attrs. */
   attributes?: ProductAttributes | null;
   semanticResolverVersion: string;
-  modelVersion?: string | null;
 }): string {
   const attrsKey = (input.attributes?.entries ?? [])
     .map((e) => `${e.dimension}:${e.value ?? ''}:${e.unit ?? ''}`)
@@ -246,8 +246,49 @@ export function buildSemanticInputFingerprint(input: {
     (input.merchantKey || '').trim().toLowerCase(),
     attrsKey,
     input.semanticResolverVersion,
-    input.modelVersion ?? '',
   ].join('\u001f');
+}
+
+/**
+ * Active semantic model pin for cache validation.
+ * Empty/null = no pin (any stored modelVersion accepted).
+ * When set, cached modelVersion must match exactly — never read "current"
+ * from the cached record itself.
+ */
+export function getActiveSemanticModelVersion(): string | null {
+  try {
+    // Lazy require avoids circular env imports in pure contract tests.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const env = require('./env') as {
+      getOcrGeminiModel?: () => string;
+    };
+    const pinned =
+      typeof process !== 'undefined'
+        ? String(
+            (process as NodeJS.Process).env?.EXPO_PUBLIC_SEMANTIC_MODEL_VERSION ||
+              (process as NodeJS.Process).env?.SEMANTIC_MODEL_VERSION ||
+              ''
+          ).trim()
+        : '';
+    if (pinned) return pinned;
+    // Prefer explicit OCR/classify model when available as the active pin.
+    const fromEnv =
+      typeof env.getOcrGeminiModel === 'function'
+        ? String(env.getOcrGeminiModel() || '').trim()
+        : '';
+    return fromEnv || null;
+  } catch {
+    return null;
+  }
+}
+
+export function isSemanticModelVersionCompatible(
+  cachedModelVersion: string | null | undefined,
+  activeModelVersion: string | null | undefined = getActiveSemanticModelVersion()
+): boolean {
+  const active = (activeModelVersion ?? '').trim();
+  if (!active) return true;
+  return (cachedModelVersion ?? '').trim() === active;
 }
 
 export function buildSemanticCacheRecord(
@@ -277,10 +318,14 @@ export function buildSemanticCacheRecord(
 export function semanticCacheMatchesInput(
   cache: MerchantProductSemanticCache | null | undefined,
   inputFingerprint: string,
-  semanticResolverVersion: string = PRODUCT_IDENTITY_SEMANTIC_VERSION
+  semanticResolverVersion: string = PRODUCT_IDENTITY_SEMANTIC_VERSION,
+  activeModelVersion: string | null | undefined = getActiveSemanticModelVersion()
 ): boolean {
   if (!cache) return false;
   if (cache.semanticResolverVersion !== semanticResolverVersion) return false;
   if (!inputFingerprint || cache.inputFingerprint !== inputFingerprint) return false;
+  if (!isSemanticModelVersionCompatible(cache.modelVersion, activeModelVersion)) {
+    return false;
+  }
   return cache.status === 'enriched' || cache.status === 'sufficient';
 }

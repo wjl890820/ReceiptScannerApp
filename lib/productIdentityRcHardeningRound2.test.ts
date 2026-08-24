@@ -454,7 +454,6 @@ describe('Round2 — semantic cache fingerprint gates hits', () => {
       merchantKey,
       attributes,
       semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
-      modelVersion: 'test-model',
     });
     const cache = buildSemanticCacheRecord(applied, 'test-model', fp);
     return {
@@ -463,6 +462,7 @@ describe('Round2 — semantic cache fingerprint gates hits', () => {
       // Categorized so selection is driven by needs_enrichment only (not uncategorized union).
       category: 'beverages',
       product_attributes: attributes,
+      deterministic_product_attributes: attributes,
       semantic_status: 'enriched',
       semantic_json: cache,
       ...overrides,
@@ -500,9 +500,10 @@ describe('Round2 — semantic cache fingerprint gates hits', () => {
 
   it('deterministic spec change → cache miss', () => {
     const item = cachedItem();
-    item.product_attributes = buildProductAttributes([
+    item.deterministic_product_attributes = buildProductAttributes([
       { dimension: 'volume', value: 1500, unit: 'ml', source: 'parsed' },
     ]);
+    item.product_attributes = item.deterministic_product_attributes;
     expect(invalidateStaleSemanticCacheOnItem(item)).toBe(true);
     expect(item.semantic_status).toBe('needs_enrichment');
   });

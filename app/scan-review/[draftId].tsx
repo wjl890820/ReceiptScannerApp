@@ -51,6 +51,7 @@ import { peekNextDraftId } from '@/lib/scanReviewQueue';
 import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
+import { bindMerchantAndInvalidateSemanticCache } from '@/lib/productIdentitySemanticBatch';
 import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
 import { resolveInitialReviewDateStr, reviewDateNeedsConfirm } from '@/lib/scanReviewDateIsolation';
 import {
@@ -416,6 +417,9 @@ export default function ScanReviewScreen() {
         unitPrice,
         review_source_index: isUserAdded ? null : line.sourceIndex,
         user_added: isUserAdded,
+        // Bind receipt merchant so semantic fingerprints include merchant context.
+        merchant_key: merchant.trim() || null,
+        merchant_name: merchant.trim() || null,
       };
 
       if (!isUserAdded) {
@@ -464,7 +468,7 @@ export default function ScanReviewScreen() {
         ]);
       }
 
-      return applyProductIdentityToItem(finalItem, {
+      const identified = applyProductIdentityToItem(finalItem, {
         finalName,
         finalCategory: line.category,
         merchantName: merchant.trim() || null,
@@ -473,6 +477,9 @@ export default function ScanReviewScreen() {
           finalName === classifiedName ? (s as any)?.brand : null,
         useExistingClassificationEvidence: finalName === classifiedName,
       });
+      // Drop stale semantic evidence when name/merchant/deterministic attrs changed.
+      bindMerchantAndInvalidateSemanticCache(identified, merchant.trim() || null);
+      return identified;
     });
   }, [lineItems, merchant, snapshot]);
 
