@@ -988,7 +988,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 148,
     backgroundColor: '#eef1f4',
-    borderRadius: 14,
+    borderRadius: 9,
     marginBottom: 14,
   },
   itemsHeader: {
@@ -1009,14 +1009,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   itemList: {
-    gap: 10,
+    borderRadius: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#dce1e7',
+    backgroundColor: '#fff',
+    overflow: 'hidden',
   },
   muted: { fontSize: 14, color: '#8a929c', marginBottom: 8 },
   addItemBtn: {
     marginTop: 12,
     marginBottom: 8,
     paddingVertical: 13,
-    borderRadius: 14,
+    borderRadius: 9,
     borderWidth: 1,
     borderColor: '#cfe1fb',
     alignItems: 'center',
@@ -1026,7 +1030,7 @@ const styles = StyleSheet.create({
   primaryBtn: {
     backgroundColor: '#1677ff',
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 9,
     alignItems: 'center',
     paddingHorizontal: 24,
   },

@@ -12,32 +12,13 @@ import {
 } from '@/lib/productPriceChart';
 import type {
   ProductPriceHistoryResult,
-  ProductPriceKind,
 } from '@/lib/productPriceHistory';
+import {
+  formatProductPriceAmount,
+  resolveProductPriceKindLabel,
+  resolveProductPriceVisualMode,
+} from '@/lib/productPricePresentation';
 import { UI_COLORS, UI_RADIUS } from '@/lib/uiTokens';
-
-function numberLabel(value: number): string {
-  return Number.isInteger(value)
-    ? value.toLocaleString()
-    : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-function unitLabel(priceKind: ProductPriceKind): string {
-  return t(`priceHistory.unit.${priceKind}`);
-}
-
-function priceLabel(
-  value: number,
-  currency: string,
-  priceKind: ProductPriceKind
-): string {
-  const amount =
-    currency === 'JPY'
-      ? `¥${numberLabel(value)}`
-      : `${currency} ${numberLabel(value)}`;
-  const unit = unitLabel(priceKind);
-  return unit ? `${amount}${unit}` : amount;
-}
 
 function statusMessageKey(
   status: ProductPriceHistoryResult['status']
@@ -79,6 +60,13 @@ export function ProductPriceHistoryChart({
           : 'priceHistory.subtitle.family');
   const titleKey =
     result.identityPresentation?.titleKey ?? 'priceHistory.title';
+  const visualMode = resolveProductPriceVisualMode(
+    result.status,
+    result.points
+  );
+  const priceKindLabel = result.priceKind
+    ? resolveProductPriceKindLabel(result.priceKind, t)
+    : null;
   const latest = result.points[result.points.length - 1];
   const minimumPoint =
     result.points.length > 0
@@ -98,115 +86,148 @@ export function ProductPriceHistoryChart({
       <Text style={styles.title}>{t(titleKey)}</Text>
       <Text style={styles.subtitle}>{t(subtitleKey)}</Text>
 
-      {result.status !== 'ready' ? (
+      {visualMode === 'status' || visualMode === 'single' ? (
         <View style={styles.statusCard}>
-          <Text style={styles.statusText}>
-            {t(statusMessageKey(result.status))}
-          </Text>
-          {result.points.length === 1 && result.priceKind && result.currency && (
-            <Text style={styles.singlePrice}>
-              {priceLabel(
-                result.points[0].priceValue,
-                result.currency,
-                result.priceKind
+          {result.status !== 'ready' || result.points.length === 0 ? (
+            <Text style={styles.statusText}>
+              {t(
+                result.status === 'ready'
+                  ? 'priceHistory.status.notEnough'
+                  : statusMessageKey(result.status)
               )}
             </Text>
-          )}
+          ) : null}
+          {result.points.length === 1 && result.currency ? (
+            <Text style={styles.singlePrice}>
+              {formatProductPriceAmount(
+                result.points[0].priceValue,
+                result.currency
+              )}
+            </Text>
+          ) : null}
         </View>
       ) : (
         <>
-          <View style={styles.unitRow}>
-            <Text style={styles.unitCaption}>
-              {t('priceHistory.priceUnit')}
-            </Text>
-            <Text style={styles.unitValue}>
-              {t(`priceHistory.kind.${result.priceKind}`)}
-            </Text>
-          </View>
-          <View
-            style={styles.chart}
-            onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
-          >
-            {chartWidth > 0 && coordinates.length > 0 && (
-              <Svg width={chartWidth} height={PRODUCT_PRICE_CHART_HEIGHT}>
-                <Line
-                  x1={PRODUCT_PRICE_CHART_PADDING_X}
-                  y1={
-                    PRODUCT_PRICE_CHART_HEIGHT -
-                    PRODUCT_PRICE_CHART_PADDING_Y
-                  }
-                  x2={chartWidth - PRODUCT_PRICE_CHART_PADDING_X}
-                  y2={
-                    PRODUCT_PRICE_CHART_HEIGHT -
-                    PRODUCT_PRICE_CHART_PADDING_Y
-                  }
-                  stroke="#d8d8d8"
-                  strokeWidth={1}
-                />
-                <Polyline
-                  points={coordinates
-                    .map((coordinate) => `${coordinate.x},${coordinate.y}`)
-                    .join(' ')}
-                  fill="none"
-                  stroke="#222"
-                  strokeWidth={2}
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
-                />
-                {coordinates.map((coordinate, index) => (
-                  <Circle
-                    key={result.points[index].itemId}
-                    cx={coordinate.x}
-                    cy={coordinate.y}
-                    r={3.5}
-                    fill="#fff"
-                    stroke="#222"
-                    strokeWidth={2}
-                  />
-                ))}
-              </Svg>
-            )}
-          </View>
-          <View style={styles.dateRange}>
-            <Text style={styles.dateLabel}>
-              {formatDate(result.points[0].occurredAt).slice(0, 10)}
-            </Text>
-            <Text style={styles.dateLabel}>
-              {formatDate(result.points[result.points.length - 1].occurredAt).slice(
-                0,
-                10
-              )}
-            </Text>
-          </View>
+          {priceKindLabel ? (
+            <View style={styles.unitRow}>
+              <Text style={styles.unitCaption}>
+                {t('priceHistory.priceUnit')}
+              </Text>
+              <Text style={styles.unitValue}>{priceKindLabel}</Text>
+            </View>
+          ) : null}
+          {visualMode === 'flat_pair' && result.currency ? (
+            <View style={styles.flatPricePanel}>
+              <View style={styles.flatPriceTopRow}>
+                <Text style={styles.flatPriceValue}>
+                  {formatProductPriceAmount(
+                    result.points[1].priceValue,
+                    result.currency
+                  )}
+                </Text>
+                <Text style={styles.flatPriceStatus}>
+                  {t('priceHistory.flatUnchanged')}
+                </Text>
+              </View>
+              <View style={styles.flatTimeline}>
+                <View style={styles.flatDot} />
+                <View style={styles.flatLine} />
+                <View style={styles.flatDot} />
+              </View>
+              <View style={styles.dateRange}>
+                <Text style={styles.dateLabel}>
+                  {formatDate(result.points[0].occurredAt).slice(0, 10)}
+                </Text>
+                <Text style={styles.dateLabel}>
+                  {formatDate(result.points[1].occurredAt).slice(0, 10)}
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View
+                style={styles.chart}
+                onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
+              >
+                {chartWidth > 0 && coordinates.length > 0 && (
+                  <Svg width={chartWidth} height={PRODUCT_PRICE_CHART_HEIGHT}>
+                    <Line
+                      x1={PRODUCT_PRICE_CHART_PADDING_X}
+                      y1={
+                        PRODUCT_PRICE_CHART_HEIGHT -
+                        PRODUCT_PRICE_CHART_PADDING_Y
+                      }
+                      x2={chartWidth - PRODUCT_PRICE_CHART_PADDING_X}
+                      y2={
+                        PRODUCT_PRICE_CHART_HEIGHT -
+                        PRODUCT_PRICE_CHART_PADDING_Y
+                      }
+                      stroke="#d8d8d8"
+                      strokeWidth={1}
+                    />
+                    <Polyline
+                      points={coordinates
+                        .map((coordinate) => `${coordinate.x},${coordinate.y}`)
+                        .join(' ')}
+                      fill="none"
+                      stroke={UI_COLORS.charcoal}
+                      strokeWidth={2}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                    {coordinates.map((coordinate, index) => (
+                      <Circle
+                        key={result.points[index].itemId}
+                        cx={coordinate.x}
+                        cy={coordinate.y}
+                        r={3.5}
+                        fill="#fff"
+                        stroke={UI_COLORS.charcoal}
+                        strokeWidth={2}
+                      />
+                    ))}
+                  </Svg>
+                )}
+              </View>
+              <View style={styles.dateRange}>
+                <Text style={styles.dateLabel}>
+                  {formatDate(result.points[0].occurredAt).slice(0, 10)}
+                </Text>
+                <Text style={styles.dateLabel}>
+                  {formatDate(result.points[result.points.length - 1].occurredAt).slice(
+                    0,
+                    10
+                  )}
+                </Text>
+              </View>
+            </>
+          )}
           {latest && minimumPoint && maximumPoint && result.priceKind && result.currency && (
             <View style={styles.factGrid}>
               <View style={[styles.fact, styles.latestFact]}>
                 <Text style={styles.factLabel}>{t('priceHistory.latest')}</Text>
                 <Text style={[styles.factValue, styles.latestFactValue]}>
-                  {priceLabel(
+                  {formatProductPriceAmount(
                     latest.priceValue,
-                    result.currency,
-                    result.priceKind
+                    result.currency
                   )}
                 </Text>
               </View>
               <View style={[styles.fact, styles.factBorder]}>
                 <Text style={styles.factLabel}>{t('priceHistory.minimum')}</Text>
                 <Text style={styles.factValue}>
-                  {priceLabel(
+                  {formatProductPriceAmount(
                     minimumPoint.priceValue,
-                    result.currency,
-                    result.priceKind
+                    result.currency
                   )}
                 </Text>
               </View>
               <View style={[styles.fact, styles.factBorder]}>
                 <Text style={styles.factLabel}>{t('priceHistory.maximum')}</Text>
                 <Text style={styles.factValue}>
-                  {priceLabel(
+                  {formatProductPriceAmount(
                     maximumPoint.priceValue,
-                    result.currency,
-                    result.priceKind
+                    result.currency
                   )}
                 </Text>
               </View>
@@ -284,6 +305,49 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
     overflow: 'hidden',
+  },
+  flatPricePanel: {
+    marginTop: 8,
+    padding: 16,
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+  },
+  flatPriceTopRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  flatPriceValue: {
+    color: UI_COLORS.textPrimary,
+    fontSize: 24,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+  },
+  flatPriceStatus: {
+    flexShrink: 1,
+    color: UI_COLORS.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  flatTimeline: {
+    marginTop: 17,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  flatDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: UI_COLORS.charcoal,
+  },
+  flatLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: UI_COLORS.accent,
   },
   dateRange: {
     marginTop: 5,

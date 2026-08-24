@@ -167,6 +167,7 @@ export default function ProductDetailScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
+          <View style={styles.productHeaderRule} />
           <Text style={styles.productTitle}>{title}</Text>
           {primaryMerchant ? (
             <View style={styles.productMerchantRow}>
@@ -431,11 +432,16 @@ const styles = StyleSheet.create({
     paddingBottom: 50,
   },
   productTitle: {
-    marginTop: 8,
+    marginTop: 10,
     fontSize: 25,
     lineHeight: 32,
     fontWeight: '800',
     color: UI_COLORS.textPrimary,
+  },
+  productHeaderRule: {
+    width: 38,
+    height: 4,
+    backgroundColor: UI_COLORS.charcoal,
   },
   productMerchantRow: {
     marginTop: 12,

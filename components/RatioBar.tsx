@@ -36,7 +36,7 @@ export function RatioBar({
 
 const styles = StyleSheet.create({
   row: {
-    gap: 7,
+    gap: 8,
   },
   labelRow: {
     flexDirection: 'row',
@@ -46,13 +46,13 @@ const styles = StyleSheet.create({
   label: {
     flex: 1,
     color: UI_COLORS.textPrimary,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
   },
   value: {
     minWidth: 76,
     color: UI_COLORS.textPrimary,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     textAlign: 'right',
     fontVariant: ['tabular-nums'],
@@ -66,12 +66,12 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   track: {
-    height: 4,
+    height: 5,
     backgroundColor: UI_COLORS.surfaceMuted,
     overflow: 'hidden',
   },
   fill: {
-    height: 4,
+    height: 5,
     backgroundColor: UI_COLORS.accent,
   },
 });

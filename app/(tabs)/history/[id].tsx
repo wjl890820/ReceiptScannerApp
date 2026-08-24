@@ -562,6 +562,11 @@ export default function ReceiptDetailScreen() {
                 <View style={styles.summaryLabelRow}>
                   <Text style={styles.summaryLeft}>{getCategoryLabel(x.category)}</Text>
                   <Text style={styles.summaryRight}>{formatJPY(x.amount)}</Text>
+                  <Text style={styles.summaryPercent}>
+                    {displayTotal > 0
+                      ? `${Math.max(0, Math.round((x.amount / displayTotal) * 100))}%`
+                      : '0%'}
+                  </Text>
                 </View>
                 <View style={styles.categoryTrack}>
                   <View
@@ -861,6 +866,14 @@ const styles = StyleSheet.create({
     color: UI_COLORS.textPrimary,
     fontVariant: ['tabular-nums'],
   },
+  summaryPercent: {
+    width: 38,
+    fontSize: 12,
+    fontWeight: '700',
+    color: UI_COLORS.textSecondary,
+    textAlign: 'right',
+    fontVariant: ['tabular-nums'],
+  },
   categoryTrack: {
     height: 5,
     marginTop: 8,
@@ -931,7 +944,7 @@ const styles = StyleSheet.create({
     color: '#555',
   },
   primaryBtn: {
-    backgroundColor: UI_COLORS.textPrimary,
+    backgroundColor: UI_COLORS.accent,
     paddingVertical: 14,
     borderRadius: UI_RADIUS.card,
     alignItems: 'center',
@@ -1022,10 +1035,10 @@ const styles = StyleSheet.create({
   editCard: {
     marginTop: 14,
     padding: 12,
-    borderRadius: 14,
-    backgroundColor: '#fafafa',
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surface,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e8e8e8',
+    borderColor: UI_COLORS.border,
   },
   editCardTitle: {
     fontSize: 14,
@@ -1044,8 +1057,8 @@ const styles = StyleSheet.create({
   totalBox: {
     marginTop: 18,
     padding: 14,
-    borderRadius: 14,
-    backgroundColor: '#f6f6f6',
+    borderRadius: UI_RADIUS.panel,
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
   totalLabel: {
     color: UI_COLORS.textSecondary,

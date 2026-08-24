@@ -143,7 +143,7 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   card: {
-    borderRadius: 16,
+    borderRadius: 9,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
     backgroundColor: '#fff',

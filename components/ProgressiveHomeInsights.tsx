@@ -156,31 +156,42 @@ export function ProgressiveHomeInsights({
       </Text>
 
       <View style={styles.scanHero}>
-        <Text style={styles.scanEyebrow}>{t('home.progressive.scan.eyebrow')}</Text>
-        <Text style={styles.scanTitle}>{t('home.progressive.scan.title')}</Text>
-        <Text style={styles.scanSubtitle}>
-          {t('home.progressive.scan.subtitle')}
-        </Text>
-        <Pressable
-          onPress={onScan}
-          disabled={scanning}
-          accessibilityRole="button"
-          accessibilityLabel={scanLabel}
-          style={({ pressed }) => [
-            styles.scanButton,
-            scanning && styles.disabled,
-            pressed && styles.pressed,
-          ]}
-        >
-          {scanning && !processingProgress && (
-            <ActivityIndicator size="small" color="#fff" />
-          )}
-          <Text style={styles.scanButtonText}>{scanLabel}</Text>
-          {!scanning ? <Text style={styles.scanArrow}>→</Text> : null}
-        </Pressable>
-        <Text style={styles.scanSupport}>
-          {t('home.progressive.scan.support')}
-        </Text>
+        <View style={styles.scanAnchor}>
+          <View style={styles.scanAnchorSignal} />
+          <Text style={styles.scanAnchorLabel}>
+            {t('home.progressive.scan.eyebrow')}
+          </Text>
+          <View style={styles.scanAnchorRule} />
+        </View>
+        <View style={styles.scanHeroContent}>
+          <Text style={styles.scanTitle}>{t('home.progressive.scan.title')}</Text>
+          <Text style={styles.scanSubtitle}>
+            {t('home.progressive.scan.subtitle')}
+          </Text>
+          <Pressable
+            onPress={onScan}
+            disabled={scanning}
+            accessibilityRole="button"
+            accessibilityLabel={scanLabel}
+            style={({ pressed }) => [
+              styles.scanButton,
+              scanning && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            {scanning && !processingProgress && (
+              <ActivityIndicator size="small" color="#fff" />
+            )}
+            <Text style={styles.scanButtonText}>{scanLabel}</Text>
+            {!scanning ? <Text style={styles.scanArrow}>→</Text> : null}
+          </Pressable>
+          <View style={styles.scanSupportRow}>
+            <View style={styles.scanSupportRule} />
+            <Text style={styles.scanSupport}>
+              {t('home.progressive.scan.support')}
+            </Text>
+          </View>
+        </View>
       </View>
 
       {experience.stage === 'empty' && (
@@ -262,7 +273,7 @@ export function ProgressiveHomeInsights({
       {showRecentInsight && experience.recentInsight && (
         <>
           <SectionTitle title={t('home.progressive.insight.title')} />
-          <View style={styles.panel}>
+          <View style={[styles.panel, styles.profilePanel]}>
             <View style={styles.metricRow}>
               <View style={styles.metric}>
                 <Text style={styles.metricLabel}>
@@ -388,21 +399,45 @@ const styles = StyleSheet.create({
   },
   scanHero: {
     marginTop: 22,
-    padding: 18,
+    minHeight: 188,
+    flexDirection: 'row',
     borderRadius: UI_RADIUS.hero,
     backgroundColor: EDITORIAL_UI.panelBackground,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: EDITORIAL_UI.panelBorder,
-    borderLeftWidth: EDITORIAL_UI.accentRuleWidth,
-    borderLeftColor: EDITORIAL_UI.accentRule,
+    overflow: 'hidden',
   },
-  scanEyebrow: {
-    color: UI_COLORS.accent,
-    fontSize: 13,
+  scanAnchor: {
+    width: 82,
+    paddingHorizontal: 14,
+    paddingVertical: 17,
+    backgroundColor: EDITORIAL_UI.darkAnchor,
+  },
+  scanAnchorSignal: {
+    width: 14,
+    height: 3,
+    backgroundColor: UI_COLORS.accent,
+  },
+  scanAnchorLabel: {
+    marginTop: 15,
+    color: '#ffffff',
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '800',
   },
+  scanAnchorRule: {
+    width: 1,
+    flex: 1,
+    minHeight: 34,
+    marginTop: 14,
+    backgroundColor: '#434951',
+  },
+  scanHeroContent: {
+    flex: 1,
+    minWidth: 0,
+    padding: 17,
+  },
   scanTitle: {
-    marginTop: 7,
     color: '#111418',
     fontSize: 22,
     lineHeight: 28,
@@ -415,9 +450,10 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   scanButton: {
-    marginTop: 18,
+    marginTop: 16,
     minHeight: 48,
-    minWidth: 156,
+    width: '48%',
+    minWidth: 138,
     alignSelf: 'flex-end',
     flexDirection: 'row',
     alignItems: 'center',
@@ -437,10 +473,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   scanSupport: {
-    marginTop: 10,
+    flex: 1,
     color: '#697584',
-    fontSize: 12,
-    textAlign: 'center',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  scanSupportRow: {
+    marginTop: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  scanSupportRule: {
+    width: 16,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: UI_COLORS.textMuted,
   },
   emptyValue: {
     marginTop: 18,
@@ -571,6 +618,10 @@ const styles = StyleSheet.create({
   bars: {
     padding: 16,
     gap: 14,
+  },
+  profilePanel: {
+    borderTopWidth: 3,
+    borderTopColor: UI_COLORS.charcoal,
   },
   profileFact: {
     marginHorizontal: 16,

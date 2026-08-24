@@ -195,12 +195,18 @@ export default function AnalysisScreen() {
         <>
           <SectionTitle title={t('analysis.release.overviewTitle')} />
           <View style={styles.overviewPanel}>
-            <Text style={styles.overviewPrimaryLabel}>
-              {t('analysis.release.totalSpend')}
-            </Text>
-            <Text style={styles.overviewPrimaryValue}>
-              {formatJPY(viewModel.overview.supportedSpend)}
-            </Text>
+            <View style={styles.overviewDarkAnchor}>
+              <View style={styles.overviewLabelRow}>
+                <View style={styles.overviewSignal} />
+                <Text style={styles.overviewPrimaryLabel}>
+                  {t('analysis.release.totalSpend')}
+                </Text>
+              </View>
+              <Text style={styles.overviewPrimaryValue}>
+                {formatJPY(viewModel.overview.supportedSpend)}
+              </Text>
+              <View style={styles.overviewTechnicalRule} />
+            </View>
             <View style={styles.metricStrip}>
               <View style={styles.stripMetric}>
                 <Text style={styles.stripValue}>{viewModel.overview.supportedReceiptCount}</Text>
@@ -276,7 +282,7 @@ export default function AnalysisScreen() {
           ) : null}
 
           <SectionTitle title={t('analysis.release.spendChangeTitle')} />
-          <View style={[styles.card, styles.changePanel]}>
+          <View style={styles.changePanel}>
             {viewModel.spendChange.status === 'available' ? (
               <>
                 <Text style={styles.changeCompared}>
@@ -389,7 +395,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   timeRangeBtnActive: {
-    backgroundColor: UI_COLORS.background,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
   },
   timeRangeBtnText: {
     fontSize: 14,
@@ -424,22 +432,45 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
   },
-  overviewPrimaryLabel: {
-    paddingTop: 18,
+  overviewDarkAnchor: {
+    position: 'relative',
+    minHeight: 122,
     paddingHorizontal: 18,
-    color: UI_COLORS.textSecondary,
+    paddingTop: 18,
+    paddingBottom: 20,
+    backgroundColor: UI_COLORS.charcoal,
+    overflow: 'hidden',
+  },
+  overviewLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  overviewSignal: {
+    width: 14,
+    height: 3,
+    backgroundColor: UI_COLORS.accent,
+  },
+  overviewPrimaryLabel: {
+    color: '#b7c0ca',
     fontSize: 13,
     fontWeight: '700',
   },
   overviewPrimaryValue: {
-    paddingHorizontal: 18,
-    paddingTop: 7,
-    paddingBottom: 18,
-    color: UI_COLORS.textPrimary,
-    fontSize: 34,
-    lineHeight: 40,
+    marginTop: 8,
+    color: '#ffffff',
+    fontSize: 36,
+    lineHeight: 43,
     fontWeight: '900',
     fontVariant: ['tabular-nums'],
+  },
+  overviewTechnicalRule: {
+    position: 'absolute',
+    right: 0,
+    bottom: 14,
+    width: 54,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#505760',
   },
   metricStrip: {
     flexDirection: 'row',
@@ -518,11 +549,13 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   changePanel: {
-    paddingHorizontal: 18,
-    paddingVertical: 4,
+    paddingHorizontal: 2,
+    paddingVertical: 13,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
   },
   changeCompared: {
-    paddingTop: 12,
     color: '#68707a',
     fontSize: 12,
     fontWeight: '600',
@@ -530,18 +563,18 @@ const styles = StyleSheet.create({
   changeAmount: {
     marginTop: 8,
     color: '#15181c',
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 26,
+    lineHeight: 32,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
   },
   changeDelta: {
     marginTop: 6,
-    marginBottom: 12,
     color: '#3c4654',
     fontSize: 14,
     fontWeight: '600',
   },
   changeUnavailable: {
-    paddingVertical: 14,
     color: '#8a929c',
     fontSize: 13,
     lineHeight: 19,
@@ -554,10 +587,10 @@ const styles = StyleSheet.create({
   },
   insightCard: {
     borderRadius: UI_RADIUS.panel,
-    backgroundColor: '#eef5ff',
+    backgroundColor: UI_COLORS.accentSoft,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#cfe1fb',
-    borderLeftWidth: 3,
+    borderColor: '#cbdcf7',
+    borderLeftWidth: 4,
     borderLeftColor: UI_COLORS.accent,
     padding: 16,
   },

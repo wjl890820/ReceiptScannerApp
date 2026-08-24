@@ -411,6 +411,7 @@
     "latest": "Latest record",
     "minimum": "Lowest record",
     "maximum": "Highest record",
+    "flatUnchanged": "Price unchanged",
     "coverage": "Based on {comparable} of {total} comparable records; {excluded} excluded",
     "coverageComparable": "Based on {comparable} comparable purchases",
     "coverageExcludedCurrent": "Ignored {excluded} possibly unusual price record(s) for this product",

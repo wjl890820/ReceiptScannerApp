@@ -19,10 +19,13 @@ describe('uiTokens contract (R2-B5)', () => {
     expect(Object.keys(UI_COLORS).sort()).toEqual(
       [
         'accent',
+        'accentSoft',
         'background',
         'border',
         'borderSubtle',
+        'charcoal',
         'destructive',
+        'signal',
         'surface',
         'surfaceMuted',
         'textMuted',

@@ -780,9 +780,10 @@ const styles = StyleSheet.create({
   list: {
     flex: 1,
     backgroundColor: UI_COLORS.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: UI_COLORS.border,
+    borderRadius: UI_RADIUS.panel,
+    overflow: 'hidden',
   },
   sep: {
     height: StyleSheet.hairlineWidth,

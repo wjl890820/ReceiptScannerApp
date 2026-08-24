@@ -84,7 +84,7 @@ export function ReceiptSummaryCard({
             accessibilityLabel={t('scanReview.total')}
           />
         </View>
-        <View style={styles.metric}>
+        <View style={[styles.metric, styles.metricBorder]}>
           <Text style={styles.metricLabel}>{t('scanReview.tax')}</Text>
           <TextInput
             value={taxStr}
@@ -95,7 +95,7 @@ export function ReceiptSummaryCard({
             accessibilityLabel={t('scanReview.tax')}
           />
         </View>
-        <View style={styles.metric}>
+        <View style={[styles.metric, styles.metricBorder]}>
           <Text style={styles.metricLabel}>{t('scanReview.currency')}</Text>
           <TextInput
             value={currency}
@@ -124,7 +124,7 @@ export function ReceiptSummaryCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
+    borderRadius: 9,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
     backgroundColor: '#fff',
@@ -159,15 +159,19 @@ const styles = StyleSheet.create({
   metricsRow: {
     flexDirection: 'row',
     marginTop: 16,
-    gap: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e8ebef',
   },
   metric: {
     flex: 1,
     minWidth: 0,
-    borderRadius: 12,
-    backgroundColor: '#f5f7fa',
     paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingVertical: 12,
+  },
+  metricBorder: {
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: '#e8ebef',
   },
   metricLabel: {
     color: '#747d88',
@@ -190,7 +194,7 @@ const styles = StyleSheet.create({
   },
   noteInput: {
     minHeight: 56,
-    borderRadius: 12,
+    borderRadius: 8,
     backgroundColor: '#f5f7fa',
     paddingHorizontal: 12,
     paddingVertical: 10,

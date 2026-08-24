@@ -117,9 +117,8 @@ export function ReceiptItemCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e8ebef',
     backgroundColor: '#fff',
     padding: 14,
   },
@@ -169,7 +168,7 @@ const styles = StyleSheet.create({
   },
   metric: {
     width: 88,
-    borderRadius: 12,
+    borderRadius: 8,
     backgroundColor: '#f5f7fa',
     paddingHorizontal: 10,
     paddingVertical: 8,

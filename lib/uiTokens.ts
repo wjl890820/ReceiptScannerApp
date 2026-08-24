@@ -18,10 +18,16 @@ export const UI_COLORS = {
   textPrimary: '#111111',
   textSecondary: '#666666',
   textMuted: '#888888',
+  /** Restrained structural anchor; never a page background. */
+  charcoal: '#181b20',
   border: '#dce1e7',
   borderSubtle: '#e8ebef',
   /** Dominant action / link accent across production screens */
   accent: '#1677ff',
+  /** Quiet information emphasis; not a second page background. */
+  accentSoft: '#edf4ff',
+  /** Optional micro-signal only. */
+  signal: '#d8792b',
   destructive: '#dd3333',
 } as const;
 
@@ -54,6 +60,8 @@ export const EDITORIAL_UI = {
   panelBorder: '#DCE1E7',
   panelBackground: '#FFFFFF',
   metricWash: '#F0F2F5',
+  darkAnchor: '#181B20',
+  darkAnchorMuted: '#AEB7C3',
 } as const;
 
 /** Font sizes only — weights stay local to screens. */

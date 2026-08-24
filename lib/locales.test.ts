@@ -29,6 +29,7 @@ const PRICE_HISTORY_KEYS = [
   'subtitle.canonical',
   'subtitle.family',
   'coverage',
+  'flatUnchanged',
   'kind.purchase_unit',
   'kind.per_liter',
   'kind.per_100g',

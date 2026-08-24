@@ -411,6 +411,7 @@
     "latest": "最近记录",
     "minimum": "最低记录",
     "maximum": "最高记录",
+    "flatUnchanged": "价格保持不变",
     "coverage": "基于 {comparable}/{total} 条可比较记录，排除 {excluded} 条",
     "coverageComparable": "基于 {comparable} 次可比较购买",
     "coverageExcludedCurrent": "已忽略 {excluded} 条可能异常的价格记录",
