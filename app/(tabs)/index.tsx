@@ -3,7 +3,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -47,6 +47,13 @@ import {
   buildHomeProgressiveExperience,
   type HomeProgressiveExperience,
 } from '@/lib/homeProgressiveExperience';
+import {
+  beginHomeRefresh,
+  completeHomeRefresh,
+  failHomeRefresh,
+  INITIAL_HOME_REFRESH_STATE,
+  isLatestHomeRefresh,
+} from '@/lib/homeRefreshState';
 import { t } from '@/lib/i18n';
 import {
   UI_COLORS,
@@ -62,7 +69,11 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
-  const [loadingReceipts, setLoadingReceipts] = useState(false);
+  const [homeRefreshState, setHomeRefreshState] = useState(
+    INITIAL_HOME_REFRESH_STATE
+  );
+  const hasCompleteSnapshotRef = useRef(false);
+  const refreshGenerationRef = useRef(0);
   const [homeExperience, setHomeExperience] =
     useState<HomeProgressiveExperience>(() =>
       buildHomeProgressiveExperience([], null)
@@ -78,39 +89,64 @@ export default function HomeScreen() {
 
   // 加载所有收据； progressive analytics 使用去重后的 purchase candidates
   const loadReceipts = useCallback(async () => {
+    const requestGeneration = ++refreshGenerationRef.current;
+    const hadCompleteSnapshot = hasCompleteSnapshotRef.current;
+    setHomeRefreshState((state) => beginHomeRefresh(state));
     try {
-      setLoadingReceipts(true);
       const allReceipts = await listReceipts();
-      setReceipts(allReceipts);
       const analyticsReceipts =
         selectAnalyticsReceipts(allReceipts).analyticsReceipts;
-      setHomeExperience(buildHomeProgressiveExperience(analyticsReceipts, null));
+      let finalCompleteExperience: HomeProgressiveExperience;
       try {
         const [evaluation, productContext] = await Promise.all([
           evaluateCurrentEngagementMilestone(),
           loadEngagementProductInsightContext(),
         ]);
-        setHomeExperience(
-          buildHomeProgressiveExperience(
-            analyticsReceipts,
-            evaluation,
-            false,
-            productContext.rows
-          )
+        finalCompleteExperience = buildHomeProgressiveExperience(
+          analyticsReceipts,
+          evaluation,
+          false,
+          productContext.rows
         );
       } catch (analyticsError) {
+        if (hadCompleteSnapshot) throw analyticsError;
         logger.warn('Home', 'progressive analytics failed', {
           error: analyticsError,
         });
-        setHomeExperience(
-          buildHomeProgressiveExperience(analyticsReceipts, null, true)
+        finalCompleteExperience = buildHomeProgressiveExperience(
+          analyticsReceipts,
+          null,
+          true
         );
       }
+      if (
+        !isLatestHomeRefresh(
+          requestGeneration,
+          refreshGenerationRef.current
+        )
+      ) {
+        return;
+      }
+      setReceipts(allReceipts);
+      setHomeExperience(finalCompleteExperience);
+      hasCompleteSnapshotRef.current = true;
+      setHomeRefreshState(completeHomeRefresh());
     } catch (e: any) {
-      console.error('加载收据失败:', e);
-      setHomeExperience(buildHomeProgressiveExperience([], null, true));
-    } finally {
-      setLoadingReceipts(false);
+      if (
+        !isLatestHomeRefresh(
+          requestGeneration,
+          refreshGenerationRef.current
+        )
+      ) {
+        return;
+      }
+      if (hasCompleteSnapshotRef.current) {
+        logger.warn('Home', 'background refresh failed', { error: e });
+      } else {
+        console.error('加载收据失败:', e);
+        setHomeExperience(buildHomeProgressiveExperience([], null, true));
+      }
+      setHomeRefreshState((state) => failHomeRefresh(state));
     }
   }, []);
 
@@ -532,7 +568,10 @@ export default function HomeScreen() {
       >
         <ProgressiveHomeInsights
           experience={homeExperience}
-          loading={loadingReceipts}
+          initialLoading={
+            homeRefreshState.initialLoading &&
+            !homeRefreshState.hasCompleteSnapshot
+          }
           scanning={scanning}
           processingProgress={processingProgress}
           onScan={handleScanReceipt}

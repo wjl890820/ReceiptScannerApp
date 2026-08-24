@@ -31,7 +31,7 @@ import { MilestoneProgressCard } from './MilestoneProgressCard';
 
 type ProgressiveHomeInsightsProps = {
   experience: HomeProgressiveExperience;
-  loading: boolean;
+  initialLoading: boolean;
   scanning: boolean;
   processingProgress: { current: number; total: number } | null;
   onScan: () => void;
@@ -132,7 +132,7 @@ function ProfileComposition({
 
 export function ProgressiveHomeInsights({
   experience,
-  loading,
+  initialLoading,
   scanning,
   processingProgress,
   onScan,
@@ -196,7 +196,7 @@ export function ProgressiveHomeInsights({
         <View style={styles.scanCornerDetail} />
       </Pressable>
 
-      {experience.stage === 'empty' && (
+      {experience.stage === 'empty' && !initialLoading && (
         <View style={styles.emptyValue}>
           <Text style={styles.emptyTitle}>
             {t('home.progressive.empty.title')}
@@ -262,7 +262,7 @@ export function ProgressiveHomeInsights({
         </>
       )}
 
-      {loading && experience.stage !== 'empty' && (
+      {initialLoading && (
         <View style={styles.analyticsLoading}>
           <ActivityIndicator size="small" color="#1677ff" />
         </View>
