@@ -280,15 +280,33 @@ describe('runBatchAiFallback: 编排 + 单次请求 + 容错', () => {
 describe('classifyItemsBatch: 网络层失败语义（mock fetch）', () => {
   const input: BatchAiInputItem[] = [{ index: 0, rawName: 'A', normalizedName: 'A' }];
 
-  it('正常 success:true results → 返回映射结果', async () => {
+  it('正常 success:true results → 返回映射结果 + modelVersion', async () => {
     (global as any).fetch = jest.fn(async () =>
       fakeResponse(200, {
         success: true,
+        modelVersion: 'gemini-3.5-flash',
+        model: 'gemini-3.5-flash',
         results: [{ index: 0, categoryId: 'snacks_drinks', confidence: 0.9, reason: 'ok' }],
       })
     );
     const out = await classifyItemsBatch(input, {});
-    expect(out).toEqual([{ index: 0, category: 'snacks_drinks', confidence: 0.9, reason: 'ok' }]);
+    expect(out).toEqual({
+      results: [{ index: 0, category: 'snacks_drinks', confidence: 0.9, reason: 'ok' }],
+      modelVersion: 'gemini-3.5-flash',
+    });
+  });
+
+  it('success:true 仅有废弃 model 字段 → 仍解析为 modelVersion', async () => {
+    (global as any).fetch = jest.fn(async () =>
+      fakeResponse(200, {
+        success: true,
+        model: 'gemini-3.5-flash',
+        results: [{ index: 0, categoryId: 'snacks_drinks', confidence: 0.9 }],
+      })
+    );
+    const out = await classifyItemsBatch(input, {});
+    expect(out?.modelVersion).toBe('gemini-3.5-flash');
+    expect(out?.results).toHaveLength(1);
   });
 
   it('success:false（HTTP 200）→ no-op，返回 null，不抛错', async () => {

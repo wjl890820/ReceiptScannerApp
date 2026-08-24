@@ -119,9 +119,26 @@ export function getGeminiApiKey(): string {
 /**
  * OCR Gemini model (Edge + DEV direct Gemini).
  * Prefer OCR_GEMINI_MODEL (to avoid conflicting with other modules like classify-item).
+ * Default: gemini-3.5-flash-lite — SEPARATE from semantic classify-items model.
  */
 export function getOcrGeminiModel(): string {
   return getExtraValue('OCR_GEMINI_MODEL') || getExtraValue('ocrGeminiModel') || 'gemini-3.5-flash-lite';
+}
+
+/**
+ * Semantic classify-items Gemini model SSOT (client mirror of Edge GEMINI_MODEL).
+ * Default: gemini-3.5-flash — NEVER fall back to OCR_GEMINI_MODEL.
+ */
+export const DEFAULT_SEMANTIC_GEMINI_MODEL = 'gemini-3.5-flash' as const;
+
+export function getSemanticGeminiModel(): string {
+  return (
+    getExtraValue('SEMANTIC_GEMINI_MODEL') ||
+    getExtraValue('EXPO_PUBLIC_SEMANTIC_GEMINI_MODEL') ||
+    getExtraValue('GEMINI_MODEL') ||
+    getExtraValue('semanticGeminiModel') ||
+    DEFAULT_SEMANTIC_GEMINI_MODEL
+  );
 }
 
 export function getCategoryAiItemCap(): number {

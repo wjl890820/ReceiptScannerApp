@@ -51,7 +51,10 @@ import { peekNextDraftId } from '@/lib/scanReviewQueue';
 import { logger } from '@/lib/logger';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
-import { bindMerchantAndInvalidateSemanticCache } from '@/lib/productIdentitySemanticBatch';
+import {
+  bindMerchantAndInvalidateSemanticCache,
+  refreshDeterministicProductAttributesFromCurrentName,
+} from '@/lib/productIdentitySemanticBatch';
 import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
 import { resolveInitialReviewDateStr, reviewDateNeedsConfirm } from '@/lib/scanReviewDateIsolation';
 import {
@@ -477,6 +480,9 @@ export default function ScanReviewScreen() {
           finalName === classifiedName ? (s as any)?.brand : null,
         useExistingClassificationEvidence: finalName === classifiedName,
       });
+      // Rebuild deterministic attrs from CURRENT edited name — never keep a
+      // stale spread snapshot (e.g. 500ml after rename to 1500ml).
+      refreshDeterministicProductAttributesFromCurrentName(identified);
       // Drop stale semantic evidence when name/merchant/deterministic attrs changed.
       bindMerchantAndInvalidateSemanticCache(identified, merchant.trim() || null);
       return identified;

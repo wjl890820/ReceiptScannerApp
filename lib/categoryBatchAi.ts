@@ -70,18 +70,50 @@ export type BatchAiResultItem = {
 export type RunBatchAiOptions = {
   merchantName?: string;
   locale?: string;
+  /** Optional override; production prefers modelVersion returned by classify-items. */
   modelVersion?: string | null;
 };
 
+/** Outcome of classify-items including the actual semantic modelVersion used. */
+export type ClassifyItemsBatchOutcome = {
+  results: BatchAiResultItem[];
+  /** Actual semantic model from Edge response (GEMINI_MODEL), never OCR model. */
+  modelVersion: string | null;
+};
+
 export type BatchAiDeps = {
-  /** Injectable network call (for tests). Defaults to classifyItemsBatch. */
+  /**
+   * Injectable network call (for tests). Defaults to classifyItemsBatch.
+   * May return ClassifyItemsBatchOutcome or a bare results array (legacy tests).
+   */
   classify?: (
     items: BatchAiInputItem[],
     opts: RunBatchAiOptions
-  ) => Promise<BatchAiResultItem[] | null>;
+  ) => Promise<ClassifyItemsBatchOutcome | BatchAiResultItem[] | null>;
   /** Injectable clock (for deterministic suggestedAt in tests). */
   now?: () => number;
 };
+
+function normalizeClassifyOutcome(
+  outcome: ClassifyItemsBatchOutcome | BatchAiResultItem[] | null | undefined,
+  fallbackModelVersion: string | null | undefined
+): { results: BatchAiResultItem[] | null; modelVersion: string | null } {
+  if (!outcome) return { results: null, modelVersion: null };
+  if (Array.isArray(outcome)) {
+    return {
+      results: outcome,
+      modelVersion: fallbackModelVersion ?? null,
+    };
+  }
+  const mv =
+    typeof outcome.modelVersion === 'string' && outcome.modelVersion.trim()
+      ? outcome.modelVersion.trim()
+      : fallbackModelVersion ?? null;
+  return {
+    results: Array.isArray(outcome.results) ? outcome.results : null,
+    modelVersion: mv,
+  };
+}
 
 export type RunBatchAiResult = {
   /** Whether a classify-items request was attempted. */
@@ -195,13 +227,14 @@ export function applySemanticFieldsToItem(
   ignoredSemantic: boolean;
   cache: MerchantProductSemanticCache;
 } {
-  // Deterministic structural attrs must come from name parse / stored deterministic
-  // snapshot — never from AI-merged product_attributes (that would poison fingerprints).
+  // Always recompute deterministic attrs from CURRENT name — never reuse a stale
+  // spread snapshot, and never feed AI-merged product_attributes back in.
   const codeAttrs =
-    (item?.deterministic_product_attributes as ProductAttributes | null | undefined) ??
-    (typeof item?.name === 'string' && item.name.trim()
+    typeof item?.name === 'string' && item.name.trim()
       ? normalizeProductForIdentity(item.name).attributes
-      : (item?.product_attributes as ProductAttributes | null | undefined) ?? null);
+      : typeof item?.raw_name === 'string' && item.raw_name.trim()
+        ? normalizeProductForIdentity(item.raw_name).attributes
+        : null;
   const aiItem: SemanticEnrichmentAiItem = {
     index: result.index,
     categoryId: result.category,
@@ -389,7 +422,7 @@ export function applyBatchAiResults(
 export async function classifyItemsBatch(
   items: BatchAiInputItem[],
   opts: RunBatchAiOptions
-): Promise<BatchAiResultItem[] | null> {
+): Promise<ClassifyItemsBatchOutcome | null> {
   if (!Array.isArray(items) || items.length === 0) return null;
 
   const supabaseUrl = getSupabaseUrl();
@@ -519,14 +552,24 @@ export async function classifyItemsBatch(
       }))
       .filter((r: BatchAiResultItem) => Number.isInteger(r.index));
 
+    // Prefer explicit modelVersion; fall back to deprecated `model` alias.
+    // Never invent from OCR model config.
+    const modelVersion =
+      typeof data?.modelVersion === 'string' && data.modelVersion.trim()
+        ? data.modelVersion.trim()
+        : typeof data?.model === 'string' && data.model.trim()
+          ? data.model.trim()
+          : null;
+
     if (__DEV__) {
       console.log('[CategoryBatchAI] classify-items response', {
         requestId,
         elapsedMs: Date.now() - startMs,
         resultCount: results.length,
+        modelVersion,
       });
     }
-    return results;
+    return { results, modelVersion };
   } catch (error: any) {
     clearTimeout(timeoutId);
     const isTimeout = error?.name === 'AbortError';
@@ -568,8 +611,12 @@ export async function runBatchAiFallback(
 
   const classify = deps?.classify ?? classifyItemsBatch;
   let results: BatchAiResultItem[] | null = null;
+  let responseModelVersion: string | null = opts.modelVersion ?? null;
   try {
-    results = await classify(selected, opts);
+    const outcome = await classify(selected, opts);
+    const normalized = normalizeClassifyOutcome(outcome, opts.modelVersion);
+    results = normalized.results;
+    responseModelVersion = normalized.modelVersion;
   } catch (error: any) {
     // 双保险：网络层已吞错，这里再兜底一次，绝不冒泡。
     if (__DEV__) console.warn(`[CategoryBatchAI] runBatchAiFallback error: ${error?.message || ''}`);
@@ -583,7 +630,8 @@ export async function runBatchAiFallback(
 
   const applied = applyBatchAiResults(items, results, {
     now: deps?.now,
-    modelVersion: opts.modelVersion ?? null,
+    // Prefer actual modelVersion returned by classify-items for cache writes.
+    modelVersion: responseModelVersion,
   });
   semantic.semanticItemsApplied = applied.semantic.semanticItemsApplied;
   semantic.semanticItemsSuggested = applied.semantic.semanticItemsSuggested;

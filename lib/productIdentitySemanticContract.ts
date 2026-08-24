@@ -251,34 +251,36 @@ export function buildSemanticInputFingerprint(input: {
 
 /**
  * Active semantic model pin for cache validation.
- * Empty/null = no pin (any stored modelVersion accepted).
- * When set, cached modelVersion must match exactly — never read "current"
- * from the cached record itself.
+ * SSOT = getSemanticGeminiModel() (classify-items / GEMINI_MODEL).
+ * NEVER uses OCR_GEMINI_MODEL. Never inferred from cached records.
  */
-export function getActiveSemanticModelVersion(): string | null {
+export function getActiveSemanticModelVersion(): string {
   try {
     // Lazy require avoids circular env imports in pure contract tests.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const env = require('./env') as {
-      getOcrGeminiModel?: () => string;
+      getSemanticGeminiModel?: () => string;
+      DEFAULT_SEMANTIC_GEMINI_MODEL?: string;
     };
     const pinned =
       typeof process !== 'undefined'
         ? String(
             (process as NodeJS.Process).env?.EXPO_PUBLIC_SEMANTIC_MODEL_VERSION ||
               (process as NodeJS.Process).env?.SEMANTIC_MODEL_VERSION ||
+              (process as NodeJS.Process).env?.EXPO_PUBLIC_SEMANTIC_GEMINI_MODEL ||
+              (process as NodeJS.Process).env?.SEMANTIC_GEMINI_MODEL ||
+              (process as NodeJS.Process).env?.GEMINI_MODEL ||
               ''
           ).trim()
         : '';
     if (pinned) return pinned;
-    // Prefer explicit OCR/classify model when available as the active pin.
-    const fromEnv =
-      typeof env.getOcrGeminiModel === 'function'
-        ? String(env.getOcrGeminiModel() || '').trim()
-        : '';
-    return fromEnv || null;
+    if (typeof env.getSemanticGeminiModel === 'function') {
+      const v = String(env.getSemanticGeminiModel() || '').trim();
+      if (v) return v;
+    }
+    return env.DEFAULT_SEMANTIC_GEMINI_MODEL || 'gemini-3.5-flash';
   } catch {
-    return null;
+    return 'gemini-3.5-flash';
   }
 }
 

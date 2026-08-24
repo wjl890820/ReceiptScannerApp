@@ -407,11 +407,15 @@ serve(async (req) => {
     }
 
     // AI 正常返回（即便没有可用分类）→ success:true，results 可为空。
-    console.log(`[classify-items] t=${Date.now() - t0}ms items=${items.length} results=${results.length}`);
+    const modelVersion = Deno.env.get('GEMINI_MODEL') ?? GEMINI_MODEL;
+    console.log(`[classify-items] t=${Date.now() - t0}ms items=${items.length} results=${results.length} model=${modelVersion}`);
     return jsonResponse(
       {
         ...okResults(results),
-        model: Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash',
+        /** Actual semantic model used for this request (cache SSOT). */
+        modelVersion,
+        /** @deprecated alias of modelVersion — keep for older clients. */
+        model: modelVersion,
       },
       200
     );

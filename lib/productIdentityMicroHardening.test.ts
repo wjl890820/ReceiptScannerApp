@@ -18,7 +18,9 @@ jest.mock('./env', () => ({
   isJwtLike: () => true,
   getCategoryBatchAiTimeoutMs: () => 9000,
   getCategoryBatchAiMaxItems: () => 40,
-  getOcrGeminiModel: () => '',
+  getOcrGeminiModel: () => 'gemini-3.5-flash-lite',
+  getSemanticGeminiModel: () => 'gemini-3.5-flash',
+  DEFAULT_SEMANTIC_GEMINI_MODEL: 'gemini-3.5-flash',
   isProductIdentityPriceHistoryV1Enabled: () => true,
 }));
 
@@ -28,6 +30,7 @@ import {
   type IdentityConsumerObservation,
 } from './productIdentityConsumer';
 import { buildProductAttributes } from './productIdentityContract';
+import { normalizeProductForIdentity } from './normalizeProductForIdentity';
 import {
   evaluatePriceObservationQuality,
   resolveQuantityOcrCorroboration,
@@ -125,15 +128,12 @@ describe('Micro — production quantity corroboration path', () => {
 
 describe('Micro — semantic fingerprint canonical contract', () => {
   function enrichedItem(overrides: Record<string, unknown> = {}) {
-    const rawName = String(overrides.name ?? '午後T MLK 500');
+    const rawName = String(overrides.name ?? '午後T MLK 500ml');
     const merchantKey = (overrides.merchant_key as string | null) ?? 'aeon';
     const attributes =
       (overrides.deterministic_product_attributes as ReturnType<
         typeof buildProductAttributes
-      >) ??
-      buildProductAttributes([
-        { dimension: 'volume', value: 500, unit: 'ml', source: 'parsed' },
-      ]);
+      >) ?? normalizeProductForIdentity(rawName).attributes;
     const applied = applySemanticEnrichmentEvidence(
       {
         index: 0,
@@ -154,7 +154,7 @@ describe('Micro — semantic fingerprint canonical contract', () => {
       attributes,
       semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
     });
-    const cache = buildSemanticCacheRecord(applied, 'gemini-test', fp);
+    const cache = buildSemanticCacheRecord(applied, 'gemini-3.5-flash', fp);
     return {
       name: rawName,
       merchant_key: merchantKey,
@@ -201,10 +201,21 @@ describe('Micro — semantic fingerprint canonical contract', () => {
   });
 
   it('deterministic 500ml → 1L → miss', () => {
-    const item = enrichedItem();
-    item.deterministic_product_attributes = buildProductAttributes([
-      { dimension: 'volume', value: 1000, unit: 'ml', source: 'parsed' },
+    const item = enrichedItem({ name: '午後の紅茶ミルク 500ml' });
+    // Align cache FP with 500ml name first.
+    const attrs500 = buildProductAttributes([
+      { dimension: 'volume', value: 500, unit: 'ml', source: 'parsed' },
     ]);
+    item.deterministic_product_attributes = attrs500;
+    const fp = buildSemanticInputFingerprint({
+      rawName: '午後の紅茶ミルク 500ml',
+      merchantKey: 'aeon',
+      attributes: attrs500,
+      semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
+    });
+    (item.semantic_json as { inputFingerprint: string }).inputFingerprint = fp;
+
+    item.name = '午後の紅茶ミルク 1L';
     expect(
       invalidateStaleSemanticCacheOnItem(item, { activeModelVersion: null })
     ).toBe(true);

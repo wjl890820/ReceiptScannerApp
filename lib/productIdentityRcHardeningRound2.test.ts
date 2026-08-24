@@ -14,6 +14,9 @@ jest.mock('./env', () => ({
   isJwtLike: () => true,
   getCategoryBatchAiTimeoutMs: () => 9000,
   getCategoryBatchAiMaxItems: () => 40,
+  getOcrGeminiModel: () => 'gemini-3.5-flash-lite',
+  getSemanticGeminiModel: () => 'gemini-3.5-flash',
+  DEFAULT_SEMANTIC_GEMINI_MODEL: 'gemini-3.5-flash',
   isProductIdentityPriceHistoryV1Enabled: () => true,
 }));
 jest.mock('./deviceId', () => ({ getDeviceId: async () => 'test-device' }));
@@ -56,6 +59,7 @@ import {
   type ReceiptItemIndexReceipt,
 } from './receiptItemIndex';
 import { buildProductAttributes } from './productIdentityContract';
+import { normalizeProductForIdentity } from './normalizeProductForIdentity';
 
 describe('Round2 — identity price-history currency completeness', () => {
   it('JPY + JPY → eligible', () => {
@@ -431,13 +435,14 @@ describe('Round2 — date-only reconciled duplicate gate', () => {
 
 describe('Round2 — semantic cache fingerprint gates hits', () => {
   function cachedItem(overrides: Record<string, unknown> = {}) {
-    const rawName = String(overrides.name ?? '午後T MLK 500');
+    const rawName = String(overrides.name ?? '午後T MLK 500ml');
     const merchantKey = (overrides.merchant_key as string | null) ?? 'aeon';
     const attributes =
       (overrides.product_attributes as ReturnType<typeof buildProductAttributes>) ??
-      buildProductAttributes([
-        { dimension: 'volume', value: 500, unit: 'ml', source: 'parsed' },
-      ]);
+      (overrides.deterministic_product_attributes as ReturnType<
+        typeof buildProductAttributes
+      >) ??
+      normalizeProductForIdentity(rawName).attributes;
     const applied = applySemanticEnrichmentEvidence(
       {
         index: 0,
@@ -455,7 +460,7 @@ describe('Round2 — semantic cache fingerprint gates hits', () => {
       attributes,
       semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
     });
-    const cache = buildSemanticCacheRecord(applied, 'test-model', fp);
+    const cache = buildSemanticCacheRecord(applied, 'gemini-3.5-flash', fp);
     return {
       name: rawName,
       merchant_key: merchantKey,
@@ -498,14 +503,29 @@ describe('Round2 — semantic cache fingerprint gates hits', () => {
     expect(item.semantic_status).toBe('needs_enrichment');
   });
 
-  it('deterministic spec change → cache miss', () => {
-    const item = cachedItem();
-    item.deterministic_product_attributes = buildProductAttributes([
-      { dimension: 'volume', value: 1500, unit: 'ml', source: 'parsed' },
+  it('name spec change 500ml→1500ml → cache miss', () => {
+    const item = cachedItem({ name: 'コーラ 500ml' });
+    // Rebuild fingerprint for 500ml name so cache matches pre-edit state.
+    const attrs500 = buildProductAttributes([
+      { dimension: 'volume', value: 500, unit: 'ml', source: 'parsed' },
     ]);
-    item.product_attributes = item.deterministic_product_attributes;
+    item.deterministic_product_attributes = attrs500;
+    item.product_attributes = attrs500;
+    const fp = buildSemanticInputFingerprint({
+      rawName: 'コーラ 500ml',
+      merchantKey: 'aeon',
+      attributes: attrs500,
+      semanticResolverVersion: PRODUCT_IDENTITY_SEMANTIC_VERSION,
+    });
+    (item.semantic_json as { inputFingerprint: string }).inputFingerprint = fp;
+
+    item.name = 'コーラ 1500ml';
     expect(invalidateStaleSemanticCacheOnItem(item)).toBe(true);
     expect(item.semantic_status).toBe('needs_enrichment');
+    const vol = (item.deterministic_product_attributes as {
+      entries?: Array<{ dimension: string; value: unknown }>;
+    })?.entries?.find((e) => e.dimension === 'volume');
+    expect(vol?.value).toBe(1500);
   });
 
   it('gate requires fingerprint match for enriched status', () => {

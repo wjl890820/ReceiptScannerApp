@@ -85,21 +85,42 @@ function itemMerchantKey(it: any): string | null {
 }
 
 /**
- * Deterministic attrs for fingerprinting — never AI-merged product_attributes /
- * semantic_json.attributes (those would self-invalidate the cache key).
+ * Parse deterministic ProductAttributes from the CURRENT item name.
+ * Never reads AI-merged product_attributes / semantic_json.attributes.
+ * Never trusts a stale deterministic_product_attributes snapshot after rename.
+ */
+export function parseDeterministicProductAttributesFromCurrentName(
+  it: any
+): ProductAttributes | null {
+  const raw = itemRawName(it);
+  if (!raw.trim()) return null;
+  return normalizeProductForIdentity(raw).attributes;
+}
+
+/**
+ * Recompute and persist deterministic_product_attributes from CURRENT name.
+ * Call on structural edits (name/spec) and before semantic fingerprint / invalidate.
+ * AI-enriched attributes must NEVER be written here.
+ */
+export function refreshDeterministicProductAttributesFromCurrentName(
+  it: any
+): ProductAttributes | null {
+  if (!it || typeof it !== 'object') return null;
+  const attrs = parseDeterministicProductAttributesFromCurrentName(it);
+  if (attrs) {
+    it.deterministic_product_attributes = attrs;
+  }
+  return attrs;
+}
+
+/**
+ * Deterministic attrs for fingerprinting — always from CURRENT name.
+ * Stale deterministic_product_attributes snapshots are ignored.
  */
 export function deterministicAttributesForSemanticFingerprint(
   it: any
 ): ProductAttributes | null {
-  if (
-    it?.deterministic_product_attributes &&
-    typeof it.deterministic_product_attributes === 'object'
-  ) {
-    return it.deterministic_product_attributes as ProductAttributes;
-  }
-  const raw = itemRawName(it);
-  if (!raw.trim()) return null;
-  return normalizeProductForIdentity(raw).attributes;
+  return parseDeterministicProductAttributesFromCurrentName(it);
 }
 
 function clearSemanticEvidenceFields(it: any): void {
@@ -112,10 +133,9 @@ function clearSemanticEvidenceFields(it: any): void {
   it.suggestedBrand = null;
   it.semantic_product_type = null;
   it.semantic_tags = null;
-  // Restore deterministic attrs; never delete them.
-  const det = deterministicAttributesForSemanticFingerprint(it);
+  // Restore deterministic attrs from CURRENT name; never delete user transaction truth.
+  const det = refreshDeterministicProductAttributesFromCurrentName(it);
   if (det) {
-    it.deterministic_product_attributes = det;
     it.product_attributes = det;
   }
 }
@@ -132,7 +152,8 @@ export function invalidateStaleSemanticCacheOnItem(
   const status = it.semantic_status as SemanticStatus | null | undefined;
   if (status !== 'enriched' && status !== 'sufficient') return false;
   const cache = readSemanticCache(it);
-  const attrs = deterministicAttributesForSemanticFingerprint(it);
+  // Keep stored deterministic snapshot in sync with CURRENT name before compare.
+  const attrs = refreshDeterministicProductAttributesFromCurrentName(it);
   const currentFp = buildSemanticInputFingerprint({
     rawName: itemRawName(it),
     merchantKey: itemMerchantKey(it),
