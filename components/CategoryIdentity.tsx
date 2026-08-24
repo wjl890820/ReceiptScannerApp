@@ -1,9 +1,9 @@
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { CategoryIdentityIcon } from '@/components/CategoryIdentityIcon';
 import { getCategoryPresentation } from '@/lib/categoryPalette';
-import { UI_COLORS, UI_RADIUS } from '@/lib/uiTokens';
+import { UI_COLORS } from '@/lib/uiTokens';
 
 export function CategoryIdentity({
   category,
@@ -19,18 +19,7 @@ export function CategoryIdentity({
 
   return (
     <View style={styles.row}>
-      <View
-        style={[
-          styles.iconTile,
-          { width: size, height: size, borderColor: presentation.color },
-        ]}
-      >
-        <MaterialIcons
-          name={presentation.icon}
-          size={compact ? 15 : 18}
-          color={presentation.color}
-        />
-      </View>
+      <CategoryIdentityIcon category={category} size={size} />
       {showLabel ? (
         <Text style={[styles.label, compact && styles.compactLabel]} numberOfLines={1}>
           {presentation.label}
@@ -46,14 +35,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 9,
     minWidth: 0,
-  },
-  iconTile: {
-    flexShrink: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: UI_RADIUS.control,
-    borderWidth: StyleSheet.hairlineWidth,
-    backgroundColor: UI_COLORS.surface,
   },
   label: {
     flexShrink: 1,

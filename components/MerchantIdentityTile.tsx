@@ -1,13 +1,9 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { merchantAccentColor } from '@/lib/merchantAccent';
 import { normalizeMerchantName } from '@/lib/productNormalizer';
-
-export function merchantIdentityGlyph(merchant: string | null | undefined): string {
-  const normalized = (merchant ?? '').trim();
-  return Array.from(normalized)[0]?.toUpperCase() ?? '?';
-}
 
 export function MerchantIdentityTile({
   merchant,
@@ -36,9 +32,11 @@ export function MerchantIdentityTile({
         },
       ]}
     >
-      <Text style={[styles.glyph, { fontSize: Math.max(14, size * 0.42) }]}>
-        {merchantIdentityGlyph(merchant)}
-      </Text>
+      <MaterialIcons
+        name="storefront"
+        size={Math.max(17, Math.round(size * 0.5))}
+        color="#FFFFFF"
+      />
     </View>
   );
 }
@@ -48,9 +46,5 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  glyph: {
-    color: '#FFFFFF',
-    fontWeight: '900',
   },
 });

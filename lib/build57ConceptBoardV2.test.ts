@@ -30,7 +30,8 @@ describe('Build 57 Concept Board v2.0 presentation contracts', () => {
     expect(merchantAccentColor('コストコ')).toBe(merchantAccentColor('コストコ'));
     const tile = source('components/MerchantIdentityTile.tsx');
     expect(tile).toContain('merchantAccentColor(');
-    expect(tile).toContain('merchantIdentityGlyph');
+    expect(tile).toContain('name="storefront"');
+    expect(tile).not.toContain('merchantIdentityGlyph');
   });
 
   it('groups visible receipt rows by localized Tokyo month without changing rows', () => {

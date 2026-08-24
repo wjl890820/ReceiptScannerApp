@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Keyboard,
   Pressable,
   RefreshControl,
@@ -16,8 +17,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { CategoryIdentity } from '@/components/CategoryIdentity';
+import { MerunoDisclosureIndicator } from '@/components/MerunoDisclosureIndicator';
+import {
+  MerunoGroupedList,
+  MerunoGroupedRow,
+} from '@/components/MerunoGroupedList';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { deleteReceipts, listReceipts, type ReceiptListRow } from '@/lib/db';
 import type { AnalysisDDuplicateGroup } from '@/lib/analysisDDuplicateAudit';
@@ -463,7 +468,6 @@ export default function HistoryScreen() {
           renderSectionHeader={({ section }) => (
             <Text style={styles.sectionTitle}>{section.title}</Text>
           )}
-          ItemSeparatorComponent={() => <View style={styles.sep} />}
           SectionSeparatorComponent={() => <View style={styles.sectionSep} />}
           ListEmptyComponent={
             <View style={styles.emptyState}>
@@ -477,7 +481,8 @@ export default function HistoryScreen() {
               )}
             </View>
           }
-          renderItem={({ item: entry }) => {
+          renderItem={({ item: entry, index, section }) => {
+            const showDivider = index < section.data.length - 1;
             if (entry.kind === 'item') {
               const result = entry.result;
               const merchant = formatHistoryMerchantDisplay(
@@ -498,47 +503,49 @@ export default function HistoryScreen() {
               const totalLabel =
                 result.lineTotal == null ? '—' : formatJPY(result.lineTotal);
               return (
-                <Pressable
+                <MerunoGroupedRow
                   onPress={() => onProductSearchResultPress(result)}
-                  accessibilityRole="button"
                   accessibilityLabel={buildHistoryReceiptRowA11yLabel({
                     merchant: `${t('history.search.productResultHint')}: ${result.displayName}`,
                     dateLine: `${merchant} · ${formatDate(result.transactionAt)}`,
                     totalLabel,
                   })}
-                  style={({ pressed }) => [
-                    styles.card,
-                    pressed && { opacity: 0.6 },
-                  ]}
+                  showDivider={showDivider}
+                  minHeight={92}
                 >
-                  <View style={styles.cardInner}>
-                    {result.category ? (
-                      <CategoryIdentity
-                        category={result.category}
-                        compact
-                        showLabel={false}
-                      />
-                    ) : null}
-                    <View style={styles.cardBody}>
-                      <Text style={styles.resultTypeHint}>
-                        {t('history.search.productResultHint')}
-                      </Text>
-                      <View style={styles.row}>
-                        <Text style={styles.itemName} numberOfLines={2}>
-                          {result.displayName}
+                  {({ pressed }) => (
+                    <View style={styles.rowInner}>
+                      {result.category ? (
+                        <CategoryIdentity
+                          category={result.category}
+                          compact
+                          showLabel={false}
+                        />
+                      ) : null}
+                      <View style={styles.rowBody}>
+                        <Text style={styles.resultTypeHint}>
+                          {t('history.search.productResultHint')}
                         </Text>
-                        <Text style={styles.total}>{totalLabel}</Text>
+                        <View style={styles.primaryLine}>
+                          <Text style={styles.itemName} numberOfLines={2}>
+                            {result.displayName}
+                          </Text>
+                          <Text style={styles.total}>{totalLabel}</Text>
+                        </View>
+                        <Text style={styles.meta}>
+                          {merchant} · {formatDate(result.transactionAt)}
+                        </Text>
+                        {itemMeta.length > 0 && (
+                          <Text style={styles.categories}>{itemMeta.join(' · ')}</Text>
+                        )}
                       </View>
-                      <Text style={styles.meta}>
-                        {merchant} · {formatDate(result.transactionAt)}
-                      </Text>
-                      {itemMeta.length > 0 && (
-                        <Text style={styles.cats}>{itemMeta.join(' · ')}</Text>
-                      )}
+                      <MerunoDisclosureIndicator
+                        kind="crossEntity"
+                        pressed={pressed}
+                      />
                     </View>
-                    <IconSymbol name="chevron.right" size={18} color="#999" />
-                  </View>
-                </Pressable>
+                  )}
+                </MerunoGroupedRow>
               );
             }
 
@@ -559,48 +566,44 @@ export default function HistoryScreen() {
               receipt.tax_is_known
             );
             return (
-              <Pressable
+              <MerunoGroupedRow
                 onPress={() => onSearchResultPress(receipt.id)}
-                accessibilityRole="button"
                 accessibilityLabel={buildHistoryReceiptRowA11yLabel({
                   merchant: `${t('history.search.receiptResultHint')}: ${merchant}`,
                   dateLine: metaLine,
                   totalLabel: formatJPY(receipt.total),
                 })}
-                style={({ pressed }) => [
-                  styles.card,
-                  pressed && { opacity: 0.6 },
-                ]}
+                showDivider={showDivider}
+                minHeight={92}
               >
-                <View style={styles.cardInner}>
+                <View style={styles.rowInner}>
                   <MerchantIdentityTile
                     merchant={merchant}
                     merchantKey={receipt.merchant_normalized}
                     size={36}
                   />
-                  <View style={styles.cardBody}>
+                  <View style={styles.rowBody}>
                     <Text style={styles.resultTypeHint}>
                       {t('history.search.receiptResultHint')}
                     </Text>
-                    <View style={styles.row}>
+                    <View style={styles.primaryLine}>
                       <Text style={styles.merchant}>{merchant}</Text>
                       <Text style={styles.total}>{formatJPY(receipt.total)}</Text>
                     </View>
                     <Text style={styles.meta}>{metaLine}</Text>
                     {topCats.length > 0 && (
-                      <Text style={styles.cats}>{topCats.join(' · ')}</Text>
+                      <Text style={styles.categories}>{topCats.join(' · ')}</Text>
                     )}
                   </View>
-                  <IconSymbol name="chevron.right" size={18} color="#999" />
                 </View>
-              </Pressable>
+              </MerunoGroupedRow>
             );
           }}
         />
       ) : (
-        <SectionList
-          sections={historySections}
-          keyExtractor={(item) => item.id}
+        <FlatList
+          data={historySections}
+          keyExtractor={(section) => section.title}
           style={styles.list}
           contentContainerStyle={{ paddingBottom: listBottomPad }}
           keyboardShouldPersistTaps="handled"
@@ -608,82 +611,98 @@ export default function HistoryScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
-          stickySectionHeadersEnabled={false}
-          renderSectionHeader={({ section }) => (
-            <Text style={styles.monthTitle}>{section.title}</Text>
-          )}
-          SectionSeparatorComponent={() => <View style={styles.monthGap} />}
-          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          ItemSeparatorComponent={() => <View style={styles.monthGap} />}
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Text style={styles.emptyText}>{t('history.list.empty')}</Text>
             </View>
           }
-          renderItem={({ item }) => {
-            const topCats = buildTopCategories(item.analysis_json, 2);
-            const checked = selectedIds.has(item.id);
-            const merchant = formatHistoryMerchantDisplay(
-              item,
-              t('common.unknownMerchant')
-            );
-            const metaLine = buildHistoryMetaLine(
-              item.transaction_at,
-              item.created_at,
-              t('history.detail.taxLabel'),
-              item.tax,
-              formatDate,
-              t('history.list.dateUnknown'),
-              t('common.uncategorizedTag'),
-              item.tax_is_known
-            );
-
+          renderItem={({ item: section }) => {
             return (
-              <Pressable
-                onPress={() => onItemPress(item)}
-                accessibilityRole="button"
-                accessibilityState={selectMode ? { selected: checked } : undefined}
-                accessibilityLabel={buildHistoryReceiptRowA11yLabel({
-                  merchant,
-                  dateLine: metaLine,
-                  totalLabel: formatJPY(item.total),
-                })}
-                style={({ pressed }) => [
-                  styles.card,
-                  pressed && { opacity: 0.6 },
-                ]}
-              >
-                <View style={styles.cardInner}>
-                  {selectMode && (
-                    <View
-                      style={[styles.checkbox, checked && styles.checkboxChecked]}
-                      accessibilityElementsHidden
-                      importantForAccessibility="no-hide-descendants"
-                    >
-                      {checked ? <Text style={styles.checkmark}>✓</Text> : null}
-                    </View>
-                  )}
-                  <MerchantIdentityTile
-                    merchant={merchant}
-                    merchantKey={item.merchant_normalized}
-                    size={38}
-                  />
-                  <View style={styles.cardBody}>
-                    <View style={styles.row}>
-                      <Text style={styles.merchant}>{merchant}</Text>
-                      <Text style={styles.total}>{formatJPY(item.total)}</Text>
-                    </View>
-                    <Text style={styles.meta}>{metaLine}</Text>
-                    {topCats.length > 0 ? (
-                      <Text style={styles.cats}>{topCats.join(' · ')}</Text>
-                    ) : (
-                      <Text style={styles.catsMuted}>{t('history.list.noCategoryInfo')}</Text>
-                    )}
-                  </View>
-                  {!selectMode ? (
-                    <IconSymbol name="chevron.right" size={18} color="#999" />
-                  ) : null}
-                </View>
-              </Pressable>
+              <View>
+                <Text style={styles.monthTitle}>{section.title}</Text>
+                <MerunoGroupedList>
+                  {section.data.map((item, index) => {
+                    const topCats = buildTopCategories(item.analysis_json, 2);
+                    const checked = selectedIds.has(item.id);
+                    const merchant = formatHistoryMerchantDisplay(
+                      item,
+                      t('common.unknownMerchant')
+                    );
+                    const metaLine = buildHistoryMetaLine(
+                      item.transaction_at,
+                      item.created_at,
+                      t('history.detail.taxLabel'),
+                      item.tax,
+                      formatDate,
+                      t('history.list.dateUnknown'),
+                      t('common.uncategorizedTag'),
+                      item.tax_is_known
+                    );
+
+                    return (
+                      <MerunoGroupedRow
+                        key={item.id}
+                        onPress={() => onItemPress(item)}
+                        accessibilityState={
+                          selectMode ? { selected: checked } : undefined
+                        }
+                        accessibilityLabel={buildHistoryReceiptRowA11yLabel({
+                          merchant,
+                          dateLine: metaLine,
+                          totalLabel: formatJPY(item.total),
+                        })}
+                        showDivider={index < section.data.length - 1}
+                        minHeight={92}
+                      >
+                        <View style={styles.rowInner}>
+                          {selectMode && (
+                            <View
+                              style={[
+                                styles.checkbox,
+                                checked && styles.checkboxChecked,
+                              ]}
+                              accessibilityElementsHidden
+                              importantForAccessibility="no-hide-descendants"
+                            >
+                              {checked ? (
+                                <Text style={styles.checkmark}>✓</Text>
+                              ) : null}
+                            </View>
+                          )}
+                          <MerchantIdentityTile
+                            merchant={merchant}
+                            merchantKey={item.merchant_normalized}
+                            size={38}
+                          />
+                          <View style={styles.rowBody}>
+                            <View style={styles.primaryLine}>
+                              <Text style={styles.merchant} numberOfLines={1}>
+                                {merchant}
+                              </Text>
+                              <Text style={styles.total} numberOfLines={1}>
+                                {formatJPY(item.total)}
+                              </Text>
+                            </View>
+                            <Text style={styles.meta} numberOfLines={1}>
+                              {metaLine}
+                            </Text>
+                            {topCats.length > 0 ? (
+                              <Text style={styles.categories} numberOfLines={1}>
+                                {topCats.join(' · ')}
+                              </Text>
+                            ) : (
+                              <Text style={styles.categoriesMuted} numberOfLines={1}>
+                                {t('history.list.noCategoryInfo')}
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                      </MerunoGroupedRow>
+                    );
+                  })}
+                </MerunoGroupedList>
+              </View>
             );
           }}
         />
@@ -810,11 +829,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: UI_COLORS.background,
   },
-  sep: {
-    height: StyleSheet.hairlineWidth,
-    marginLeft: 54,
-    backgroundColor: UI_COLORS.borderSubtle,
-  },
   sectionSep: {
     height: 8,
   },
@@ -831,7 +845,7 @@ const styles = StyleSheet.create({
     backgroundColor: UI_COLORS.background,
     color: UI_COLORS.textPrimary,
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '800',
   },
   monthGap: {
     height: 12,
@@ -845,17 +859,12 @@ const styles = StyleSheet.create({
   emptyText: {
     color: UI_COLORS.textSecondary,
   },
-  card: {
-    backgroundColor: UI_COLORS.surface,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-  },
-  cardInner: {
+  rowInner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  cardBody: {
+  rowBody: {
     flex: 1,
     minWidth: 0,
   },
@@ -877,8 +886,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-  row: {
+  primaryLine: {
     flexDirection: 'row',
+    alignItems: 'baseline',
     justifyContent: 'space-between',
     gap: 12,
   },
@@ -892,8 +902,9 @@ const styles = StyleSheet.create({
   },
   merchant: {
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '700',
     flexShrink: 1,
+    color: UI_COLORS.textPrimary,
   },
   itemName: {
     flex: 1,
@@ -903,7 +914,8 @@ const styles = StyleSheet.create({
   },
   total: {
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '700',
+    color: UI_COLORS.textPrimary,
     fontVariant: ['tabular-nums'],
   },
   meta: {
@@ -911,16 +923,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: UI_COLORS.textSecondary,
   },
-  cats: {
-    marginTop: 6,
+  categories: {
+    marginTop: 5,
     fontSize: 13,
-    color: '#333',
-    fontWeight: '600',
+    color: UI_COLORS.textSecondary,
+    fontWeight: '400',
   },
-  catsMuted: {
-    marginTop: 6,
+  categoriesMuted: {
+    marginTop: 5,
     fontSize: 13,
-    color: '#999',
+    color: UI_COLORS.textMuted,
+    fontWeight: '400',
   },
   bottomBar: {
     flexDirection: 'row',
