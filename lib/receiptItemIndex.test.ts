@@ -246,14 +246,14 @@ describe('buildReceiptItemIndexRows', () => {
     expect(row.purchase_quantity).toBe(2);
   });
 
-  it('defaults invalid quantity to one and invalid amount to null unit price', () => {
+  it('preserves explicit invalid quantity as null and nulls unit price', () => {
     const [row] = buildReceiptItemIndexRows(
       receipt('defensive', [
         { name: '商品', quantity: 0, lineTotal: 'bad', unitPrice: 999 },
       ])
     );
 
-    expect(row.purchase_quantity).toBe(1);
+    expect(row.purchase_quantity).toBeNull();
     expect(row.line_total).toBe(0);
     expect(row.purchase_unit_price).toBeNull();
   });

@@ -85,6 +85,8 @@ export type AnalysisDDuplicateReceiptSummary = {
   merchantLabel: string;
   transactionAt: number | null;
   hasValidTransactionAt: boolean;
+  /** False for date-only midnight — not exact-time evidence. */
+  hasExactTransactionTime: boolean;
   total: number;
   tax: number | null;
   taxKnown: boolean;
@@ -404,6 +406,7 @@ export function summarizeReceiptForDuplicateAudit(
       ? receipt.transaction_at
       : null,
     hasValidTransactionAt: hasValidTransactionAt(receipt),
+    hasExactTransactionTime: hasExactTransactionTime(receipt),
     total: Number(receipt.total) || 0,
     tax: tax.value,
     taxKnown: tax.known,
@@ -472,7 +475,8 @@ export function evaluateReconciledStructuralExactPair(
   overage: number;
   taxDelta: number | null;
 } | null {
-  if (!a.hasValidTransactionAt || !b.hasValidTransactionAt) return null;
+  // Date-only midnight is not exact-time evidence (same rule as primary fingerprints).
+  if (!a.hasExactTransactionTime || !b.hasExactTransactionTime) return null;
   if (!a.merchantKey || a.merchantKey !== b.merchantKey) return null;
   if (a.transactionAt == null || a.transactionAt !== b.transactionAt) return null;
   if (!moneyEquals(a.total, b.total)) return null;

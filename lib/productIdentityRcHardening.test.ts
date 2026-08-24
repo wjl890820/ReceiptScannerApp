@@ -286,23 +286,28 @@ describe('RC Hardening — quantity quality', () => {
     expect(q.includeInHistory).toBe(false);
   });
 
-  it('flags reciprocal half-price OCR quantity anomaly (400→200)', () => {
+  it('flags reciprocal half-price as caution promo without qty OCR corroboration', () => {
     const q = evaluatePriceObservationQuality({
       lineTotal: 200,
       quantity: 1,
-      peerPurchaseUnitPrices: [400, 400, 398],
+      peerPurchaseUnitPrices: [400, 400, 400],
       rawName: '商品',
     });
+    expect(q.quality).toBe('usable_with_caution');
+    expect(q.includeInHistory).toBe(true);
     expect(q.includeInTrend).toBe(false);
-    expect(
-      q.quality === 'suspected_anomaly' ||
-        q.suspectedIntegerMultiple === 0.5 ||
-        q.suspectedIntegerMultiple === 2 ||
-        q.reasons.some(
-          (r) =>
-            String(r).includes('anomaly') || String(r).includes('quantity')
-        )
-    ).toBe(true);
+  });
+
+  it('allows suspected_anomaly for reciprocal half-price when qty OCR is corroborated', () => {
+    const q = evaluatePriceObservationQuality({
+      lineTotal: 200,
+      quantity: 1,
+      peerPurchaseUnitPrices: [400, 400, 400],
+      rawName: '商品',
+      quantityOcrCorroborated: true,
+    });
+    expect(q.quality).toBe('suspected_anomaly');
+    expect(q.includeInHistory).toBe(false);
   });
 });
 

@@ -130,6 +130,30 @@ function knownCurrency(value: unknown): string | null {
   return currency;
 }
 
+/**
+ * Selected MerchantProduct history currency gate:
+ * every observation must have a known currency, and all must be identical.
+ * Never defaults to JPY. Any unknown → not eligible.
+ */
+export function gateIdentityHistoryCurrencies(
+  currencies: ReadonlyArray<unknown>
+):
+  | { status: 'ok'; currency: string }
+  | { status: 'mixed_currency' | 'unknown_currency'; currency: null } {
+  const known = currencies.map(knownCurrency);
+  if (known.some((c) => c == null)) {
+    return { status: 'unknown_currency', currency: null };
+  }
+  const set = new Set(known as string[]);
+  if (set.size === 0) {
+    return { status: 'unknown_currency', currency: null };
+  }
+  if (set.size > 1) {
+    return { status: 'mixed_currency', currency: null };
+  }
+  return { status: 'ok', currency: [...set][0]! };
+}
+
 function dimensionForRow(row: ProductPriceHistoryRow): PriceDimension | null {
   const dimensions: PriceDimension[] = [];
   if (positiveFinite(row.volumeBaseMl)) dimensions.push('volume');
@@ -454,21 +478,22 @@ export async function loadProductPriceHistoryWithDb(
         preferredMpId
       );
       if (identityView) {
-        const identityCurrencies = new Set<string>();
-        for (const p of identityView.historyPoints) {
+        // Selected MP history: every accepted observation must share one known currency.
+        // Any unknown currency among selected history points → not eligible.
+        const pointCurrencies: Array<string | null> = [];
+        for (const pt of identityView.historyPoints) {
           const src = filtered.find(
             (r) =>
-              r.receiptId === p.receiptId &&
-              r.sourceIndex === p.itemSourceIndex
+              r.receiptId === pt.receiptId &&
+              r.sourceIndex === pt.itemSourceIndex
           );
-          const c =
-            typeof src?.currency === 'string' ? src.currency.trim() : '';
-          if (c && c.toLowerCase() !== 'unknown') identityCurrencies.add(c);
+          pointCurrencies.push(knownCurrency(src?.currency));
         }
-        if (identityCurrencies.size > 1) {
+        const currencyGate = gateIdentityHistoryCurrencies(pointCurrencies);
+        if (currencyGate.status !== 'ok') {
           return {
             target,
-            status: 'mixed_currency',
+            status: currencyGate.status,
             priceKind: 'purchase_unit',
             currency: null,
             totalOccurrenceCount: filtered.length,
@@ -478,40 +503,27 @@ export async function loadProductPriceHistoryWithDb(
             identityPresentation: null,
           };
         }
-        if (identityCurrencies.size === 0) {
-          return {
-            target,
-            status: 'unknown_currency',
-            priceKind: 'purchase_unit',
-            currency: null,
-            totalOccurrenceCount: filtered.length,
-            comparableOccurrenceCount: 0,
-            excludedOccurrenceCount: filtered.length,
-            points: [],
-            identityPresentation: null,
-          };
-        }
-        const currency = [...identityCurrencies][0]!;
+        const currency = currencyGate.currency;
         const points: ProductPriceHistoryPoint[] = identityView.historyPoints.map(
-          (p) => {
+          (pt) => {
             const src =
               filtered.find(
                 (r) =>
-                  r.receiptId === p.receiptId &&
-                  r.sourceIndex === p.itemSourceIndex
+                  r.receiptId === pt.receiptId &&
+                  r.sourceIndex === pt.itemSourceIndex
               ) ?? null;
             return {
-              receiptId: p.receiptId,
-              itemId: src?.itemId ?? `${p.receiptId}:${p.itemSourceIndex}`,
-              sourceIndex: p.itemSourceIndex,
-              occurredAt: p.occurredAt,
+              receiptId: pt.receiptId,
+              itemId: src?.itemId ?? `${pt.receiptId}:${pt.itemSourceIndex}`,
+              sourceIndex: pt.itemSourceIndex,
+              occurredAt: pt.occurredAt,
               merchantRaw: src?.merchantRaw ?? null,
               merchantNormalized: src?.merchantNormalized ?? identityView.merchantKey,
-              displayName: p.rawName,
+              displayName: pt.rawName,
               currency,
-              lineTotal: src?.lineTotal ?? p.purchaseUnitPrice,
+              lineTotal: src?.lineTotal ?? pt.purchaseUnitPrice,
               purchaseQuantity: src?.purchaseQuantity ?? 1,
-              priceValue: p.purchaseUnitPrice,
+              priceValue: pt.purchaseUnitPrice,
               priceKind: 'purchase_unit' as const,
             };
           }
@@ -550,7 +562,35 @@ export async function loadProductPriceHistoryWithDb(
       }
     }
   } catch {
-    // Fall through to legacy on any identity-path failure.
+    // merchant_product must NEVER fall through to broad legacy history.
+    if (target.type === 'merchant_product') {
+      return {
+        target,
+        status: 'not_enough_points',
+        priceKind: 'purchase_unit',
+        currency: null,
+        totalOccurrenceCount: filtered.length,
+        comparableOccurrenceCount: 0,
+        excludedOccurrenceCount: filtered.length,
+        points: [],
+        identityPresentation: null,
+      };
+    }
+    // Legacy target types only: fall through on identity-path failure.
+  }
+
+  if (target.type === 'merchant_product') {
+    return {
+      target,
+      status: 'not_enough_points',
+      priceKind: 'purchase_unit',
+      currency: null,
+      totalOccurrenceCount: filtered.length,
+      comparableOccurrenceCount: 0,
+      excludedOccurrenceCount: filtered.length,
+      points: [],
+      identityPresentation: null,
+    };
   }
 
   return buildProductPriceHistory(target, filtered);

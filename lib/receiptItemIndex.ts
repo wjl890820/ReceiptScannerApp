@@ -40,7 +40,8 @@ export type ReceiptItemIndexRow = {
   brand: string | null;
   product_family_key: ProductFamilyKey | null;
   category: string | null;
-  purchase_quantity: number;
+  /** Null when quantity was explicitly invalid (0/negative/NaN); missing still defaults to 1. */
+  purchase_quantity: number | null;
   line_total: number;
   purchase_unit_price: number | null;
   spec_size_value: number | null;
@@ -150,6 +151,20 @@ function positiveNumberOrNull(value: unknown): number | null {
   const numberValue = finiteNumberOrNull(value);
   return numberValue != null && numberValue > 0 ? numberValue : null;
 }
+
+/**
+ * Index quantity contract:
+ * - missing/null/empty → default 1 (existing safe behavior)
+ * - explicit 0 / negative / NaN / non-finite → preserve invalid as null
+ */
+export function resolveIndexPurchaseQuantity(value: unknown): number | null {
+  if (value == null) return 1;
+  if (typeof value === 'string' && value.trim() === '') return 1;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 
 function integerOrNull(value: unknown): number | null {
   const numberValue = finiteNumberOrNull(value);
@@ -406,7 +421,7 @@ export function buildReceiptItemIndexRows(
       ? nonNegativeNumberOrNull(item.spec_confidence) ?? 0
       : derived.spec_confidence;
 
-    const purchaseQuantity = positiveNumberOrNull(item.quantity) ?? 1;
+    const purchaseQuantity = resolveIndexPurchaseQuantity(item.quantity);
     const camelLineTotal = nonNegativeNumberOrNull(item.lineTotal);
     const snakeLineTotal = nonNegativeNumberOrNull(item.line_total);
     const effectiveLineTotal = nonNegativeNumberOrNull(item.effectiveLineTotal);
@@ -416,9 +431,11 @@ export function buildReceiptItemIndexRows(
     const resolvedLineTotal = hasAmountField
       ? itemAmountForAnalytics(item as DiscountableItem)
       : 0;
-    const purchaseUnitPrice = hasAmountField
-      ? resolvedLineTotal / purchaseQuantity
-      : null;
+    // Explicit invalid quantity → null unit price (quality gate rejects).
+    const purchaseUnitPrice =
+      hasAmountField && purchaseQuantity != null && purchaseQuantity > 0
+        ? resolvedLineTotal / purchaseQuantity
+        : null;
 
     const specification = buildSpecification(
       specSizeValue,
@@ -519,6 +536,90 @@ export async function rebuildReceiptItemIndex(
   } else {
     await db.withTransactionAsync(run);
   }
+}
+
+
+/**
+ * Emergency projection after a full rebuild failure.
+ * Writes bare SoT fields into receipt_items so index-backed consumers still
+ * see the edited receipt. Not transaction truth — derived from analysis/user JSON.
+ */
+export async function projectMinimalReceiptItemIndexFromSoT(
+  db: ReceiptItemIndexDatabase,
+  receipt: ReceiptItemIndexReceipt,
+  options: BuildReceiptItemIndexOptions = {}
+): Promise<void> {
+  await ensureReceiptItemsSchema(db);
+  const indexedAt = options.indexedAt ?? Date.now();
+  const items = getReceiptItems(receipt);
+  const run = async () => {
+    await db.runAsync(`DELETE FROM receipt_items WHERE receipt_id = ?`, [
+      receipt.id,
+    ]);
+    for (let sourceIndex = 0; sourceIndex < items.length; sourceIndex++) {
+      const raw = items[sourceIndex];
+      const item =
+        raw && typeof raw === 'object'
+          ? (raw as Record<string, unknown>)
+          : {};
+      const name =
+        stringOrNull(item.name) ??
+        stringOrNull(item.raw_name) ??
+        stringOrNull(item.normalized_full_name) ??
+        '';
+      const purchaseQuantity = resolveIndexPurchaseQuantity(item.quantity);
+      const camelLineTotal = nonNegativeNumberOrNull(item.lineTotal);
+      const snakeLineTotal = nonNegativeNumberOrNull(item.line_total);
+      const effectiveLineTotal = nonNegativeNumberOrNull(item.effectiveLineTotal);
+      const hasAmountField =
+        effectiveLineTotal != null ||
+        camelLineTotal != null ||
+        snakeLineTotal != null;
+      const resolvedLineTotal = hasAmountField
+        ? itemAmountForAnalytics(item as DiscountableItem)
+        : 0;
+      const purchaseUnitPrice =
+        hasAmountField && purchaseQuantity != null && purchaseQuantity > 0
+          ? resolvedLineTotal / purchaseQuantity
+          : null;
+      const row: ReceiptItemIndexRow = {
+        id: `${receipt.id}:${sourceIndex}`,
+        receipt_id: receipt.id,
+        source_index: sourceIndex,
+        review_source_index: integerOrNull(item.review_source_index),
+        raw_name: stringOrNull(item.raw_name) ?? (name || null),
+        normalized_name: name,
+        normalized_full_name: name,
+        canonical_product_name: null,
+        legacy_canonical_name: null,
+        brand: null,
+        product_family_key: null,
+        category:
+          typeof item.category === 'string' ? item.category : null,
+        purchase_quantity: purchaseQuantity,
+        line_total: resolvedLineTotal,
+        purchase_unit_price: purchaseUnitPrice,
+        spec_size_value: null,
+        spec_size_unit: null,
+        spec_pack_count: null,
+        volume_base_ml: null,
+        weight_base_g: null,
+        count_base: null,
+        sku_key: null,
+        identity_source: 'unknown',
+        identity_confidence: 0,
+        identity_version: 1,
+        spec_source_text: null,
+        spec_confidence: 0,
+        item_source: resolveItemSource(item),
+        created_at: indexedAt,
+        updated_at: indexedAt,
+      };
+      await db.runAsync(INSERT_SQL, toInsertParams(row));
+    }
+  };
+  if (options.skipTransaction) await run();
+  else await db.withTransactionAsync(run);
 }
 
 export async function deleteReceiptItemIndex(

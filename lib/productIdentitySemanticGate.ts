@@ -38,6 +38,11 @@ export type SemanticGateInput = {
   categorySource?: string | null;
   attributes?: ProductAttributes | null;
   cachedSemanticStatus?: SemanticStatus | null;
+  /** Stored cache fingerprint (from semantic_json.inputFingerprint). */
+  cachedSemanticInputFingerprint?: string | null;
+  cachedSemanticResolverVersion?: string | null;
+  /** Fresh fingerprint from current name/merchant/attrs/version contract. */
+  currentSemanticInputFingerprint?: string | null;
   identityLevel?: string | null;
   identityConfidence?: number | null;
 };
@@ -159,13 +164,24 @@ export function evaluateSemanticSufficiency(
 
   const cached = input.cachedSemanticStatus;
   if (cached === 'enriched' || cached === 'sufficient') {
-    return {
-      status: cached,
-      needsEnrichment: false,
-      reasons: ['semantic_cache_hit'],
-      nameInformativeness: nameInfo,
-      categoryStrong,
-    };
+    const fpCurrent = (input.currentSemanticInputFingerprint || '').trim();
+    const fpCached = (input.cachedSemanticInputFingerprint || '').trim();
+    const versionOk =
+      !input.cachedSemanticResolverVersion ||
+      input.cachedSemanticResolverVersion === PRODUCT_IDENTITY_SEMANTIC_VERSION;
+    const fingerprintOk =
+      !!fpCurrent && !!fpCached && fpCurrent === fpCached && versionOk;
+    if (fingerprintOk) {
+      return {
+        status: cached,
+        needsEnrichment: false,
+        reasons: ['semantic_cache_hit'],
+        nameInformativeness: nameInfo,
+        categoryStrong,
+      };
+    }
+    // Stale semantic cache (rename / merchant / attrs / version) — do not reuse.
+    reasons.push('semantic_cache_stale');
   }
   if (cached === 'failed') {
     return {

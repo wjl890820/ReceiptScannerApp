@@ -35,6 +35,8 @@ export type PriceObservationQualityInput = {
   attributes?: ProductAttributes | null;
   rawName?: string | null;
   isNonProductRow?: boolean;
+  /** When true, reciprocal half/integer price drop may be treated as qty OCR anomaly. */
+  quantityOcrCorroborated?: boolean;
 };
 
 export type PriceObservationQualityResult = {
@@ -213,12 +215,26 @@ export function evaluatePriceObservationQuality(
     if (peerCv <= MAX_PEER_CV_FOR_ANOMALY && med > 0) {
       const ratio = rawPurchaseUnitPrice / med;
       const multiple = nearIntegerMultiple(ratio);
-      if (multiple != null && (multiple >= 2 || multiple <= 0.5)) {
+      if (multiple != null && multiple >= 2) {
+        // High-side integer multiple (e.g. 400→800): strong qty OCR suspicion.
         suspectedIntegerMultiple = multiple;
         reasons.push('suspected_quantity_ocr_anomaly');
         quality = 'suspected_anomaly';
         quantityConfidence = 0.25;
         potentialOutlier = true;
+      } else if (multiple != null && multiple <= 0.5) {
+        // Reciprocal low-side (e.g. 400→200): do not auto-suppress legitimate promotions.
+        suspectedIntegerMultiple = multiple;
+        potentialOutlier = true;
+        if (input.quantityOcrCorroborated === true) {
+          reasons.push('suspected_quantity_ocr_anomaly');
+          quality = 'suspected_anomaly';
+          quantityConfidence = 0.25;
+        } else {
+          reasons.push('high_variance_variable_price');
+          quality = 'usable_with_caution';
+          quantityConfidence = 0.55;
+        }
       } else if (Math.abs(ratio - 1) >= 0.45) {
         potentialOutlier = true;
         quality = 'usable_with_caution';

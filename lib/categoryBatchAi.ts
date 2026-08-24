@@ -22,6 +22,7 @@ import { stampMachineClassificationProvenance } from './productTaxonomy';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from './categoryTaxonomyV1';
 import {
   emptySemanticBatchCostMetrics,
+  invalidateStaleSemanticCacheOnItem,
   selectBatchSemanticItems,
   type SemanticBatchCostMetrics,
 } from './productIdentitySemanticBatch';
@@ -544,6 +545,7 @@ export async function runBatchAiFallback(
 ): Promise<RunBatchAiResult> {
   const semantic = emptySemanticBatchCostMetrics();
   for (const it of items ?? []) {
+    invalidateStaleSemanticCacheOnItem(it);
     if (it?.semantic_status === 'enriched' || it?.semantic_status === 'sufficient') {
       semantic.semanticCacheHits += 1;
     }

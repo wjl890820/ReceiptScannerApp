@@ -114,14 +114,31 @@ describe('Product Identity Batch 4 — semantic gate', () => {
   });
 
   it('semantic cache hit → no AI', () => {
+    const fp = '午後t mlk 500\u001f\u001f\u001fmeruno-product-identity-semantic-v1.1\u001f';
     expect(
       needsSemanticEnrichment({
         rawName: '午後T MLK 500',
         cachedSemanticStatus: 'enriched',
+        cachedSemanticInputFingerprint: fp,
+        currentSemanticInputFingerprint: fp,
+        cachedSemanticResolverVersion: 'meruno-product-identity-semantic-v1.1',
         createdMerchantProduct: true,
         category: 'uncategorized',
       })
     ).toBe(false);
+  });
+
+  it('semantic cache without fingerprint match is not a hit', () => {
+    expect(
+      needsSemanticEnrichment({
+        rawName: '午後T MLK 500',
+        cachedSemanticStatus: 'enriched',
+        cachedSemanticInputFingerprint: 'old-fp',
+        currentSemanticInputFingerprint: 'new-fp',
+        createdMerchantProduct: true,
+        category: 'uncategorized',
+      })
+    ).toBe(true);
   });
 });
 
