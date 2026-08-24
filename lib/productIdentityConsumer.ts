@@ -100,7 +100,13 @@ export type IdentityFrequentProductGroup = {
   key: string;
   displayName: string;
   merchantKey: string;
+  /** Distinct receipt purchase occasions (Frequent card purchase count). */
   distinctReceiptCount: number;
+  /**
+   * Cumulative purchase quantity across identity-linked item rows for this MP.
+   * Same positive-quantity sum rule as Product Detail merchant_product history.
+   */
+  totalPurchaseQuantity: number;
   firstPurchaseAt: number | null;
   latestPurchaseAt: number | null;
   rawNameVariants: string[];
@@ -355,6 +361,16 @@ export function buildIdentityFrequentProductGroups(
       if (first == null || ts < first) first = ts;
       if (latest == null || ts > latest) latest = ts;
     }
+    // Quantity aggregate: all identity-linked product rows for this MP (not SKU
+    // fields). Matches Product Detail merchant_product totalPurchaseQuantity rule.
+    const quantityRows = rows.filter((r) => !observationIsNonProductRow(r));
+    const totalPurchaseQuantity = quantityRows.reduce((sum, r) => {
+      const q =
+        typeof r.quantity === 'number' && Number.isFinite(r.quantity)
+          ? r.quantity
+          : 0;
+      return sum + (q > 0 ? q : 0);
+    }, 0);
     groups.push({
       groupingType: 'merchant_product',
       key: mpId,
@@ -365,6 +381,7 @@ export function buildIdentityFrequentProductGroups(
       }),
       merchantKey: sorted[0]!.merchantKey,
       distinctReceiptCount: receiptIds.size,
+      totalPurchaseQuantity,
       firstPurchaseAt: first,
       latestPurchaseAt: latest,
       rawNameVariants: rawNames,

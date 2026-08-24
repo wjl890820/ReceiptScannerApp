@@ -410,6 +410,8 @@
     "minimum": "最低记录",
     "maximum": "最高记录",
     "coverage": "基于 {comparable}/{total} 条可比较记录，排除 {excluded} 条",
+    "coverageComparable": "基于 {comparable} 次可比较购买",
+    "coverageExcludedCurrent": "已忽略 {excluded} 条可能异常的价格记录",
     "subtitle": {
       "sku": "同一规格的购买价格记录",
       "canonical": "已按规格换算为统一单位",
@@ -417,13 +419,13 @@
       "merchantProduct": "同一商店中该商品的购买价格记录"
     },
     "kind": {
-      "purchase_unit": "每件价格",
+      "purchase_unit": "成交单价",
       "per_liter": "每升价格",
       "per_100g": "每100克价格",
       "per_item": "每个价格"
     },
     "unit": {
-      "purchase_unit": "/购买单位",
+      "purchase_unit": "",
       "per_liter": "/L",
       "per_100g": "/100g",
       "per_item": "/个"
@@ -436,7 +438,7 @@
       "mixedCurrency": "存在不同币种记录，暂不合并比较。",
       "unknownCurrency": "部分购买记录缺少明确币种，暂时无法安全比较。"
     },
-    "titleMerchantLocal": "在这家店的购买价格历史",
+    "titleMerchantLocal": "在这家店的价格历史",
     "qualityNote": "部分记录已从价格比较中排除。"
   },
   "postSaveSummary": {

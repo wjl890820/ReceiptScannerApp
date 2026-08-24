@@ -61,8 +61,9 @@ export default function TabLayout() {
         }}
       />
 
+          {/* Nested History stack: index + [id] (edge-swipe + correct goBack) */}
       <Tabs.Screen
-        name="history/index"
+        name="history"
         options={{
           title: tabTitles.history,
           tabBarLabel: tabTitles.history,
@@ -72,11 +73,7 @@ export default function TabLayout() {
         }}
       />
 
-      <Tabs.Screen
-        name="history/[id]"
-        options={{ href: null }}
-      />
-
+      {/* Nested Stack: settings/index + subordinate pages */}
       <Tabs.Screen
         name="settings"
         options={{
@@ -86,21 +83,6 @@ export default function TabLayout() {
             <IconSymbol size={28} name="gearshape.fill" color={color} />
           ),
         }}
-      />
-
-      <Tabs.Screen
-        name="pro-insight"
-        options={{ href: null }}
-      />
-
-      <Tabs.Screen
-        name="feedback"
-        options={{ href: null }}
-      />
-
-      <Tabs.Screen
-        name="uncategorized-items"
-        options={{ href: null }}
       />
     </Tabs>
   );

@@ -34,7 +34,8 @@ function priceLabel(
     currency === 'JPY'
       ? `¥${numberLabel(value)}`
       : `${currency} ${numberLabel(value)}`;
-  return `${amount}${unitLabel(priceKind)}`;
+  const unit = unitLabel(priceKind);
+  return unit ? `${amount}${unit}` : amount;
 }
 
 function statusMessageKey(
@@ -214,11 +215,14 @@ export function ProductPriceHistoryChart({
       )}
 
       <Text style={styles.coverage}>
-        {t('priceHistory.coverage', {
+        {t('priceHistory.coverageComparable', {
           comparable: result.comparableOccurrenceCount,
-          total: result.totalOccurrenceCount,
-          excluded: result.excludedOccurrenceCount,
         })}
+        {result.excludedOccurrenceCount > 0
+          ? ` ${t('priceHistory.coverageExcludedCurrent', {
+              excluded: result.excludedOccurrenceCount,
+            })}`
+          : ''}
       </Text>
     </>
   );

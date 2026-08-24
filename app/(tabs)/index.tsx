@@ -56,7 +56,6 @@ import {
 } from '@/lib/uiTokens';
 import {
   buildHomeFrequentProductDetailHref,
-  HOME_ANALYSIS_HREF,
 } from '@/lib/homeValueHierarchy';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 export default function HomeScreen() {
@@ -518,10 +517,6 @@ export default function HomeScreen() {
     [router]
   );
 
-  const handleViewAnalysis = useCallback(() => {
-    router.push(HOME_ANALYSIS_HREF as any);
-  }, [router]);
-
   return (
     <View
       style={[
@@ -543,7 +538,6 @@ export default function HomeScreen() {
           onScan={handleScanReceipt}
           onRecentPurchasePress={handleRecentPurchasePress}
           onProductPress={handleProductPress}
-          onViewAnalysis={handleViewAnalysis}
         />
       </ScrollView>
 

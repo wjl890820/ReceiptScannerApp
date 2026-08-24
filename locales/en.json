@@ -410,6 +410,8 @@
     "minimum": "Lowest record",
     "maximum": "Highest record",
     "coverage": "Based on {comparable} of {total} comparable records; {excluded} excluded",
+    "coverageComparable": "Based on {comparable} comparable purchases",
+    "coverageExcludedCurrent": "Ignored {excluded} possibly unusual price record(s) for this product",
     "subtitle": {
       "sku": "Purchase prices for the same specification",
       "canonical": "Specifications are normalized to a common unit",
@@ -417,13 +419,13 @@
       "merchantProduct": "Prices for this product at the same store"
     },
     "kind": {
-      "purchase_unit": "Price per purchase unit",
+      "purchase_unit": "Purchase price",
       "per_liter": "Price per liter",
       "per_100g": "Price per 100 grams",
       "per_item": "Price per item"
     },
     "unit": {
-      "purchase_unit": "/purchase unit",
+      "purchase_unit": "",
       "per_liter": "/L",
       "per_100g": "/100g",
       "per_item": "/item"

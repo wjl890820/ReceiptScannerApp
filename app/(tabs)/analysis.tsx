@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { AnalysisEmptyState } from '@/components/analysis/AnalysisEmptyState';
+import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from '@/lib/db';
@@ -23,9 +24,12 @@ import {
 } from '@/lib/analysisPresentation';
 import { buildStatsSafe } from '@/lib/analysisHelpers';
 import { formatJPY } from '@/lib/formatJPY';
+import { merchantAccentColor } from '@/lib/merchantAccent';
+import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
 import { t } from '@/lib/i18n';
 import { type TimeRange } from '@/lib/statsCalculator';
 import {
+  INDUSTRIAL_UI,
   UI_COLORS,
   UI_LAYOUT,
   UI_RADIUS,
@@ -190,9 +194,10 @@ export default function AnalysisScreen() {
       (viewModel.stage === 'low' || viewModel.stage === 'ready') &&
       viewModel.overview ? (
         <>
-          <Text style={styles.sectionTitle}>
-            {t('analysis.release.overviewTitle')}
-          </Text>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.analysis.overview}
+            title={t('analysis.release.overviewTitle')}
+          />
           <View style={styles.overviewGrid}>
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>
@@ -230,9 +235,10 @@ export default function AnalysisScreen() {
 
           {viewModel.categories.length > 0 ? (
             <>
-              <Text style={styles.sectionTitle}>
-                {t('analysis.release.categoryTitle')}
-              </Text>
+              <IndustrialSectionHeader
+                microLabel={SECTION_MICRO.analysis.category}
+                title={t('analysis.release.categoryTitle')}
+              />
               <View style={styles.card}>
                 {viewModel.categories.map((row) => (
                   <View key={row.category} style={styles.categoryRow}>
@@ -245,6 +251,14 @@ export default function AnalysisScreen() {
                     <Text style={styles.categoryShare}>
                       {Math.round(row.share * 100)}%
                     </Text>
+                    <View style={styles.categoryTrack}>
+                      <View
+                        style={[
+                          styles.categoryFill,
+                          { width: `${Math.max(Math.round(row.share * 100), 2)}%` },
+                        ]}
+                      />
+                    </View>
                   </View>
                 ))}
                 {viewModel.uncategorized ? (
@@ -261,9 +275,10 @@ export default function AnalysisScreen() {
 
           {viewModel.merchants.length > 0 ? (
             <>
-              <Text style={styles.sectionTitle}>
-                {t('analysis.release.merchantsTitle')}
-              </Text>
+              <IndustrialSectionHeader
+                microLabel={SECTION_MICRO.analysis.merchant}
+                title={t('analysis.release.merchantsTitle')}
+              />
               <View style={styles.card}>
                 {viewModel.merchants.map((row) => (
                   <View key={row.merchantKey} style={styles.merchantRow}>
@@ -286,9 +301,10 @@ export default function AnalysisScreen() {
             </>
           ) : null}
 
-          <Text style={styles.sectionTitle}>
-            {t('analysis.release.spendChangeTitle')}
-          </Text>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.analysis.change}
+            title={t('analysis.release.spendChangeTitle')}
+          />
           <View style={styles.card}>
             {viewModel.spendChange.status === 'available' ? (
               <>
@@ -339,9 +355,10 @@ export default function AnalysisScreen() {
 
           {viewModel.insight ? (
             <>
-              <Text style={styles.sectionTitle}>
-                {t(viewModel.insight.titleKey)}
-              </Text>
+              <IndustrialSectionHeader
+                microLabel={SECTION_MICRO.analysis.insight}
+                title={t(viewModel.insight.titleKey)}
+              />
               <View style={styles.insightCard}>
                 <Text style={styles.insightText}>{renderInsightBody()}</Text>
               </View>
@@ -421,7 +438,7 @@ const styles = StyleSheet.create({
   messageCard: {
     marginTop: 18,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: UI_COLORS.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
@@ -449,7 +466,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     minWidth: '46%',
     padding: 14,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: UI_COLORS.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
@@ -466,7 +483,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   card: {
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: UI_COLORS.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e1e4e8',
@@ -475,6 +492,7 @@ const styles = StyleSheet.create({
   },
   categoryRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -561,7 +579,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   insightCard: {
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: '#eef5ff',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#cfe1fb',
@@ -572,6 +590,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     fontWeight: '600',
+  },
+  categoryTrack: {
+    marginTop: 8,
+    width: '100%',
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: INDUSTRIAL_UI.metricWash,
+    overflow: 'hidden',
+  },
+  categoryFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: INDUSTRIAL_UI.accentRule,
   },
   lowDataNote: {
     marginTop: 14,

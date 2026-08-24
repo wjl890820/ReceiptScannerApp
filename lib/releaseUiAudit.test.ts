@@ -29,7 +29,7 @@ const RELEASE_SCAN_ROOTS = [
   'app/(tabs)/index.tsx',
   'app/(tabs)/analysis.tsx',
   'app/(tabs)/history',
-  'app/(tabs)/feedback.tsx',
+  'app/(tabs)/settings/feedback.tsx',
   'app/(tabs)/_layout.tsx',
   'app/scan-review',
   'app/post-save-summary',
@@ -137,7 +137,7 @@ describe('release UI audit — gates', () => {
 
   it('pro-insight route is gated by the same coming-soon flag', () => {
     const source = fs.readFileSync(
-      path.join(ROOT, 'app/(tabs)/pro-insight.tsx'),
+      path.join(ROOT, 'app/(tabs)/settings/pro-insight.tsx'),
       'utf8'
     );
     expect(source).toContain('shouldShowSettingsProEntry');
@@ -147,7 +147,7 @@ describe('release UI audit — gates', () => {
 
   it('uncategorized-items route requires Dev Tools unlock', () => {
     const source = fs.readFileSync(
-      path.join(ROOT, 'app/(tabs)/uncategorized-items.tsx'),
+      path.join(ROOT, 'app/(tabs)/settings/uncategorized-items.tsx'),
       'utf8'
     );
     expect(source).toContain('isDevToolsUnlocked');

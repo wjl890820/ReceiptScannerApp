@@ -97,7 +97,7 @@ function buildHomeLongTermFrequentProducts(
           displayLabel: g.displayName,
           displayLabelKey: null,
           purchaseOccurrenceCount: g.distinctReceiptCount,
-          totalPurchaseQuantity: 0,
+          totalPurchaseQuantity: g.totalPurchaseQuantity,
           lastPurchasedAt: g.latestPurchaseAt ?? 0,
           priceSummary: null,
         }));

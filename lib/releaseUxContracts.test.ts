@@ -52,7 +52,7 @@ describe('R2-B6 release UX contracts', () => {
     expect(shouldShowSettingsProEntry({ comingSoon: true })).toBe(false);
 
     const settingsSource = fs.readFileSync(
-      path.join(__dirname, '../app/(tabs)/settings.tsx'),
+      path.join(__dirname, '../app/(tabs)/settings/index.tsx'),
       'utf8'
     );
     expect(settingsSource).toContain('shouldShowSettingsDevTools');
@@ -129,12 +129,14 @@ describe('R2-B6 release UX contracts', () => {
       'utf8'
     );
     const feedback = fs.readFileSync(
-      path.join(__dirname, '../app/(tabs)/feedback.tsx'),
+      path.join(__dirname, '../app/(tabs)/settings/feedback.tsx'),
       'utf8'
     );
     expect(receiptDetail).toContain('navigateBackOrHistory');
-    expect(productDetail).toContain('navigateBackOrHistory');
-    expect(feedback).toContain('router.back');
+    expect(productDetail).toContain('navigateBackOrHome');
+    expect(feedback).toContain('navigateBackOrSettings');
+    // Internal targetType is not a user-facing badge (avoids raw i18n keys).
+    expect(productDetail).not.toContain('productDetail.targetType.');
   });
 
   it('G — domain helper modules remain present; layout tokens stable', () => {
@@ -157,5 +159,118 @@ describe('R2-B6 release UX contracts', () => {
     expect(resolveTabTitles((key) => key)).toEqual(
       TAB_TITLE_EMERGENCY_FALLBACK
     );
+  });
+
+  it('H — Build 52: no raw productDetail.targetType / merchant_product badge leakage', () => {
+    const productDetail = fs.readFileSync(
+      path.join(__dirname, '../app/product/[targetType].tsx'),
+      'utf8'
+    );
+    expect(productDetail).not.toContain('productDetail.targetType.');
+    expect(productDetail).not.toMatch(
+      /t\(['"]productDetail\.targetType/
+    );
+    // Internal badge copy must not surface merchant_product as user UI.
+    const badgeSnippet = productDetail.match(
+      /targetType|merchant_product|SKU_EXACT|family_spec/
+    );
+    // Route param name targetType is OK; user-visible badge keys are not.
+    expect(productDetail).not.toContain('merchant_product');
+    expect(badgeSnippet?.[0] === 'merchant_product').toBeFalsy();
+  });
+
+  it('I — Build 52: Frequent quantity omits unreliable zero; no viewHistory duplicate CTA', () => {
+    const home = fs.readFileSync(
+      path.join(__dirname, '../components/ProgressiveHomeInsights.tsx'),
+      'utf8'
+    );
+    expect(home).toContain('totalPurchaseQuantity > 0');
+    expect(home).not.toContain('home.progressive.frequent.viewHistory');
+    // Duplicate Analysis-tab CTA removed from Home JSX (styles/dead props OK).
+    expect(home).not.toContain("t('home.progressive.analysisCta'");
+    expect(home).not.toContain('onViewAnalysis()');
+    const progressive = fs.readFileSync(
+      path.join(__dirname, 'homeProgressiveExperience.ts'),
+      'utf8'
+    );
+    // Identity path must pass through real aggregate quantity (not hardcode 0).
+    expect(progressive).not.toMatch(/totalPurchaseQuantity:\s*0\b/);
+  });
+
+  it('J — Build 52: merchant-local price wording + product-scoped coverage keys', () => {
+    for (const locale of ['zh', 'ja', 'en'] as const) {
+      const data = JSON.parse(
+        fs.readFileSync(
+          path.join(__dirname, `../locales/${locale}.json`),
+          'utf8'
+        )
+      ) as Record<string, unknown>;
+      const ph = data.priceHistory as Record<string, unknown>;
+      expect(typeof ph.coverageComparable).toBe('string');
+      expect(String(ph.coverageComparable)).toContain('{comparable}');
+      expect(String(ph.coverageComparable)).not.toContain('{total}');
+      expect(typeof ph.coverageExcludedCurrent).toBe('string');
+      expect(typeof ph.titleMerchantLocal).toBe('string');
+      expect(String(ph.titleMerchantLocal).length).toBeGreaterThan(0);
+    }
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(__dirname, '../locales/zh.json'), 'utf8')
+      ).priceHistory.titleMerchantLocal
+    ).toContain('在这家店');
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(__dirname, '../locales/ja.json'), 'utf8')
+      ).priceHistory.titleMerchantLocal
+    ).toContain('この店舗');
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(__dirname, '../locales/en.json'), 'utf8')
+      ).priceHistory.titleMerchantLocal
+    ).toMatch(/this store/i);
+    const chart = fs.readFileSync(
+      path.join(__dirname, '../components/ProductPriceHistoryChart.tsx'),
+      'utf8'
+    );
+    expect(chart).toContain('priceHistory.coverageComparable');
+    expect(chart).not.toMatch(/t\(['"]priceHistory\.coverage['"]/);
+  });
+
+  it('K — Build 52: merchant accent helper is deterministic and palette-bounded', () => {
+    const {
+      merchantAccentColor,
+      merchantAccentIndex,
+    } = require('./merchantAccent') as typeof import('./merchantAccent');
+    expect(merchantAccentColor('ヨークベニマル')).toBe(
+      merchantAccentColor('ヨークベニマル')
+    );
+    expect(merchantAccentIndex('costco')).toBeGreaterThanOrEqual(0);
+    expect(merchantAccentIndex('costco')).toBeLessThan(8);
+    expect(merchantAccentColor('')).toBe(merchantAccentColor('   '));
+  });
+
+  it('L — Build 52: user routes avoid known engineering identifier copy', () => {
+    const screens = [
+      '../components/ProgressiveHomeInsights.tsx',
+      '../app/(tabs)/analysis.tsx',
+      '../app/(tabs)/history/index.tsx',
+      '../app/product/[targetType].tsx',
+      '../app/(tabs)/settings/index.tsx',
+    ];
+    const banned = [
+      'resolverVersion',
+      'comparisonKey',
+      'eligible observation',
+      'SKU_EXACT',
+      'family_spec',
+      'Gemini model',
+      'semantic cache',
+    ];
+    for (const rel of screens) {
+      const src = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+      for (const term of banned) {
+        expect(src).not.toContain(term);
+      }
+    }
   });
 });

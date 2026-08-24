@@ -10,7 +10,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { navigateBackOrHistory } from '@/lib/navigationBack';
+import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
+import { navigateBackOrHome } from '@/lib/navigationBack';
+import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
@@ -26,6 +28,7 @@ import {
 import { parseProductDetailTarget } from '@/lib/productDetailTarget';
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
 import {
+  INDUSTRIAL_UI,
   UI_COLORS,
   UI_LAYOUT,
   UI_RADIUS,
@@ -44,7 +47,7 @@ export default function ProductDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const onBack = useCallback(() => {
-    navigateBackOrHistory(router);
+    navigateBackOrHome(router);
   }, [router]);
   const locale = getCurrentLocale();
   const params = useLocalSearchParams<{
@@ -121,9 +124,6 @@ export default function ProductDetailScreen() {
         ? t(`productDetail.family.${target.key}`)
         : t('productDetail.title')
       : summary?.title || target?.key || t('productDetail.title');
-  const typeLabel = target
-    ? t(`productDetail.targetType.${target.type}`)
-    : '';
   const specificationLabels = summary
     ? [
         ...new Set(
@@ -169,7 +169,6 @@ export default function ProductDetailScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.typeLabel}>{typeLabel}</Text>
           <Text style={styles.productTitle}>{title}</Text>
           {target.type === 'canonical' && (
             <Text style={styles.scopeNote}>
@@ -254,7 +253,10 @@ export default function ProductDetailScreen() {
             </>
           ) : null}
 
-          <Text style={styles.sectionTitle}>{t('productDetail.stores')}</Text>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.product.records}
+            title={t('productDetail.stores')}
+          />
           <View style={styles.sectionCard}>
             {summary.merchants.map((merchant, index) => (
               <View
@@ -390,17 +392,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
     paddingTop: 24,
     paddingBottom: 50,
-  },
-  typeLabel: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    overflow: 'hidden',
-    backgroundColor: '#eee',
-    color: '#555',
-    fontSize: 12,
-    fontWeight: '700',
   },
   productTitle: {
     marginTop: 12,

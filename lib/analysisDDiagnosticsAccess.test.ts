@@ -195,7 +195,7 @@ describe('Analysis D1-A diagnostics access', () => {
 
   test('I — Settings gates Analysis D entry; normal tree unchanged when flag OFF', () => {
     const settingsSource = fs.readFileSync(
-      path.resolve(__dirname, '../app/(tabs)/settings.tsx'),
+      path.resolve(__dirname, '../app/(tabs)/settings/index.tsx'),
       'utf8'
     );
     expect(settingsSource).toContain('shouldShowAnalysisDDiagnosticsEntry');

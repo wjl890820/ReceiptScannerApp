@@ -59,7 +59,16 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style="dark" />
-      <Stack key={localeEpoch} screenOptions={{ headerShown: false }} />
+      <Stack
+        key={localeEpoch}
+        screenOptions={{
+          headerShown: false,
+          // Build 53: native iOS edge-swipe on hierarchical PUSH screens
+          // (product, scan-review, etc.). Tabs are not back-stack pages.
+          gestureEnabled: true,
+          animation: 'slide_from_right',
+        }}
+      />
     </>
   );
 }

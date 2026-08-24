@@ -4,6 +4,7 @@ import React, { useEffect } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { t } from '@/lib/i18n';
+import { navigateBackOrSettings } from '@/lib/navigationBack';
 import { shouldShowSettingsProEntry } from '@/lib/settingsPresentation';
 
 /** Release freeze: Pro purchase is not shipped. */
@@ -30,7 +31,7 @@ export default function ProInsightScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backButton}>
+        <Pressable onPress={() => navigateBackOrSettings(router)} style={styles.backButton}>
           <Text style={styles.backButtonText}>{t('pro.back')}</Text>
         </Pressable>
         <Text style={styles.title}>{t('pro.title')}</Text>

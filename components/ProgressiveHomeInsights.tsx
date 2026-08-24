@@ -7,6 +7,7 @@ import {
   View,
 } from 'react-native';
 
+import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import type {
   MilestoneCategoryComposition,
@@ -16,11 +17,14 @@ import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import type { HomeProgressiveExperience } from '@/lib/homeProgressiveExperience';
 import { t } from '@/lib/i18n';
+import { merchantAccentColor } from '@/lib/merchantAccent';
 import {
   formatFrequentProductLabel,
   formatMilestoneRecentChange,
   formatMilestoneSummary,
 } from '@/lib/milestonePresentation';
+import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
+import { INDUSTRIAL_UI, UI_RADIUS } from '@/lib/uiTokens';
 
 import { MilestoneProgressCard } from './MilestoneProgressCard';
 
@@ -32,7 +36,6 @@ type ProgressiveHomeInsightsProps = {
   onScan: () => void;
   onRecentPurchasePress: (receiptId: string) => void;
   onProductPress: (product: MilestoneFrequentProduct) => void;
-  onViewAnalysis: () => void;
 };
 
 function categoryLabel(category: string): string {
@@ -57,7 +60,7 @@ function FrequentProductList({
   onPress: (product: MilestoneFrequentProduct) => void;
 }) {
   return (
-    <View style={styles.card}>
+    <View style={styles.panel}>
       {products.map((product, index) => {
         const label = formatFrequentProductLabel(product, t);
         return (
@@ -82,13 +85,11 @@ function FrequentProductList({
                 {t('home.progressive.frequent.occurrences', {
                   count: product.purchaseOccurrenceCount,
                 })}
-                {' · '}
-                {t('home.progressive.frequent.quantity', {
-                  count: product.totalPurchaseQuantity,
-                })}
-              </Text>
-              <Text style={styles.productActionHint}>
-                {t('home.progressive.frequent.viewHistory')}
+                {product.totalPurchaseQuantity > 0
+                  ? ` · ${t('home.progressive.frequent.quantity', {
+                      count: product.totalPurchaseQuantity,
+                    })}`
+                  : ''}
               </Text>
             </View>
             <Text style={styles.chevron} importantForAccessibility="no">
@@ -101,7 +102,7 @@ function FrequentProductList({
   );
 }
 
-function CategoryChips({
+function CategoryBars({
   categories,
 }: {
   categories: MilestoneCategoryComposition[];
@@ -110,22 +111,27 @@ function CategoryChips({
     (category) => category.itemCount > 0 || category.spend > 0
   );
   return (
-    <View style={styles.chips}>
-      {visible.map((category) => (
-        <View key={category.category} style={styles.chip}>
-          <Text style={styles.chipLabel}>
-            {categoryLabel(category.category)}
-          </Text>
-          <Text style={styles.chipValue}>
-            {Math.round(
-              category.spend > 0
-                ? category.spendShare * 100
-                : category.itemShare * 100
-            )}
-            %
-          </Text>
-        </View>
-      ))}
+    <View style={styles.bars}>
+      {visible.map((category) => {
+        const pct = Math.round(
+          (category.spend > 0 ? category.spendShare : category.itemShare) * 100
+        );
+        return (
+          <View key={category.category} style={styles.barRow}>
+            <View style={styles.barLabelRow}>
+              <Text style={styles.barLabel}>
+                {categoryLabel(category.category)}
+              </Text>
+              <Text style={styles.barPct}>{pct}%</Text>
+            </View>
+            <View style={styles.barTrack}>
+              <View
+                style={[styles.barFill, { width: `${Math.max(pct, 2)}%` as any }]}
+              />
+            </View>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -138,7 +144,6 @@ export function ProgressiveHomeInsights({
   onScan,
   onRecentPurchasePress,
   onProductPress,
-  onViewAnalysis,
 }: ProgressiveHomeInsightsProps) {
   const scanLabel = processingProgress
     ? t('home.scan.processingMulti', {
@@ -162,12 +167,11 @@ export function ProgressiveHomeInsights({
       </Text>
 
       <View style={styles.scanHero}>
-        <Text style={styles.scanEyebrow}>
-          {t('home.progressive.scan.eyebrow')}
-        </Text>
-        <Text style={styles.scanTitle}>
-          {t('home.progressive.scan.title')}
-        </Text>
+        <IndustrialSectionHeader
+          microLabel={SECTION_MICRO.home.quickScan}
+          title={t('home.progressive.scan.title')}
+          showRule
+        />
         <Text style={styles.scanSubtitle}>
           {t('home.progressive.scan.subtitle')}
         </Text>
@@ -205,7 +209,10 @@ export function ProgressiveHomeInsights({
 
       {showRecent && experience.latestPurchase && (
         <>
-          <SectionTitle>{t('home.progressive.recent.title')}</SectionTitle>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.home.recent}
+            title={t('home.progressive.recent.title')}
+          />
           <Pressable
             onPress={() =>
               onRecentPurchasePress(experience.latestPurchase!.receiptId)
@@ -213,8 +220,14 @@ export function ProgressiveHomeInsights({
             accessibilityRole="button"
             accessibilityLabel={t('home.progressive.recent.openA11y')}
             style={({ pressed }) => [
-              styles.card,
+              styles.panel,
               styles.recentCard,
+              {
+                borderLeftWidth: INDUSTRIAL_UI.merchantBarWidth,
+                borderLeftColor: merchantAccentColor(
+                  experience.latestPurchase!.merchant
+                ),
+              },
               pressed && styles.pressed,
             ]}
           >
@@ -238,11 +251,21 @@ export function ProgressiveHomeInsights({
                   experience.latestPurchase.currency
                 )}
               </Text>
+              <Text style={styles.chevron} importantForAccessibility="no">
+                ›
+              </Text>
             </View>
           </Pressable>
 
-          <SectionTitle>{t('home.progressive.progress.section')}</SectionTitle>
-          <MilestoneProgressCard status={experience.status} />
+          {/* Mature users: hide permanent "profile established" progress block. */}
+          {experience.status.nextMilestone != null ? (
+            <>
+              <SectionTitle>
+                {t('home.progressive.progress.section')}
+              </SectionTitle>
+              <MilestoneProgressCard status={experience.status} />
+            </>
+          ) : null}
         </>
       )}
 
@@ -254,8 +277,11 @@ export function ProgressiveHomeInsights({
 
       {showRecentInsight && experience.recentInsight && (
         <>
-          <SectionTitle>{t('home.progressive.insight.title')}</SectionTitle>
-          <View style={styles.card}>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.home.profile}
+            title={t('home.progressive.insight.title')}
+          />
+          <View style={styles.panel}>
             <View style={styles.metricRow}>
               <View style={styles.metric}>
                 <Text style={styles.metricLabel}>
@@ -279,7 +305,7 @@ export function ProgressiveHomeInsights({
             <Text style={styles.insightCategoryTitle}>
               {t('home.progressive.insight.category')}
             </Text>
-            <CategoryChips
+            <CategoryBars
               categories={
                 experience.recentInsight.categoryStructure.categories
               }
@@ -297,14 +323,17 @@ export function ProgressiveHomeInsights({
 
       {experience.stage === 'frequent' && (
         <>
-          <SectionTitle>{t('home.progressive.frequent.title')}</SectionTitle>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.home.frequent}
+            title={t('home.progressive.frequent.title')}
+          />
           {experience.frequentProducts.length > 0 ? (
             <FrequentProductList
               products={experience.frequentProducts}
               onPress={onProductPress}
             />
           ) : (
-            <View style={styles.card}>
+            <View style={styles.panel}>
               <Text style={styles.fallbackText}>
                 {t('home.progressive.frequent.preparing')}
               </Text>
@@ -315,12 +344,15 @@ export function ProgressiveHomeInsights({
 
       {experience.stage === 'profile' && experience.profile && (
         <>
-          <SectionTitle>{t('home.progressive.profile.title')}</SectionTitle>
-          <View style={styles.card}>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.home.profile}
+            title={t('home.progressive.profile.title')}
+          />
+          <View style={styles.panel}>
             <Text style={styles.profileHeading}>
               {t('home.progressive.profile.category')}
             </Text>
-            <CategoryChips
+            <CategoryBars
               categories={experience.profile.categoryStructure.categories}
             />
             {experience.profile.shoppingFrequency && (
@@ -346,9 +378,10 @@ export function ProgressiveHomeInsights({
           </View>
           {experience.frequentProducts.length > 0 && (
             <>
-              <SectionTitle>
-                {t('home.progressive.frequent.title')}
-              </SectionTitle>
+              <IndustrialSectionHeader
+                microLabel={SECTION_MICRO.home.frequent}
+                title={t('home.progressive.frequent.title')}
+              />
               <FrequentProductList
                 products={experience.frequentProducts}
                 onPress={onProductPress}
@@ -358,25 +391,6 @@ export function ProgressiveHomeInsights({
         </>
       )}
 
-
-      {experience.stage !== 'empty' ? (
-        <Pressable
-          onPress={onViewAnalysis}
-          accessibilityRole="button"
-          accessibilityLabel={t('home.progressive.analysisCta')}
-          style={({ pressed }) => [
-            styles.analysisCta,
-            pressed && styles.pressed,
-          ]}
-        >
-          <Text style={styles.analysisCtaText}>
-            {t('home.progressive.analysisCta')}
-          </Text>
-          <Text style={styles.analysisCtaChevron} importantForAccessibility="no">
-            ›
-          </Text>
-        </Pressable>
-      ) : null}
 
       {experience.analyticsUnavailable && experience.stage !== 'empty' && (
         <Text style={styles.analyticsFallback}>
@@ -402,11 +416,13 @@ const styles = StyleSheet.create({
   },
   scanHero: {
     marginTop: 22,
-    padding: 20,
-    borderRadius: 18,
-    backgroundColor: '#eef5ff',
+    padding: 18,
+    borderRadius: UI_RADIUS.hero,
+    backgroundColor: INDUSTRIAL_UI.metricWash,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#cfe1fb',
+    borderColor: INDUSTRIAL_UI.panelBorder,
+    borderLeftWidth: INDUSTRIAL_UI.accentRuleWidth,
+    borderLeftColor: INDUSTRIAL_UI.accentRule,
   },
   scanEyebrow: {
     color: '#1677ff',
@@ -470,10 +486,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   card: {
-    borderRadius: 16,
+    borderRadius: UI_RADIUS.panel,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
-    backgroundColor: '#fff',
+    borderColor: INDUSTRIAL_UI.panelBorder,
+    backgroundColor: INDUSTRIAL_UI.panelBackground,
+  },
+  panel: {
+    borderRadius: UI_RADIUS.panel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: INDUSTRIAL_UI.panelBorder,
+    backgroundColor: INDUSTRIAL_UI.panelBackground,
+    overflow: 'hidden',
   },
   recentCard: {
     padding: 16,
@@ -576,27 +599,39 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  chips: {
-    padding: 16,
+  bars: {
+    marginTop: 10,
+    gap: 10,
+  },
+  barRow: {
+    gap: 5,
+  },
+  barLabelRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  chip: {
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: '#f1f4f7',
+  barLabel: {
+    color: '#3f4751',
+    fontSize: 13,
+    fontWeight: '700',
   },
-  chipLabel: {
-    color: '#4f5965',
+  barPct: {
+    color: '#68707a',
     fontSize: 12,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
-  chipValue: {
-    marginTop: 2,
-    color: '#171a1f',
-    fontSize: 12,
-    fontWeight: '800',
+  barTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#e8ecf1',
+    overflow: 'hidden',
+  },
+  barFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: INDUSTRIAL_UI.accentRule,
   },
   profileFact: {
     marginHorizontal: 16,
@@ -622,32 +657,5 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.62,
-  },
-  productActionHint: {
-    marginTop: 4,
-    color: '#1677ff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  analysisCta: {
-    marginTop: 22,
-    minHeight: 48,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d7dde5',
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  analysisCtaText: {
-    color: '#171a1f',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  analysisCtaChevron: {
-    color: '#9aa2ad',
-    fontSize: 24,
   },
 });

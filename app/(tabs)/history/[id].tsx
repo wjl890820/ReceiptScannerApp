@@ -16,11 +16,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
-  deleteReceipt,
+  deleteReceipts,
   getReceipt,
+  listReceipts,
   updateReceipt,
   type ReceiptRow,
 } from '@/lib/db';
+import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
+import {
+  expandHistoryPurchaseDeleteIds,
+  HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
+} from '@/lib/historyPurchaseTruth';
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
@@ -428,7 +434,15 @@ export default function ReceiptDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteReceipt(receipt.id);
+              // Expand confirmed high-confidence duplicate group so the
+              // purchase cannot immediately reappear from a hidden scan.
+              const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+              const selection = selectAnalyticsReceipts(stored);
+              const deleteIds = expandHistoryPurchaseDeleteIds(
+                [receipt.id],
+                selection.highConfidenceDuplicateGroups
+              );
+              await deleteReceipts(deleteIds);
               Alert.alert(t('history.detail.deletedTitle'));
               navigateBackOrHistory(router);
             } catch (e: any) {

@@ -33,6 +33,8 @@ import {
   t,
   type LocalePreference,
 } from '@/lib/i18n';
+import { IndustrialSectionHeader } from '@/components/IndustrialSectionHeader';
+import { SECTION_MICRO } from '@/lib/sectionMicroLabels';
 import { getMissingInProductDictionaryTop100 } from '@/lib/missingDictionaryCandidates';
 import { getCanonicalNamePriceStats } from '@/lib/priceStats';
 import {
@@ -714,7 +716,10 @@ export default function SettingsScreen() {
 
       {showAppleAccount ? (
         <View style={styles.group}>
-          <Text style={styles.sectionLabel}>{t('settings.account.title')}</Text>
+          <IndustrialSectionHeader
+            microLabel={SECTION_MICRO.settings.account}
+            title={t('settings.account.title')}
+          />
           {accountBusy ? (
             <Text style={styles.accountBody}>{t('settings.account.busy')}</Text>
           ) : null}
@@ -785,7 +790,7 @@ export default function SettingsScreen() {
             <SettingsRow
               title={t('settings.pro.title')}
               subtitle={t('settings.pro.subtitle')}
-              onPress={() => router.push('/(tabs)/pro-insight')}
+              onPress={() => router.push('/(tabs)/settings/pro-insight' as any)}
               accessibilityLabel={t('settings.pro.title')}
             />
           </>
@@ -794,7 +799,7 @@ export default function SettingsScreen() {
         <SettingsRow
           title={t('settings.feedback.title')}
           subtitle={t('settings.feedback.subtitle')}
-          onPress={() => router.push('/(tabs)/feedback')}
+          onPress={() => router.push('/(tabs)/settings/feedback' as any)}
           accessibilityLabel={t('settings.feedback.title')}
         />
         <View style={styles.separator} />
@@ -883,7 +888,7 @@ export default function SettingsScreen() {
             <SettingsRow
               title="Uncategorized Items"
               subtitle="列表选择分类 → 写入 product_dictionary"
-              onPress={() => router.push('/(tabs)/uncategorized-items' as Href)}
+              onPress={() => router.push('/(tabs)/settings/uncategorized-items' as any)}
               accessibilityLabel="Uncategorized Items"
             />
             <View style={styles.separator} />

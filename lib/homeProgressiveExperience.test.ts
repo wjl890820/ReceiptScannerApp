@@ -131,4 +131,37 @@ describe('progressive Home integration boundaries', () => {
       );
     }
   });
+
+  it('identity Frequent card model: 18 purchases → quantity 47 (not hardcoded 0)', () => {
+    const { buildIdentityFrequentProductGroups } =
+      require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
+    const observations = Array.from({ length: 18 }, (_, i) => ({
+      receiptId: `yoko-${i + 1}`,
+      itemSourceIndex: 0,
+      rawName: '横浜家系',
+      merchantKey: 'ramen-shop',
+      occurredAt: 1_700_000_000_000 + i * 86_400_000,
+      lineTotal: 800,
+      quantity: i === 0 ? 30 : 1,
+    }));
+    const { groups } = buildIdentityFrequentProductGroups(observations);
+    expect(groups).toHaveLength(1);
+
+    // Same mapping used by buildHomeLongTermFrequentProducts identity path.
+    const card = {
+      purchaseOccurrenceCount: groups[0]!.distinctReceiptCount,
+      totalPurchaseQuantity: groups[0]!.totalPurchaseQuantity,
+    };
+    expect(card.purchaseOccurrenceCount).toBe(18);
+    expect(card.totalPurchaseQuantity).toBe(47);
+
+    const homeSource = fs.readFileSync(
+      path.resolve(__dirname, 'homeProgressiveExperience.ts'),
+      'utf8'
+    );
+    expect(homeSource).toContain('totalPurchaseQuantity: g.totalPurchaseQuantity');
+    expect(homeSource).not.toMatch(
+      /totalPurchaseQuantity:\s*0\s*,\s*\n\s*lastPurchasedAt: g\.latestPurchaseAt/
+    );
+  });
 });

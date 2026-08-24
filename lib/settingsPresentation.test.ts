@@ -84,7 +84,7 @@ describe('settings version/build presentation', () => {
   it('does not hardcode build 15/20 in Settings presentation helpers or screen', () => {
     const files = [
       path.resolve(__dirname, 'settingsPresentation.ts'),
-      path.resolve(__dirname, '../app/(tabs)/settings.tsx'),
+      path.resolve(__dirname, '../app/(tabs)/settings/index.tsx'),
     ];
     for (const file of files) {
       const source = fs.readFileSync(file, 'utf8');
@@ -115,7 +115,7 @@ describe('settings language labels', () => {
 
 describe('settings release surface contracts', () => {
   const settingsSource = fs.readFileSync(
-    path.resolve(__dirname, '../app/(tabs)/settings.tsx'),
+    path.resolve(__dirname, '../app/(tabs)/settings/index.tsx'),
     'utf8'
   );
 

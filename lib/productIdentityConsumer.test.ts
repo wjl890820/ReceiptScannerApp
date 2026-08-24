@@ -284,4 +284,21 @@ describe('Product Identity Batch 5B — frequent + history consumers', () => {
     ]);
     expect(new Set(qualified.map((q) => q.receiptId))).toEqual(new Set(['kept']));
   });
+
+  it('Frequent group: 18 distinct purchases + cumulative qty 47 (横浜家系-style)', () => {
+    const observations = Array.from({ length: 18 }, (_, i) => ({
+      receiptId: `r${i + 1}`,
+      itemSourceIndex: 0,
+      rawName: '横浜家系',
+      merchantKey: 'ラーメン店',
+      occurredAt: Date.parse('2026-01-01') + i * 86_400_000,
+      lineTotal: 800,
+      // 17×1 + 1×30 = 47
+      quantity: i === 0 ? 30 : 1,
+    }));
+    const { groups } = buildIdentityFrequentProductGroups(observations);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.distinctReceiptCount).toBe(18);
+    expect(groups[0]!.totalPurchaseQuantity).toBe(47);
+  });
 });

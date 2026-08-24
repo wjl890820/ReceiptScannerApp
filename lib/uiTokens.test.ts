@@ -34,7 +34,7 @@ describe('uiTokens contract (R2-B5)', () => {
       ['lg', 'md', 'sm', 'xl', 'xs'].sort()
     );
     expect(Object.keys(UI_RADIUS).sort()).toEqual(
-      ['card', 'control', 'input', 'pill'].sort()
+      ['card', 'control', 'hero', 'input', 'panel', 'pill'].sort()
     );
     expect(Object.keys(UI_TYPOGRAPHY).sort()).toEqual(
       [
@@ -101,7 +101,7 @@ describe('uiTokens contract (R2-B5)', () => {
       '../app/(tabs)/history/index.tsx',
       '../app/(tabs)/history/[id].tsx',
       '../app/product/[targetType].tsx',
-      '../app/(tabs)/settings.tsx',
+      '../app/(tabs)/settings/index.tsx',
     ];
     for (const relative of screens) {
       const source = fs.readFileSync(path.join(__dirname, relative), 'utf8');

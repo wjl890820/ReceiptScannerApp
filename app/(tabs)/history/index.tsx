@@ -17,7 +17,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { deleteReceipts, listReceiptsForList, type ReceiptListRow } from '@/lib/db';
+import { deleteReceipts, listReceipts, type ReceiptListRow } from '@/lib/db';
+import type { AnalysisDDuplicateGroup } from '@/lib/analysisDDuplicateAudit';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
 import { getCategoryLabel } from '@/lib/categoryPalette';
@@ -26,6 +27,13 @@ import {
   buildHistorySelectModeSubtitle,
   formatHistoryMerchantDisplay,
 } from '@/lib/historyPresentation';
+import {
+  buildHistoryPurchaseTruthView,
+  expandHistoryPurchaseDeleteIds,
+  HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
+  projectHistorySearchToPurchaseTruth,
+} from '@/lib/historyPurchaseTruth';
+import { merchantAccentColor } from '@/lib/merchantAccent';
 import { buildTopCategories, buildHistoryMetaLine } from '@/lib/receiptListHelpers';
 import { formatDate } from '@/lib/formatDate';
 import {
@@ -59,6 +67,9 @@ export default function HistoryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ReceiptListRow[]>([]);
+  const [duplicateGroups, setDuplicateGroups] = useState<
+    AnalysisDDuplicateGroup[]
+  >([]);
   const [refreshing, setRefreshing] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -70,11 +81,17 @@ export default function HistoryScreen() {
   const searchQueryRef = useRef('');
   const searchRequestSequence = useRef(0);
   const lastCompletedNormalizedQueryRef = useRef('');
+  const purchaseTruthRef = useRef<ReturnType<
+    typeof buildHistoryPurchaseTruthView
+  > | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const data = await listReceiptsForList({ limit: 200 });
-      setRows(data);
+      const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+      const truth = buildHistoryPurchaseTruthView(stored);
+      purchaseTruthRef.current = truth;
+      setDuplicateGroups(truth.selection.highConfidenceDuplicateGroups);
+      setRows(truth.visibleRows);
     } catch (e: any) {
       console.error(e);
       Alert.alert(t('history.errors.loadTitle'), t('history.errors.loadMessage'));
@@ -117,9 +134,27 @@ export default function HistoryScreen() {
         return;
       }
 
+      // Ensure purchase-truth groups exist for projection (fresh load if needed).
+      let truth = purchaseTruthRef.current;
+      if (!truth) {
+        const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+        truth = buildHistoryPurchaseTruthView(stored);
+        purchaseTruthRef.current = truth;
+        setDuplicateGroups(truth.selection.highConfidenceDuplicateGroups);
+        setRows(truth.visibleRows);
+      }
+
+      const projected = projectHistorySearchToPurchaseTruth(
+        {
+          itemResults: outcome.itemResults as ReceiptItemSearchResult[],
+          receiptResults: outcome.receiptResults as ReceiptListRow[],
+        },
+        truth.selection
+      );
+
       lastCompletedNormalizedQueryRef.current = outcome.normalizedQuery;
-      setItemResults(outcome.itemResults as ReceiptItemSearchResult[]);
-      setReceiptResults(outcome.receiptResults as ReceiptListRow[]);
+      setItemResults(projected.itemResults);
+      setReceiptResults(projected.receiptResults);
     } finally {
       if (requestId === searchRequestSequence.current) {
         setSearching(false);
@@ -240,12 +275,18 @@ export default function HistoryScreen() {
   }, [rows, selectedIds]);
 
   const onDeleteSelected = useCallback(async () => {
-    const ids = Array.from(selectedIds);
-    if (ids.length === 0) return;
+    const purchaseIds = Array.from(selectedIds);
+    if (purchaseIds.length === 0) return;
+
+    // Confirm by visible purchase count; delete expands confirmed HC groups.
+    const deleteIds = expandHistoryPurchaseDeleteIds(
+      purchaseIds,
+      duplicateGroups
+    );
 
     Alert.alert(
       t('history.batchDelete.confirmTitle'),
-      t('history.batchDelete.confirmMessage', { n: ids.length }),
+      t('history.batchDelete.confirmMessage', { n: purchaseIds.length }),
       [
         { text: t('history.batchDelete.confirmCancel'), style: 'cancel' },
         {
@@ -254,7 +295,7 @@ export default function HistoryScreen() {
           onPress: async () => {
             try {
               setDeleting(true);
-              await deleteReceipts(ids);
+              await deleteReceipts(deleteIds);
               setSelectMode(false);
               setSelectedIds(new Set());
               await load();
@@ -268,7 +309,7 @@ export default function HistoryScreen() {
         },
       ]
     );
-  }, [selectedIds, load]);
+  }, [selectedIds, duplicateGroups, load]);
 
   const onItemPress = useCallback(
     (item: ReceiptListRow) => {
@@ -577,7 +618,16 @@ export default function HistoryScreen() {
                   dateLine: metaLine,
                   totalLabel: formatJPY(item.total),
                 })}
-                style={({ pressed }) => [styles.card, pressed && { opacity: 0.6 }]}
+                style={({ pressed }) => [
+                  styles.card,
+                  {
+                    borderLeftWidth: 4,
+                    borderLeftColor: merchantAccentColor(
+                      item.merchant_normalized || item.merchant_raw
+                    ),
+                  },
+                  pressed && { opacity: 0.6 },
+                ]}
               >
                 <View style={styles.cardInner}>
                   {selectMode && (

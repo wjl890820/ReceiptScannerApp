@@ -35,9 +35,31 @@ export const UI_SPACING = {
 
 export const UI_RADIUS = {
   card: 12,
+  /** Build 53 — structured data panels (less soft than card) */
+  panel: 8,
+  /** Build 53 — hero / primary CTA surfaces */
+  hero: 14,
   control: 10,
   input: 12,
   pill: 999,
+} as const;
+
+/**
+ * Build 53 — Meruno / industrial-data visual language (Arknights-lite ~30%).
+ * Additive tokens only — not a full redesign system.
+ */
+export const INDUSTRIAL_UI = {
+  /** Cool gray for micro English section labels */
+  microLabel: '#6B7A8A',
+  microLabelSize: 10,
+  microLabelTracking: 1.4,
+  structureLine: '#D7DDE5',
+  accentRule: '#1677ff',
+  accentRuleWidth: 3,
+  merchantBarWidth: 4,
+  panelBorder: '#D9DEE6',
+  panelBackground: '#FFFFFF',
+  metricWash: '#F4F6F8',
 } as const;
 
 /** Font sizes only — weights stay local to screens. */

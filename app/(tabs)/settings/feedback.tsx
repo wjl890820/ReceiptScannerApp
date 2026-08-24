@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { t } from '@/lib/i18n';
 import { submitFeedback } from '@/lib/feedbackService';
 import { getSupportEmail } from '@/lib/env';
+import { navigateBackOrSettings } from '@/lib/navigationBack';
 import { UI_COLORS, UI_LAYOUT, UI_RADIUS, UI_TYPOGRAPHY } from '@/lib/uiTokens';
 
 export default function FeedbackScreen() {
@@ -134,7 +135,7 @@ export default function FeedbackScreen() {
     >
       <Pressable
         style={styles.backButton}
-        onPress={() => router.back()}
+        onPress={() => navigateBackOrSettings(router)}
         accessibilityRole="button"
         accessibilityLabel={t('feedback.back')}
         hitSlop={8}

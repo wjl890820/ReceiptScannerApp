@@ -18,6 +18,7 @@ import { getCategoryLabel } from '@/lib/categoryPalette';
 import { buildAnalysisTags, mapLegacyCategoryToV1 } from '@/lib/categoryTaxonomyV1';
 import { isDevToolsUnlocked } from '@/lib/devToolsAccess';
 import { t } from '@/lib/i18n';
+import { navigateBackOrSettings } from '@/lib/navigationBack';
 import {
   getMissingInProductDictionaryTop100,
   type MissingDictionaryCandidate,
@@ -159,7 +160,7 @@ export default function UncategorizedItemsScreen() {
   return (
     <View style={styles.root}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={8}>
+        <Pressable onPress={() => navigateBackOrSettings(router)} style={styles.backBtn} hitSlop={8}>
           <Text style={styles.backText}>← 返回</Text>
         </Pressable>
         <Text style={styles.title}>未分类商品</Text>

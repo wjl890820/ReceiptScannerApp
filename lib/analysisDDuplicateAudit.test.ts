@@ -990,18 +990,21 @@ describe('D2-E3 RECONCILED_STRUCTURAL_EXACT_DUPLICATE', () => {
     expect(groups[0]!.confidence).toBe('STRUCTURAL_EXACT_DUPLICATE');
   });
 
-  test('M — History/raw untouched (selection excludes only analytics extras)', () => {
+  test('M — selection is read-only on stored receipts (History consumer projects separately)', () => {
     const receipts = [
       cleanCostco('2bDvMWs3dkCKagyrYWyxA', 2000),
       noisyCostco('C_aMA69ijcqNLhGI76Y5Q', 1000),
       cleanCostco('n6_vGM5c8X255Psyiup4k', 3000, '_b'),
       cleanCostco('NEHGZCkqd8MiBCyKO-fWd', 4000, '_c'),
     ];
+    const before = JSON.stringify(receipts);
     const selection = selectAnalyticsReceipts(receipts);
     expect(selection.storedReceipts).toHaveLength(4);
     expect(receipts.map((r) => r.id).sort()).toEqual(
       selection.storedReceipts.map((r) => r.id).sort()
     );
+    expect(JSON.stringify(receipts)).toBe(before);
+    expect(selection.analyticsPurchaseCandidateCount).toBe(1);
   });
 
   test('N — category conservation gap remains 0 after reconciled selection', () => {
@@ -1026,7 +1029,7 @@ describe('D2-E3 RECONCILED_STRUCTURAL_EXACT_DUPLICATE', () => {
     expect(composition - activeSum).toBe(0);
   });
 
-  test('O — Home/Analysis production parity unchanged (single selection boundary)', () => {
+  test('O — Home/Analysis/History production parity (single selection boundary)', () => {
     const srcHome = fs.readFileSync(
       path.join(__dirname, '..', 'app', '(tabs)', 'index.tsx'),
       'utf8'
@@ -1035,8 +1038,14 @@ describe('D2-E3 RECONCILED_STRUCTURAL_EXACT_DUPLICATE', () => {
       path.join(__dirname, '..', 'app', '(tabs)', 'analysis.tsx'),
       'utf8'
     );
+    const srcHistory = fs.readFileSync(
+      path.join(__dirname, '..', 'app', '(tabs)', 'history', 'index.tsx'),
+      'utf8'
+    );
     expect(srcHome).toContain('selectAnalyticsReceipts');
     expect(srcAnalysis).toContain('selectAnalyticsReceipts');
+    expect(srcHistory).toContain('buildHistoryPurchaseTruthView');
+    expect(srcHistory).toContain('expandHistoryPurchaseDeleteIds');
   });
 
   test('P — price observation / occurrence counts use selected receipt IDs only', () => {
