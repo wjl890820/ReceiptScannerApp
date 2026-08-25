@@ -22,11 +22,6 @@ import {
 } from './productIdentityResolver';
 import { classifyLineKind } from './receiptOcrNormalize';
 import {
-  measureHomeColdStartSync,
-  monotonicNowMs,
-  recordHomeColdStartPhase,
-} from './homeColdStartTiming';
-import {
   createMemoryProductIdentityStore,
   type MerchantProductRecord,
   type ProductIdentityStore,
@@ -322,15 +317,8 @@ export function buildIdentityFrequentProductGroups(
   qualified: QualifiedIdentityObservation[];
   store: ProductIdentityStore;
 } {
-  const { qualified, store: usedStore } = measureHomeColdStartSync(
-    'identityResolution',
-    () => resolveIdentityConsumerObservations(observations, store),
-    (result) => ({
-      observationCount: observations.length,
-      qualifiedObservationCount: result.qualified.length,
-    })
-  );
-  const aggregationStartedAt = monotonicNowMs();
+  const { qualified, store: usedStore } =
+    resolveIdentityConsumerObservations(observations, store);
   const byMp = new Map<string, QualifiedIdentityObservation[]>();
   for (const q of qualified) {
     const list = byMp.get(q.merchantProductId) ?? [];
@@ -405,14 +393,6 @@ export function buildIdentityFrequentProductGroups(
       b.distinctReceiptCount - a.distinctReceiptCount ||
       (b.latestPurchaseAt ?? 0) - (a.latestPurchaseAt ?? 0) ||
       a.displayName.localeCompare(b.displayName)
-  );
-  recordHomeColdStartPhase(
-    'frequentAggregation',
-    monotonicNowMs() - aggregationStartedAt,
-    {
-      merchantProductCount: byMp.size,
-      frequentGroupCount: groups.length,
-    }
   );
   return { groups, qualified, store: usedStore };
 }

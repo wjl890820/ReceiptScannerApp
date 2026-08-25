@@ -19,7 +19,6 @@ import {
   type ReceiptItemIndexBackfillBatchResult,
 } from './receiptItemIndexBackfill';
 import { logger } from './logger';
-import { monotonicNowMs } from './homeColdStartTiming';
 import { resolveOwnershipStamp, TRANSACTION_SOURCE_RECEIPT_OCR } from './receiptOwnershipContext';
 import {
   ensureSyncOutboxSchema,
@@ -132,18 +131,6 @@ export type UpdateReceiptParams = {
 let _db: SQLite.SQLiteDatabase | null = null;
 let _inited = false;
 let _initPromise: Promise<void> | null = null;
-let _lastInitializationTiming: DatabaseInitializationTiming | null = null;
-
-export type DatabaseInitializationTiming = {
-  durationMs: number;
-  completedAtEpochMs: number;
-};
-
-export function getDatabaseInitializationTiming(): DatabaseInitializationTiming | null {
-  return _lastInitializationTiming
-    ? { ..._lastInitializationTiming }
-    : null;
-}
 
 // 数据库版本升级：使用 receipts_v2.db（强制新 schema，包含 transaction_at）
 const DB_NAME = 'receipts_v2.db';
@@ -174,7 +161,6 @@ async function initIfNeeded() {
   }
 
   // 创建初始化 Promise，确保只执行一次
-  const initializationStartedAt = monotonicNowMs();
   _initPromise = (async () => {
     try {
       const db = await getDb();
@@ -625,10 +611,6 @@ async function initIfNeeded() {
 
       // 所有迁移完成后才设置 _inited 标志
       _inited = true;
-      _lastInitializationTiming = {
-        durationMs: Math.max(0, monotonicNowMs() - initializationStartedAt),
-        completedAtEpochMs: Date.now(),
-      };
 
       // 临时"核爆式验证"（DEV ONLY）
       if (__DEV__) {

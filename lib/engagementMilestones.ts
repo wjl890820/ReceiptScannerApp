@@ -14,7 +14,6 @@ import type {
 import { getReceiptItems } from './receiptItems';
 import { jstCalendarDayStartMs } from './dateParser';
 import type { ReceiptRow } from './db';
-import { measureHomeColdStartAsync } from './homeColdStartTiming';
 
 export const ENGAGEMENT_MILESTONES = [1, 3, 5, 10] as const;
 
@@ -1001,17 +1000,10 @@ async function readProductRows(
 
 async function readProductInsightContext(
   db: EngagementMilestoneDatabase,
-  excludedDuplicateReceiptIds?: ReadonlySet<string>,
-  timingPhase?: 'productContextItemIndexRead'
+  excludedDuplicateReceiptIds?: ReadonlySet<string>
 ): Promise<MilestoneProductInsightContext> {
   try {
-    const rows = timingPhase
-      ? await measureHomeColdStartAsync(
-          timingPhase,
-          () => readProductRows(db),
-          (result) => ({ receiptItemRowCount: result.length })
-        )
-      : await readProductRows(db);
+    const rows = await readProductRows(db);
     const filtered =
       excludedDuplicateReceiptIds && excludedDuplicateReceiptIds.size > 0
         ? filterProductRowsByExcludedReceiptIds(
@@ -1223,24 +1215,10 @@ export async function evaluateSavedReceiptMilestone(
  */
 export async function loadEngagementProductInsightContext(): Promise<MilestoneProductInsightContext> {
   const db = await getEngagementMilestoneDb();
-  const receipts = await measureHomeColdStartAsync(
-    'productContextReceiptRead',
-    () => readAllReceipts(db),
-    (result) => ({ receiptCount: result.length })
-  );
-  const { excludedDuplicateReceiptIds } = await measureHomeColdStartAsync(
-    'productContextDuplicateSelection',
-    () => selectEngagementAnalyticsReceipts(receipts),
-    (result) => ({
-      duplicateExtraCount: result.excludedDuplicateReceiptIds.size,
-      purchaseCandidateCount: result.analyticsReceipts.length,
-    })
-  );
-  return readProductInsightContext(
-    db,
-    excludedDuplicateReceiptIds,
-    'productContextItemIndexRead'
-  );
+  const receipts = await readAllReceipts(db);
+  const { excludedDuplicateReceiptIds } =
+    await selectEngagementAnalyticsReceipts(receipts);
+  return readProductInsightContext(db, excludedDuplicateReceiptIds);
 }
 
 export async function evaluateCurrentEngagementMilestone(

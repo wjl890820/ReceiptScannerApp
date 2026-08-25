@@ -67,7 +67,7 @@ describe('Home refresh production wiring', () => {
 
   it('publishes no intermediate Home experience before enrichment completes', () => {
     const receiptRead = homeSource.indexOf(
-      "'initialReceiptRead'"
+      'const allReceipts = await listReceipts();'
     );
     const enrichment = homeSource.indexOf(
       'const [evaluation, productContext] = await Promise.all'
