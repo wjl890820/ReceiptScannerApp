@@ -4,6 +4,7 @@
  */
 
 import type { ReceiptRow } from './db';
+import { filterAnalysisReceiptsByTransactionWindow } from './analysisPeriod';
 import { getReceiptItems } from './receiptItems';
 import { calculateStats, type WeeklyMonthlyStats } from './statsCalculator';
 
@@ -19,7 +20,7 @@ function ts(r: ReceiptRow): number {
   return r.transaction_at ?? r.created_at;
 }
 
-function filterByRange(receipts: ReceiptRow[], startMs: number, endMs: number): ReceiptRow[] {
+function filterAllHistoryByRange(receipts: ReceiptRow[], startMs: number, endMs: number): ReceiptRow[] {
   return receipts.filter((r) => {
     const t = ts(r);
     return t >= startMs && t < endMs;
@@ -98,8 +99,17 @@ export function buildInsights(
   let previousStart = currentStart - periodDays * MS_DAY;
   let previousEnd = currentStart;
 
-  let currentReceipts = filterByRange(receipts, currentStart, currentEnd);
-  let previousReceipts = filterByRange(receipts, previousStart, previousEnd);
+  let currentReceipts = filterAnalysisReceiptsByTransactionWindow(
+    receipts,
+    currentStart,
+    currentEnd,
+    { includeEnd: true }
+  );
+  let previousReceipts = filterAnalysisReceiptsByTransactionWindow(
+    receipts,
+    previousStart,
+    previousEnd
+  );
 
   if (timeRange === 'all') {
     // Keep insight universe aligned with Analysis "all" overview (no silent 30d shrink).
@@ -112,7 +122,11 @@ export function buildInsights(
       // Matched prior window immediately before first receipt — only if we have prior data.
       previousEnd = ts(currentReceipts[0]);
       previousStart = previousEnd - spanMs;
-      previousReceipts = filterByRange(receipts, previousStart, previousEnd);
+      previousReceipts = filterAllHistoryByRange(
+        receipts,
+        previousStart,
+        previousEnd
+      );
       // If no matched prior data, suppress period comparison (avoid partial vs full mismatch).
       if (previousReceipts.length === 0) {
         previousReceipts = [];
@@ -128,8 +142,17 @@ export function buildInsights(
     currentEnd = now;
     previousStart = currentStart - PERIOD_14_DAYS;
     previousEnd = currentStart;
-    currentReceipts = filterByRange(receipts, currentStart, currentEnd);
-    previousReceipts = filterByRange(receipts, previousStart, previousEnd);
+    currentReceipts = filterAnalysisReceiptsByTransactionWindow(
+      receipts,
+      currentStart,
+      currentEnd,
+      { includeEnd: true }
+    );
+    previousReceipts = filterAnalysisReceiptsByTransactionWindow(
+      receipts,
+      previousStart,
+      previousEnd
+    );
   }
 
   const currentStats = calculateStats(currentReceipts, 'all');
@@ -318,4 +341,3 @@ function buildConfidence(
   if (score < 15) return { confidence: 'med', confidenceKey: 'analysisV2.confidence.med' };
   return { confidence: 'high', confidenceKey: 'analysisV2.confidence.high' };
 }
-

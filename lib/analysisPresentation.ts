@@ -5,6 +5,7 @@
  */
 
 import type { ReceiptRow } from './db';
+import { filterAnalysisReceiptsByTimeRange } from './analysisPeriod';
 import { isV1SupportedReceipt } from './merchantType';
 import { V1_SPENDING_PRODUCT_CATEGORIES } from './productCategory';
 import { getReceiptItems } from './receiptItems';
@@ -16,10 +17,6 @@ import {
   type AnalysisMerchantRow,
   type AnalysisSpendChangeSurface,
 } from './analysisValueSurfaces';
-import {
-  filterByRollingWindowDays,
-  rollingDaysForAnalysisRange,
-} from './rollingTimeWindow';
 
 export type AnalysisReleaseStage = 'empty' | 'period_empty' | 'low' | 'ready';
 
@@ -100,21 +97,12 @@ export function resolveAnalysisReleaseStage(options: {
   return 'ready';
 }
 
-function receiptTimestamp(receipt: ReceiptRow): number {
-  return receipt.transaction_at || receipt.created_at || 0;
-}
-
 export function filterReceiptsByTimeRange(
   receipts: ReceiptRow[],
   range: TimeRange,
   now = Date.now()
 ): ReceiptRow[] {
-  return filterByRollingWindowDays(
-    receipts,
-    receiptTimestamp,
-    rollingDaysForAnalysisRange(range),
-    now
-  );
+  return filterAnalysisReceiptsByTimeRange(receipts, range, now);
 }
 
 export function countSupportedItemsInRange(

@@ -8,10 +8,7 @@ import { isGroceryMerchant } from './groceryDetector';
 import { isV1SupportedReceipt } from './merchantType';
 import { resolveItemFinalCategory } from './homeMetricsHelpers';
 import type { ReceiptRow } from './db';
-import {
-  filterByRollingWindowDays,
-  rollingDaysForAnalysisRange,
-} from './rollingTimeWindow';
+import { filterAnalysisReceiptsByTimeRange } from './analysisPeriod';
 
 export type TimeRange = 'week' | 'month' | 'all';
 
@@ -70,12 +67,9 @@ export function calculateStats(
   range: TimeRange = 'all'
 ): WeeklyMonthlyStats {
   const now = Date.now();
-  const days = rollingDaysForAnalysisRange(range);
-  // Use transaction_at with fallback to created_at for consistent time filtering
-  const filteredReceipts = filterByRollingWindowDays(
+  const filteredReceipts = filterAnalysisReceiptsByTimeRange(
     receipts,
-    (r) => r.transaction_at || r.created_at,
-    days,
+    range,
     now
   );
 

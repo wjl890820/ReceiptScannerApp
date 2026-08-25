@@ -33,10 +33,7 @@ import {
 import { getReceiptItems } from './receiptItems';
 import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { resolveItemFinalCategory } from './homeMetricsHelpers';
-import {
-  filterByRollingWindowDays,
-  rollingDaysForAnalysisRange,
-} from './rollingTimeWindow';
+import { filterAnalysisReceiptsByTimeRange } from './analysisPeriod';
 import {
   buildSkuKey,
   hasPersistedSkuIdentity,
@@ -353,8 +350,11 @@ function filterReceiptsForWindow(
   window: AnalysisDWindowId,
   nowMs: number
 ): ReceiptRow[] {
-  const days = rollingDaysForAnalysisRange(windowToTimeRange(window));
-  return filterByRollingWindowDays(receipts, receiptTs, days, nowMs);
+  return filterAnalysisReceiptsByTimeRange(
+    receipts,
+    windowToTimeRange(window),
+    nowMs
+  );
 }
 
 function itemName(item: Record<string, unknown>): string {
