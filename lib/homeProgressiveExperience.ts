@@ -64,11 +64,25 @@ function receiptTimestamp(receipt: ReceiptRow): number {
     : 0;
 }
 
+export function filterHomeIdentityProductRows<
+  T extends Pick<EngagementProductRow, 'receiptId'>,
+>(
+  productRows: readonly T[],
+  supportedReceiptIds: ReadonlySet<string>
+): T[] {
+  return productRows.filter((row) => supportedReceiptIds.has(row.receiptId));
+}
+
 function buildHomeLongTermFrequentProducts(
   analyticsReceipts: ReceiptRow[],
   productRows: readonly EngagementProductRow[]
 ): MilestoneFrequentProduct[] {
   const supported = filterV1SupportedReceipts(analyticsReceipts);
+  const supportedReceiptIds = new Set(supported.map((receipt) => receipt.id));
+  const identityProductRows = filterHomeIdentityProductRows(
+    productRows,
+    supportedReceiptIds
+  );
 
   try {
     // Lazy require keeps env/identity graph out of cold home path when disabled.
@@ -77,7 +91,7 @@ function buildHomeLongTermFrequentProducts(
       const {
         buildIdentityFrequentProductGroups,
       } = require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
-      const observations = productRows.map((row) => ({
+      const observations = identityProductRows.map((row) => ({
         receiptId: row.receiptId,
         itemSourceIndex: row.sourceIndex,
         rawName: row.displayName,

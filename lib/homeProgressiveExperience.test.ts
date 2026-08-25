@@ -4,6 +4,7 @@ import * as path from 'path';
 import type { ReceiptRow } from './db';
 import {
   buildHomeProgressiveExperience,
+  filterHomeIdentityProductRows,
   resolveProgressiveHomeStage,
 } from './homeProgressiveExperience';
 
@@ -103,6 +104,23 @@ describe('progressive Home stage model', () => {
 });
 
 describe('progressive Home integration boundaries', () => {
+  it('preserves product-row order while excluding unsupported receipt IDs', () => {
+    const rows = [
+      { receiptId: 'unsupported-a', marker: 'first' },
+      { receiptId: 'supported-b', marker: 'second' },
+      { receiptId: 'supported-a', marker: 'third' },
+      { receiptId: 'unsupported-b', marker: 'fourth' },
+      { receiptId: 'supported-b', marker: 'fifth' },
+    ];
+
+    expect(
+      filterHomeIdentityProductRows(
+        rows,
+        new Set(['supported-a', 'supported-b'])
+      ).map((row) => row.marker)
+    ).toEqual(['second', 'third', 'fifth']);
+  });
+
   it('keeps the existing scan, batch, retry, recovery, and review wiring', () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, '../app/(tabs)/index.tsx'),
