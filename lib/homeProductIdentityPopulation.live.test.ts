@@ -16,11 +16,6 @@ import {
 import { runShadowIdentityAudit } from './productIdentityShadowAudit';
 import { filterHomeIdentityProductRows } from './homeProgressiveExperience';
 import { filterV1SupportedReceipts } from './merchantType';
-import {
-  beginHomeColdStartTiming,
-  getActiveHomeColdStartTimingSnapshotForTests,
-  resetHomeColdStartTimingForTests,
-} from './homeColdStartTiming';
 
 const ARTIFACT = path.join(
   __dirname,
@@ -96,49 +91,11 @@ describe('Home Product Identity V1 population boundary', () => {
         lineTotal: observation.lineTotal,
         quantity: observation.quantity,
       }));
-      resetHomeColdStartTimingForTests();
-      beginHomeColdStartTiming();
       const { groups, qualified } =
         buildIdentityFrequentProductGroups(consumerObservations);
-      const timingPhases =
-        getActiveHomeColdStartTimingSnapshotForTests()?.phases;
 
       expect(qualified).toHaveLength(932);
       expect(groups).toHaveLength(160);
-      expect(timingPhases?.identityResolverObservationLoop?.counts).toMatchObject(
-        {
-          observationCount: 932,
-          resolvedObservationCount: 932,
-          createdMerchantProductCount: 610,
-        }
-      );
-      expect(timingPhases?.identityNormalization?.counts).toEqual({
-        normalizationCallCount: 932,
-      });
-      expect(timingPhases?.identityExactLookup?.counts).toMatchObject({
-        exactLookupCount: 932,
-        exactLookupHitCount: 322,
-        exactLookupMissCount: 610,
-        exactAcceptedMatchCount: 322,
-      });
-      expect(timingPhases?.identityMerchantProductUpsert?.counts).toEqual({
-        merchantProductUpsertCount: 610,
-        createdMerchantProductCount: 610,
-      });
-      expect(timingPhases?.identityLinkPersistence?.counts).toEqual({
-        linkPersistenceCount: 932,
-      });
-      expect(timingPhases?.identityQualityQualification?.counts).toEqual({
-        qualityEvaluationCount: 932,
-      });
-      expect(timingPhases?.identityQualityNormalization?.counts).toEqual({
-        qualityNormalizationCallCount: 932,
-      });
-      expect(timingPhases?.frequentAggregation?.counts).toEqual({
-        merchantProductCount: 610,
-        frequentGroupCount: 160,
-      });
-      resetHomeColdStartTimingForTests();
     }
   );
 });

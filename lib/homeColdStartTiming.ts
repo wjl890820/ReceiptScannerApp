@@ -19,16 +19,6 @@ export type HomeColdStartTimingPhase =
   | 'homeBuildTotal'
   | 'identityFrequentTotal'
   | 'identityResolution'
-  | 'identityResolverObservationLoop'
-  | 'identityNormalization'
-  | 'identityMerchantCatalogRetrieval'
-  | 'identityExactLookup'
-  | 'identityStemEvaluation'
-  | 'identityFuzzyEvaluation'
-  | 'identityMerchantProductUpsert'
-  | 'identityLinkPersistence'
-  | 'identityQualityQualification'
-  | 'identityQualityNormalization'
   | 'frequentAggregation'
   | 'totalToSnapshotPublication'
   | 'totalToFirstCompleteFrame';
@@ -53,27 +43,6 @@ export type HomeColdStartTimingSummary = {
 
 export type HomeColdStartTimingHandle = {
   correlationId: string;
-};
-
-export type ProductIdentityHotPathTimingPhase = Extract<
-  HomeColdStartTimingPhase,
-  | 'identityResolverObservationLoop'
-  | 'identityNormalization'
-  | 'identityMerchantCatalogRetrieval'
-  | 'identityExactLookup'
-  | 'identityStemEvaluation'
-  | 'identityFuzzyEvaluation'
-  | 'identityMerchantProductUpsert'
-  | 'identityLinkPersistence'
-  | 'identityQualityQualification'
-  | 'identityQualityNormalization'
->;
-
-export type ProductIdentityHotPathTiming = {
-  start(): number;
-  addElapsed(phase: ProductIdentityHotPathTimingPhase, startedAt: number): void;
-  increment(count: string, amount?: number): void;
-  publish(): void;
 };
 
 type MutableHomeColdStartTiming = {
@@ -173,89 +142,6 @@ export function measureHomeColdStartSync<T>(
     counts?.(result)
   );
   return result;
-}
-
-const PRODUCT_IDENTITY_PHASE_COUNTS: Record<
-  ProductIdentityHotPathTimingPhase,
-  readonly string[]
-> = {
-  identityResolverObservationLoop: [
-    'observationCount',
-    'resolvedObservationCount',
-    'emptyNameCount',
-    'createdMerchantProductCount',
-  ],
-  identityNormalization: ['normalizationCallCount'],
-  identityMerchantCatalogRetrieval: [
-    'catalogLookupCount',
-    'catalogCandidateCount',
-  ],
-  identityExactLookup: [
-    'exactLookupCount',
-    'exactLookupHitCount',
-    'exactLookupMissCount',
-    'exactAcceptedMatchCount',
-  ],
-  identityStemEvaluation: [
-    'stemCandidateVisitCount',
-    'stemAcceptedMatchCount',
-  ],
-  identityFuzzyEvaluation: [
-    'fuzzyCandidateVisitCount',
-    'similarityCallCount',
-    'fuzzyCandidateFloorCount',
-    'fuzzyAutoThresholdCount',
-    'fuzzyAcceptedMatchCount',
-  ],
-  identityMerchantProductUpsert: [
-    'merchantProductUpsertCount',
-    'createdMerchantProductCount',
-  ],
-  identityLinkPersistence: ['linkPersistenceCount'],
-  identityQualityQualification: ['qualityEvaluationCount'],
-  identityQualityNormalization: ['qualityNormalizationCallCount'],
-};
-
-export function createProductIdentityHotPathTiming(): ProductIdentityHotPathTiming | null {
-  if (!activeTimingFor()) return null;
-
-  const durations = new Map<ProductIdentityHotPathTimingPhase, number>();
-  const counts = new Map<string, number>();
-  let published = false;
-
-  return {
-    start() {
-      return monotonicNowMs();
-    },
-
-    addElapsed(phase, startedAt) {
-      const elapsed = Math.max(0, monotonicNowMs() - startedAt);
-      durations.set(phase, (durations.get(phase) ?? 0) + elapsed);
-    },
-
-    increment(count, amount = 1) {
-      if (!Number.isFinite(amount)) return;
-      counts.set(count, (counts.get(count) ?? 0) + amount);
-    },
-
-    publish() {
-      if (published) return;
-      published = true;
-      for (const phase of Object.keys(
-        PRODUCT_IDENTITY_PHASE_COUNTS
-      ) as ProductIdentityHotPathTimingPhase[]) {
-        const phaseCounts: HomeColdStartTimingCounts = {};
-        for (const count of PRODUCT_IDENTITY_PHASE_COUNTS[phase]) {
-          phaseCounts[count] = counts.get(count) ?? 0;
-        }
-        recordHomeColdStartPhase(
-          phase,
-          durations.get(phase) ?? 0,
-          phaseCounts
-        );
-      }
-    },
-  };
 }
 
 export async function measureHomeColdStartAsync<T>(

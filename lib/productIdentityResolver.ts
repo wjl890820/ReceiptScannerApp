@@ -22,14 +22,13 @@ import {
   stemStructuralEvidenceBalanced,
   type StructuralConflict,
 } from './productIdentityStructuralConflict';
-import { combinedNameSimilarity } from './productIdentitySimilarity';
+import { combinedNameSimilarityAtOrAbovePotential } from './productIdentitySimilarity';
 import { buildIdentityNameStem } from './productIdentityNameStem';
 import { resolveProductIdentity } from './productIdentity';
 import type {
   MerchantProductRecord,
   ProductIdentityStore,
 } from './productIdentityStore';
-import type { ProductIdentityHotPathTiming } from './homeColdStartTiming';
 
 /** Same-merchant fuzzy auto-match (intentionally very high). */
 export const FUZZY_AUTO_MATCH_THRESHOLD = 0.98;
@@ -125,11 +124,9 @@ function persistOptionalLink(
   input: ResolveIdentityInput,
   fingerprint: string,
   merchantKey: string,
-  link: ReceiptItemIdentityLink,
-  timing?: ProductIdentityHotPathTiming | null
+  link: ReceiptItemIdentityLink
 ): void {
   if (input.receiptId == null || input.itemSourceIndex == null) return;
-  const startedAt = timing?.start();
   store.saveLink({
     receiptId: input.receiptId,
     itemSourceIndex: input.itemSourceIndex,
@@ -137,10 +134,6 @@ function persistOptionalLink(
     merchantKey,
     ...link,
   });
-  timing?.increment('linkPersistenceCount');
-  if (startedAt != null) {
-    timing?.addElapsed('identityLinkPersistence', startedAt);
-  }
 }
 
 function finishMatch(args: {
@@ -159,7 +152,6 @@ function finishMatch(args: {
   reason: string;
   fuzzyCandidates: FuzzyCandidate[];
   conflictsRejected: StructuralConflict[];
-  timing?: ProductIdentityHotPathTiming | null;
 }): ResolveIdentityResult {
   const link = makeLink({
     merchantProductId: args.merchant.id,
@@ -173,8 +165,7 @@ function finishMatch(args: {
     args.input,
     args.fingerprint,
     args.merchant.merchantKey,
-    link,
-    args.timing
+    link
   );
   return {
     link,
@@ -218,17 +209,11 @@ export function isUnknownMerchantScopeKey(merchantKey: string | null | undefined
 
 export function resolveReceiptItemIdentity(
   input: ResolveIdentityInput,
-  store: ProductIdentityStore,
-  timing?: ProductIdentityHotPathTiming | null
+  store: ProductIdentityStore
 ): ResolveIdentityResult {
   const merchantKey = scopeMerchantKeyForIdentity(input.merchantKey, input.receiptId);
   const rawName = typeof input.rawName === 'string' ? input.rawName : '';
-  const normalizationStartedAt = timing?.start();
   const norm = normalizeProductForIdentity(rawName);
-  timing?.increment('normalizationCallCount');
-  if (normalizationStartedAt != null) {
-    timing?.addElapsed('identityNormalization', normalizationStartedAt);
-  }
   const attributes = norm.attributes ?? emptyProductAttributes();
   const fingerprint = buildItemIdentityFingerprint({
     rawName,
@@ -289,13 +274,7 @@ export function resolveReceiptItemIdentity(
     }
   }
 
-  const catalogStartedAt = timing?.start();
   const catalog = store.listMerchantProducts(merchantKey);
-  timing?.increment('catalogLookupCount');
-  timing?.increment('catalogCandidateCount', catalog.length);
-  if (catalogStartedAt != null) {
-    timing?.addElapsed('identityMerchantCatalogRetrieval', catalogStartedAt);
-  }
 
   const inquiryStem = buildIdentityNameStem(
     norm.normalizedName || norm.comparisonKey || rawName
@@ -303,18 +282,10 @@ export function resolveReceiptItemIdentity(
 
   // 2) Exact comparisonKey within merchant
   if (norm.comparisonKey) {
-    const exactStartedAt = timing?.start();
     const exact = store.findMerchantProductByComparisonKey(
       merchantKey,
       norm.comparisonKey
     );
-    timing?.increment('exactLookupCount');
-    timing?.increment(
-      exact ? 'exactLookupHitCount' : 'exactLookupMissCount'
-    );
-    if (exactStartedAt != null) {
-      timing?.addElapsed('identityExactLookup', exactStartedAt);
-    }
     if (exact) {
       const compat = attributesAreCompatible(
         attributes,
@@ -323,7 +294,6 @@ export function resolveReceiptItemIdentity(
         `${exact.canonicalDisplayName ?? ''} ${exact.normalizedName ?? ''}`
       );
       if (compat.ok) {
-        timing?.increment('exactAcceptedMatchCount');
         return finishMatch({
           store,
           input,
@@ -340,7 +310,6 @@ export function resolveReceiptItemIdentity(
           reason: 'same_merchant_comparison_key',
           fuzzyCandidates,
           conflictsRejected,
-          timing,
         });
       }
       conflictsRejected.push(...compat.conflicts);
@@ -351,9 +320,7 @@ export function resolveReceiptItemIdentity(
   // Bridges unit aliases like 1L ↔ 1000ml without fuzzy merge.
   // Underspecified anchors must NOT bridge conflicting specified variants.
   if (inquiryStem.length >= 2) {
-    const stemStartedAt = timing?.start();
     for (const candidate of catalog) {
-      timing?.increment('stemCandidateVisitCount');
       const candStem = buildIdentityNameStem(
         candidate.normalizedName ||
           candidate.canonicalDisplayName ||
@@ -383,10 +350,6 @@ export function resolveReceiptItemIdentity(
         conflictsRejected.push(...compat.conflicts);
         continue;
       }
-      timing?.increment('stemAcceptedMatchCount');
-      if (stemStartedAt != null) {
-        timing?.addElapsed('identityStemEvaluation', stemStartedAt);
-      }
       return finishMatch({
         store,
         input,
@@ -403,35 +366,17 @@ export function resolveReceiptItemIdentity(
         reason: 'same_merchant_identity_stem',
         fuzzyCandidates,
         conflictsRejected,
-        timing,
       });
-    }
-    if (stemStartedAt != null) {
-      timing?.addElapsed('identityStemEvaluation', stemStartedAt);
     }
   }
 
   // 3–4) Alias / dictionary exact
   if (strongName) {
-    const strongNormalizationStartedAt = timing?.start();
     const strong = normalizeProductForIdentity(strongName);
-    timing?.increment('normalizationCallCount');
-    if (strongNormalizationStartedAt != null) {
-      timing?.addElapsed(
-        'identityNormalization',
-        strongNormalizationStartedAt
-      );
-    }
-    const exactStartedAt = timing?.start();
     const hit = store.findMerchantProductByComparisonKey(
       merchantKey,
       strong.comparisonKey
     );
-    timing?.increment('exactLookupCount');
-    timing?.increment(hit ? 'exactLookupHitCount' : 'exactLookupMissCount');
-    if (exactStartedAt != null) {
-      timing?.addElapsed('identityExactLookup', exactStartedAt);
-    }
     if (hit) {
       const compat = attributesAreCompatible(
         attributes,
@@ -440,7 +385,6 @@ export function resolveReceiptItemIdentity(
         `${hit.canonicalDisplayName ?? ''} ${hit.normalizedName ?? ''}`
       );
       if (compat.ok) {
-        timing?.increment('exactAcceptedMatchCount');
         return finishMatch({
           store,
           input,
@@ -457,7 +401,6 @@ export function resolveReceiptItemIdentity(
           reason: 'alias_or_dictionary_exact',
           fuzzyCandidates,
           conflictsRejected,
-          timing,
         });
       }
       conflictsRejected.push(...compat.conflicts);
@@ -466,16 +409,14 @@ export function resolveReceiptItemIdentity(
 
   // 5) Same-merchant fuzzy only
   let bestAuto: { merchant: MerchantProductRecord; score: number } | null = null;
-  const fuzzyStartedAt = timing?.start();
   for (const candidate of catalog) {
-    timing?.increment('fuzzyCandidateVisitCount');
-    timing?.increment('similarityCallCount');
-    const score = combinedNameSimilarity(
+    const score = combinedNameSimilarityAtOrAbovePotential(
       norm.comparisonKey,
-      candidate.comparisonKey
+      candidate.comparisonKey,
+      FUZZY_CANDIDATE_FLOOR
     );
+    if (score == null) continue;
     if (score < FUZZY_CANDIDATE_FLOOR) continue;
-    timing?.increment('fuzzyCandidateFloorCount');
     const compat = attributesAreCompatible(
       attributes,
       candidate.attributes ?? emptyProductAttributes(),
@@ -495,7 +436,6 @@ export function resolveReceiptItemIdentity(
       continue;
     }
     if (score >= FUZZY_AUTO_MATCH_THRESHOLD) {
-      timing?.increment('fuzzyAutoThresholdCount');
       fuzzyCandidates.push({
         merchantProductId: candidate.id,
         displayName: candidate.canonicalDisplayName,
@@ -518,12 +458,8 @@ export function resolveReceiptItemIdentity(
       });
     }
   }
-  if (fuzzyStartedAt != null) {
-    timing?.addElapsed('identityFuzzyEvaluation', fuzzyStartedAt);
-  }
 
   if (bestAuto) {
-    timing?.increment('fuzzyAcceptedMatchCount');
     return finishMatch({
       store,
       input,
@@ -543,13 +479,11 @@ export function resolveReceiptItemIdentity(
       reason: 'same_merchant_fuzzy_auto',
       fuzzyCandidates,
       conflictsRejected,
-      timing,
     });
   }
 
   // 6) Create MerchantProduct when comparison key exists
   if (norm.comparisonKey) {
-    const upsertStartedAt = timing?.start();
     const created = store.upsertMerchantProduct({
       merchantKey,
       comparisonKey: norm.comparisonKey,
@@ -562,10 +496,6 @@ export function resolveReceiptItemIdentity(
       brand: null,
       attributes,
     });
-    timing?.increment('merchantProductUpsertCount');
-    if (upsertStartedAt != null) {
-      timing?.addElapsed('identityMerchantProductUpsert', upsertStartedAt);
-    }
 
     const legacy = resolveProductIdentity({ rawName });
     const familyKey = legacy.productFamilyKey;
@@ -604,7 +534,6 @@ export function resolveReceiptItemIdentity(
       reason,
       fuzzyCandidates,
       conflictsRejected,
-      timing,
     });
   }
 

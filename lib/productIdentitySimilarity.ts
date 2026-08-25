@@ -63,3 +63,61 @@ export function combinedNameSimilarity(a: string, b: string): number {
   const jac = jaccardSimilarity(a, b);
   return 0.65 * lev + 0.35 * jac;
 }
+
+export type FuzzySimilarityDiagnostics = {
+  candidateVisits: number;
+  upperBoundRejected: number;
+  lengthUpperBoundRejected: number;
+  tokenUpperBoundRejected: number;
+  expensiveSimilarityCalls: number;
+};
+
+function levenshteinSimilarityLengthUpperBound(a: string, b: string): number {
+  const maxLength = Math.max(a.length, b.length);
+  return maxLength === 0
+    ? 1
+    : 1 - Math.abs(a.length - b.length) / maxLength;
+}
+
+/**
+ * Exact upper bound for the current combined score before Levenshtein work.
+ * distance(a,b) >= |length(a)-length(b)|, therefore Levenshtein similarity
+ * cannot exceed 1 - lengthDifference / maxLength. Jaccard is computed exactly.
+ */
+export function combinedNameSimilarityUpperBound(
+  a: string,
+  b: string
+): number {
+  const levenshteinUpperBound = levenshteinSimilarityLengthUpperBound(a, b);
+  return 0.65 * levenshteinUpperBound + 0.35 * jaccardSimilarity(a, b);
+}
+
+/**
+ * Returns null only when the unchanged combined score is provably below the
+ * supplied floor. Survivors use combinedNameSimilarity without modification.
+ */
+export function combinedNameSimilarityAtOrAbovePotential(
+  a: string,
+  b: string,
+  floor: number,
+  diagnostics?: FuzzySimilarityDiagnostics
+): number | null {
+  if (diagnostics) diagnostics.candidateVisits += 1;
+  const levenshteinUpperBound = levenshteinSimilarityLengthUpperBound(a, b);
+  if (0.65 * levenshteinUpperBound + 0.35 < floor) {
+    if (diagnostics) {
+      diagnostics.upperBoundRejected += 1;
+      diagnostics.lengthUpperBoundRejected += 1;
+    }
+    return null;
+  }
+  if (combinedNameSimilarityUpperBound(a, b) < floor) {
+    if (diagnostics) {
+      diagnostics.upperBoundRejected += 1;
+      diagnostics.tokenUpperBoundRejected += 1;
+    }
+    return null;
+  }
+  if (diagnostics) diagnostics.expensiveSimilarityCalls += 1;
+  return combinedNameSimilarity(a, b);
+}
