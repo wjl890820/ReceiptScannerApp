@@ -5,6 +5,7 @@
 
 import type { ReceiptRow } from './db';
 import { filterAnalysisReceiptsByTransactionWindow } from './analysisPeriod';
+import { filterAnalysisJpyReceipts } from './analysisCurrency';
 import { getReceiptItems } from './receiptItems';
 import { calculateStats, type WeeklyMonthlyStats } from './statsCalculator';
 
@@ -74,7 +75,7 @@ export type BuildInsightsOutput = {
   currentStats: WeeklyMonthlyStats;
   /** Previous period stats (for UI) */
   previousStats: WeeklyMonthlyStats | null;
-  /** Current period receipts count */
+  /** Current period JPY Analysis receipts count */
   currentReceiptsCount: number;
   /** Current period items count */
   currentItemsCount: number;
@@ -92,6 +93,7 @@ export function buildInsights(
   receipts: ReceiptRow[],
   timeRange: TimeRange
 ): BuildInsightsOutput {
+  const monetaryReceipts = filterAnalysisJpyReceipts(receipts);
   const now = Date.now();
   let periodDays = timeRange === 'week' ? 7 : 30;
   let currentStart = now - periodDays * MS_DAY;
@@ -100,13 +102,13 @@ export function buildInsights(
   let previousEnd = currentStart;
 
   let currentReceipts = filterAnalysisReceiptsByTransactionWindow(
-    receipts,
+    monetaryReceipts,
     currentStart,
     currentEnd,
     { includeEnd: true }
   );
   let previousReceipts = filterAnalysisReceiptsByTransactionWindow(
-    receipts,
+    monetaryReceipts,
     previousStart,
     previousEnd
   );
@@ -114,7 +116,7 @@ export function buildInsights(
   if (timeRange === 'all') {
     // Keep insight universe aligned with Analysis "all" overview (no silent 30d shrink).
     // Period-over-period changes use a matched trailing window of equal length when possible.
-    currentReceipts = [...receipts].sort((a, b) => ts(a) - ts(b));
+    currentReceipts = [...monetaryReceipts].sort((a, b) => ts(a) - ts(b));
     previousReceipts = [];
     if (currentReceipts.length >= 2) {
       const spanMs = Math.max(0, ts(currentReceipts[currentReceipts.length - 1]) - ts(currentReceipts[0]));
@@ -123,7 +125,7 @@ export function buildInsights(
       previousEnd = ts(currentReceipts[0]);
       previousStart = previousEnd - spanMs;
       previousReceipts = filterAllHistoryByRange(
-        receipts,
+        monetaryReceipts,
         previousStart,
         previousEnd
       );
@@ -143,13 +145,13 @@ export function buildInsights(
     previousStart = currentStart - PERIOD_14_DAYS;
     previousEnd = currentStart;
     currentReceipts = filterAnalysisReceiptsByTransactionWindow(
-      receipts,
+      monetaryReceipts,
       currentStart,
       currentEnd,
       { includeEnd: true }
     );
     previousReceipts = filterAnalysisReceiptsByTransactionWindow(
-      receipts,
+      monetaryReceipts,
       previousStart,
       previousEnd
     );

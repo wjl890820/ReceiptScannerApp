@@ -9,14 +9,15 @@ import { isV1SupportedReceipt } from './merchantType';
 import { resolveItemFinalCategory } from './homeMetricsHelpers';
 import type { ReceiptRow } from './db';
 import { filterAnalysisReceiptsByTimeRange } from './analysisPeriod';
+import { filterAnalysisJpyReceipts } from './analysisCurrency';
 
 export type TimeRange = 'week' | 'month' | 'all';
 
 export type WeeklyMonthlyStats = {
-  totalSpend: number; // All receipts total
+  totalSpend: number; // All Analysis-eligible JPY receipt totals
   /** Legacy：仅 supermarket 小票合计（不含 convenience） */
   grocerySpend: number;
-  /** V1：supermarket + convenience 小票合计 */
+  /** V1 Analysis：JPY supermarket + convenience 小票合计 */
   supportedSpend: number;
   supportedReceiptCount: number;
   /** All eligible categorized rows (same universe as categoryCompositionTotal). */
@@ -72,16 +73,17 @@ export function calculateStats(
     range,
     now
   );
+  const monetaryReceipts = filterAnalysisJpyReceipts(filteredReceipts);
 
-  // Total spend (all receipts)
-  const totalSpend = filteredReceipts.reduce((sum, r) => sum + (r.total || 0), 0);
+  // Total spend (all JPY receipts; Analysis V1 performs no FX conversion)
+  const totalSpend = monetaryReceipts.reduce((sum, r) => sum + (r.total || 0), 0);
 
   // Grocery spend (supermarket only — legacy field, unchanged semantics)
-  const groceryReceipts = filteredReceipts.filter(isGroceryReceipt);
+  const groceryReceipts = monetaryReceipts.filter(isGroceryReceipt);
   const grocerySpend = groceryReceipts.reduce((sum, r) => sum + (r.total || 0), 0);
 
   // V1 supported spend (supermarket + convenience)
-  const supportedReceipts = filteredReceipts.filter(isV1SupportedReceipt);
+  const supportedReceipts = monetaryReceipts.filter(isV1SupportedReceipt);
   const supportedSpend = supportedReceipts.reduce((sum, r) => sum + (r.total || 0), 0);
   const supportedReceiptCount = supportedReceipts.length;
 

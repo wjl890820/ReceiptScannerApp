@@ -6,6 +6,7 @@
 
 import type { ReceiptRow } from './db';
 import { filterAnalysisReceiptsByTimeRange } from './analysisPeriod';
+import { isAnalysisJpyReceipt } from './analysisCurrency';
 import { isV1SupportedReceipt } from './merchantType';
 import { V1_SPENDING_PRODUCT_CATEGORIES } from './productCategory';
 import { getReceiptItems } from './receiptItems';
@@ -111,7 +112,8 @@ export function countSupportedItemsInRange(
   now = Date.now()
 ): number {
   const supported = filterReceiptsByTimeRange(receipts, range, now).filter(
-    isV1SupportedReceipt
+    (receipt) =>
+      isV1SupportedReceipt(receipt) && isAnalysisJpyReceipt(receipt)
   );
   let count = 0;
   for (const receipt of supported) {

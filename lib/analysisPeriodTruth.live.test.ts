@@ -30,6 +30,32 @@ describe('Analysis period truth — 127 receipt live control', () => {
       jest.spyOn(Date, 'now').mockReturnValue(REFERENCE_NOW);
       try {
         const payload = JSON.parse(fs.readFileSync(ARTIFACT, 'utf8'));
+        const currencyDistribution = (payload.receipts ?? []).reduce(
+          (
+            counts: {
+              jpy: number;
+              missingOrUnknown: number;
+              nonJpy: number;
+              malformed: number;
+            },
+            raw: Record<string, unknown>
+          ) => {
+            const value = raw.currency;
+            if (value == null || (typeof value === 'string' && !value.trim())) {
+              counts.missingOrUnknown += 1;
+            } else if (typeof value !== 'string') {
+              counts.malformed += 1;
+            } else {
+              const currency = value.trim().toUpperCase();
+              if (currency === 'JPY') counts.jpy += 1;
+              else if (currency === 'UNKNOWN') counts.missingOrUnknown += 1;
+              else if (/^[A-Z]{3}$/.test(currency)) counts.nonJpy += 1;
+              else counts.malformed += 1;
+            }
+            return counts;
+          },
+          { jpy: 0, missingOrUnknown: 0, nonJpy: 0, malformed: 0 }
+        );
         const storedReceipts = (payload.receipts ?? []).map(
           receiptRowFromIntelligenceExport
         );
@@ -55,6 +81,12 @@ describe('Analysis period truth — 127 receipt live control', () => {
         const monthSpendChange = buildAnalysisSpendChangeSurface(monthInsights);
 
         expect(selection.storedReceipts).toHaveLength(127);
+        expect(currencyDistribution).toEqual({
+          jpy: 127,
+          missingOrUnknown: 0,
+          nonJpy: 0,
+          malformed: 0,
+        });
         expect(selection.highConfidenceDuplicateExtras).toBe(23);
         expect(selection.analyticsReceipts).toHaveLength(104);
         expect(allStats.supportedReceiptCount).toBe(100);
