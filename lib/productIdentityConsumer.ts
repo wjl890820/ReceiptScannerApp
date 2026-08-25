@@ -22,6 +22,7 @@ import {
 } from './productIdentityResolver';
 import { classifyLineKind } from './receiptOcrNormalize';
 import {
+  createProductIdentityHotPathTiming,
   measureHomeColdStartSync,
   monotonicNowMs,
   recordHomeColdStartPhase,
@@ -160,10 +161,16 @@ export function resolveIdentityConsumerObservations(
     purchaseUnitPrice: number | null;
   };
   const draft: Draft[] = [];
+  const hotPathTiming = createProductIdentityHotPathTiming();
+  const resolverLoopStartedAt = hotPathTiming?.start();
 
   for (const obs of observations) {
+    hotPathTiming?.increment('observationCount');
     const name = (obs.rawName || '').trim();
-    if (!name) continue;
+    if (!name) {
+      hotPathTiming?.increment('emptyNameCount');
+      continue;
+    }
     const result = resolveReceiptItemIdentity(
       {
         rawName: name,
@@ -173,13 +180,24 @@ export function resolveIdentityConsumerObservations(
         quantity: obs.quantity,
         lineTotal: obs.lineTotal,
       },
-      store
+      store,
+      hotPathTiming
     );
+    hotPathTiming?.increment('resolvedObservationCount');
+    if (result.createdMerchantProduct) {
+      hotPathTiming?.increment('createdMerchantProductCount');
+    }
     draft.push({
       ...obs,
       merchantProductId: result.link.merchantProductId,
       purchaseUnitPrice: computePurchaseUnitPrice(obs.lineTotal, obs.quantity),
     });
+  }
+  if (resolverLoopStartedAt != null) {
+    hotPathTiming?.addElapsed(
+      'identityResolverObservationLoop',
+      resolverLoopStartedAt
+    );
   }
 
   const peersByMp = new Map<string, number[]>();
@@ -191,6 +209,7 @@ export function resolveIdentityConsumerObservations(
   }
 
   const qualified: QualifiedIdentityObservation[] = [];
+  const qualityLoopStartedAt = hotPathTiming?.start();
   for (const row of draft) {
     if (!row.merchantProductId) continue;
     const peerPrices = [...(peersByMp.get(row.merchantProductId) ?? [])];
@@ -198,7 +217,15 @@ export function resolveIdentityConsumerObservations(
       const idx = peerPrices.indexOf(row.purchaseUnitPrice);
       if (idx >= 0) peerPrices.splice(idx, 1);
     }
+    const qualityNormalizationStartedAt = hotPathTiming?.start();
     const attrs = normalizeProductForIdentity(row.rawName).attributes;
+    hotPathTiming?.increment('qualityNormalizationCallCount');
+    if (qualityNormalizationStartedAt != null) {
+      hotPathTiming?.addElapsed(
+        'identityQualityNormalization',
+        qualityNormalizationStartedAt
+      );
+    }
     const quality = evaluatePriceObservationQuality({
       lineTotal: row.lineTotal,
       quantity: row.quantity,
@@ -208,6 +235,7 @@ export function resolveIdentityConsumerObservations(
       isNonProductRow: observationIsNonProductRow(row),
       quantityOcrCorroborated: resolveQuantityOcrCorroboration(row),
     });
+    hotPathTiming?.increment('qualityEvaluationCount');
     qualified.push({
       ...row,
       merchantProductId: row.merchantProductId,
@@ -218,6 +246,13 @@ export function resolveIdentityConsumerObservations(
       suspectedIntegerMultiple: quality.suspectedIntegerMultiple,
     });
   }
+  if (qualityLoopStartedAt != null) {
+    hotPathTiming?.addElapsed(
+      'identityQualityQualification',
+      qualityLoopStartedAt
+    );
+  }
+  hotPathTiming?.publish();
 
   return { store, qualified };
 }

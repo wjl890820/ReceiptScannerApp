@@ -4,6 +4,7 @@ import {
   HOME_COLD_START_TIMING_VERSION,
   appendHomeColdStartTimingSummary,
   beginHomeColdStartTiming,
+  createProductIdentityHotPathTiming,
   getActiveHomeColdStartTimingSnapshotForTests,
   measureHomeColdStartAsync,
   measureHomeColdStartSync,
@@ -12,6 +13,7 @@ import {
   resetHomeColdStartTimingForTests,
   type HomeColdStartTimingSummary,
 } from './homeColdStartTiming';
+import { buildIdentityFrequentProductGroups } from './productIdentityConsumer';
 
 function summary(index: number): HomeColdStartTimingSummary {
   return {
@@ -57,6 +59,75 @@ describe('Home cold-start timing', () => {
           counts: { receiptCount: 127 },
         },
       });
+  });
+
+  it('records aggregate Product Identity hot-path phases without private inputs', () => {
+    beginHomeColdStartTiming();
+    const { groups, qualified } = buildIdentityFrequentProductGroups([
+      {
+        receiptId: 'timing-r1',
+        itemSourceIndex: 0,
+        rawName: 'Timing Secret Product 500ml',
+        merchantKey: 'timing-merchant',
+        occurredAt: 1,
+        lineTotal: 100,
+        quantity: 1,
+      },
+      {
+        receiptId: 'timing-r2',
+        itemSourceIndex: 0,
+        rawName: 'Timing Secret Product 500ml',
+        merchantKey: 'timing-merchant',
+        occurredAt: 2,
+        lineTotal: 100,
+        quantity: 1,
+      },
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(qualified).toHaveLength(2);
+    const phases = getActiveHomeColdStartTimingSnapshotForTests()?.phases;
+    expect(phases?.identityResolverObservationLoop?.counts).toMatchObject({
+      observationCount: 2,
+      resolvedObservationCount: 2,
+      createdMerchantProductCount: 1,
+    });
+    expect(phases?.identityNormalization?.counts).toEqual({
+      normalizationCallCount: 2,
+    });
+    expect(phases?.identityMerchantCatalogRetrieval?.counts).toEqual({
+      catalogLookupCount: 2,
+      catalogCandidateCount: 1,
+    });
+    expect(phases?.identityExactLookup?.counts).toMatchObject({
+      exactLookupCount: 2,
+      exactLookupHitCount: 1,
+      exactLookupMissCount: 1,
+      exactAcceptedMatchCount: 1,
+    });
+    expect(phases?.identityMerchantProductUpsert?.counts).toEqual({
+      merchantProductUpsertCount: 1,
+      createdMerchantProductCount: 1,
+    });
+    expect(phases?.identityLinkPersistence?.counts).toEqual({
+      linkPersistenceCount: 2,
+    });
+    expect(phases?.identityQualityQualification?.counts).toEqual({
+      qualityEvaluationCount: 2,
+    });
+    expect(phases?.identityQualityNormalization?.counts).toEqual({
+      qualityNormalizationCallCount: 2,
+    });
+    expect(phases?.identityFuzzyEvaluation?.counts).toMatchObject({
+      fuzzyCandidateVisitCount: 0,
+      similarityCallCount: 0,
+    });
+    expect(JSON.stringify(phases)).not.toContain('Timing Secret Product');
+    expect(JSON.stringify(phases)).not.toContain('timing-merchant');
+  });
+
+  it('does not create Product Identity timing outside a cold-start correlation', () => {
+    expect(createProductIdentityHotPathTiming()).toBeNull();
   });
 
   it('does not serialize operations that callers start in parallel', async () => {
