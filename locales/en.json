@@ -626,8 +626,8 @@
     "title": "Analysis",
     "loading": "Loading...",
     "timeRange": {
-      "week": "Week",
-      "month": "Month",
+      "week": "Last 7 days",
+      "month": "Last 30 days",
       "all": "All"
     },
     "stats": {
@@ -669,7 +669,7 @@
       "totalSpend": "Total spend",
       "receiptCount": "Receipts",
       "averageSpend": "Average per trip",
-      "itemCount": "Items",
+      "itemCount": "Item entries",
       "categoryTitle": "Category mix",
       "insightTitle": "Period insights",
       "topCategoryInsight": "In recent records, among categorized item spending, “{catLabel}” is the largest share (about {pct}%).",

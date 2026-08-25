@@ -626,8 +626,8 @@
     "title": "分析",
     "loading": "加载中...",
     "timeRange": {
-      "week": "本周",
-      "month": "本月",
+      "week": "近7天",
+      "month": "近30天",
       "all": "全部"
     },
     "stats": {
@@ -669,7 +669,7 @@
       "totalSpend": "总支出",
       "receiptCount": "记录次数",
       "averageSpend": "平均每次",
-      "itemCount": "商品数量",
+      "itemCount": "商品记录",
       "categoryTitle": "分类构成",
       "insightTitle": "本期洞察",
       "topCategoryInsight": "最近记录中，在已分类商品支出里，「{catLabel}」占比最高（约 {pct}%）。",
