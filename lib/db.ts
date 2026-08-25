@@ -1050,12 +1050,11 @@ export async function saveReceipt(
  * 排序依据：优先 transaction_at（小票发生时间），没有则 fallback created_at
  * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
-export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
+async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
   await initIfNeeded();
   const db = await getDb();
 
-  const rows = await db.getAllAsync<ReceiptRow>(
-    `
+  const sql = `
     SELECT
       id, created_at,
       transaction_at,
@@ -1071,12 +1070,23 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
       user_items_json
     FROM receipts
     ORDER BY COALESCE(transaction_at, created_at) DESC
-    LIMIT ?
-    `,
-    [limit]
-  );
+    ${limit == null ? '' : 'LIMIT ?'}
+    `;
+  const rows =
+    limit == null
+      ? await db.getAllAsync<ReceiptRow>(sql)
+      : await db.getAllAsync<ReceiptRow>(sql, [limit]);
 
   return rows ?? [];
+}
+
+export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
+  return listReceiptRows(limit);
+}
+
+/** Full local receipt history for Analysis before purchase-truth projection. */
+export async function listReceiptsForAnalysis(): Promise<ReceiptRow[]> {
+  return listReceiptRows(null);
 }
 
 /**

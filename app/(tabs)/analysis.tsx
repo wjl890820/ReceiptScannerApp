@@ -19,7 +19,7 @@ import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
-import { listReceipts, type ReceiptRow } from '@/lib/db';
+import { listReceiptsForAnalysis, type ReceiptRow } from '@/lib/db';
 import { buildInsights } from '@/lib/buildInsights';
 import {
   buildAnalysisReleaseViewModel,
@@ -53,7 +53,7 @@ export default function AnalysisScreen() {
     try {
       setLoading(true);
       setLoadError(false);
-      const allReceipts = await listReceipts();
+      const allReceipts = await listReceiptsForAnalysis();
       setReceipts(selectAnalyticsReceipts(allReceipts).analyticsReceipts);
     } catch (e) {
       console.error('加载收据失败:', e);
