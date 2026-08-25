@@ -111,23 +111,93 @@ function nowIso(): string {
 
 export function createMemoryProductIdentityStore(): ProductIdentityStore {
   const merchants = new Map<string, MerchantProductRecord>();
+  const merchantProductIdsByMerchant = new Map<string, string[]>();
+  const merchantProductIdsByExactKey = new Map<
+    string,
+    Map<string, string[]>
+  >();
+  const merchantProductInsertionOrder = new Map<string, number>();
+  let nextMerchantProductInsertionOrder = 0;
   const canonicals = new Map<string, CanonicalProduct>();
   const links = new Map<string, ReceiptItemIdentityLinkRecord>();
   const keyOf = (receiptId: string, idx: number) => `${receiptId}#${idx}`;
 
+  const insertMerchantProductIdInOrder = (ids: string[], id: string) => {
+    if (ids.includes(id)) return;
+    const order = merchantProductInsertionOrder.get(id);
+    if (order == null) return;
+    const insertionIndex = ids.findIndex((candidateId) => {
+      const candidateOrder = merchantProductInsertionOrder.get(candidateId);
+      return candidateOrder != null && candidateOrder > order;
+    });
+    if (insertionIndex < 0) {
+      ids.push(id);
+    } else {
+      ids.splice(insertionIndex, 0, id);
+    }
+  };
+
+  const addMerchantProductToIndexes = (row: MerchantProductRecord) => {
+    const merchantIds = merchantProductIdsByMerchant.get(row.merchantKey) ?? [];
+    insertMerchantProductIdInOrder(merchantIds, row.id);
+    merchantProductIdsByMerchant.set(row.merchantKey, merchantIds);
+
+    if (!row.comparisonKey) return;
+    const exactByComparisonKey =
+      merchantProductIdsByExactKey.get(row.merchantKey) ?? new Map();
+    const exactIds = exactByComparisonKey.get(row.comparisonKey) ?? [];
+    insertMerchantProductIdInOrder(exactIds, row.id);
+    exactByComparisonKey.set(row.comparisonKey, exactIds);
+    merchantProductIdsByExactKey.set(row.merchantKey, exactByComparisonKey);
+  };
+
+  const removeMerchantProductFromIndexes = (row: MerchantProductRecord) => {
+    const merchantIds = merchantProductIdsByMerchant.get(row.merchantKey);
+    if (merchantIds) {
+      const index = merchantIds.indexOf(row.id);
+      if (index >= 0) merchantIds.splice(index, 1);
+      if (merchantIds.length === 0) {
+        merchantProductIdsByMerchant.delete(row.merchantKey);
+      }
+    }
+
+    if (!row.comparisonKey) return;
+    const exactByComparisonKey = merchantProductIdsByExactKey.get(
+      row.merchantKey
+    );
+    const exactIds = exactByComparisonKey?.get(row.comparisonKey);
+    if (exactIds) {
+      const index = exactIds.indexOf(row.id);
+      if (index >= 0) exactIds.splice(index, 1);
+      if (exactIds.length === 0) {
+        exactByComparisonKey?.delete(row.comparisonKey);
+      }
+      if (exactByComparisonKey?.size === 0) {
+        merchantProductIdsByExactKey.delete(row.merchantKey);
+      }
+    }
+  };
+
+  const findMerchantProductByExactKey = (
+    merchantKey: string,
+    comparisonKey: string
+  ): MerchantProductRecord | null => {
+    if (!comparisonKey) return null;
+    const firstId = merchantProductIdsByExactKey
+      .get(merchantKey)
+      ?.get(comparisonKey)?.[0];
+    return firstId ? merchants.get(firstId) ?? null : null;
+  };
+
   return {
     listMerchantProducts(merchantKey) {
-      return [...merchants.values()].filter((m) => m.merchantKey === merchantKey);
+      return (merchantProductIdsByMerchant.get(merchantKey) ?? [])
+        .map((id) => merchants.get(id))
+        .filter((row): row is MerchantProductRecord => row != null);
     },
 
     findMerchantProductByComparisonKey(merchantKey, comparisonKey) {
-      if (!comparisonKey) return null;
-      for (const m of merchants.values()) {
-        if (m.merchantKey === merchantKey && m.comparisonKey === comparisonKey) {
-          return m;
-        }
-      }
-      return null;
+      return findMerchantProductByExactKey(merchantKey, comparisonKey);
     },
 
     upsertMerchantProduct(input) {
@@ -135,15 +205,11 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
       const existingById = input.id ? merchants.get(input.id) : undefined;
       let existingByKey: MerchantProductRecord | undefined;
       if (!existingById && input.comparisonKey) {
-        for (const m of merchants.values()) {
-          if (
-            m.merchantKey === input.merchantKey &&
-            m.comparisonKey === input.comparisonKey
-          ) {
-            existingByKey = m;
-            break;
-          }
-        }
+        existingByKey =
+          findMerchantProductByExactKey(
+            input.merchantKey,
+            input.comparisonKey
+          ) ?? undefined;
       }
       const existing = existingById ?? existingByKey;
       const id =
@@ -178,7 +244,29 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
             ? input.semanticResolverVersion
             : existing?.semanticResolverVersion ?? null,
       };
+      const previous = merchants.get(id);
+      if (!merchantProductInsertionOrder.has(id)) {
+        merchantProductInsertionOrder.set(
+          id,
+          nextMerchantProductInsertionOrder
+        );
+        nextMerchantProductInsertionOrder += 1;
+      }
+      if (
+        previous &&
+        (previous.merchantKey !== row.merchantKey ||
+          previous.comparisonKey !== row.comparisonKey)
+      ) {
+        removeMerchantProductFromIndexes(previous);
+      }
       merchants.set(id, row);
+      if (
+        !previous ||
+        previous.merchantKey !== row.merchantKey ||
+        previous.comparisonKey !== row.comparisonKey
+      ) {
+        addMerchantProductToIndexes(row);
+      }
       return row;
     },
 
@@ -259,6 +347,10 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
 
     clearDerived() {
       merchants.clear();
+      merchantProductIdsByMerchant.clear();
+      merchantProductIdsByExactKey.clear();
+      merchantProductInsertionOrder.clear();
+      nextMerchantProductInsertionOrder = 0;
       canonicals.clear();
       links.clear();
     },
