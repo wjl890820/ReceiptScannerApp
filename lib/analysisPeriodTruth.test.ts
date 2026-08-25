@@ -9,6 +9,7 @@ import {
   countSupportedItemsInRange,
   filterReceiptsByTimeRange,
 } from './analysisPresentation';
+import { buildAnalysisSpendChangeSurface } from './analysisValueSurfaces';
 import { calculateStats } from './statsCalculator';
 
 const REFERENCE_NOW = Date.parse('2026-08-25T03:00:00.000Z');
@@ -28,6 +29,8 @@ const EXPECTED = {
   weekItemRows: 5,
   previousMonthSupportedPurchases: 3,
   previousMonthSpend: 1000,
+  comparisonDelta: 1250,
+  comparisonPercent: 125,
 } as const;
 
 type FixtureOptions = {
@@ -308,5 +311,43 @@ describe('Golden Analysis Dataset — period purchase-date truth', () => {
     expect(insights.previousStats?.supportedSpend).toBe(
       EXPECTED.previousMonthSpend
     );
+  });
+
+  it('keeps unsupported current and previous purchases out of spend change', () => {
+    const receipts = [
+      ...goldenAnalysisReceipts(),
+      receipt('unsupported-previous', {
+        merchant: 'Unsupported Previous Store',
+        merchantType: 'other',
+        transactionAt: Date.parse('2026-07-15T01:00:00.000Z'),
+        total: 5000,
+        items: [item('Unsupported previous item', 'other', 5000)],
+      }),
+    ];
+    const selection = selectAnalyticsReceipts(receipts);
+    const insights = buildInsights(selection.analyticsReceipts, 'month');
+    const surface = buildAnalysisSpendChangeSurface(insights);
+
+    expect(insights.currentStats.supportedReceiptCount).toBe(
+      EXPECTED.monthSupportedPurchases
+    );
+    expect(insights.previousStats?.supportedReceiptCount).toBe(
+      EXPECTED.previousMonthSupportedPurchases
+    );
+    expect(insights.currentStats.supportedSpend).toBe(EXPECTED.monthSpend);
+    expect(insights.previousStats?.supportedSpend).toBe(
+      EXPECTED.previousMonthSpend
+    );
+    expect(insights.currentStats.totalSpend).toBe(3249);
+    expect(insights.previousStats?.totalSpend).toBe(6000);
+    expect(surface).toEqual({
+      status: 'available',
+      direction: 'up',
+      absoluteDelta: EXPECTED.comparisonDelta,
+      percentDelta: EXPECTED.comparisonPercent,
+      periodDays: 30,
+      currentSpend: EXPECTED.monthSpend,
+      previousSpend: EXPECTED.previousMonthSpend,
+    });
   });
 });

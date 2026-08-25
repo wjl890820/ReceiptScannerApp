@@ -241,7 +241,7 @@ function buildChanges(
     return out;
   }
 
-  const spendDiff = current.totalSpend - previous.totalSpend;
+  const spendDiff = current.supportedSpend - previous.supportedSpend;
   const spendKey = spendDiff >= 0 ? 'analysisV2.changes.spendUp' : 'analysisV2.changes.spendDown';
   out.push({
     changeKey: spendKey,

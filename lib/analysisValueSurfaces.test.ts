@@ -27,17 +27,19 @@ function insightsWithSpendChange(options: {
   periodDays: number;
   currentSpend: number;
   previousSpend: number;
+  currentBroadSpend?: number;
+  previousBroadSpend?: number;
   includeSpendChange?: boolean;
 }): BuildInsightsOutput {
   const currentStats = {
     ...createEmptyStats(),
-    totalSpend: options.currentSpend,
+    totalSpend: options.currentBroadSpend ?? options.currentSpend,
     supportedSpend: options.currentSpend,
     supportedReceiptCount: 5,
   };
   const previousStats = {
     ...createEmptyStats(),
-    totalSpend: options.previousSpend,
+    totalSpend: options.previousBroadSpend ?? options.previousSpend,
     supportedSpend: options.previousSpend,
     supportedReceiptCount: 5,
   };
@@ -137,6 +139,30 @@ describe('analysisValueSurfaces spend change', () => {
       periodDays: 30,
       currentSpend: 10000,
       previousSpend: 8500,
+    });
+  });
+
+  it('presents supported spend even when broad candidate totals differ', () => {
+    expect(
+      buildAnalysisSpendChangeSurface(
+        insightsWithSpendChange({
+          direction: 'up',
+          delta: 1250,
+          periodDays: 30,
+          currentSpend: 2250,
+          previousSpend: 1000,
+          currentBroadSpend: 3249,
+          previousBroadSpend: 6000,
+        })
+      )
+    ).toEqual({
+      status: 'available',
+      direction: 'up',
+      absoluteDelta: 1250,
+      percentDelta: 125,
+      periodDays: 30,
+      currentSpend: 2250,
+      previousSpend: 1000,
     });
   });
 

@@ -76,8 +76,8 @@ export function buildAnalysisSpendChangeSurface(
   const absoluteDelta = Math.abs(
     Number(spendChange.changeParams?.delta ?? 0)
   );
-  const currentSpend = insights.currentStats.totalSpend;
-  const previousSpend = insights.previousStats.totalSpend;
+  const currentSpend = insights.currentStats.supportedSpend;
+  const previousSpend = insights.previousStats.supportedSpend;
 
   let direction: 'up' | 'down' | 'flat' = 'flat';
   if (absoluteDelta === 0 || currentSpend === previousSpend) {

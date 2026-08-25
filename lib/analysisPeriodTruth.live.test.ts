@@ -10,6 +10,7 @@ import {
   countSupportedItemsInRange,
   filterReceiptsByTimeRange,
 } from './analysisPresentation';
+import { buildAnalysisSpendChangeSurface } from './analysisValueSurfaces';
 import { isV1SupportedReceipt } from './merchantType';
 import { receiptRowFromIntelligenceExport } from './productIdentityShadowAuditDataset';
 import { calculateStats } from './statsCalculator';
@@ -51,6 +52,7 @@ describe('Analysis period truth — 127 receipt live control', () => {
           'month'
         );
         const weekInsights = buildInsights(selection.analyticsReceipts, 'week');
+        const monthSpendChange = buildAnalysisSpendChangeSurface(monthInsights);
 
         expect(selection.storedReceipts).toHaveLength(127);
         expect(selection.highConfidenceDuplicateExtras).toBe(23);
@@ -94,6 +96,17 @@ describe('Analysis period truth — 127 receipt live control', () => {
 
         expect(monthInsights.currentStats.supportedReceiptCount).toBe(7);
         expect(monthInsights.currentStats.supportedSpend).toBe(19521);
+        expect(monthInsights.previousStats?.supportedReceiptCount).toBe(18);
+        expect(monthInsights.previousStats?.supportedSpend).toBe(46858);
+        expect(monthSpendChange).toEqual({
+          status: 'available',
+          direction: 'down',
+          absoluteDelta: 27337,
+          percentDelta: -58,
+          periodDays: 30,
+          currentSpend: 19521,
+          previousSpend: 46858,
+        });
         expect(weekInsights.currentStats.supportedReceiptCount).toBe(0);
         expect(weekInsights.currentStats.supportedSpend).toBe(0);
       } finally {
