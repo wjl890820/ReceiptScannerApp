@@ -14,7 +14,6 @@ const MIN_RECEIPTS = 3;
 const MIN_ITEMS = 10;
 const MIN_TOTAL_JPY = 2000;
 const PERIOD_30_DAYS = 30 * MS_DAY;
-const PERIOD_14_DAYS = 14 * MS_DAY;
 const PERIOD_7_DAYS = 7 * MS_DAY;
 
 function ts(r: ReceiptRow): number {
@@ -81,7 +80,7 @@ export type BuildInsightsOutput = {
   currentItemsCount: number;
   /** Days covered in current period */
   currentDaysCovered: number;
-  /** Period length in days (30 or 14 or 7) */
+  /** Period length in days used by the selected comparison contract. */
   periodDays: number;
 };
 
@@ -138,23 +137,6 @@ export function buildInsights(
     }
     currentStart = currentReceipts.length ? ts(currentReceipts[0]) : now;
     currentEnd = now;
-  } else if (periodDays === 30 && currentReceipts.length < MIN_RECEIPTS) {
-    periodDays = 14;
-    currentStart = now - PERIOD_14_DAYS;
-    currentEnd = now;
-    previousStart = currentStart - PERIOD_14_DAYS;
-    previousEnd = currentStart;
-    currentReceipts = filterAnalysisReceiptsByTransactionWindow(
-      monetaryReceipts,
-      currentStart,
-      currentEnd,
-      { includeEnd: true }
-    );
-    previousReceipts = filterAnalysisReceiptsByTransactionWindow(
-      monetaryReceipts,
-      previousStart,
-      previousEnd
-    );
   }
 
   const currentStats = calculateStats(currentReceipts, 'all');

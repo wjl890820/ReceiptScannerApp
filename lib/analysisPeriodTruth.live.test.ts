@@ -128,6 +128,7 @@ describe('Analysis period truth — 127 receipt live control', () => {
 
         expect(monthInsights.currentStats.supportedReceiptCount).toBe(7);
         expect(monthInsights.currentStats.supportedSpend).toBe(19521);
+        expect(monthInsights.periodDays).toBe(30);
         expect(monthInsights.previousStats?.supportedReceiptCount).toBe(18);
         expect(monthInsights.previousStats?.supportedSpend).toBe(46858);
         expect(monthSpendChange).toEqual({
