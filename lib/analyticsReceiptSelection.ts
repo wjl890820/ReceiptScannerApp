@@ -51,7 +51,7 @@ export function selectAnalyticsReceipts(
   const keepSeparateReceiptIds = opts?.keepSeparateReceiptIds ?? new Set<string>();
   const summaries = receipts.map(summarizeReceiptForDuplicateAudit);
   const highConfidenceDuplicateGroups =
-    buildHighConfidenceDuplicateGroups(summaries);
+    buildHighConfidenceDuplicateGroups(summaries, receipts);
 
   let contentExactDuplicateExtras = 0;
   let structuralExactDuplicateExtras = 0;

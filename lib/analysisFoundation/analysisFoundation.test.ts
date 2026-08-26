@@ -786,3 +786,115 @@ describe('Analysis Foundation A1.2 — amount basis', () => {
     expect(excluded.normalizedGrossAmount).toBeNull();
   });
 });
+
+describe('Analysis Foundation A1.3 — semantic rescan reconciliation', () => {
+  const txAt = Date.parse('2024-08-15T18:42:11+09:00');
+
+  test('022 synthetic fixture collapses to 1 physical group; tax-known wins representative', () => {
+    const frontTarget = 2707;
+    const frontItems: FixtureItem[] = Array.from({ length: 9 }, (_, i) => ({
+      name: `Shared Item ${i + 1}`,
+      lineTotal: i < 8 ? 300 : frontTarget - 300 * 8,
+      quantity: 1,
+    }));
+    const itemsA: FixtureItem[] = [
+      ...frontItems,
+      { name: 'Battery AA', lineTotal: 393, quantity: 4 },
+      { name: 'Battery AAA', lineTotal: 393, quantity: 4 },
+      { name: 'Product X', lineTotal: 794, quantity: 1 },
+    ];
+    const itemsB: FixtureItem[] = [
+      ...frontItems,
+      { name: 'Battery AA 4-count', lineTotal: 393, quantity: 1 },
+      { name: 'Battery AAA 4-count', lineTotal: 393, quantity: 1 },
+      { name: 'Product X', lineTotal: 794, quantity: 2 },
+    ];
+    const rA = makeReceipt({
+      id: '022-a',
+      merchantNormalized: 'Merchant A',
+      transactionAt: txAt,
+      createdAt: txAt,
+      total: 4287,
+      taxIsKnown: 0,
+      items: itemsA,
+    });
+    const rB = makeReceipt({
+      id: '022-b',
+      merchantNormalized: 'Merchant A',
+      transactionAt: txAt,
+      createdAt: txAt + 10_000,
+      total: 4287,
+      tax: 330,
+      taxIsKnown: 1,
+      items: itemsB,
+    });
+    const groups = buildCanonicalReceiptGroups([rA, rB]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.duplicateCount).toBe(1);
+    expect(groups[0]!.sourceReceiptIds).toEqual(['022-a', '022-b']);
+    expect(groups[0]!.confidence).toBe('SEMANTIC_RESCAN_EXACT_DUPLICATE');
+    expect(groups[0]!.representativeReceipt.id).toBe('022-b');
+    expect(
+      groups[0]!.evidence.some((e) =>
+        e.includes('observation_quantity_conflict')
+      )
+    ).toBe(true);
+
+    const summaries = [rA, rB].map(summarizeReceiptForDuplicateAudit);
+    const scoreB = pickCanonicalRepresentativeReceipt([rA, rB], summaries);
+    expect(scoreB.id).toBe('022-b');
+  });
+
+  test('adversarial: different names with same line amounts stay distinct', () => {
+    const rA = makeReceipt({
+      id: 'adv-a',
+      merchantNormalized: 'Merchant A',
+      transactionAt: txAt,
+      total: 794,
+      items: [{ name: 'Product A', lineTotal: 794, quantity: 1 }],
+    });
+    const rB = makeReceipt({
+      id: 'adv-b',
+      merchantNormalized: 'Merchant A',
+      transactionAt: txAt,
+      total: 794,
+      tax: 60,
+      taxIsKnown: 1,
+      items: [{ name: 'Product B', lineTotal: 794, quantity: 2 }],
+    });
+    const groups = buildCanonicalReceiptGroups([rA, rB]);
+    expect(groups).toHaveLength(2);
+    expect(groups.every((g) => g.duplicateCount === 0)).toBe(true);
+  });
+
+  test('same names qty disagreement => one purchase event for cycle eligibility', () => {
+    const rA = makeReceipt({
+      id: 'cycle-a',
+      merchantNormalized: 'Merchant A',
+      transactionAt: txAt,
+      total: 794,
+      items: [{ name: 'Product X', lineTotal: 794, quantity: 1 }],
+    });
+    const rB = makeReceipt({
+      id: 'cycle-b',
+      merchantNormalized: 'Merchant A',
+      transactionAt: txAt,
+      createdAt: txAt + 1,
+      total: 794,
+      tax: 60,
+      taxIsKnown: 1,
+      items: [{ name: 'Product X', lineTotal: 794, quantity: 2 }],
+    });
+    const groups = buildCanonicalReceiptGroups([rA, rB]);
+    expect(groups).toHaveLength(1);
+    const extra = groups[0]!.representativeReceipt.id === 'cycle-a' ? rB : rA;
+    const cycle = evaluatePurchaseCycleEligibility({
+      receipt: extra,
+      canonicalGroups: groups,
+      itemIdentityConfidence: 0.9,
+      itemIdentitySource: 'merchant_exact',
+      merchantProductId: 'mp_x',
+    });
+    expect(cycle.reasonCodes).toContain('duplicate_receipt_extra');
+  });
+});

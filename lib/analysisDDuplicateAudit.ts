@@ -15,30 +15,39 @@
  *     exactly explain overage (>0), and when both taxes are known & differ,
  *     abs(taxA-taxB)===overage. Trailing-prefix only (no arbitrary deletion).
  *     No header-only dedupe. No product-name / fuzzy / AI matching.
+ *   SEMANTIC_RESCAN_EXACT_DUPLICATE — additive high-confidence path for
+ *     same physical transaction with OCR quantity/spec interpretation
+ *     disagreement: same merchantAnalyticsKey + exact clock transaction_at +
+ *     exact total + same item count + identical ordered LINE AMOUNT vector +
+ *     conservative item-name compatibility + tax compatibility
+ *     (both known → tax must match; one known/one unknown → allowed;
+ *     both known & different → reject). Does NOT average quantities or merge
+ *     item truth — only groups observations and retains disagreement evidence.
  *   PROBABLE_DUPLICATE — weaker than structural (V1: empty; not excluded)
  *   NOT_ENOUGH_EVIDENCE — insufficient for high-confidence dedupe
  *
- * Grouping: by STRUCTURAL fingerprint first. If every member shares the same
- * content fingerprint → CONTENT_EXACT_DUPLICATE; else STRUCTURAL_EXACT_DUPLICATE.
- * Multiple content-exact subgroups under one structural fingerprint collapse
- * to ONE group with ONE analytics representative. Reconciled pairs then union
- * across different structural fingerprints when all required evidence holds.
+ * Grouping (A1.3.1): ALL-PAIRS / complete-link invariant.
+ * Candidate duplicate pair links (CONTENT / STRUCTURAL / RECONCILED / SEMANTIC)
+ * are relationships only — never transitive Union-Find merges.
+ * A receipt joins a group only when it has a valid high-confidence relation
+ * with EVERY existing member. Deterministic: seed/candidate order by receiptId.
  *
- * Representative rule (documented):
- *   CONTENT/STRUCTURAL groups: earliest created_at, then receipt id ascending.
- *   RECONCILED groups: smallest abs(merchandiseSum-total), then stronger
- *   structural support, then earlier created_at, then receipt id ascending.
+ * Representative rule (SSOT): lib/receiptRepresentativeQuality.ts
+ *   scoreReceiptRepresentativeQuality / pickBestRepresentativeReceiptId
+ *   Used by duplicate audit, analytics selection, and canonical foundation.
  *   Does not merge receipt contents — only chooses which stored receipt
  *   contributes to analytics.
  *
  * V1 policy: B_EXCLUDE_CONTENT_AND_STRUCTURAL_EXACT
- *   Exclude CONTENT_EXACT + STRUCTURAL_EXACT + RECONCILED_STRUCTURAL_EXACT extras.
+ *   Exclude CONTENT_EXACT + STRUCTURAL_EXACT + RECONCILED_STRUCTURAL_EXACT
+ *   + SEMANTIC_RESCAN_EXACT extras.
  *   Do NOT exclude PROBABLE / NOT_ENOUGH_EVIDENCE.
  *
  * Collision / safety notes:
  *   - Same merchant + calendar day + total is NOT sufficient.
  *   - Same merchant + total + items with different transaction_at → distinct.
  *   - Missing/invalid transaction_at → never high-confidence dedupe.
+ *   - Date-only midnight is NOT exact-time evidence (blocks SEMANTIC_RESCAN).
  *   - created_at is ignored by fingerprints (scan time ≠ purchase identity).
  *   - No register/order number exists reliably in the domain model today;
  *     fingerprints do not invent OCR heuristics for register/order ids.
@@ -57,14 +66,17 @@ import type { ReceiptRow } from './db';
 import { merchantAnalyticsKey } from './merchantAnalytics';
 import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { getReceiptItems } from './receiptItems';
+import { parseProductSpecification } from './productSpecification';
+import { pickBestRepresentativeReceiptId } from './receiptRepresentativeQuality';
 
 export const ANALYSIS_D_DUPLICATE_AUDIT_VERSION =
-  'meruno-analysis-d-duplicate-audit-v3' as const;
+  'meruno-analysis-d-duplicate-audit-v7' as const;
 
 export type AnalysisDDuplicateConfidence =
   | 'CONTENT_EXACT_DUPLICATE'
   | 'STRUCTURAL_EXACT_DUPLICATE'
   | 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+  | 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
   | 'PROBABLE_DUPLICATE'
   | 'NOT_ENOUGH_EVIDENCE';
 
@@ -99,6 +111,8 @@ export type AnalysisDDuplicateReceiptSummary = {
   structuralFingerprint: string | null;
   /** Ordered (qty, effective/line amount) vector — structural/reconciled evidence. */
   orderedQtyAmountVector: AnalysisDQtyAmountRow[];
+  /** Ordered canonical item names (SEMANTIC_RESCAN name compatibility). */
+  orderedNameCanonicals: string[];
   /** Sum of orderedQtyAmountVector line amounts. */
   merchandiseSum: number;
 };
@@ -116,6 +130,54 @@ export type AnalysisDReconciledStructuralEvidence = {
   representativeReceiptId: string;
 };
 
+export type AnalysisDSemanticRescanQuantityConflict = {
+  leftReceiptId: string;
+  rightReceiptId: string;
+  itemIndex: number;
+  leftQuantity: number;
+  rightQuantity: number;
+  lineAmount: number;
+  leftNameCanonical: string;
+  rightNameCanonical: string;
+};
+
+export type AnalysisDSemanticRescanTaxCompatibility =
+  | 'both_known_equal'
+  | 'one_known_one_unknown'
+  | 'both_unknown';
+
+/**
+ * Group-level semantic summary only.
+ * Tax compatibility is pair-level — see relationEvidence[].semanticRescanEvidence.
+ */
+export type AnalysisDSemanticRescanEvidence = {
+  quantityConflicts: AnalysisDSemanticRescanQuantityConflict[];
+  nameCompatibilityNotes: string[];
+  representativeReceiptId: string;
+};
+
+/** Pair-level semantic evidence (authoritative taxCompatibility lives here). */
+export type AnalysisDSemanticRescanRelationEvidence =
+  AnalysisDSemanticRescanEvidence & {
+    taxCompatibility: AnalysisDSemanticRescanTaxCompatibility;
+  };
+
+/** One high-confidence duplicate relation between two observations. */
+export type AnalysisDDuplicateRelationEvidence = {
+  leftReceiptId: string;
+  rightReceiptId: string;
+  path: Extract<
+    AnalysisDDuplicateConfidence,
+    | 'CONTENT_EXACT_DUPLICATE'
+    | 'STRUCTURAL_EXACT_DUPLICATE'
+    | 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+    | 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
+  >;
+  evidence: string[];
+  semanticRescanEvidence?: AnalysisDSemanticRescanRelationEvidence;
+  reconciledEvidence?: AnalysisDReconciledStructuralEvidence;
+};
+
 export type AnalysisDDuplicateGroup = {
   confidence: AnalysisDDuplicateConfidence;
   fingerprint: string;
@@ -128,7 +190,10 @@ export type AnalysisDDuplicateGroup = {
   matchingEvidence: string[];
   differenceEvidence: string[];
   members: AnalysisDDuplicateReceiptSummary[];
+  /** All actual pair links that justify membership (not just group summary). */
+  relationEvidence: AnalysisDDuplicateRelationEvidence[];
   reconciledEvidence?: AnalysisDReconciledStructuralEvidence;
+  semanticRescanEvidence?: AnalysisDSemanticRescanEvidence;
 };
 
 export type AnalysisDDuplicateImpactMetrics = {
@@ -192,8 +257,9 @@ export type AnalysisDDuplicateScanAudit = {
   contentExactDuplicateExtras: number;
   structuralExactDuplicateExtras: number;
   reconciledStructuralExactDuplicateExtras: number;
+  semanticRescanExactDuplicateExtras: number;
   probableDuplicateExtras: number;
-  /** CONTENT_EXACT + STRUCTURAL_EXACT + RECONCILED_STRUCTURAL_EXACT extras. */
+  /** CONTENT_EXACT + STRUCTURAL_EXACT + RECONCILED + SEMANTIC_RESCAN extras. */
   highConfidenceDuplicateExtras: number;
   duplicateGroupCount: number;
   notEnoughEvidencePairCount: number;
@@ -247,6 +313,8 @@ export function hasValidTransactionAt(receipt: ReceiptRow): boolean {
 export function hasExactTransactionTime(receipt: ReceiptRow): boolean {
   if (!hasValidTransactionAt(receipt)) return false;
   const t = receipt.transaction_at as number;
+  const d = new Date(t);
+  if (!Number.isFinite(d.getTime())) return false;
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: 'Asia/Tokyo',
@@ -254,7 +322,7 @@ export function hasExactTransactionTime(receipt: ReceiptRow): boolean {
       minute: '2-digit',
       second: '2-digit',
       hourCycle: 'h23',
-    }).formatToParts(new Date(t));
+    }).formatToParts(d);
     const hour = parts.find((p) => p.type === 'hour')?.value ?? '';
     const minute = parts.find((p) => p.type === 'minute')?.value ?? '';
     const second = parts.find((p) => p.type === 'second')?.value ?? '';
@@ -262,7 +330,7 @@ export function hasExactTransactionTime(receipt: ReceiptRow): boolean {
       return false;
     }
   } catch {
-    return true;
+    return false;
   }
   return true;
 }
@@ -416,13 +484,14 @@ export function summarizeReceiptForDuplicateAudit(
     exactFingerprint: contentFingerprint,
     structuralFingerprint: buildStructuralReceiptFingerprint(receipt),
     orderedQtyAmountVector,
+    orderedNameCanonicals: items.map((it) => it.nameCanonical),
     merchandiseSum,
   };
 }
 
 /**
  * Deterministic representative: earliest created_at, then receipt id ASC.
- * Documented rule — do not merge contents; pick analytics contributor only.
+ * @deprecated Prefer pickBestRepresentativeReceiptId (SSOT) for groups.
  */
 export function pickDuplicateRepresentative(
   members: AnalysisDDuplicateReceiptSummary[]
@@ -525,6 +594,195 @@ export function evaluateReconciledStructuralExactPair(
 }
 
 /**
+ * Strip trailing pack/count structural tokens for conservative name base compare.
+ * Does NOT fuzzy-match product names — only structural quantity/spec suffixes.
+ */
+export function stripStructuralPackCountSuffix(canonicalName: string): string {
+  let s = canonicalName.trim();
+  const suffix =
+    /(?:\s*[-x×*]\s*\d+(?:\s*(?:個|枚|pc|pcs|pk|pack|count))?|\s+\d+\s*(?:個|枚|pc|pcs|pk|pack|count)(?:入)?|\s+\d+-count)\s*$/i;
+  for (let i = 0; i < 4; i += 1) {
+    const next = s.replace(suffix, '').trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+/**
+ * Conservative item-name compatibility for SEMANTIC_RESCAN.
+ * Exact canonical match OR same base after stripping pack/count structural tokens
+ * OR parseProductSpecification shows only count/pack representation difference
+ * on an otherwise identical base. Never fuzzy AI.
+ */
+export function areSemanticRescanItemNamesCompatible(
+  leftNameCanonical: string,
+  rightNameCanonical: string
+): { compatible: boolean; note: string } {
+  const a = leftNameCanonical.trim();
+  const b = rightNameCanonical.trim();
+  if (!a || !b) {
+    return { compatible: false, note: 'empty_item_name' };
+  }
+  if (a === b) {
+    return { compatible: true, note: 'exact_canonical_name' };
+  }
+  const baseA = stripStructuralPackCountSuffix(a);
+  const baseB = stripStructuralPackCountSuffix(b);
+  if (baseA && baseB && baseA === baseB) {
+    return {
+      compatible: true,
+      note: 'same_semantic_base_pack_count_token_diff',
+    };
+  }
+  // One name equals the other's stripped base (suffix only on one side).
+  if (baseA && baseA === b) {
+    return {
+      compatible: true,
+      note: 'pack_count_suffix_on_left_only',
+    };
+  }
+  if (baseB && baseB === a) {
+    return {
+      compatible: true,
+      note: 'pack_count_suffix_on_right_only',
+    };
+  }
+
+  // Spec parser: if bases still equal after removing parsed count evidence text.
+  const specA = parseProductSpecification(a);
+  const specB = parseProductSpecification(b);
+  const stripEvidence = (name: string, evidence: string | null): string => {
+    if (!evidence) return name;
+    const e = canonicalizeReceiptItemName(evidence);
+    if (!e) return name;
+    return name.replace(e, ' ').replace(/\s+/g, ' ').trim();
+  };
+  const withoutSpecA = stripStructuralPackCountSuffix(
+    stripEvidence(a, specA.sourceText ?? null)
+  );
+  const withoutSpecB = stripStructuralPackCountSuffix(
+    stripEvidence(b, specB.sourceText ?? null)
+  );
+  if (
+    withoutSpecA &&
+    withoutSpecB &&
+    withoutSpecA === withoutSpecB &&
+    (specA.dimension === 'count' ||
+      specB.dimension === 'count' ||
+      specA.packCount != null ||
+      specB.packCount != null)
+  ) {
+    return {
+      compatible: true,
+      note: 'spec_parser_count_pack_representation_diff',
+    };
+  }
+
+  return { compatible: false, note: 'item_name_mismatch' };
+}
+
+function lineAmountVectorEquals(
+  a: readonly AnalysisDQtyAmountRow[],
+  b: readonly AnalysisDQtyAmountRow[]
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (!moneyEquals(a[i]!.lineAmount, b[i]!.lineAmount)) return false;
+  }
+  return true;
+}
+
+/**
+ * SEMANTIC_RESCAN_EXACT_DUPLICATE pair gate.
+ * Requires exact clock time, merchant, total, item count, ordered line amounts,
+ * conservative name compatibility, and tax compatibility.
+ * Does not require quantity equality — records quantity disagreements as evidence.
+ */
+export function evaluateSemanticRescanExactPair(
+  a: AnalysisDDuplicateReceiptSummary,
+  b: AnalysisDDuplicateReceiptSummary
+): {
+  quantityConflicts: AnalysisDSemanticRescanQuantityConflict[];
+  nameCompatibilityNotes: string[];
+  taxCompatibility: AnalysisDSemanticRescanTaxCompatibility;
+  leftReceiptId: string;
+  rightReceiptId: string;
+} | null {
+  if (!a.hasExactTransactionTime || !b.hasExactTransactionTime) return null;
+  if (!a.merchantKey || a.merchantKey !== b.merchantKey) return null;
+  if (a.transactionAt == null || a.transactionAt !== b.transactionAt) return null;
+  if (!moneyEquals(a.total, b.total)) return null;
+  if (a.itemCount !== b.itemCount) return null;
+  if (a.itemCount === 0) return null;
+  if (!lineAmountVectorEquals(a.orderedQtyAmountVector, b.orderedQtyAmountVector)) {
+    return null;
+  }
+
+  // Tax: both known & different → reject; one unknown → allowed.
+  if (a.taxKnown && b.taxKnown) {
+    if (a.tax == null || b.tax == null) return null;
+    if (!moneyEquals(a.tax, b.tax)) return null;
+  }
+
+  // Orient left/right by sorted receipt ids — never input order.
+  const left = a.receiptId <= b.receiptId ? a : b;
+  const right = a.receiptId <= b.receiptId ? b : a;
+
+  const namesLeft = left.orderedNameCanonicals;
+  const namesRight = right.orderedNameCanonicals;
+  if (
+    namesLeft.length !== namesRight.length ||
+    namesLeft.length !== left.itemCount
+  ) {
+    return null;
+  }
+
+  const nameCompatibilityNotes: string[] = [];
+  for (let i = 0; i < namesLeft.length; i += 1) {
+    const check = areSemanticRescanItemNamesCompatible(
+      namesLeft[i]!,
+      namesRight[i]!
+    );
+    if (!check.compatible) return null;
+    nameCompatibilityNotes.push(
+      `pair=${left.receiptId}|${right.receiptId};item_index=${i};${check.note}`
+    );
+  }
+
+  const quantityConflicts: AnalysisDSemanticRescanQuantityConflict[] = [];
+  for (let i = 0; i < left.orderedQtyAmountVector.length; i += 1) {
+    const leftQ = left.orderedQtyAmountVector[i]!.quantity;
+    const rightQ = right.orderedQtyAmountVector[i]!.quantity;
+    if (leftQ !== rightQ) {
+      quantityConflicts.push({
+        leftReceiptId: left.receiptId,
+        rightReceiptId: right.receiptId,
+        itemIndex: i,
+        leftQuantity: leftQ,
+        rightQuantity: rightQ,
+        lineAmount: left.orderedQtyAmountVector[i]!.lineAmount,
+        leftNameCanonical: namesLeft[i]!,
+        rightNameCanonical: namesRight[i]!,
+      });
+    }
+  }
+
+  let taxCompatibility: AnalysisDSemanticRescanTaxCompatibility;
+  if (a.taxKnown && b.taxKnown) taxCompatibility = 'both_known_equal';
+  else if (!a.taxKnown && !b.taxKnown) taxCompatibility = 'both_unknown';
+  else taxCompatibility = 'one_known_one_unknown';
+
+  return {
+    quantityConflicts,
+    nameCompatibilityNotes,
+    taxCompatibility,
+    leftReceiptId: left.receiptId,
+    rightReceiptId: right.receiptId,
+  };
+}
+
+/**
  * Reconciled-group representative: merchandise reconciliation quality first,
  * then structural support, then created_at, then receipt id.
  * Never prefer a noisier earlier scan solely because created_at is earlier.
@@ -557,235 +815,151 @@ export function pickReconciledDuplicateRepresentative(
 }
 
 function pickRepresentative(
-  members: AnalysisDDuplicateReceiptSummary[]
+  members: AnalysisDDuplicateReceiptSummary[],
+  receiptById: ReadonlyMap<string, ReceiptRow>
 ): string {
-  return pickDuplicateRepresentative(members);
+  return pickBestRepresentativeReceiptId(members, receiptById);
 }
 
-function groupByKey<T>(
-  rows: T[],
-  keyFn: (row: T) => string | null
-): Map<string, T[]> {
-  const map = new Map<string, T[]>();
-  for (const row of rows) {
-    const key = keyFn(row);
-    if (!key) continue;
-    const list = map.get(key) ?? [];
-    list.push(row);
-    map.set(key, list);
-  }
-  return map;
+function pairKey(a: string, b: string): string {
+  return a <= b ? `${a}\u001f${b}` : `${b}\u001f${a}`;
 }
 
-/**
- * High-confidence groups keyed by STRUCTURAL fingerprint.
- * Content-identical clusters → CONTENT_EXACT_DUPLICATE;
- * mixed content under same structure → STRUCTURAL_EXACT_DUPLICATE.
- */
-export function buildHighConfidenceDuplicateGroups(
-  summaries: AnalysisDDuplicateReceiptSummary[]
-): AnalysisDDuplicateGroup[] {
-  const structuralGroups: AnalysisDDuplicateGroup[] = [];
-  for (const [fp, members] of groupByKey(
-    summaries,
-    (s) => s.structuralFingerprint
-  )) {
-    if (members.length < 2) continue;
-    const contentKeys = new Set(
-      members.map((m) => m.contentFingerprint).filter(Boolean)
-    );
-    const allSameContent =
-      contentKeys.size === 1 &&
-      members.every((m) => m.contentFingerprint != null);
-    const confidence: AnalysisDDuplicateConfidence = allSameContent
-      ? 'CONTENT_EXACT_DUPLICATE'
-      : 'STRUCTURAL_EXACT_DUPLICATE';
-    const representativeReceiptId = pickRepresentative(members);
-    const rep = members.find((m) => m.receiptId === representativeReceiptId)!;
-    const matchingEvidence = allSameContent
-      ? [
-          'identical_content_fingerprint',
-          'merchant',
-          'transaction_at',
-          'total',
-          'tax_slot',
-          'ordered_item_name_qty_amount',
-        ]
-      : [
-          'identical_structural_fingerprint',
-          'merchant',
-          'transaction_at',
-          'total',
-          'tax_slot',
-          'ordered_qty_amount_structure',
-        ];
-    const differenceEvidence = allSameContent
-      ? members
-          .filter((m) => m.receiptId !== representativeReceiptId)
-          .map(
-            (m) =>
-              `receipt_id=${m.receiptId};created_at_delta_ms=${
-                m.createdAt - rep.createdAt
-              }`
-          )
-      : [
-          'item_name_canonical_may_differ',
-          ...members
-            .filter((m) => m.receiptId !== representativeReceiptId)
-            .map(
-              (m) =>
-                `receipt_id=${m.receiptId};created_at_delta_ms=${
-                  m.createdAt - rep.createdAt
-                }`
-            ),
-        ];
-    structuralGroups.push({
-      confidence,
-      fingerprint: fp,
-      receiptIds: members.map((m) => m.receiptId),
-      representativeReceiptId,
-      merchant: members[0]!.merchantLabel,
-      transactionAt: members[0]!.transactionAt,
-      total: members[0]!.total,
-      itemCount: members[0]!.itemCount,
-      matchingEvidence,
-      differenceEvidence,
-      members,
-    });
-  }
+const PATH_RANK: Record<
+  AnalysisDDuplicateRelationEvidence['path'],
+  number
+> = {
+  CONTENT_EXACT_DUPLICATE: 0,
+  STRUCTURAL_EXACT_DUPLICATE: 1,
+  RECONCILED_STRUCTURAL_EXACT_DUPLICATE: 2,
+  SEMANTIC_RESCAN_EXACT_DUPLICATE: 3,
+};
 
-  const byId = new Map(summaries.map((s) => [s.receiptId, s]));
-  const parent = new Map<string, string>();
-  const find = (id: string): string => {
-    const p = parent.get(id) ?? id;
-    if (p !== id) {
-      const root = find(p);
-      parent.set(id, root);
-      return root;
+function sortRelationEvidence(
+  relations: AnalysisDDuplicateRelationEvidence[]
+): AnalysisDDuplicateRelationEvidence[] {
+  return [...relations].sort((a, b) => {
+    const ra = PATH_RANK[a.path] - PATH_RANK[b.path];
+    if (ra !== 0) return ra;
+    if (a.leftReceiptId !== b.leftReceiptId) {
+      return a.leftReceiptId.localeCompare(b.leftReceiptId);
     }
-    return id;
-  };
-  const union = (a: string, b: string) => {
-    const ra = find(a);
-    const rb = find(b);
-    if (ra !== rb) parent.set(ra, rb);
-  };
+    return a.rightReceiptId.localeCompare(b.rightReceiptId);
+  });
+}
 
-  for (const s of summaries) parent.set(s.receiptId, s.receiptId);
-  for (const g of structuralGroups) {
-    for (let i = 1; i < g.receiptIds.length; i++) {
-      union(g.receiptIds[0]!, g.receiptIds[i]!);
+function quantityConflictDedupeKey(
+  c: AnalysisDSemanticRescanQuantityConflict
+): string {
+  return [
+    c.leftReceiptId,
+    c.rightReceiptId,
+    String(c.itemIndex),
+    String(c.leftQuantity),
+    String(c.rightQuantity),
+    roundMoney(c.lineAmount),
+    c.leftNameCanonical,
+    c.rightNameCanonical,
+  ].join('\u001f');
+}
+
+function sortQuantityConflicts(
+  conflicts: AnalysisDSemanticRescanQuantityConflict[]
+): AnalysisDSemanticRescanQuantityConflict[] {
+  return [...conflicts].sort((a, b) => {
+    if (a.leftReceiptId !== b.leftReceiptId) {
+      return a.leftReceiptId.localeCompare(b.leftReceiptId);
     }
-  }
+    if (a.rightReceiptId !== b.rightReceiptId) {
+      return a.rightReceiptId.localeCompare(b.rightReceiptId);
+    }
+    if (a.itemIndex !== b.itemIndex) return a.itemIndex - b.itemIndex;
+    if (a.leftQuantity !== b.leftQuantity) return a.leftQuantity - b.leftQuantity;
+    if (a.rightQuantity !== b.rightQuantity) {
+      return a.rightQuantity - b.rightQuantity;
+    }
+    if (a.lineAmount !== b.lineAmount) return a.lineAmount - b.lineAmount;
+    const n = a.leftNameCanonical.localeCompare(b.leftNameCanonical);
+    if (n !== 0) return n;
+    return a.rightNameCanonical.localeCompare(b.rightNameCanonical);
+  });
+}
 
-  type ReconciledLink = NonNullable<
+function dedupeQuantityConflicts(
+  conflicts: AnalysisDSemanticRescanQuantityConflict[]
+): AnalysisDSemanticRescanQuantityConflict[] {
+  const seen = new Set<string>();
+  const out: AnalysisDSemanticRescanQuantityConflict[] = [];
+  for (const c of sortQuantityConflicts(conflicts)) {
+    const key = quantityConflictDedupeKey(c);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
+}
+
+type InternalPairRelation = AnalysisDDuplicateRelationEvidence & {
+  reconciledLink?: NonNullable<
     ReturnType<typeof evaluateReconciledStructuralExactPair>
   >;
-  const reconciledLinks: ReconciledLink[] = [];
-  for (let i = 0; i < summaries.length; i++) {
-    for (let j = i + 1; j < summaries.length; j++) {
-      const left = summaries[i]!;
-      const right = summaries[j]!;
-      if (
-        left.structuralFingerprint &&
-        left.structuralFingerprint === right.structuralFingerprint
-      ) {
-        continue;
-      }
-      const link = evaluateReconciledStructuralExactPair(left, right);
-      if (!link) continue;
-      reconciledLinks.push(link);
-      union(left.receiptId, right.receiptId);
-    }
-  }
+};
 
-  if (reconciledLinks.length === 0) {
-    return structuralGroups;
-  }
+function buildPairRelation(
+  left: AnalysisDDuplicateReceiptSummary,
+  right: AnalysisDDuplicateReceiptSummary
+): InternalPairRelation | null {
+  const leftId = left.receiptId <= right.receiptId ? left.receiptId : right.receiptId;
+  const rightId = left.receiptId <= right.receiptId ? right.receiptId : left.receiptId;
+  const L = left.receiptId <= right.receiptId ? left : right;
+  const R = left.receiptId <= right.receiptId ? right : left;
 
-  const components = new Map<string, AnalysisDDuplicateReceiptSummary[]>();
-  for (const s of summaries) {
-    const root = find(s.receiptId);
-    const list = components.get(root) ?? [];
-    list.push(s);
-    components.set(root, list);
-  }
-
-  const structuralByRoot = new Map<string, AnalysisDDuplicateGroup>();
-  for (const g of structuralGroups) {
-    structuralByRoot.set(find(g.receiptIds[0]!), g);
-  }
-
-  const reconciledTouchedRoots = new Set<string>();
-  for (const link of reconciledLinks) {
-    reconciledTouchedRoots.add(find(link.core.receiptId));
-  }
-
-  const out: AnalysisDDuplicateGroup[] = [];
-  const emittedRoots = new Set<string>();
-
-  for (const [root, members] of components) {
-    if (members.length < 2) continue;
-    if (emittedRoots.has(root)) continue;
-    emittedRoots.add(root);
-
-    if (!reconciledTouchedRoots.has(root)) {
-      const existing = structuralByRoot.get(root);
-      if (existing) out.push(existing);
-      continue;
-    }
-
-    const links = reconciledLinks.filter(
-      (l) => find(l.core.receiptId) === root
-    );
-    const representativeReceiptId = pickReconciledDuplicateRepresentative(members);
-    const rep = members.find((m) => m.receiptId === representativeReceiptId)!;
-    const core = links[0]?.core ?? rep;
-    const noisyMembers = members.filter(
-      (m) => m.receiptId !== core.receiptId && m.itemCount > core.itemCount
-    );
-    const primaryNoisy = links[0]?.noisy ?? noisyMembers[0] ?? rep;
-    const trailingExtraCount = links[0]?.trailingExtraCount ?? 0;
-    const trailingExtraAmount = links[0]?.trailingExtraAmount ?? 0;
-    const taxDelta = links[0]?.taxDelta ?? null;
-
-    const fingerprint = [
-      'reconciled-struct-v1',
-      core.merchantKey,
-      String(core.transactionAt),
-      roundMoney(core.total),
-      `coreN:${core.orderedQtyAmountVector.length}`,
-      `coreAmt:${core.orderedQtyAmountVector
-        .map((r) => `${r.quantity}\u001f${roundMoney(r.lineAmount)}`)
-        .join('\u001e')}`,
-    ].join('|');
-
-    const reconciledEvidence: AnalysisDReconciledStructuralEvidence = {
-      coreReceiptId: core.receiptId,
-      noisyReceiptIds: noisyMembers.map((m) => m.receiptId),
-      sharedExactCoreVector: core.orderedQtyAmountVector.map((r) => ({
-        quantity: r.quantity,
-        lineAmount: r.lineAmount,
-      })),
-      trailingExtraCount,
-      trailingExtraAmount,
-      coreMerchandiseSum: core.merchandiseSum,
-      noisyMerchandiseSum: primaryNoisy.merchandiseSum,
-      total: core.total,
-      taxDelta,
-      representativeReceiptId,
+  if (
+    L.contentFingerprint &&
+    L.contentFingerprint === R.contentFingerprint
+  ) {
+    return {
+      leftReceiptId: leftId,
+      rightReceiptId: rightId,
+      path: 'CONTENT_EXACT_DUPLICATE',
+      evidence: [
+        'identical_content_fingerprint',
+        'merchant',
+        'transaction_at',
+        'total',
+        'tax_slot',
+        'ordered_item_name_qty_amount',
+      ],
     };
+  }
 
-    out.push({
-      confidence: 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE',
-      fingerprint,
-      receiptIds: members.map((m) => m.receiptId),
-      representativeReceiptId,
-      merchant: members[0]!.merchantLabel,
-      transactionAt: members[0]!.transactionAt,
-      total: members[0]!.total,
-      itemCount: rep.itemCount,
-      matchingEvidence: [
+  if (
+    L.structuralFingerprint &&
+    L.structuralFingerprint === R.structuralFingerprint
+  ) {
+    return {
+      leftReceiptId: leftId,
+      rightReceiptId: rightId,
+      path: 'STRUCTURAL_EXACT_DUPLICATE',
+      evidence: [
+        'identical_structural_fingerprint',
+        'merchant',
+        'transaction_at',
+        'total',
+        'tax_slot',
+        'ordered_qty_amount_structure',
+      ],
+    };
+  }
+
+  const reconciled = evaluateReconciledStructuralExactPair(L, R);
+  if (reconciled) {
+    const taxDelta = reconciled.taxDelta;
+    return {
+      leftReceiptId: leftId,
+      rightReceiptId: rightId,
+      path: 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE',
+      evidence: [
         'reconciled_structural_exact_duplicate',
         'same_merchant_analytics_key',
         'exact_transaction_at',
@@ -793,26 +967,399 @@ export function buildHighConfidenceDuplicateGroups(
         'exact_ordered_qty_amount_prefix',
         'core_merchandise_sum_equals_total',
         'trailing_extras_explain_overage',
-        ...(taxDelta != null && taxDelta > 0
+        ...(taxDelta != null && taxDelta > 0 ? ['tax_delta_equals_overage'] : []),
+      ],
+      reconciledLink: reconciled,
+      reconciledEvidence: {
+        coreReceiptId: reconciled.core.receiptId,
+        noisyReceiptIds: [reconciled.noisy.receiptId],
+        sharedExactCoreVector: reconciled.core.orderedQtyAmountVector.map((r) => ({
+          quantity: r.quantity,
+          lineAmount: r.lineAmount,
+        })),
+        trailingExtraCount: reconciled.trailingExtraCount,
+        trailingExtraAmount: reconciled.trailingExtraAmount,
+        coreMerchandiseSum: reconciled.core.merchandiseSum,
+        noisyMerchandiseSum: reconciled.noisy.merchandiseSum,
+        total: reconciled.core.total,
+        taxDelta: reconciled.taxDelta,
+        representativeReceiptId: '',
+      },
+    };
+  }
+
+  const semantic = evaluateSemanticRescanExactPair(L, R);
+  if (!semantic) return null;
+
+  return {
+    leftReceiptId: leftId,
+    rightReceiptId: rightId,
+    path: 'SEMANTIC_RESCAN_EXACT_DUPLICATE',
+    evidence: [
+      'semantic_rescan_exact_duplicate',
+      'same_merchant_analytics_key',
+      'exact_transaction_at',
+      'exact_total',
+      'same_item_count',
+      'exact_ordered_line_amount_vector',
+      'conservative_item_name_compatibility',
+      `tax_compatibility=${semantic.taxCompatibility}`,
+    ],
+    semanticRescanEvidence: {
+      quantityConflicts: semantic.quantityConflicts,
+      nameCompatibilityNotes: semantic.nameCompatibilityNotes,
+      taxCompatibility: semantic.taxCompatibility,
+      representativeReceiptId: '',
+    },
+  };
+}
+
+/**
+ * High-confidence duplicate groups with ALL-PAIRS compatibility (A1.3.1).
+ * Never forms a group solely from transitive Union-Find connectivity.
+ *
+ * Optional `receipts` enables full representative quality SSOT scoring.
+ */
+export function buildHighConfidenceDuplicateGroups(
+  summaries: AnalysisDDuplicateReceiptSummary[],
+  receipts?: readonly ReceiptRow[]
+): AnalysisDDuplicateGroup[] {
+  const receiptById = new Map((receipts ?? []).map((r) => [r.id, r]));
+  const byId = new Map(summaries.map((s) => [s.receiptId, s]));
+  const sortedIds = [...byId.keys()].sort((a, b) => a.localeCompare(b));
+
+  const relationByPair = new Map<string, InternalPairRelation>();
+  for (let i = 0; i < sortedIds.length; i += 1) {
+    for (let j = i + 1; j < sortedIds.length; j += 1) {
+      const a = byId.get(sortedIds[i]!)!;
+      const b = byId.get(sortedIds[j]!)!;
+      const rel = buildPairRelation(a, b);
+      if (!rel) continue;
+      relationByPair.set(pairKey(a.receiptId, b.receiptId), rel);
+    }
+  }
+
+  // Deterministic greedy complete-link: seed by sorted receiptId.
+  const assigned = new Set<string>();
+  const clusters: string[][] = [];
+
+  for (const seed of sortedIds) {
+    if (assigned.has(seed)) continue;
+    const cluster = [seed];
+    for (const candidate of sortedIds) {
+      if (candidate === seed || assigned.has(candidate)) continue;
+      const compatible = cluster.every((member) =>
+        relationByPair.has(pairKey(member, candidate))
+      );
+      if (compatible) cluster.push(candidate);
+    }
+    if (cluster.length >= 2) {
+      for (const id of cluster) assigned.add(id);
+      clusters.push(cluster);
+    }
+  }
+
+  const out: AnalysisDDuplicateGroup[] = [];
+
+  for (const clusterIds of clusters) {
+    const members = clusterIds
+      .map((id) => byId.get(id)!)
+      .sort((a, b) => a.receiptId.localeCompare(b.receiptId));
+    const memberIds = members.map((m) => m.receiptId);
+
+    const relations: InternalPairRelation[] = [];
+    for (let i = 0; i < memberIds.length; i += 1) {
+      for (let j = i + 1; j < memberIds.length; j += 1) {
+        const rel = relationByPair.get(pairKey(memberIds[i]!, memberIds[j]!));
+        if (rel) relations.push(rel);
+      }
+    }
+    const sortedRelations = sortRelationEvidence(relations);
+
+    const hasReconciled = relations.some(
+      (r) => r.path === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+    );
+    const hasSemantic = relations.some(
+      (r) => r.path === 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
+    );
+
+    let confidence: AnalysisDDuplicateConfidence;
+    if (hasReconciled) {
+      confidence = 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE';
+    } else if (hasSemantic) {
+      confidence = 'SEMANTIC_RESCAN_EXACT_DUPLICATE';
+    } else {
+      const allContent = relations.every(
+        (r) => r.path === 'CONTENT_EXACT_DUPLICATE'
+      );
+      confidence = allContent
+        ? 'CONTENT_EXACT_DUPLICATE'
+        : 'STRUCTURAL_EXACT_DUPLICATE';
+    }
+
+    const representativeReceiptId = pickRepresentative(members, receiptById);
+    const rep = members.find((m) => m.receiptId === representativeReceiptId)!;
+
+    const relationEvidence: AnalysisDDuplicateRelationEvidence[] =
+      sortedRelations.map((r) => {
+        const base: AnalysisDDuplicateRelationEvidence = {
+          leftReceiptId: r.leftReceiptId,
+          rightReceiptId: r.rightReceiptId,
+          path: r.path,
+          evidence: [...r.evidence],
+        };
+        if (r.semanticRescanEvidence) {
+          base.semanticRescanEvidence = {
+            ...r.semanticRescanEvidence,
+            representativeReceiptId,
+          };
+        }
+        if (r.reconciledEvidence) {
+          base.reconciledEvidence = {
+            ...r.reconciledEvidence,
+            representativeReceiptId,
+          };
+        }
+        return base;
+      });
+
+    let reconciledEvidence: AnalysisDReconciledStructuralEvidence | undefined;
+    if (hasReconciled) {
+      const reconciledRels = relations.filter(
+        (r) =>
+          r.path === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' && r.reconciledLink
+      );
+      const noisyReceiptIds = [
+        ...new Set(
+          reconciledRels.map((r) => r.reconciledLink!.noisy.receiptId)
+        ),
+      ].sort((a, b) => a.localeCompare(b));
+      const primary = reconciledRels[0]!.reconciledLink!;
+      const core = primary.core;
+      reconciledEvidence = {
+        coreReceiptId: core.receiptId,
+        noisyReceiptIds,
+        sharedExactCoreVector: core.orderedQtyAmountVector.map((row) => ({
+          quantity: row.quantity,
+          lineAmount: row.lineAmount,
+        })),
+        trailingExtraCount: primary.trailingExtraCount,
+        trailingExtraAmount: primary.trailingExtraAmount,
+        coreMerchandiseSum: core.merchandiseSum,
+        noisyMerchandiseSum: primary.noisy.merchandiseSum,
+        total: core.total,
+        taxDelta: primary.taxDelta,
+        representativeReceiptId,
+      };
+    }
+
+    let semanticRescanEvidence: AnalysisDSemanticRescanEvidence | undefined;
+    if (hasSemantic) {
+      const semanticRels = sortRelationEvidence(
+        relations.filter(
+          (r) =>
+            r.path === 'SEMANTIC_RESCAN_EXACT_DUPLICATE' &&
+            r.semanticRescanEvidence
+        )
+      );
+      const quantityConflicts = dedupeQuantityConflicts(
+        semanticRels.flatMap(
+          (r) => r.semanticRescanEvidence!.quantityConflicts
+        )
+      );
+      const nameCompatibilityNotes = stableUnique(
+        semanticRels.flatMap(
+          (r) => r.semanticRescanEvidence!.nameCompatibilityNotes
+        )
+      );
+      // Tax compatibility is pair-level only (relationEvidence SSOT).
+      semanticRescanEvidence = {
+        quantityConflicts,
+        nameCompatibilityNotes,
+        representativeReceiptId,
+      };
+    }
+
+    let fingerprint: string;
+    let matchingEvidence: string[];
+    let differenceEvidence: string[];
+
+    if (
+      confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' &&
+      reconciledEvidence
+    ) {
+      const core =
+        members.find((m) => m.receiptId === reconciledEvidence.coreReceiptId) ??
+        rep;
+      fingerprint = [
+        'reconciled-struct-v1',
+        core.merchantKey,
+        String(core.transactionAt),
+        roundMoney(core.total),
+        `coreN:${core.orderedQtyAmountVector.length}`,
+        `coreAmt:${core.orderedQtyAmountVector
+          .map((r) => `${r.quantity}\u001f${roundMoney(r.lineAmount)}`)
+          .join('\u001e')}`,
+      ].join('|');
+      matchingEvidence = [
+        'reconciled_structural_exact_duplicate',
+        'same_merchant_analytics_key',
+        'exact_transaction_at',
+        'exact_total',
+        'exact_ordered_qty_amount_prefix',
+        'core_merchandise_sum_equals_total',
+        'trailing_extras_explain_overage',
+        ...(reconciledEvidence.taxDelta != null &&
+        reconciledEvidence.taxDelta > 0
           ? ['tax_delta_equals_overage']
           : []),
-      ],
-      differenceEvidence: [
-        `core_receipt_id=${core.receiptId}`,
-        `noisy_receipt_ids=${noisyMembers.map((m) => m.receiptId).join(',')}`,
-        `trailing_extra_count=${trailingExtraCount}`,
-        `trailing_extra_amount=${roundMoney(trailingExtraAmount)}`,
-        `core_merchandise_sum=${roundMoney(core.merchandiseSum)}`,
-        `noisy_merchandise_sum=${roundMoney(primaryNoisy.merchandiseSum)}`,
-        `total=${roundMoney(core.total)}`,
-        `tax_delta=${taxDelta == null ? 'n/a' : roundMoney(taxDelta)}`,
+        ...(hasSemantic ? ['also_has_semantic_rescan_pair_evidence'] : []),
+      ];
+      differenceEvidence = [
+        `core_receipt_id=${reconciledEvidence.coreReceiptId}`,
+        `noisy_receipt_ids=${reconciledEvidence.noisyReceiptIds.join(',')}`,
+        `trailing_extra_count=${reconciledEvidence.trailingExtraCount}`,
+        `trailing_extra_amount=${roundMoney(
+          reconciledEvidence.trailingExtraAmount
+        )}`,
+        `core_merchandise_sum=${roundMoney(
+          reconciledEvidence.coreMerchandiseSum
+        )}`,
+        `noisy_merchandise_sum=${roundMoney(
+          reconciledEvidence.noisyMerchandiseSum
+        )}`,
+        `total=${roundMoney(reconciledEvidence.total)}`,
+        `tax_delta=${
+          reconciledEvidence.taxDelta == null
+            ? 'n/a'
+            : roundMoney(reconciledEvidence.taxDelta)
+        }`,
         `representative_receipt_id=${representativeReceiptId}`,
-      ],
+        ...(semanticRescanEvidence?.quantityConflicts.map(
+          (c) =>
+            `observation_quantity_conflict;left_receipt_id=${c.leftReceiptId};right_receipt_id=${c.rightReceiptId};item_index=${c.itemIndex};left_quantity=${c.leftQuantity};right_quantity=${c.rightQuantity};line_amount=${roundMoney(c.lineAmount)}`
+        ) ?? []),
+      ];
+    } else if (
+      confidence === 'SEMANTIC_RESCAN_EXACT_DUPLICATE' &&
+      semanticRescanEvidence
+    ) {
+      const lineAmtKey = members[0]!.orderedQtyAmountVector
+        .map((r) => roundMoney(r.lineAmount))
+        .join('\u001e');
+      fingerprint = [
+        'semantic-rescan-v1',
+        members[0]!.merchantKey,
+        String(members[0]!.transactionAt),
+        roundMoney(members[0]!.total),
+        `n:${members[0]!.itemCount}`,
+        `lineAmt:${lineAmtKey}`,
+      ].join('|');
+      matchingEvidence = [
+        'semantic_rescan_exact_duplicate',
+        'same_merchant_analytics_key',
+        'exact_transaction_at',
+        'exact_total',
+        'same_item_count',
+        'exact_ordered_line_amount_vector',
+        'conservative_item_name_compatibility',
+      ];
+      differenceEvidence = [
+        ...semanticRescanEvidence.quantityConflicts.map(
+          (c) =>
+            `observation_quantity_conflict;left_receipt_id=${c.leftReceiptId};right_receipt_id=${c.rightReceiptId};item_index=${c.itemIndex};left_quantity=${c.leftQuantity};right_quantity=${c.rightQuantity};line_amount=${roundMoney(c.lineAmount)}`
+        ),
+        ...semanticRescanEvidence.nameCompatibilityNotes.filter(
+          (n) => !n.includes('exact_canonical_name')
+        ),
+        `representative_receipt_id=${representativeReceiptId}`,
+      ].sort();
+    } else {
+      const allSameContent = confidence === 'CONTENT_EXACT_DUPLICATE';
+      const fp =
+        members[0]!.structuralFingerprint ??
+        members[0]!.contentFingerprint ??
+        memberIds.join('|');
+      fingerprint = fp;
+      matchingEvidence = allSameContent
+        ? [
+            'identical_content_fingerprint',
+            'merchant',
+            'transaction_at',
+            'total',
+            'tax_slot',
+            'ordered_item_name_qty_amount',
+          ]
+        : [
+            'identical_structural_fingerprint',
+            'merchant',
+            'transaction_at',
+            'total',
+            'tax_slot',
+            'ordered_qty_amount_structure',
+          ];
+      differenceEvidence = allSameContent
+        ? members
+            .filter((m) => m.receiptId !== representativeReceiptId)
+            .map(
+              (m) =>
+                `receipt_id=${m.receiptId};created_at_delta_ms=${
+                  m.createdAt - rep.createdAt
+                }`
+            )
+        : [
+            'item_name_canonical_may_differ',
+            ...members
+              .filter((m) => m.receiptId !== representativeReceiptId)
+              .map(
+                (m) =>
+                  `receipt_id=${m.receiptId};created_at_delta_ms=${
+                    m.createdAt - rep.createdAt
+                  }`
+              ),
+          ];
+    }
+
+    out.push({
+      confidence,
+      fingerprint,
+      receiptIds: [...memberIds],
+      representativeReceiptId,
+      merchant: members[0]!.merchantLabel,
+      transactionAt: members[0]!.transactionAt,
+      total: members[0]!.total,
+      itemCount:
+        confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+          ? rep.itemCount
+          : members[0]!.itemCount,
+      matchingEvidence,
+      differenceEvidence,
       members,
-      reconciledEvidence,
+      relationEvidence,
+      ...(reconciledEvidence ? { reconciledEvidence } : {}),
+      ...(semanticRescanEvidence ? { semanticRescanEvidence } : {}),
     });
   }
 
+  return out.sort((a, b) => {
+    const ca = PATH_RANK[a.confidence as keyof typeof PATH_RANK] ?? 99;
+    const cb = PATH_RANK[b.confidence as keyof typeof PATH_RANK] ?? 99;
+    if (ca !== cb) return ca - cb;
+    if (a.fingerprint !== b.fingerprint) {
+      return a.fingerprint.localeCompare(b.fingerprint);
+    }
+    return a.representativeReceiptId.localeCompare(b.representativeReceiptId);
+  });
+}
+
+function stableUnique(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of [...values].sort()) {
+    if (seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
   return out;
 }
 
@@ -990,7 +1537,13 @@ export function auditSweetPotatoStyleObservations(
   const matchedSummaries = receipts
     .filter((r) => matchedReceiptIds.includes(r.id))
     .map(summarizeReceiptForDuplicateAudit);
-  const highConfidence = buildHighConfidenceDuplicateGroups(matchedSummaries);
+  const matchedReceipts = receipts.filter((r) =>
+    matchedReceiptIds.includes(r.id)
+  );
+  const highConfidence = buildHighConfidenceDuplicateGroups(
+    matchedSummaries,
+    matchedReceipts
+  );
   const purchaseCandidateCount = countPurchaseCandidatesAmongMatched(
     matchedReceiptIds,
     highConfidence
@@ -1088,7 +1641,7 @@ export function auditKnownStructuralCostco9534Case(
   });
   if (matched.length === 0) return null;
   const summaries = matched.map(summarizeReceiptForDuplicateAudit);
-  const groups = buildHighConfidenceDuplicateGroups(summaries);
+  const groups = buildHighConfidenceDuplicateGroups(summaries, matched);
   const structuralPurchaseCandidateCount = countPurchaseCandidatesAmongMatched(
     matched.map((r) => r.id),
     groups
@@ -1129,18 +1682,24 @@ export function buildAnalysisDDuplicateScanAudit(
     (s) => !s.hasValidTransactionAt
   ).length;
 
-  const highConfidenceGroups = buildHighConfidenceDuplicateGroups(summaries);
+  const highConfidenceGroups = buildHighConfidenceDuplicateGroups(
+    summaries,
+    receipts
+  );
   const probableGroups = buildProbableDuplicateGroups(summaries);
 
   let contentExactDuplicateExtras = 0;
   let structuralExactDuplicateExtras = 0;
   let reconciledStructuralExactDuplicateExtras = 0;
+  let semanticRescanExactDuplicateExtras = 0;
   for (const g of highConfidenceGroups) {
     const extras = Math.max(0, g.receiptIds.length - 1);
     if (g.confidence === 'CONTENT_EXACT_DUPLICATE') {
       contentExactDuplicateExtras += extras;
     } else if (g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE') {
       reconciledStructuralExactDuplicateExtras += extras;
+    } else if (g.confidence === 'SEMANTIC_RESCAN_EXACT_DUPLICATE') {
+      semanticRescanExactDuplicateExtras += extras;
     } else {
       structuralExactDuplicateExtras += extras;
     }
@@ -1152,7 +1711,8 @@ export function buildAnalysisDDuplicateScanAudit(
   const highConfidenceDuplicateExtras =
     contentExactDuplicateExtras +
     structuralExactDuplicateExtras +
-    reconciledStructuralExactDuplicateExtras;
+    reconciledStructuralExactDuplicateExtras +
+    semanticRescanExactDuplicateExtras;
 
   const analyticsPurchaseCandidateCount =
     receipts.length - highConfidenceDuplicateExtras;
@@ -1182,6 +1742,7 @@ export function buildAnalysisDDuplicateScanAudit(
     contentExactDuplicateExtras,
     structuralExactDuplicateExtras,
     reconciledStructuralExactDuplicateExtras,
+    semanticRescanExactDuplicateExtras,
     probableDuplicateExtras,
     highConfidenceDuplicateExtras,
     duplicateGroupCount: highConfidenceGroups.length,
@@ -1237,7 +1798,7 @@ export function buildAnalysisDDuplicateScanAudit(
     },
     policyNotes: [
       'OPTION A: count every stored receipt (legacy production behavior).',
-      'OPTION B (V1): B_EXCLUDE_CONTENT_AND_STRUCTURAL_EXACT — exclude CONTENT_EXACT + STRUCTURAL_EXACT + RECONCILED_STRUCTURAL_EXACT extras.',
+      'OPTION B (V1): B_EXCLUDE_CONTENT_AND_STRUCTURAL_EXACT — exclude CONTENT_EXACT + STRUCTURAL_EXACT + RECONCILED_STRUCTURAL_EXACT + SEMANTIC_RESCAN_EXACT extras.',
       'OPTION C: also exclude PROBABLE — NOT recommended; PROBABLE is empty/weaker and not used for V1 exclusion.',
       'Category conservation gap is independent of duplicate scans and remains a D2-B topic.',
       'Future metadata (derived only): receipt_fingerprint, duplicate_of_candidate, duplicate_confidence — recompute; no destructive migration.',

@@ -12,7 +12,7 @@ import type {
 } from '../retailerIdentity';
 
 export const ANALYSIS_FOUNDATION_VERSION =
-  'meruno-analysis-foundation-a1.2.2-v1' as const;
+  'meruno-analysis-foundation-a1.3.3-v1' as const;
 
 /** High-confidence physical-receipt duplicate (reuses Analysis D confidence ladder). */
 export type CanonicalReceiptDuplicateConfidence = Extract<
@@ -20,6 +20,7 @@ export type CanonicalReceiptDuplicateConfidence = Extract<
   | 'CONTENT_EXACT_DUPLICATE'
   | 'STRUCTURAL_EXACT_DUPLICATE'
   | 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+  | 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
 >;
 
 export type CanonicalReceiptConfidence =

@@ -54,11 +54,11 @@ describe('Home Product Identity V1 population boundary', () => {
       );
 
       expect(selection.storedReceipts).toHaveLength(127);
-      expect(selection.highConfidenceDuplicateExtras).toBe(23);
-      expect(selection.analyticsReceipts).toHaveLength(104);
-      expect(supportedReceipts).toHaveLength(100);
-      expect(broad.observations).toHaveLength(968);
-      expect(supportedObservations).toHaveLength(932);
+      expect(selection.highConfidenceDuplicateExtras).toBe(24);
+      expect(selection.analyticsReceipts).toHaveLength(103);
+      expect(supportedReceipts).toHaveLength(99);
+      expect(broad.observations).toHaveLength(956);
+      expect(supportedObservations).toHaveLength(920);
       expect(unsupportedObservations).toHaveLength(36);
       expect(
         new Set(unsupportedObservations.map((observation) => observation.receiptId))
@@ -67,15 +67,15 @@ describe('Home Product Identity V1 population boundary', () => {
       expect(supportedObservations).toEqual(expectedOrder);
 
       const shadow = runShadowIdentityAudit(supportedObservations);
-      expect(shadow.entityAssignment.distinctMerchantProducts).toBe(610);
-      expect(shadow.entityAssignment.merchantProductNewEntity).toBe(610);
+      expect(shadow.entityAssignment.distinctMerchantProducts).toBe(612); // A1.3.2: score-first Costco rep
+      expect(shadow.entityAssignment.merchantProductNewEntity).toBe(612);
       expect(shadow.reuseQuality.merchantProductsWith2PlusObservations).toBe(
-        165
+        162
       );
       expect(shadow.reuseQuality.merchantProductsWith3PlusObservations).toBe(
-        66
+        62
       );
-      expect(shadow.byAction.existing_exact).toBe(322);
+      expect(shadow.byAction.existing_exact).toBe(308);
       expect(shadow.byLevel.family_spec).toBe(2);
       expect(shadow.byLevel.family_only).toBe(20);
 
@@ -94,8 +94,8 @@ describe('Home Product Identity V1 population boundary', () => {
       const { groups, qualified } =
         buildIdentityFrequentProductGroups(consumerObservations);
 
-      expect(qualified).toHaveLength(932);
-      expect(groups).toHaveLength(160);
+      expect(qualified).toHaveLength(920);
+      expect(groups).toHaveLength(157);
     }
   );
 });

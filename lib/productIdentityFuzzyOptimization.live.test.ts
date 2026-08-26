@@ -67,7 +67,7 @@ describe('Product Identity fuzzy optimization live equivalence', () => {
       let familyOnly = 0;
       let acceptedFuzzyResults = 0;
 
-      expect(observations).toHaveLength(932);
+      expect(observations).toHaveLength(920);
 
       for (const observation of observations) {
         const name = (observation.rawName || '').trim();
@@ -128,19 +128,21 @@ describe('Product Identity fuzzy optimization live equivalence', () => {
       }
 
       const observationCounts = [...observationsByMerchantProduct.values()];
-      expect(created).toBe(610);
-      expect(exactReuse).toBe(322);
+
+      expect(created).toBe(612);
+      expect(exactReuse).toBe(308);
       expect(familySpec).toBe(2);
       expect(familyOnly).toBe(20);
-      expect(observationsByMerchantProduct.size).toBe(610);
-      expect(observationCounts.filter((count) => count >= 2)).toHaveLength(165);
-      expect(observationCounts.filter((count) => count >= 3)).toHaveLength(66);
+      expect(observationsByMerchantProduct.size).toBe(612);
+      expect(observationCounts.filter((count) => count >= 2)).toHaveLength(162);
+      expect(observationCounts.filter((count) => count >= 3)).toHaveLength(62);
 
       expect(fuzzyDiagnostics).toEqual({
-        candidateVisits: 37465,
-        upperBoundRejected: 37465,
-        lengthUpperBoundRejected: 20659,
-        tokenUpperBoundRejected: 16806,
+        candidateVisits: 37108,
+        upperBoundRejected: 37108,
+        // A1.3.2: score-first Costco representative shifts fuzzy upper-bound split.
+        lengthUpperBoundRejected: 20296,
+        tokenUpperBoundRejected: 16812,
         expensiveSimilarityCalls: 0,
       });
       expect(acceptedFuzzyResults).toBe(0);
@@ -161,8 +163,8 @@ describe('Product Identity fuzzy optimization live equivalence', () => {
       const { groups, qualified } =
         buildIdentityFrequentProductGroups(consumerObservations);
 
-      expect(qualified).toHaveLength(932);
-      expect(groups).toHaveLength(160);
+      expect(qualified).toHaveLength(920);
+      expect(groups).toHaveLength(157);
     }
   );
 });

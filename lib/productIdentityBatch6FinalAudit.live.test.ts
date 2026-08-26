@@ -46,10 +46,10 @@ describe('Product Identity Batch 6 — final production audit', () => {
         applyV1MerchantFilter: true,
       });
       expect(dataset.storedReceiptCount).toBe(127);
-      expect(dataset.duplicateExtrasExcluded).toBe(23);
-      expect(dataset.purchaseCandidateCount).toBe(104);
-      expect(dataset.v1SupportedPurchaseCandidateCount).toBe(100);
-      expect(dataset.eligibleItemObservations).toBe(932);
+      expect(dataset.duplicateExtrasExcluded).toBe(24);
+      expect(dataset.purchaseCandidateCount).toBe(103);
+      expect(dataset.v1SupportedPurchaseCandidateCount).toBe(99);
+      expect(dataset.eligibleItemObservations).toBe(920);
 
       const identityReport = runShadowIdentityAudit(
         observations,
@@ -130,8 +130,8 @@ describe('Product Identity Batch 6 — final production audit', () => {
               : 'unexpected_filter',
         }));
 
-      expect(mpGe2.length).toBe(165); // RC hardening: was 167
-      expect(frequentGroups.length).toBe(160); // RC hardening: was 162
+      expect(mpGe2.length).toBe(162); // A1.3.2 score-first Costco rep
+      expect(frequentGroups.length).toBe(157); // A1.3.2 score-first Costco rep
       expect(discrepancy.length).toBe(5);
       expect(
         discrepancy.every(
@@ -457,20 +457,21 @@ describe('Product Identity Batch 6 — final production audit', () => {
         featureFreeze: 'PRODUCT IDENTITY V1 FEATURE FREEZE',
       };
 
-      expect(report.kpis.distinctMerchantProducts).toBe(610); // RC hardening: was 608
-      expect(report.kpis.mpGe2).toBe(165); // RC hardening: was 167
-      expect(report.frequentVsMpGe2.identityFrequentGroupsGe2).toBe(160); // RC hardening: was 162
-      expect(report.priceHistoryFinal.historyEligibleMps).toBe(165); // RC hardening: was 167
+      expect(report.kpis.distinctMerchantProducts).toBe(612); // A1.3.2 score-first Costco rep
+      expect(report.kpis.mpGe2).toBe(162); // A1.3.2 score-first Costco rep
+      expect(report.frequentVsMpGe2.identityFrequentGroupsGe2).toBe(157);
+      expect(report.priceHistoryFinal.historyEligibleMps).toBe(162);
       expect(report.geminiAdditionalCalls).toBe(0);
-      expect(
-        report.anomalySpotChecks.yokohama?.suspected ?? 0
-      ).toBeGreaterThanOrEqual(1);
-      expect(report.anomalySpotChecks.yokohama?.has794).toBe(true);
+      // A1.3.1: tax-known 022 representative uses qty=2 → unit ~397, not lineTotal 794.
+      // Prior suspected_anomaly/has794 came from the tax-unknown qty=1 observation.
+      expect(report.anomalySpotChecks.yokohama?.suspected ?? 0).toBe(0);
+      expect(report.anomalySpotChecks.yokohama?.has794).toBe(false);
+      expect(report.anomalySpotChecks.yokohama?.prices.includes(397)).toBe(true);
       expect(
         report.anomalySpotChecks.shengjian?.suspected ?? 0
       ).toBeGreaterThanOrEqual(1);
       expect(report.anomalySpotChecks.shengjian?.has1756).toBe(true);
-      expect(report.anomalySpotChecks.shengjian?.obsCount).toBe(8);
+      expect(report.anomalySpotChecks.shengjian?.obsCount).toBe(7); // A1.3.2 score-first Costco rep
 
       fs.mkdirSync(path.dirname(OUT), { recursive: true });
       fs.writeFileSync(OUT, JSON.stringify(report, null, 2), 'utf8');

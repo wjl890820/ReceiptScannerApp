@@ -34,20 +34,20 @@ describe('Product Identity Batch 4.1 — semantic gate dry-run + receipt cost', 
       });
 
       expect(dataset.storedReceiptCount).toBe(127);
-      expect(dataset.duplicateExtrasExcluded).toBe(23);
-      expect(dataset.purchaseCandidateCount).toBe(104);
-      expect(dataset.v1SupportedPurchaseCandidateCount).toBe(100);
-      expect(dataset.eligibleItemObservations).toBe(932);
-      expect(observations.length).toBe(932);
+      expect(dataset.duplicateExtrasExcluded).toBe(24);
+      expect(dataset.purchaseCandidateCount).toBe(103);
+      expect(dataset.v1SupportedPurchaseCandidateCount).toBe(99);
+      expect(dataset.eligibleItemObservations).toBe(920);
+      expect(observations.length).toBe(920);
 
       const semantic = runSemanticShadowSelectionAudit(observations);
       expect(semantic.geminiLiveCalls).toBe(0);
-      expect(semantic.eligibleObservations).toBe(932);
-      expect(semantic.distinctMerchantProducts).toBe(610); // RC hardening: was 608
+      expect(semantic.eligibleObservations).toBe(920);
+      expect(semantic.distinctMerchantProducts).toBe(612); // A1.3.2 score-first Costco rep
       expect(semantic.ratioDistinctNeedingAi).toBeLessThan(0.55);
 
       const receiptCost = runReceiptSemanticCostSimulation(payload);
-      expect(receiptCost.receiptCount).toBe(100);
+      expect(receiptCost.receiptCount).toBe(99);
 
       const liveSamplePlan = selectLiveEvalSamples(semantic.observations, {
         maxSamples: 28,

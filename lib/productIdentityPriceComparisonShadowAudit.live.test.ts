@@ -32,17 +32,17 @@ describe('Product Identity Batch 5A — price comparison shadow audit', () => {
       });
 
       expect(dataset.storedReceiptCount).toBe(127);
-      expect(dataset.duplicateExtrasExcluded).toBe(23);
-      expect(dataset.purchaseCandidateCount).toBe(104);
-      expect(dataset.v1SupportedPurchaseCandidateCount).toBe(100);
-      expect(dataset.eligibleItemObservations).toBe(932);
+      expect(dataset.duplicateExtrasExcluded).toBe(24);
+      expect(dataset.purchaseCandidateCount).toBe(103);
+      expect(dataset.v1SupportedPurchaseCandidateCount).toBe(99);
+      expect(dataset.eligibleItemObservations).toBe(920);
 
       const enriched = enrichObservationsForPriceShadow(observations, payload);
       const report = runPriceComparisonShadowAudit(enriched, dataset);
 
       expect(report.geminiAdditionalCalls).toBe(0);
       expect(report.userVisibleBehaviorChange).toBe(false);
-      expect(report.identityBaseline.distinctMerchantProducts).toBe(610); // RC hardening: was 608
+      expect(report.identityBaseline.distinctMerchantProducts).toBe(612); // A1.3.2 score-first Costco rep
       expect(report.identityBaseline.productExact).toBe(0);
       expect(report.identityBaseline.skuExact).toBe(0);
       expect(report.examples.length).toBeGreaterThanOrEqual(20);
@@ -50,7 +50,7 @@ describe('Product Identity Batch 5A — price comparison shadow audit', () => {
       expect(report.topPriceJumps.length).toBeGreaterThanOrEqual(1);
 
       // Price value usable (legacy) should remain ~932
-      expect(report.legacyVsNew.legacyPurchaseUnitUsable).toBe(932);
+      expect(report.legacyVsNew.legacyPurchaseUnitUsable).toBe(920);
 
       const outPath = path.join(
         __dirname,

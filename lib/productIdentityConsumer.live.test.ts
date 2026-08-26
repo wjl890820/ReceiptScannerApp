@@ -36,7 +36,7 @@ describe('Product Identity Batch 5B — 932 consumer integration audit', () => {
       const { dataset, observations } = buildDedupedShadowObservations(payload, {
         applyV1MerchantFilter: true,
       });
-      expect(dataset.eligibleItemObservations).toBe(932);
+      expect(dataset.eligibleItemObservations).toBe(920);
 
       const enriched = enrichObservationsForPriceShadow(observations, payload);
       const shadow5a = runPriceComparisonShadowAudit(enriched, dataset);
@@ -203,8 +203,8 @@ describe('Product Identity Batch 5B — 932 consumer integration audit', () => {
         ],
       };
 
-      expect(report.baseline5a.distinctMerchantProducts).toBe(610); // RC hardening: was 608
-      expect(report.baseline5a.mpGe2).toBe(165); // RC hardening: was 167
+      expect(report.baseline5a.distinctMerchantProducts).toBe(612); // A1.3.2 score-first Costco rep
+      expect(report.baseline5a.mpGe2).toBe(162); // A1.3.2 score-first Costco rep
       expect(report.consumer.priceHistoryEligibleMps).toBeGreaterThan(0);
       expect(report.geminiAdditionalCalls).toBe(0);
 

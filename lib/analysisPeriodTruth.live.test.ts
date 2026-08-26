@@ -87,17 +87,17 @@ describe('Analysis period truth — 127 receipt live control', () => {
           nonJpy: 0,
           malformed: 0,
         });
-        expect(selection.highConfidenceDuplicateExtras).toBe(23);
-        expect(selection.analyticsReceipts).toHaveLength(104);
-        expect(allStats.supportedReceiptCount).toBe(100);
-        expect(allStats.supportedSpend).toBe(424878);
+        expect(selection.highConfidenceDuplicateExtras).toBe(24);
+        expect(selection.analyticsReceipts).toHaveLength(103);
+        expect(allStats.supportedReceiptCount).toBe(99);
+        expect(allStats.supportedSpend).toBe(420591);
         expect(
           countSupportedItemsInRange(
             selection.analyticsReceipts,
             'all',
             REFERENCE_NOW
           )
-        ).toBe(932);
+        ).toBe(920);
 
         expect(monthStats.supportedReceiptCount).toBe(7);
         expect(monthStats.supportedSpend).toBe(19521);
