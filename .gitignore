@@ -67,3 +67,7 @@ tools/out/
 
 # Test fixtures (local)
 tools/fixtures/
+
+# Build artifacts
+/artifacts/
+/*.ipa
