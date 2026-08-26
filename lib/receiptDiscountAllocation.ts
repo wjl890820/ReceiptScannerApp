@@ -94,6 +94,41 @@ const RECEIPT_LEVEL_DISCOUNT_LABEL =
   /合計|総(?:額|計)?|total|subtotal|値引合計|割引合計|クーポン合計/i;
 
 /**
+ * Receipt-level aggregate discount summary labels (値引合計 / 割引合計 / …).
+ * Shared by allocation + analysis-foundation amount-basis (A1.2.1).
+ */
+export function isReceiptLevelDiscountSummaryLabel(label: string): boolean {
+  const raw = String(label || '').trim();
+  if (!raw) return false;
+  if (RECEIPT_LEVEL_DISCOUNT_LABEL.test(raw)) return true;
+  const n = normalizeToken(raw);
+  return Boolean(n && RECEIPT_LEVEL_DISCOUNT_LABEL.test(n));
+}
+
+/**
+ * True when discounts[] mixes aggregate summary rows with component discounts
+ * and additive independence cannot be proven — callers should treat reconciliation
+ * as ambiguous rather than summing everything.
+ */
+export function discountsHaveAggregateSummaryAmbiguity(
+  discounts: DiscountLine[] | null | undefined
+): boolean {
+  const list = (Array.isArray(discounts) ? discounts : []).filter((d) => {
+    const amount = Number(d?.amount);
+    return Number.isFinite(amount) && amount !== 0;
+  });
+  if (list.length < 2) return false;
+  let hasSummary = false;
+  let hasComponent = false;
+  for (const d of list) {
+    if (isReceiptLevelDiscountSummaryLabel(d.label)) hasSummary = true;
+    else hasComponent = true;
+    if (hasSummary && hasComponent) return true;
+  }
+  return false;
+}
+
+/**
  * Conservative adjacent product discount labels (値引 / N%割引 / 割引 N% / 値下げ).
  * Excludes bundle/まとめ売り and receipt-level summaries.
  */
@@ -102,7 +137,7 @@ export function isOrdinaryAdjacentProductDiscountLabel(label: string): boolean {
   const raw = String(label || '').trim();
   if (!raw) return false;
   const n = normalizeToken(raw);
-  if (!n || RECEIPT_LEVEL_DISCOUNT_LABEL.test(n)) return false;
+  if (!n || isReceiptLevelDiscountSummaryLabel(label)) return false;
   if (n.includes('クーポン') || n.includes('coupon') || n.includes('cpn')) return false;
   // After normalizeToken, % is whitespace, so "10%割引" → "10 割引" and "割引 10%" → "割引 10".
   if (/^\d{1,2}\s*割引$/.test(n) || /^割引\s*\d{1,2}$/.test(n)) return true;

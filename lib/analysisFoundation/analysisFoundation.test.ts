@@ -13,14 +13,50 @@ import type { ReceiptRow } from '../db';
 import {
   buildAnalysisFoundationSnapshot,
   buildCanonicalReceiptGroups,
+  buildMonetaryObservation,
   buildShoppingSessionCandidates,
   consolidateReceiptBasket,
   deriveCanonicalMerchant,
+  assessReceiptAmountBasis,
   evaluatePriceComparisonEligibility,
   evaluatePurchaseCycleEligibility,
   pickCanonicalRepresentativeReceipt,
+  type ExactPriceAmountEvidence,
 } from './index';
 import { summarizeReceiptForDuplicateAudit } from '../analysisDDuplicateAudit';
+
+const trustedExcluded: ExactPriceAmountEvidence = {
+  basis: 'tax_excluded',
+  confidence: 'high',
+  taxProvenance: 'trusted',
+};
+const trustedIncluded: ExactPriceAmountEvidence = {
+  basis: 'tax_included',
+  confidence: 'high',
+  taxProvenance: 'trusted',
+};
+
+function side(partial: {
+  rawName?: string;
+  quantity?: number;
+  lineTotal?: number;
+  currency?: string;
+  identityConfidence?: number;
+  identitySource?: string;
+  merchantProductId?: string | null;
+  amountEvidence: ExactPriceAmountEvidence | null;
+}) {
+  return {
+    rawName: partial.rawName ?? '牛乳',
+    quantity: partial.quantity ?? 1,
+    lineTotal: partial.lineTotal ?? 200,
+    currency: partial.currency ?? 'JPY',
+    identityConfidence: partial.identityConfidence ?? 0.9,
+    identitySource: partial.identitySource ?? 'high_confidence_rule',
+    merchantProductId: partial.merchantProductId === undefined ? 'mp_1' : partial.merchantProductId,
+    amountEvidence: partial.amountEvidence,
+  };
+}
 
 type FixtureItem = {
   name: string;
@@ -33,6 +69,9 @@ type FixtureItem = {
   canonical_product_id?: string;
   spec_size_value?: number;
   spec_size_unit?: string;
+  effectiveLineTotal?: number;
+  discountAllocated?: number;
+  amountUserEdited?: boolean;
 };
 
 function makeReceipt(args: {
@@ -42,14 +81,21 @@ function makeReceipt(args: {
   transactionAt?: number | null;
   createdAt?: number;
   total?: number;
+  tax?: number;
+  taxIsKnown?: number;
   items: FixtureItem[];
+  discounts?: Array<{ label: string; amount: number }>;
   userEdited?: number;
+  finalTotal?: number | null;
+  userItems?: FixtureItem[] | null;
   currency?: string;
 }): ReceiptRow {
   const itemSum = args.items.reduce(
     (s, it) => s + (it.lineTotal ?? 0),
     0
   );
+  const analysis: Record<string, unknown> = { items: args.items };
+  if (args.discounts) analysis.discounts = args.discounts;
   return {
     id: args.id,
     created_at: args.createdAt ?? args.transactionAt ?? Date.now(),
@@ -57,18 +103,19 @@ function makeReceipt(args: {
       args.transactionAt === undefined ? Date.now() : args.transactionAt,
     image_uri: '',
     total: args.total ?? itemSum,
-    tax: 0,
-    tax_is_known: 0,
+    tax: args.tax ?? 0,
+    tax_is_known: args.taxIsKnown ?? 0,
     currency: args.currency ?? 'JPY',
-    analysis_json: JSON.stringify({ items: args.items }),
+    analysis_json: JSON.stringify(analysis),
     merchant_raw: args.merchantRaw ?? args.merchantNormalized ?? 'イオン',
     merchant_normalized: args.merchantNormalized ?? 'イオン',
     merchant_type: 'supermarket',
     user_edited: args.userEdited ?? 0,
-    final_total: null,
+    final_total: args.finalTotal ?? null,
     final_category: null,
     note: null,
-    user_items_json: null,
+    user_items_json:
+      args.userItems != null ? JSON.stringify(args.userItems) : null,
   } as ReceiptRow;
 }
 
@@ -221,12 +268,15 @@ describe('Analysis Foundation A1', () => {
   // 6. Untrusted price identity => price comparison rejected with reason
   test('6: low-confidence identity rejects price comparison', () => {
     const result = evaluatePriceComparisonEligibility({
-      rawName: '不明商品',
-      quantity: 1,
-      lineTotal: 100,
-      currency: 'JPY',
-      identityConfidence: 0,
-      identitySource: 'unknown',
+      self: side({
+        rawName: '不明商品',
+        lineTotal: 100,
+        identityConfidence: 0,
+        identitySource: 'unknown',
+        merchantProductId: null,
+        amountEvidence: trustedExcluded,
+      }),
+      peer: side({ amountEvidence: trustedExcluded }),
     });
     expect(result.eligible).toBe(false);
     expect(result.reasonCodes).toContain('identity_unresolved');
@@ -510,5 +560,229 @@ describe('Analysis Foundation A1 — snapshot', () => {
     expect(alone[0]!.ephemeralSnapshotGroupId).not.toBe(
       together[0]!.ephemeralSnapshotGroupId
     );
+  });
+
+  test('A1.2: snapshot includes receiptAmountBasisAssessments', () => {
+    const r = makeReceipt({
+      id: 'snap-basis',
+      transactionAt: Date.parse('2024-01-01T12:00:00+09:00'),
+      items: [{ name: 'a', lineTotal: 2442, quantity: 1 }],
+      tax: 195,
+      total: 2637,
+      taxIsKnown: 1,
+    });
+    const snap = buildAnalysisFoundationSnapshot([r]);
+    expect(snap.receiptAmountBasisAssessments).toHaveLength(1);
+    expect(snap.receiptAmountBasisAssessments[0]!.basis).toBe('tax_excluded');
+  });
+});
+
+describe('Analysis Foundation A1.2 — amount basis', () => {
+  test('1: tax-excluded (Aeon-style 2442 + 195 = 2637)', () => {
+    const r = makeReceipt({
+      id: 'aeon',
+      merchantNormalized: 'イオン',
+      items: [{ name: 'merchandise', lineTotal: 2442, quantity: 1 }],
+      tax: 195,
+      total: 2637,
+      taxIsKnown: 1,
+    });
+    const a = assessReceiptAmountBasis(r);
+    expect(a.basis).toBe('tax_excluded');
+    expect(a.analyticsItemSum).toBe(2442);
+    expect(a.confidence).not.toBe('unknown');
+  });
+
+  test('2: tax-included (York-style sum=total with positive tax)', () => {
+    const r = makeReceipt({
+      id: 'york',
+      merchantNormalized: 'ヨークベニマル',
+      items: [{ name: 'merchandise', lineTotal: 3352, quantity: 1 }],
+      tax: 248,
+      total: 3352,
+      taxIsKnown: 1,
+    });
+    const a = assessReceiptAmountBasis(r);
+    expect(a.basis).toBe('tax_included');
+    expect(a.analyticsItemSum).toBe(3352);
+  });
+
+  test('3: tax=0 and item sum = total => unknown (not tax_included)', () => {
+    const r = makeReceipt({
+      id: 'zero-tax',
+      items: [{ name: 'x', lineTotal: 1000, quantity: 1 }],
+      tax: 0,
+      total: 1000,
+      taxIsKnown: 1,
+    });
+    const a = assessReceiptAmountBasis(r);
+    expect(a.basis).toBe('unknown');
+    expect(a.reasonCodes).toContain('tax_non_positive_cannot_discriminate');
+  });
+
+  test('4: neither equation closes => unknown', () => {
+    const r = makeReceipt({
+      id: 'open',
+      items: [{ name: 'x', lineTotal: 1000, quantity: 1 }],
+      tax: 100,
+      total: 1500,
+      taxIsKnown: 1,
+    });
+    const a = assessReceiptAmountBasis(r);
+    expect(a.basis).toBe('unknown');
+    expect(a.reasonCodes).toContain('neither_hypothesis_closes');
+  });
+
+  test('5: both hypotheses close within tolerance => unknown/ambiguous', () => {
+    // tax=1 within tol=2: included (100≈100) and excluded (100+1≈100) both close
+    const r = makeReceipt({
+      id: 'ambig',
+      items: [{ name: 'x', lineTotal: 100, quantity: 1 }],
+      tax: 1,
+      total: 100,
+      taxIsKnown: 1,
+    });
+    const a = assessReceiptAmountBasis(r);
+    expect(a.basis).toBe('unknown');
+    expect(a.reasonCodes).toContain('ambiguous_both_hypotheses_close');
+  });
+
+  test('6: discounted receipt uses effective amounts + unallocated once', () => {
+    // Bound discount via OCR allocation (or remainder) — never double-subtract
+    const r = makeReceipt({
+      id: 'disc-bound',
+      items: [
+        {
+          name: 'ファンタ',
+          lineTotal: 210,
+          quantity: 1,
+          effectiveLineTotal: 203,
+          discountAllocated: -7,
+        },
+      ],
+      discounts: [{ label: 'まとめ売り値引', amount: -7 }],
+      tax: 15,
+      total: 218, // 203 + 15 tax_excluded
+      taxIsKnown: 1,
+    });
+    const a = assessReceiptAmountBasis(r);
+    // Coherent OCR view: allocated effective OR gross+remainder, not both
+    expect(a.analyticsItemSum + a.unallocatedDiscountTotal).toBe(203);
+    expect(a.basis).toBe('tax_excluded');
+
+    // Receipt-level unallocated coupon: do not double-subtract from analytics sum
+    const r2 = makeReceipt({
+      id: 'disc-unalloc',
+      items: [{ name: '牛乳', lineTotal: 1000, quantity: 1 }],
+      discounts: [{ label: 'レシートクーポン', amount: -100 }],
+      tax: 72,
+      total: 972, // 1000 - 100 + 72
+      taxIsKnown: 1,
+    });
+    const a2 = assessReceiptAmountBasis(r2);
+    expect(a2.analyticsItemSum).toBe(1000);
+    expect(a2.unallocatedDiscountTotal).toBe(-100);
+    expect(a2.basis).toBe('tax_excluded');
+  });
+
+  test('7: user-edited amounts/total follow precedence', () => {
+    const r = makeReceipt({
+      id: 'user-edit',
+      items: [{ name: 'ocr', lineTotal: 2442, quantity: 1 }],
+      tax: 195,
+      total: 2637,
+      taxIsKnown: 1,
+      userEdited: 1,
+      finalTotal: 3352,
+      userItems: [
+        {
+          name: 'edited',
+          lineTotal: 3352,
+          quantity: 1,
+          amountUserEdited: true,
+        },
+      ],
+    });
+    // With user items sum 3352 + tax 195 would be excluded→3547 ≠ 3352 final
+    // included: 3352 ≈ 3352 → tax_included using final_total + user_items
+    const a = assessReceiptAmountBasis(r);
+    expect(a.receiptTotal).toBe(3352);
+    expect(a.analyticsItemSum).toBe(3352);
+    expect(a.basis).toBe('tax_included');
+    expect(a.evidence).toContain('paid_total_from_final_total');
+  });
+
+  test('8: price comparison tax_included vs tax_excluded => amount_basis_mismatch', () => {
+    const result = evaluatePriceComparisonEligibility({
+      self: side({ amountEvidence: trustedIncluded }),
+      peer: side({ amountEvidence: trustedExcluded }),
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reasonCodes).toContain('amount_basis_mismatch');
+  });
+
+  test('9: known vs unknown => amount_basis_unknown', () => {
+    const result = evaluatePriceComparisonEligibility({
+      self: side({ amountEvidence: trustedIncluded }),
+      peer: side({
+        amountEvidence: {
+          basis: 'unknown',
+          confidence: 'unknown',
+          taxProvenance: 'untrusted',
+        },
+      }),
+    });
+    expect(result.eligible).toBe(false);
+    expect(
+      result.reasonCodes.some((c) =>
+        c === 'amount_basis_unknown' || c === 'peer_amount_basis_unknown'
+      )
+    ).toBe(true);
+  });
+
+  test('10: same known basis passes amount-basis gate but still needs identity', () => {
+    const basisOk = evaluatePriceComparisonEligibility({
+      self: side({ amountEvidence: trustedExcluded }),
+      peer: side({ amountEvidence: trustedExcluded }),
+    });
+    expect(basisOk.reasonCodes).not.toContain('amount_basis_mismatch');
+    expect(basisOk.reasonCodes).not.toContain('amount_basis_unknown');
+    expect(basisOk.eligible).toBe(true);
+
+    const identityFail = evaluatePriceComparisonEligibility({
+      self: side({
+        rawName: '不明',
+        identityConfidence: 0,
+        identitySource: 'unknown',
+        merchantProductId: null,
+        amountEvidence: trustedExcluded,
+      }),
+      peer: side({ amountEvidence: trustedExcluded }),
+    });
+    expect(identityFail.reasonCodes).not.toContain('amount_basis_mismatch');
+    expect(identityFail.reasonCodes).toContain('identity_unresolved');
+    expect(identityFail.eligible).toBe(false);
+  });
+
+  test('11: mixed 8%/10% without item tax rate does not fake per-item normalization', () => {
+    const obs = buildMonetaryObservation({
+      rawAmount: 1080,
+      effectiveAmount: 1080,
+      taxBasis: 'tax_included',
+      itemTaxRatePercent: null,
+      confidence: 'high',
+    });
+    expect(obs.normalizedGrossAmount).toBe(1080);
+    expect(obs.normalizedNetAmount).toBeNull();
+    expect(obs.evidence).toContain('no_proportional_receipt_tax_split');
+    expect(obs.evidence).toContain('normalized_net_null_without_item_tax_rate');
+
+    const excluded = buildMonetaryObservation({
+      rawAmount: 1000,
+      effectiveAmount: 1000,
+      taxBasis: 'tax_excluded',
+    });
+    expect(excluded.normalizedNetAmount).toBe(1000);
+    expect(excluded.normalizedGrossAmount).toBeNull();
   });
 });

@@ -1,7 +1,10 @@
 /**
- * A1 — Analysis eligibility / evidence gates (pure functions).
+ * A1 / A1.2.2 — Analysis eligibility / evidence gates (pure functions).
  *
- * Prevents under-qualified observations from entering price trend / purchase cycle analytics.
+ * Exact price comparison =
+ *   self observation eligibility
+ *   AND peer observation eligibility
+ *   AND pairwise compatibility
  */
 
 import type { ReceiptRow } from '../db';
@@ -19,7 +22,14 @@ import {
 import type { CanonicalReceiptGroup } from './types';
 import { isDuplicateReceiptExtra } from './canonicalReceipt';
 import { deriveCanonicalMerchant } from './canonicalMerchant';
+import {
+  assessReceiptAmountBasis,
+  exactPriceAmountEvidenceFromAssessment,
+  evaluateExactPriceAmountBasisGate,
+  isExactPriceAmountEvidenceTrusted,
+} from './amountBasis';
 import type {
+  ExactPriceAmountEvidence,
   MerchantPatternEligibility,
   MerchantPatternRejectReason,
   PriceComparisonEligibility,
@@ -32,25 +42,27 @@ import type {
 const MIN_IDENTITY_CONFIDENCE_FOR_PRICE = 0.55;
 const MIN_IDENTITY_CONFIDENCE_FOR_CYCLE = 0.45;
 
-export type PriceComparisonEligibilityInput = {
+export type PriceObservationSideInput = {
   rawName: string;
   quantity: number | null | undefined;
   lineTotal: number | null | undefined;
   currency: string | null | undefined;
-  expectedCurrency?: string | null;
   identityConfidence?: number | null;
   identitySource?: string | null;
   merchantProductId?: string | null;
   canonicalProductId?: string | null;
-  /** Peer attributes for variant comparability (optional). */
-  peerAttributes?: ReturnType<typeof normalizeProductForIdentity>['attributes'] | null;
   isNonProductRow?: boolean;
   isDuplicateExtra?: boolean;
   peerPurchaseUnitPrices?: readonly number[];
+  amountEvidence: ExactPriceAmountEvidence | null | undefined;
 };
 
-export function evaluatePriceComparisonEligibility(
-  input: PriceComparisonEligibilityInput
+/**
+ * Single observation: is this row eligible to participate in exact price comparison?
+ * Does NOT authorize pairwise comparison alone.
+ */
+export function evaluateSinglePriceObservationEligibility(
+  input: PriceObservationSideInput
 ): PriceComparisonEligibility {
   const reasons: PriceComparisonRejectReason[] = [];
 
@@ -62,9 +74,12 @@ export function evaluatePriceComparisonEligibility(
   }
 
   const currency = (input.currency ?? '').trim().toUpperCase();
-  const expected = (input.expectedCurrency ?? currency).trim().toUpperCase();
-  if (currency && expected && currency !== expected) {
+  if (!currency) {
     reasons.push('currency_mismatch');
+  }
+
+  if (!isExactPriceAmountEvidenceTrusted(input.amountEvidence)) {
+    reasons.push('amount_basis_unknown');
   }
 
   const hasStrongIdentity = Boolean(
@@ -83,24 +98,12 @@ export function evaluatePriceComparisonEligibility(
     reasons.push('identity_low_confidence');
   }
 
-  const normalized = normalizeProductForIdentity(input.rawName);
-  if (input.peerAttributes) {
-    const compat = attributesAreCompatible(
-      normalized.attributes,
-      input.peerAttributes,
-      input.rawName,
-      input.rawName
-    );
-    if (!compat.ok) {
-      reasons.push('variant_spec_incomparable');
-    }
-  }
-
   const qty = input.quantity;
   if (qty != null && (typeof qty !== 'number' || !Number.isFinite(qty) || qty <= 0)) {
     reasons.push('invalid_quantity_basis');
   }
 
+  const normalized = normalizeProductForIdentity(input.rawName);
   const quality = evaluatePriceObservationQuality({
     lineTotal: input.lineTotal,
     quantity: input.quantity,
@@ -126,6 +129,138 @@ export function evaluatePriceComparisonEligibility(
   return { eligible: reasons.length === 0, reasonCodes: reasons };
 }
 
+function observationsShareComparableIdentity(
+  self: PriceObservationSideInput,
+  peer: PriceObservationSideInput
+): boolean {
+  if (
+    self.merchantProductId &&
+    peer.merchantProductId &&
+    self.merchantProductId === peer.merchantProductId
+  ) {
+    return true;
+  }
+  if (
+    self.canonicalProductId &&
+    peer.canonicalProductId &&
+    self.canonicalProductId === peer.canonicalProductId
+  ) {
+    return true;
+  }
+  const selfNorm = normalizeProductForIdentity(self.rawName);
+  const peerNorm = normalizeProductForIdentity(peer.rawName);
+  const selfConf =
+    typeof self.identityConfidence === 'number' ? self.identityConfidence : 0;
+  const peerConf =
+    typeof peer.identityConfidence === 'number' ? peer.identityConfidence : 0;
+  if (
+    selfNorm.comparisonKey &&
+    selfNorm.comparisonKey === peerNorm.comparisonKey &&
+    selfConf >= MIN_IDENTITY_CONFIDENCE_FOR_PRICE &&
+    peerConf >= MIN_IDENTITY_CONFIDENCE_FOR_PRICE
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Pairwise compatibility between two already single-eligible observations.
+ */
+export function evaluatePairwisePriceObservationCompatibility(
+  self: PriceObservationSideInput,
+  peer: PriceObservationSideInput
+): PriceComparisonEligibility {
+  const reasons: PriceComparisonRejectReason[] = [];
+
+  const selfCur = (self.currency ?? '').trim().toUpperCase();
+  const peerCur = (peer.currency ?? '').trim().toUpperCase();
+  if (!selfCur || !peerCur || selfCur !== peerCur) {
+    reasons.push('currency_mismatch');
+  }
+
+  const amountGate = evaluateExactPriceAmountBasisGate(
+    self.amountEvidence,
+    peer.amountEvidence
+  );
+  if (!amountGate.pass) {
+    reasons.push(amountGate.reason);
+  }
+
+  if (!observationsShareComparableIdentity(self, peer)) {
+    reasons.push('identity_mismatch');
+  }
+
+  const selfNorm = normalizeProductForIdentity(self.rawName);
+  const peerNorm = normalizeProductForIdentity(peer.rawName);
+  const compat = attributesAreCompatible(
+    selfNorm.attributes,
+    peerNorm.attributes,
+    self.rawName,
+    peer.rawName
+  );
+  if (!compat.ok) {
+    reasons.push('variant_spec_incomparable');
+  }
+
+  return { eligible: reasons.length === 0, reasonCodes: reasons };
+}
+
+export type PriceComparisonEligibilityInput = {
+  self: PriceObservationSideInput;
+  peer: PriceObservationSideInput;
+};
+
+const PEER_REASON_MAP: Partial<
+  Record<PriceComparisonRejectReason, PriceComparisonRejectReason>
+> = {
+  identity_unresolved: 'peer_identity_unresolved',
+  identity_low_confidence: 'peer_identity_low_confidence',
+  invalid_quantity_basis: 'peer_invalid_quantity_basis',
+  invalid_price: 'peer_invalid_price',
+  price_quality_invalid: 'peer_price_quality_invalid',
+  price_quality_suspected_anomaly: 'peer_price_quality_suspected_anomaly',
+  duplicate_receipt_observation: 'peer_duplicate_receipt_observation',
+  non_product_row: 'peer_non_product_row',
+  amount_basis_unknown: 'peer_amount_basis_unknown',
+  currency_mismatch: 'peer_currency_mismatch',
+};
+
+/**
+ * Exact pairwise price comparison:
+ * self eligibility AND peer eligibility AND pairwise compatibility.
+ */
+export function evaluatePriceComparisonEligibility(
+  input: PriceComparisonEligibilityInput
+): PriceComparisonEligibility {
+  const selfResult = evaluateSinglePriceObservationEligibility(input.self);
+  const peerResult = evaluateSinglePriceObservationEligibility(input.peer);
+  const pairResult = evaluatePairwisePriceObservationCompatibility(
+    input.self,
+    input.peer
+  );
+
+  const reasonCodes: PriceComparisonRejectReason[] = [...selfResult.reasonCodes];
+  for (const c of peerResult.reasonCodes) {
+    reasonCodes.push(PEER_REASON_MAP[c] ?? c);
+  }
+  reasonCodes.push(...pairResult.reasonCodes);
+
+  const seen = new Set<string>();
+  const merged: PriceComparisonRejectReason[] = [];
+  for (const c of reasonCodes) {
+    if (seen.has(c)) continue;
+    seen.add(c);
+    merged.push(c);
+  }
+
+  return {
+    eligible:
+      selfResult.eligible && peerResult.eligible && pairResult.eligible,
+    reasonCodes: merged,
+  };
+}
+
 export type PurchaseCycleEligibilityInput = {
   receipt: ReceiptRow;
   canonicalGroups: CanonicalReceiptGroup[];
@@ -135,10 +270,6 @@ export type PurchaseCycleEligibilityInput = {
   canonicalProductId?: string | null;
 };
 
-/**
- * Resolve temporal precision for a valid transaction_at.
- * date_only (Asia/Tokyo midnight) is still a usable calendar date for day-level cycle.
- */
 export function resolveTransactionTemporalPrecision(
   receipt: ReceiptRow
 ): TransactionTemporalPrecision | null {
@@ -146,14 +277,6 @@ export function resolveTransactionTemporalPrecision(
   return hasExactTransactionTime(receipt) ? 'exact_time' : 'date_only';
 }
 
-/**
- * Purchase-cycle eligibility (A1.1):
- * - Valid calendar date (transaction_at) is sufficient.
- * - exact_time vs date_only is preserved as temporalPrecision metadata.
- * - date_only may participate in day-level purchase-cycle analysis.
- * - date_only must still be excluded from shopping-session time-proximity
- *   (enforced in shoppingSessionCandidate, not here).
- */
 export function evaluatePurchaseCycleEligibility(
   input: PurchaseCycleEligibilityInput
 ): PurchaseCycleEligibility {
@@ -208,53 +331,92 @@ export function evaluateMerchantPatternEligibility(
   return { eligible: reasons.length === 0, reasonCodes: reasons };
 }
 
-/** Convenience: eligibility for a receipt item row with duplicate context. */
-export function evaluateReceiptItemPriceComparisonEligibility(args: {
+function readItemFields(item: Record<string, unknown>) {
+  const quantity = typeof item.quantity === 'number' ? item.quantity : 1;
+  const lineTotal = itemAmountForAnalytics(item as DiscountableItem);
+  const identityConfidence =
+    typeof item.identity_confidence === 'number'
+      ? item.identity_confidence
+      : null;
+  const identitySource =
+    typeof item.identity_source === 'string' ? item.identity_source : null;
+  const rawName =
+    typeof item.name === 'string'
+      ? item.name
+      : typeof item.raw_name === 'string'
+        ? item.raw_name
+        : '';
+  const merchantProductId =
+    typeof item.merchant_product_id === 'string'
+      ? item.merchant_product_id
+      : null;
+  const canonicalProductId =
+    typeof item.canonical_product_id === 'string'
+      ? item.canonical_product_id
+      : null;
+  return {
+    quantity,
+    lineTotal,
+    identityConfidence,
+    identitySource,
+    rawName,
+    merchantProductId,
+    canonicalProductId,
+  };
+}
+
+function sideFromReceiptItem(args: {
   receipt: ReceiptRow;
   item: Record<string, unknown>;
   canonicalGroups: CanonicalReceiptGroup[];
-  expectedCurrency?: string;
-  peerAttributes?: ReturnType<typeof normalizeProductForIdentity>['attributes'] | null;
-  peerPurchaseUnitPrices?: readonly number[];
-}): PriceComparisonEligibility {
-  const quantity =
-    typeof args.item.quantity === 'number' ? args.item.quantity : 1;
-  const lineTotal = itemAmountForAnalytics(args.item as DiscountableItem);
-  const identityConfidence =
-    typeof args.item.identity_confidence === 'number'
-      ? args.item.identity_confidence
-      : null;
-  const identitySource =
-    typeof args.item.identity_source === 'string'
-      ? args.item.identity_source
-      : null;
-  const rawName =
-    typeof args.item.name === 'string'
-      ? args.item.name
-      : typeof args.item.raw_name === 'string'
-        ? args.item.raw_name
-        : '';
-
-  return evaluatePriceComparisonEligibility({
-    rawName,
-    quantity,
-    lineTotal,
+  amountEvidence: ExactPriceAmountEvidence;
+}): PriceObservationSideInput {
+  const fields = readItemFields(args.item);
+  return {
+    rawName: fields.rawName,
+    quantity: fields.quantity,
+    lineTotal: fields.lineTotal,
     currency: args.receipt.currency,
-    expectedCurrency: args.expectedCurrency ?? args.receipt.currency,
-    identityConfidence,
-    identitySource,
-    merchantProductId:
-      typeof args.item.merchant_product_id === 'string'
-        ? args.item.merchant_product_id
-        : null,
-    canonicalProductId:
-      typeof args.item.canonical_product_id === 'string'
-        ? args.item.canonical_product_id
-        : null,
-    peerAttributes: args.peerAttributes,
-    isDuplicateExtra: isDuplicateReceiptExtra(args.receipt.id, args.canonicalGroups),
-    peerPurchaseUnitPrices: args.peerPurchaseUnitPrices,
+    identityConfidence: fields.identityConfidence,
+    identitySource: fields.identitySource,
+    merchantProductId: fields.merchantProductId,
+    canonicalProductId: fields.canonicalProductId,
+    isDuplicateExtra: isDuplicateReceiptExtra(
+      args.receipt.id,
+      args.canonicalGroups
+    ),
+    amountEvidence: args.amountEvidence,
+  };
+}
+
+/**
+ * Exact pairwise convenience API for two receipt items.
+ * Independently gates self item AND peer item, then pairwise compatibility.
+ */
+export function evaluateReceiptItemPriceComparisonEligibility(args: {
+  receipt: ReceiptRow;
+  item: Record<string, unknown>;
+  peerReceipt: ReceiptRow;
+  peerItem: Record<string, unknown>;
+  canonicalGroups: CanonicalReceiptGroup[];
+}): PriceComparisonEligibility {
+  const selfAssessment = assessReceiptAmountBasis(args.receipt);
+  const peerAssessment = assessReceiptAmountBasis(args.peerReceipt);
+
+  const self = sideFromReceiptItem({
+    receipt: args.receipt,
+    item: args.item,
+    canonicalGroups: args.canonicalGroups,
+    amountEvidence: exactPriceAmountEvidenceFromAssessment(selfAssessment),
   });
+  const peer = sideFromReceiptItem({
+    receipt: args.peerReceipt,
+    item: args.peerItem,
+    canonicalGroups: args.canonicalGroups,
+    amountEvidence: exactPriceAmountEvidenceFromAssessment(peerAssessment),
+  });
+
+  return evaluatePriceComparisonEligibility({ self, peer });
 }
 
 export type { PriceObservationQualityLevel };

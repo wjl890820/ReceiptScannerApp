@@ -12,7 +12,7 @@ import type {
 } from '../retailerIdentity';
 
 export const ANALYSIS_FOUNDATION_VERSION =
-  'meruno-analysis-foundation-a1-v1' as const;
+  'meruno-analysis-foundation-a1.2.2-v1' as const;
 
 /** High-confidence physical-receipt duplicate (reuses Analysis D confidence ladder). */
 export type CanonicalReceiptDuplicateConfidence = Extract<
@@ -82,9 +82,71 @@ export type CanonicalMerchant = {
   analyticsKey: string;
 };
 
+/**
+ * Receipt / observation tax-amount basis (A1.2).
+ * Derived only — not persisted. Distinct from discount/effective-line semantics.
+ */
+export type AmountTaxBasis = 'tax_included' | 'tax_excluded' | 'unknown';
+
+export type AmountBasisConfidence = 'high' | 'medium' | 'low' | 'unknown';
+
+/**
+ * Tax field provenance trust (separate from AmountTaxBasis / confidence).
+ * tax_is_known=1 → trusted; otherwise untrusted for exact comparison.
+ */
+export type TaxProvenanceTrust = 'trusted' | 'untrusted';
+
+/**
+ * Exact price-comparison amount evidence for one observation side.
+ * All three dimensions must pass — known basis alone is insufficient.
+ */
+export type ExactPriceAmountEvidence = {
+  basis: AmountTaxBasis;
+  confidence: AmountBasisConfidence;
+  taxProvenance: TaxProvenanceTrust;
+};
+
+/**
+ * Read-only receipt-level assessment of whether analytics item amounts
+ * appear tax-included or tax-excluded relative to paid total + tax.
+ */
+export type ReceiptAmountBasisAssessment = {
+  receiptId: string;
+  basis: AmountTaxBasis;
+  receiptTotal: number;
+  receiptTax: number | null;
+  analyticsItemSum: number;
+  unallocatedDiscountTotal: number;
+  expectedTotalIfTaxIncluded: number | null;
+  expectedTotalIfTaxExcluded: number | null;
+  confidence: AmountBasisConfidence;
+  taxProvenance: TaxProvenanceTrust;
+  /** True only when basis+confidence+taxProvenance authorize exact price comparison. */
+  exactComparisonTrusted: boolean;
+  evidence: string[];
+  reasonCodes: string[];
+};
+
+/**
+ * Optional per-item monetary derivation (A1.2).
+ * Without reliable item-level tax-rate evidence, the alternate side stays null.
+ * Never invents normalized amounts via receipt.tax / item-sum proportional split.
+ */
+export type MonetaryObservation = {
+  rawAmount: number;
+  /** Analytics effective / user-edited amount (discount semantics only). */
+  effectiveAmount: number;
+  taxBasis: AmountTaxBasis;
+  normalizedGrossAmount: number | null;
+  normalizedNetAmount: number | null;
+  confidence: AmountBasisConfidence;
+  evidence: string[];
+};
+
 export type PriceComparisonRejectReason =
   | 'identity_unresolved'
   | 'identity_low_confidence'
+  | 'identity_mismatch'
   | 'variant_spec_incomparable'
   | 'currency_mismatch'
   | 'invalid_quantity_basis'
@@ -92,7 +154,19 @@ export type PriceComparisonRejectReason =
   | 'duplicate_receipt_observation'
   | 'non_product_row'
   | 'price_quality_invalid'
-  | 'price_quality_suspected_anomaly';
+  | 'price_quality_suspected_anomaly'
+  | 'amount_basis_unknown'
+  | 'amount_basis_mismatch'
+  | 'peer_identity_unresolved'
+  | 'peer_identity_low_confidence'
+  | 'peer_invalid_quantity_basis'
+  | 'peer_invalid_price'
+  | 'peer_price_quality_invalid'
+  | 'peer_price_quality_suspected_anomaly'
+  | 'peer_duplicate_receipt_observation'
+  | 'peer_non_product_row'
+  | 'peer_amount_basis_unknown'
+  | 'peer_currency_mismatch';
 
 export type PriceComparisonEligibility = {
   eligible: boolean;

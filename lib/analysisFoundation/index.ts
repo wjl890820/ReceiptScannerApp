@@ -1,13 +1,14 @@
 /**
- * Meruno Analysis Foundation A1 — canonical read layer (read-only).
+ * Meruno Analysis Foundation A1 / A1.1 / A1.2 / A1.2.1 — canonical read layer (read-only).
  *
- * Composes duplicate audit, retailer identity, product normalization, and
- * eligibility gates for downstream experiments. Does not wire into production stats/UI.
+ * Does not wire into production stats/UI.
  */
 
 export {
   ANALYSIS_FOUNDATION_VERSION,
   DEFAULT_SHOPPING_SESSION_CANDIDATE_CONFIG,
+  type AmountBasisConfidence,
+  type AmountTaxBasis,
   type BasketMergeConfidence,
   type CanonicalMerchant,
   type CanonicalReceiptConfidence,
@@ -15,15 +16,19 @@ export {
   type CanonicalReceiptGroup,
   type ConsolidatedBasket,
   type ConsolidatedBasketLine,
+  type ExactPriceAmountEvidence,
   type MerchantPatternEligibility,
   type MerchantPatternRejectReason,
+  type MonetaryObservation,
   type PriceComparisonEligibility,
   type PriceComparisonRejectReason,
   type PurchaseCycleEligibility,
   type PurchaseCycleRejectReason,
+  type ReceiptAmountBasisAssessment,
   type ShoppingSessionCandidate,
   type ShoppingSessionCandidateConfidence,
   type ShoppingSessionCandidateConfig,
+  type TaxProvenanceTrust,
   type TransactionTemporalPrecision,
 } from './types';
 
@@ -41,12 +46,35 @@ export { deriveCanonicalMerchant } from './canonicalMerchant';
 export { consolidateReceiptBasket } from './basketConsolidation';
 
 export {
+  AMOUNT_BASIS_TOLERANCE_JPY,
+  assessReceiptAmountBasis,
+  assessReceiptAmountBasisForAll,
+  buildMonetaryObservation,
+  exactPriceAmountEvidenceFromAssessment,
+  evaluateExactPriceAmountBasisGate,
+  isExactPriceAmountEvidenceTrusted,
+} from './amountBasis';
+
+export {
+  resolveReceiptMonetarySourceBundle,
+  sumBundleAnalyticsItemAmounts,
+} from './monetarySourceBundle';
+
+export {
+  isPersistedDiscountAllocationConsistent,
+  resolveDiscountOwnership,
+} from './discountOwnership';
+
+export {
   evaluateMerchantPatternEligibility,
+  evaluatePairwisePriceObservationCompatibility,
   evaluatePriceComparisonEligibility,
   evaluatePurchaseCycleEligibility,
   evaluateReceiptItemPriceComparisonEligibility,
+  evaluateSinglePriceObservationEligibility,
   resolveTransactionTemporalPrecision,
   type PriceComparisonEligibilityInput,
+  type PriceObservationSideInput,
   type PurchaseCycleEligibilityInput,
   type PriceObservationQualityLevel,
 } from './eligibility';
@@ -60,11 +88,13 @@ import type { ReceiptRow } from '../db';
 import { buildCanonicalReceiptGroups } from './canonicalReceipt';
 import { consolidateReceiptBasket } from './basketConsolidation';
 import { deriveCanonicalMerchant } from './canonicalMerchant';
+import { assessReceiptAmountBasisForAll } from './amountBasis';
 import { buildShoppingSessionCandidates } from './shoppingSessionCandidate';
 import type { ShoppingSessionCandidateConfig } from './types';
 import type {
   CanonicalReceiptGroup,
   ConsolidatedBasket,
+  ReceiptAmountBasisAssessment,
   ShoppingSessionCandidate,
 } from './types';
 import { ANALYSIS_FOUNDATION_VERSION } from './types';
@@ -73,9 +103,11 @@ export type AnalysisFoundationSnapshot = {
   version: typeof ANALYSIS_FOUNDATION_VERSION;
   canonicalReceiptGroups: CanonicalReceiptGroup[];
   shoppingSessionCandidates: ShoppingSessionCandidate[];
+  /** A1.2 — read-only receipt amount tax-basis assessments (stable-sorted by receiptId). */
+  receiptAmountBasisAssessments: ReceiptAmountBasisAssessment[];
 };
 
-/** Build the full A1 read snapshot for a receipt corpus (pure, deterministic). */
+/** Build the full A1+ read snapshot for a receipt corpus (pure, deterministic). */
 export function buildAnalysisFoundationSnapshot(
   receipts: ReceiptRow[],
   shoppingConfig?: ShoppingSessionCandidateConfig
@@ -85,10 +117,12 @@ export function buildAnalysisFoundationSnapshot(
     receipts,
     shoppingConfig
   );
+  const receiptAmountBasisAssessments = assessReceiptAmountBasisForAll(receipts);
   return {
     version: ANALYSIS_FOUNDATION_VERSION,
     canonicalReceiptGroups,
     shoppingSessionCandidates,
+    receiptAmountBasisAssessments,
   };
 }
 
