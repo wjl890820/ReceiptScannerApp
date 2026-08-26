@@ -2,6 +2,8 @@
 
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { useRouter, type Href } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -43,6 +45,10 @@ import {
   upsertProductDictionary,
 } from '@/lib/productDictionary';
 import { reclassifyReceiptsMissingCategories } from '@/lib/reclassifyReceipts';
+import {
+  exportAndShareReceiptsDb,
+  RECEIPTS_DB_EXPORT_PRIVACY_WARNING,
+} from '@/lib/receiptsDbExport';
 import {
   UI_COLORS,
   UI_LAYOUT,
@@ -403,6 +409,38 @@ export default function SettingsScreen() {
         // ignore
       }
       setDevToolsEnabled(false);
+    };
+  }, []);
+
+  const runExportReceiptsDb = useMemo(() => {
+    return () => {
+      if (!__DEV__) return;
+      Alert.alert('Private data', RECEIPTS_DB_EXPORT_PRIVACY_WARNING, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Share JSON',
+          onPress: async () => {
+            try {
+              const result = await exportAndShareReceiptsDb({
+                cacheDirectory: FileSystem.cacheDirectory,
+                writeAsStringAsync: FileSystem.writeAsStringAsync,
+                isAvailableAsync: Sharing.isAvailableAsync,
+                shareAsync: Sharing.shareAsync,
+                isDevBuild: __DEV__,
+              });
+              Alert.alert(
+                'Export ready',
+                `${result.filename}\nreceipts=${result.receiptCount}`
+              );
+            } catch (e: unknown) {
+              Alert.alert(
+                'Export failed',
+                e instanceof Error ? e.message : String(e)
+              );
+            }
+          },
+        },
+      ]);
     };
   }, []);
 
@@ -885,6 +923,17 @@ export default function SettingsScreen() {
         <View style={styles.devGroup}>
           <Text style={styles.devSectionLabel}>Developer Tools</Text>
           <View style={styles.group}>
+            {__DEV__ ? (
+              <>
+                <SettingsRow
+                  title="Export receipts DB (JSON)"
+                  subtitle="All receipts_v2.db rows → Share Sheet"
+                  onPress={runExportReceiptsDb}
+                  accessibilityLabel="Export receipts DB JSON"
+                />
+                <View style={styles.separator} />
+              </>
+            ) : null}
             <SettingsRow
               title="Default receipt source"
               subtitle={defaultReceiptSource}

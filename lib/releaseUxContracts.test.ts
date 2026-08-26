@@ -58,6 +58,11 @@ describe('R2-B6 release UX contracts', () => {
     expect(settingsSource).toContain('shouldShowSettingsDevTools');
     expect(settingsSource).toContain('shouldShowAnalysisDDiagnosticsEntry');
     expect(settingsSource).toContain('shouldShowSettingsProEntry');
+    // Receipts DB JSON export must remain development-build-only.
+    expect(settingsSource).toContain('exportAndShareReceiptsDb');
+    expect(settingsSource).toMatch(
+      /\{__DEV__\s*\?[\s\S]*Export receipts DB \(JSON\)/
+    );
   });
 
   it('C — tab labels resolve through i18n for en/zh/ja', () => {
