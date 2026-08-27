@@ -61,8 +61,26 @@ function receiptFixture(
 }
 
 describe('M1-E domain boundaries', () => {
+  /**
+   * Fixed reference clock for rolling-window assertions.
+   * calculateStats() reads Date.now(); filterReceiptsByTimeRange receives an
+   * explicit now — both must observe the same instant or the week fixture
+   * eventually falls outside "Last 7 days" as wall-clock advances.
+   */
+  const FIXED_NOW_MS = Date.parse('2026-08-22T12:00:00+09:00');
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(FIXED_NOW_MS);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('A — identical receipts + identical window → same shared category composition metric', () => {
-    const now = Date.parse('2026-08-22T12:00:00+09:00');
+    const now = Date.now();
+    expect(now).toBe(FIXED_NOW_MS);
     const receipts = [
       receiptFixture('r1', {
         total: 1000,
@@ -91,6 +109,42 @@ describe('M1-E domain boundaries', () => {
     const food = shares.find((s) => s.category === 'food_ingredients');
     expect(food?.share).toBeCloseTo(1, 5);
     expect(categoryCompositionPercent(200, viaStats.categoryCompositionTotal)).toBe(
+      100
+    );
+  });
+
+  it('A2 — rolling week boundary under fixed clock (inside vs outside)', () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const inside = receiptFixture('inside', {
+      total: 100,
+      at: now - 6 * dayMs,
+      items: [
+        {
+          name: '牛乳',
+          category: 'food_ingredients',
+          lineTotal: 100,
+          quantity: 1,
+        },
+      ],
+    });
+    const outside = receiptFixture('outside', {
+      total: 100,
+      at: now - 8 * dayMs,
+      items: [
+        {
+          name: '牛乳',
+          category: 'food_ingredients',
+          lineTotal: 100,
+          quantity: 1,
+        },
+      ],
+    });
+    expect(filterReceiptsByTimeRange([inside], 'week', now)).toHaveLength(1);
+    expect(filterReceiptsByTimeRange([outside], 'week', now)).toHaveLength(0);
+    expect(calculateStats([inside], 'week').categoryCompositionTotal).toBe(100);
+    expect(calculateStats([outside], 'week').categoryCompositionTotal).toBe(0);
+    expect(calculateStats([inside, outside], 'week').categoryCompositionTotal).toBe(
       100
     );
   });
