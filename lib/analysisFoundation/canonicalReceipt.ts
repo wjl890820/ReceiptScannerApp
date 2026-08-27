@@ -15,6 +15,7 @@ import {
 import {
   pickBestRepresentativeReceiptId,
 } from '../receiptRepresentativeQuality';
+import { applyEvidenceAwareRepresentativeOverride } from './evidenceAwareRepresentative';
 import type {
   CanonicalReceiptConfidence,
   CanonicalReceiptGroup,
@@ -24,6 +25,11 @@ export {
   scoreReceiptRepresentativeQuality,
   pickBestRepresentativeReceiptId,
 } from '../receiptRepresentativeQuality';
+
+export {
+  applyEvidenceAwareRepresentativeOverride,
+  isTrustedMonetaryRepresentative,
+} from './evidenceAwareRepresentative';
 
 function fnv1aHex(text: string): string {
   let h = 0x811c9dc5;
@@ -59,14 +65,27 @@ function mapDuplicateGroup(
   group: AnalysisDDuplicateGroup,
   receiptById: Map<string, ReceiptRow>
 ): CanonicalReceiptGroup {
-  const representativeReceipt =
-    receiptById.get(group.representativeReceiptId) ??
-    pickCanonicalRepresentativeReceipt(
-      group.receiptIds
-        .map((id) => receiptById.get(id))
-        .filter((r): r is ReceiptRow => r != null),
-      group.members
-    );
+  const sourceReceiptIds = [...group.receiptIds].sort();
+  const baselineRepresentativeId =
+    receiptById.has(group.representativeReceiptId) &&
+    sourceReceiptIds.includes(group.representativeReceiptId)
+      ? group.representativeReceiptId
+      : pickCanonicalRepresentativeReceipt(
+          sourceReceiptIds
+            .map((id) => receiptById.get(id))
+            .filter((r): r is ReceiptRow => r != null),
+          group.members
+        ).id;
+
+  // A1.4B-1: strict trusted-monetary override only. Membership unchanged.
+  const override = applyEvidenceAwareRepresentativeOverride({
+    baselineRepresentativeId,
+    sourceReceiptIds,
+    receiptById,
+    memberSummaries: group.members,
+  });
+
+  const representativeReceipt = receiptById.get(override.representativeId)!;
   const semanticEvidence = group.semanticRescanEvidence;
   const semanticDiff =
     semanticEvidence == null
@@ -75,10 +94,16 @@ function mapDuplicateGroup(
           (c) =>
             `observation_quantity_conflict;left_receipt_id=${c.leftReceiptId};right_receipt_id=${c.rightReceiptId};item_index=${c.itemIndex};left_quantity=${c.leftQuantity};right_quantity=${c.rightQuantity};line_amount=${c.lineAmount}`
         );
+  const overrideEvidence =
+    override.changed
+      ? [
+          `evidence_aware_representative_override;baseline=${override.baselineRepresentativeId};selected=${override.representativeId};reason=${override.reason}`,
+        ]
+      : [`evidence_aware_representative_policy;reason=${override.reason}`];
   return {
     ephemeralSnapshotGroupId: buildEphemeralSnapshotGroupId(group.receiptIds),
     representativeReceipt,
-    sourceReceiptIds: [...group.receiptIds].sort(),
+    sourceReceiptIds,
     duplicateCount: Math.max(0, group.receiptIds.length - 1),
     confidence: group.confidence as CanonicalReceiptConfidence,
     evidence: [
@@ -88,6 +113,7 @@ function mapDuplicateGroup(
       `representative_receipt_id=${representativeReceipt.id}`,
       `duplicate_confidence=${group.confidence}`,
       'ephemeral_snapshot_group_id_not_persistent_physical_identity',
+      ...overrideEvidence,
     ],
   };
 }

@@ -122,12 +122,18 @@ describe('A1.4A Ground Truth shadow audit — live (optional)', () => {
 
       expect(gt019.productionCandidateCount).toBe(1);
       expect(gt019.shadowRepresentativeRecommendation).not.toBeNull();
+      // A1.4B-1: production canonical representative promoted to trusted monetary
       expect(
         gt019.shadowRepresentativeRecommendation!.productionRepresentativeReceiptId
-      ).toBe('pbU0NavDejcsAEM7fGlMB');
+      ).toBe('9Brk_HjDEvLeBD2i6c7Hb');
       expect(
         gt019.shadowRepresentativeRecommendation!.shadowRecommendedRepresentativeReceiptId
       ).toBe('9Brk_HjDEvLeBD2i6c7Hb');
+      expect(
+        gt019.evidence.some((e) =>
+          e.includes('representative=9Brk_HjDEvLeBD2i6c7Hb')
+        )
+      ).toBe(true);
 
       expect(gt020.productionCandidateCount).toBe(1);
       expect(gt020.monetaryProvenanceNotes.length).toBeGreaterThan(0);

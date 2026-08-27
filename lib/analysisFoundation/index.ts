@@ -39,6 +39,8 @@ export {
   isDuplicateReceiptExtra,
   pickCanonicalRepresentativeReceipt,
   scoreReceiptRepresentativeQuality,
+  applyEvidenceAwareRepresentativeOverride,
+  isTrustedMonetaryRepresentative,
 } from './canonicalReceipt';
 
 export { deriveCanonicalMerchant } from './canonicalMerchant';
