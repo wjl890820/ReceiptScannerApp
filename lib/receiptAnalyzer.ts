@@ -8,6 +8,11 @@ import { getCurrentLocale } from './i18n';
 import { normalizeOcrAnalysis } from './receiptOcrNormalize';
 import type { ProductCategory } from './productCategory';
 import {
+  buildDirectGeminiReceiptAnalysisFromParsed,
+  convertEdgeOcrAnalysisResponse,
+} from './receiptOcrEdgeConversion';
+import { type PrintedIdentifiers } from './receiptPrintedEvidence';
+import {
   getSupabaseUrl,
   getSupabaseAnonKey,
   getGeminiApiKey,
@@ -16,6 +21,11 @@ import {
 } from './env';
 import { resolveOcrAuthorizationBearer } from './ocrAuthHeaders';
 import { extractOcrRequestIdFromEdgeResponse } from './ocrRequestId';
+
+export {
+  buildDirectGeminiReceiptAnalysisFromParsed,
+  convertEdgeOcrAnalysisResponse,
+} from './receiptOcrEdgeConversion';
 
 const DEFAULT_OCR_MODEL = 'gemini-3.5-flash-lite';
 
@@ -50,6 +60,10 @@ export type ReceiptItem = {
   effectiveLineTotal?: number;
   /** Sum of negative coupon amounts bound to this line. */
   discountAllocated?: number;
+  /** G1-1: store-local printed product/item code (string; leading zeros preserved). */
+  merchantProductCode?: string;
+  /** G1-1: verbatim short printed promo markers on this line (e.g. 特, 特価). */
+  promoMarkers?: string[];
 };
 
 export type ReceiptAnalysis = {
@@ -68,6 +82,10 @@ export type ReceiptAnalysis = {
   ocr_raw_text?: string;
   /** Optional OCR-edge discount lines (merged again in normalize). */
   discounts?: Array<{ label: string; amount: number }>;
+  /** G1-1: printed receipt / transaction identifiers (evidence only). */
+  printedIdentifiers?: PrintedIdentifiers;
+  /** G1-1: parser provenance — stamped by Edge/client, not model output. */
+  evidenceCaptureVersion?: 1;
 };
 
 type ScanTrace = { id: string; t0: number };
@@ -301,27 +319,9 @@ async function analyzeReceiptImageViaEdgeFunction(
   }
 
   // 交易时间：OCR 可能返回 transactionDate / transactionAt / purchasedAt / datetime
-  const txDateStr =
-    (typeof analysis.transactionDate === 'string' && analysis.transactionDate.trim()) ||
-    (typeof (analysis as any).transactionAt === 'string' && (analysis as any).transactionAt.trim()) ||
-    (typeof (analysis as any).purchasedAt === 'string' && (analysis as any).purchasedAt.trim()) ||
-    (typeof (analysis as any).datetime === 'string' && (analysis as any).datetime.trim()) ||
-    undefined;
-
-  // 转换为 ReceiptAnalysis 格式
-  const receiptAnalysis: ReceiptAnalysis = {
-    merchant: typeof analysis.merchant === 'string' ? analysis.merchant : undefined,
-    items: Array.isArray(analysis.items) ? analysis.items : [],
-    total: typeof analysis.total === 'number' ? analysis.total : 0,
-    tax: typeof analysis.tax === 'number' && Number.isFinite(analysis.tax) ? analysis.tax : null,
-    taxBreakdown: Array.isArray(analysis.taxBreakdown) ? analysis.taxBreakdown : undefined,
-    currency:
-      typeof analysis.currency === 'string' && analysis.currency.trim()
-        ? analysis.currency
-        : '¥',
-    transactionDate: txDateStr || undefined,
-    discounts: Array.isArray(analysis.discounts) ? analysis.discounts : undefined,
-  };
+  const receiptAnalysis = convertEdgeOcrAnalysisResponse(
+    analysis as Record<string, unknown>
+  );
 
   // 确定性后处理：剔除折扣/税/小计行、清洗分类、归一化店铺名、金额对账
   const normalized = normalizeOcrAnalysis(receiptAnalysis);
@@ -369,6 +369,13 @@ categoryKey 必须从以下枚举中选择一个：
 只输出 JSON，不要解释。
   `.trim();
 
+  const evidenceSpec = `
+可选 printed evidence（证据のみ。推測禁止）:
+- items[].merchantProductCode: string|null — 店舗/商品コード（先頭ゼロ保持。数値化禁止）
+- items[].promoMarkers: string[]|null — 商品行に印刷された短い販促記号（例: 特, 特価）。値引価格から推測しない
+- printedIdentifiers: { transactionId, receiptNumber, registerId }|null — 伝票番号/レシートNo./レジNo. 等（文字列のみ）
+`.trim();
+
   const body = {
     contents: [
       {
@@ -376,9 +383,11 @@ categoryKey 必须从以下枚举中选择一个：
           {
             text:
               '这是一张日本超市或便利店的小票照片。请识别并输出 JSON。\n' +
-              '字段：merchant（可选）、items、total、tax、currency。\n' +
-              'items 每项：name, quantity, unitPrice, lineTotal, categoryKey。\n' +
-              categorySpec,
+              '字段：merchant（可选）、items、total、tax、currency、printedIdentifiers（可选）。\n' +
+              'items 每项：name, quantity, unitPrice, lineTotal, categoryKey, merchantProductCode, promoMarkers。\n' +
+              categorySpec +
+              '\n' +
+              evidenceSpec,
           },
           {
             inline_data: {
@@ -449,31 +458,14 @@ categoryKey 必须从以下枚举中选择一个：
         });
       }
 
-      // 交易时间：直连 Gemini 可能返回 transactionDate / transactionAt / purchasedAt / datetime
-        const txDateStr =
-          (typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()) ||
-          (typeof parsed.transactionAt === 'string' && parsed.transactionAt?.trim()) ||
-          (typeof parsed.purchasedAt === 'string' && parsed.purchasedAt?.trim()) ||
-          (typeof parsed.datetime === 'string' && parsed.datetime?.trim()) ||
-          undefined;
+      const rawSnippet =
+        modelReplyText.length > 80000 ? modelReplyText.slice(0, 80000) + '\n…(truncated)' : modelReplyText;
+      const analysis = buildDirectGeminiReceiptAnalysisFromParsed(
+        parsed as Record<string, unknown>,
+        { ocrRawText: rawSnippet }
+      );
 
-        const rawSnippet =
-          modelReplyText.length > 80000 ? modelReplyText.slice(0, 80000) + '\n…(truncated)' : modelReplyText;
-        const analysis: ReceiptAnalysis = {
-          merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
-          items: Array.isArray(parsed.items) ? parsed.items : [],
-          total: typeof parsed.total === 'number' ? parsed.total : 0,
-          tax: typeof parsed.tax === 'number' && Number.isFinite(parsed.tax) ? parsed.tax : null,
-          taxBreakdown: Array.isArray(parsed.taxBreakdown) ? parsed.taxBreakdown : undefined,
-          currency:
-            typeof parsed.currency === 'string' && parsed.currency.trim()
-              ? parsed.currency
-              : '¥',
-          transactionDate: txDateStr || undefined,
-          ocr_raw_text: rawSnippet,
-        };
-
-        return normalizeOcrAnalysis(analysis);
+      return normalizeOcrAnalysis(analysis);
     }
 
     if ((res.status === 429 || res.status === 503) && i < maxRetry) {

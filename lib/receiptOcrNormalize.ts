@@ -12,6 +12,10 @@
 
 import type { ReceiptAnalysis, ReceiptItem, CategoryKey } from './receiptAnalyzer';
 import {
+  applyPrintedEvidenceRootFields,
+  copyItemPrintedEvidenceFields,
+} from './receiptPrintedEvidence';
+import {
   V1_ACTIVE_PRODUCT_CATEGORIES,
   type ProductCategory,
 } from './productCategory';
@@ -668,6 +672,7 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
       unitPrice: Number.isFinite(Number(it?.unitPrice)) ? Number(it.unitPrice) : 0,
       lineTotal,
       categoryKey: sanitizeOcrCategoryKey((it as any)?.categoryKey),
+      ...copyItemPrintedEvidenceFields(it as Record<string, unknown>),
     });
   }
 
@@ -691,9 +696,17 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   const reconciliation = reconcileReceiptTotals(itemsPositiveSum, discountsSum, tax, total);
 
   const merchant_normalized = canonicalizeMerchantChain(merchantOut);
+  const {
+    printedIdentifiers: _rawPrintedIdentifiers,
+    evidenceCaptureVersion: _rawEvidenceCaptureVersion,
+    ...analysisWithoutPrintedEvidenceRoot
+  } = analysis as ReceiptAnalysis & Record<string, unknown>;
+  const printedEvidenceRoot = applyPrintedEvidenceRootFields(
+    analysis as Record<string, unknown>
+  );
 
   return {
-    ...analysis,
+    ...analysisWithoutPrintedEvidenceRoot,
     merchant: merchantOut,
     items: allocated.items,
     total,
@@ -704,5 +717,6 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     discounts,
     reconciliation,
     amount_mismatch: !reconciliation.ok,
+    ...printedEvidenceRoot,
   };
 }

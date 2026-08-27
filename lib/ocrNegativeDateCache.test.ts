@@ -213,7 +213,7 @@ describe('Gate 1.1 edge contract + regression freeze', () => {
   it('13 — Sample 007 Costco still requires verification (no hardcode)', () => {
     expect(edgeSource).not.toContain('Sample 077');
     expect(edgeSource).not.toContain('06/10/2026');
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*10/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*11/);
   });
 
   it('14 — Sample 029 AEON still skips verifier when date plausible', async () => {

@@ -30,7 +30,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 10;
+const OCR_CACHE_VERSION = 11;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -76,12 +76,20 @@ interface OCRResponse {
       lineTotal: number;
       categoryKey?: string;
       kind?: 'item' | 'discount' | 'tax' | 'subtotal';
+      merchantProductCode?: string;
+      promoMarkers?: string[];
     }>;
     discounts?: Array<{ label: string; amount: number }>;
     total: number;
     tax: number;
     currency: string;
     transactionDate?: string;
+    printedIdentifiers?: {
+      transactionId?: string;
+      receiptNumber?: string;
+      registerId?: string;
+    };
+    evidenceCaptureVersion?: 1;
   };
   cached?: boolean;
   hash?: string;
@@ -304,6 +312,84 @@ async function checkRateLimit(supabase: any, deviceId: string): Promise<boolean>
   }
 }
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function sanitizeMerchantProductCode(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return trimNonEmptyString(value);
+}
+
+function sanitizePromoMarkers(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function sanitizePrintedIdentifiers(value: unknown):
+  | { transactionId?: string; receiptNumber?: string; registerId?: string }
+  | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const transactionId = trimNonEmptyString(row.transactionId);
+  const receiptNumber = trimNonEmptyString(row.receiptNumber);
+  const registerId = trimNonEmptyString(row.registerId);
+  if (!transactionId && !receiptNumber && !registerId) return undefined;
+  return {
+    ...(transactionId ? { transactionId } : {}),
+    ...(receiptNumber ? { receiptNumber } : {}),
+    ...(registerId ? { registerId } : {}),
+  };
+}
+
+function sanitizeOcrItemEvidence(row: Record<string, unknown>): {
+  merchantProductCode?: string;
+  promoMarkers?: string[];
+} {
+  const merchantProductCode = sanitizeMerchantProductCode(row.merchantProductCode);
+  const promoMarkers = sanitizePromoMarkers(row.promoMarkers);
+  return {
+    ...(merchantProductCode ? { merchantProductCode } : {}),
+    ...(promoMarkers ? { promoMarkers } : {}),
+  };
+}
+
+function sanitizeGeminiItems(items: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(items)) return [];
+  return items.map((raw) => {
+    const row = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+    const evidence = sanitizeOcrItemEvidence(row);
+    return {
+      name: typeof row.name === 'string' ? row.name : '',
+      quantity: typeof row.quantity === 'number' && Number.isFinite(row.quantity) ? row.quantity : 1,
+      unitPrice: typeof row.unitPrice === 'number' && Number.isFinite(row.unitPrice) ? row.unitPrice : 0,
+      lineTotal: typeof row.lineTotal === 'number' && Number.isFinite(row.lineTotal) ? row.lineTotal : 0,
+      categoryKey: typeof row.categoryKey === 'string' ? row.categoryKey : undefined,
+      kind:
+        row.kind === 'item' ||
+        row.kind === 'discount' ||
+        row.kind === 'tax' ||
+        row.kind === 'subtotal'
+          ? row.kind
+          : undefined,
+      ...evidence,
+    };
+  });
+}
+
 function extractJsonFromText(text: string): any {
   try {
     return JSON.parse(text);
@@ -343,9 +429,16 @@ function buildOcrPrompt(): string {
     '  "items": [ {',
     '     "name": string, "quantity": number, "unitPrice": number, "lineTotal": number,',
     '     "categoryKey": string,            // 下記 enum のみ（参考用。最終分類はクライアントが決定）',
-    '     "kind": "item"|"discount"|"tax"|"subtotal"',
+    '     "kind": "item"|"discount"|"tax"|"subtotal",',
+    '     "merchantProductCode": string|null, // 店舗/商品コード（文字列のみ。先頭ゼロ保持。数値化禁止）',
+    '     "promoMarkers": string[]|null     // 商品行に印刷された短い販促記号（例: 特, 特価）。価格から推測禁止',
     '  } ],',
-    '  "discounts": [ { "label": string, "amount": number } ]   // amount は負数（例 -50）',
+    '  "discounts": [ { "label": string, "amount": number } ],   // amount は負数（例 -50）',
+    '  "printedIdentifiers": {',
+    '     "transactionId": string|null,     // 伝票番号 / 取引番号 等（文字列のみ）',
+    '     "receiptNumber": string|null,     // レシートNo. 等（文字列のみ）',
+    '     "registerId": string|null         // レジNo. 等（文字列のみ）',
+    '  }|null',
     '}',
     '',
     'ルール:',
@@ -402,6 +495,16 @@ function buildOcrPrompt(): string {
     '- 中文/日本語などの分類名は返さない（必ず上記の英語 enum キーのみ）。',
     '- 店舗の業態（コンビニ / スーパー / ドラッグストア / 非超市 / store / merchant 等）を商品分類に入れない。',
     '- 商品分類はあくまで参考。最終的な分類はクライアント側のローカル分類器が決定する。',
+    '',
+    '【printed evidence — 推測禁止 / 証拠のみ】',
+    '- merchantProductCode: 店舗/商品ローカルコード（Costco 商品コード等）。文字列のみ。先頭ゼロを保持。数値型禁止。',
+    '  JAN/バーコード/部門コード/数量/単価/税率/レジ番号/会員番号/決済参照番号は merchantProductCode にしない。',
+    '- promoMarkers: その商品行に視覚的に付いた短い販促記号のみ（例: 特, 特価, セール）。',
+    '  値引き価格・クーポン・discounts[] から promoMarkers を合成しない。不明なら null。',
+    '- printedIdentifiers: 明確なラベル付きの伝票番号/レシートNo./レジNo. のみ。文字列のみ。先頭ゼロ保持。',
+    '  クレジット承認番号/会員番号/決済参照番号/バーコード/JAN/商品コードは識別子にしない（ラベルが明示的でない限り）。',
+    '- 商品コード/販促記号は対応する商品行にのみ付ける。曖昧なら null。',
+    '',
     '- 日本のコンビニ（セブン-イレブン / ファミリーマート / ローソン / ミニストップ）のレシートは、',
     '  「商品行 → 小計 → 値引 → 消費税(軽減税率含む) → 合計」の構造を優先して解釈する。',
     '- 店名が 7-Eleven / セブンイレブン / セブンーイレブン の場合は merchant を "セブン-イレブン" に正規化してよい。',
@@ -550,8 +653,9 @@ async function callGemini(imageBase64: string): Promise<any> {
             'Markdown や説明は出力しないこと。' +
             'total は印刷された最終合計の転記であり、items/小計/tax/discounts から再計算しないこと。' +
             '印刷済み total に tax を足し直さないこと。\n' +
-            'スキーマ: {merchant, transactionDate, total, tax, currency, ' +
-            'items:[{name,quantity,unitPrice,lineTotal,categoryKey,kind}], discounts:[{label,amount}]}。' +
+            'スキーマ: {merchant, transactionDate, total, tax, currency, printedIdentifiers, ' +
+            'items:[{name,quantity,unitPrice,lineTotal,categoryKey,kind,merchantProductCode,promoMarkers}], ' +
+            'discounts:[{label,amount}]}。' +
             '商品直下の値引（割引 10% 等）は印刷順で items に kind=discount 負数行として残し、discounts に重複させない。' +
             'Costco CPN 等の全体クーポンは discounts のみ。まとめ売り値引は両方。\n\n' +
             '--- 元の内容 ---\n' +
@@ -572,9 +676,11 @@ async function callGemini(imageBase64: string): Promise<any> {
   const outputTokens = usage?.candidatesTokenCount || null;
   const totalTokens = usage?.totalTokenCount || null;
 
+  const printedIdentifiers = sanitizePrintedIdentifiers(parsed.printedIdentifiers);
+
   return {
     merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
-    items: Array.isArray(parsed.items) ? parsed.items : [],
+    items: sanitizeGeminiItems(parsed.items),
     discounts: Array.isArray(parsed.discounts) ? parsed.discounts : [],
     total: typeof parsed.total === 'number' ? parsed.total : 0,
     // Prefer explicit number (including 0 only when model sent 0); otherwise null.
@@ -586,6 +692,8 @@ async function callGemini(imageBase64: string): Promise<any> {
       typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()
         ? parsed.transactionDate.trim()
         : undefined,
+    ...(printedIdentifiers ? { printedIdentifiers } : {}),
+    evidenceCaptureVersion: 1 as const,
     _usageMetadata: {
       inputTokens,
       outputTokens,

@@ -189,9 +189,9 @@ describe('B3 Edge contract (source)', () => {
     'utf8'
   );
 
-  it('I — cache v10 stores post-verification analysis; date verify model configured', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*10/);
-    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*9[^\d]/);
+  it('I — cache v11 stores post-verification analysis; date verify model configured', () => {
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*11/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*10[^\d]/);
     expect(edgeSource).toContain('OCR_DATE_VERIFY_MODEL');
     expect(edgeSource).toContain("gemini-3.5-flash'");
     expect(edgeSource).toContain('buildDateVerifyPrompt');

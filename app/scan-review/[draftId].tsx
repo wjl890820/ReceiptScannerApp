@@ -33,6 +33,7 @@ import {
   applyItemFieldCorrections,
 } from '@/lib/userCorrections';
 import { applyUserLineAmountEdit } from '@/lib/receiptDiscountAllocation';
+import { mergeReviewSnapshotPreservingEvidence } from '@/lib/receiptPrintedEvidence';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -409,8 +410,7 @@ export default function ScanReviewScreen() {
         typeof (s as any).category === 'string' ? String((s as any).category) : 'uncategorized';
       const snapQty = Number((s as any).quantity);
       const snapAmount = Number((s as any).lineTotal ?? (s as any).line_total);
-      let finalItem: Record<string, unknown> = {
-        ...s,
+      let finalItem: Record<string, unknown> = mergeReviewSnapshotPreservingEvidence(s, {
         name: finalName,
         ocr_recognized_name: ocrName,
         category: line.category,
@@ -423,7 +423,7 @@ export default function ScanReviewScreen() {
         // Bind receipt merchant so semantic fingerprints include merchant context.
         merchant_key: merchant.trim() || null,
         merchant_name: merchant.trim() || null,
-      };
+      });
 
       if (!isUserAdded) {
         const beforeQty = Number.isFinite(snapQty) && snapQty > 0 ? snapQty : 1;
@@ -648,8 +648,7 @@ export default function ScanReviewScreen() {
       const merchantObservationChanged = snapshotMerchant !== editedMerchant;
 
       const finalAnalysis = appendUserCorrections(
-        {
-          ...snapshot,
+        mergeReviewSnapshotPreservingEvidence(snapshot as Record<string, unknown>, {
           merchant: editedMerchant || undefined,
           // Drop stale derived merchant metadata when the user changes the observation.
           ...(merchantObservationChanged
@@ -662,7 +661,7 @@ export default function ScanReviewScreen() {
           currency: currency.trim() || 'JPY',
           items: finalItemsForSave,
           review_meta,
-        } as Record<string, unknown>,
+        }),
         receiptCorrectionEvents
       ) as typeof snapshot & {
         merchant?: string;

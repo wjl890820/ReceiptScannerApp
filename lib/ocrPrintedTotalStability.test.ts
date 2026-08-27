@@ -109,8 +109,8 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
   });
 
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*10/);
-    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*9[^\d]/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*11/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*10[^\d]/);
     expect(edgeSource).toContain("gemini-3.5-flash-lite");
     expect(edgeSource).not.toContain('gemini-3-flash-preview');
     expect(edgeSource).toContain('OCR_DATE_VERIFY_MODEL');
