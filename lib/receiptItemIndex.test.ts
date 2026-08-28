@@ -13,7 +13,7 @@ import {
   type ReceiptItemIndexRow,
 } from './receiptItemIndex';
 
-const ROW_KEYS: readonly (keyof ReceiptItemIndexRow)[] = [
+const LEGACY_ROW_KEYS: readonly (keyof ReceiptItemIndexRow)[] = [
   'id',
   'receipt_id',
   'source_index',
@@ -46,13 +46,43 @@ const ROW_KEYS: readonly (keyof ReceiptItemIndexRow)[] = [
   'updated_at',
 ];
 
+const G3_ROW_KEYS: readonly (keyof ReceiptItemIndexRow)[] = [
+  'gross_line_amount',
+  'effective_line_amount',
+  'discount_allocated',
+  'amount_provenance',
+  'item_amount_evidence_state',
+  'promo_markers_json',
+  'evidence_capture_version',
+  'price_observation_version',
+];
+
+const ROW_KEYS: readonly (keyof ReceiptItemIndexRow)[] = [
+  ...LEGACY_ROW_KEYS,
+  ...G3_ROW_KEYS,
+];
+
+const LEGACY_TABLE_COLUMNS = LEGACY_ROW_KEYS.filter(
+  (key) => key !== 'id' && key !== 'receipt_id'
+).map((name) => ({ name: String(name) }));
+
 class MemoryIndexDb implements ReceiptItemIndexDatabase {
   readonly schemaCalls: string[] = [];
+  readonly alterCalls: string[] = [];
+  readonly tableColumns = new Set<string>(
+    LEGACY_TABLE_COLUMNS.map((column) => column.name)
+  );
   private rows = new Map<string, ReceiptItemIndexRow>();
   failNextInsert = false;
+  freshInstall = false;
 
   async execAsync(source: string): Promise<void> {
     this.schemaCalls.push(source);
+    if (/CREATE TABLE IF NOT EXISTS receipt_items/i.test(source) && this.freshInstall) {
+      for (const key of G3_ROW_KEYS) {
+        this.tableColumns.add(String(key));
+      }
+    }
   }
 
   async runAsync(
@@ -60,6 +90,12 @@ class MemoryIndexDb implements ReceiptItemIndexDatabase {
     params: SQLite.SQLiteBindParams
   ): Promise<unknown> {
     const values = Array.isArray(params) ? params : [];
+    if (/ALTER TABLE receipt_items ADD COLUMN/i.test(source)) {
+      const match = source.match(/ADD COLUMN ([a-z_]+)/i);
+      if (match?.[1]) this.tableColumns.add(match[1]);
+      this.alterCalls.push(source);
+      return {};
+    }
     if (/DELETE FROM receipt_items/i.test(source)) {
       if (values.length === 0) {
         this.rows.clear();
@@ -86,9 +122,12 @@ class MemoryIndexDb implements ReceiptItemIndexDatabase {
   }
 
   async getAllAsync<T>(
-    _source: string,
+    source: string,
     params: SQLite.SQLiteBindParams
   ): Promise<T[]> {
+    if (/PRAGMA table_info\(receipt_items\)/i.test(source)) {
+      return [...this.tableColumns].map((name) => ({ name })) as T[];
+    }
     const values = Array.isArray(params) ? params : [];
     return [...this.rows.values()]
       .filter((row) => row.receipt_id === String(values[0]))
@@ -370,14 +409,16 @@ describe('receipt item index persistence primitives', () => {
 describe('ensureReceiptItemsSchema', () => {
   it('is additive, repeatable, and creates all required ordinary indexes', async () => {
     const db = new MemoryIndexDb();
+    db.freshInstall = true;
 
     await ensureReceiptItemsSchema(db);
     await ensureReceiptItemsSchema(db);
 
     const ddl = db.schemaCalls.join('\n');
     expect(ddl).toContain('CREATE TABLE IF NOT EXISTS receipt_items');
+    expect(ddl).toContain('gross_line_amount REAL');
     expect(ddl).toContain('UNIQUE(receipt_id, source_index)');
-    expect(ddl).not.toMatch(/\bDROP\b|\bALTER\b|\bFTS5\b/i);
+    expect(db.alterCalls).toHaveLength(0);
     for (const indexName of [
       'idx_receipt_items_receipt_id',
       'idx_receipt_items_normalized_name',
@@ -389,5 +430,80 @@ describe('ensureReceiptItemsSchema', () => {
     ]) {
       expect(ddl).toContain(`CREATE INDEX IF NOT EXISTS ${indexName}`);
     }
+  });
+
+  it('upgrades legacy receipt_items schema idempotently with ALTER TABLE', async () => {
+    const db = new MemoryIndexDb();
+    await ensureReceiptItemsSchema(db);
+    expect(db.alterCalls.length).toBe(G3_ROW_KEYS.length);
+    expect(db.alterCalls.every((sql) => /ADD COLUMN/i.test(sql))).toBe(true);
+    const added = db.alterCalls.map(
+      (sql) => sql.match(/ADD COLUMN ([a-z_]+)/i)?.[1]
+    );
+    expect(added).toEqual(G3_ROW_KEYS.map(String));
+
+    const secondPassAlters = db.alterCalls.length;
+    await ensureReceiptItemsSchema(db);
+    expect(db.alterCalls.length).toBe(secondPassAlters);
+  });
+});
+
+describe('G3-1 receipt item index price truth projection', () => {
+  it('round-trips gross/discount/effective/marker/capture fields', async () => {
+    const db = new MemoryIndexDb();
+    db.freshInstall = true;
+    const source: ReceiptItemIndexReceipt = {
+      id: 'g3',
+      analysis_json: JSON.stringify({
+        items: [
+          {
+            name: 'Item',
+            quantity: 1,
+            lineTotal: 439,
+            discountAllocated: -51,
+            effectiveLineTotal: 388,
+            promoMarkers: ['特'],
+          },
+        ],
+        evidenceCaptureVersion: 1,
+      }),
+      user_items_json: null,
+    };
+
+    await rebuildReceiptItemIndex(db, source, { indexedAt: 100 });
+    const [row] = await getReceiptItemIndexRows(db, 'g3');
+    expect(row).toMatchObject({
+      line_total: 388,
+      gross_line_amount: 439,
+      effective_line_amount: 388,
+      discount_allocated: -51,
+      amount_provenance: 'ocr_observed',
+      item_amount_evidence_state: 'coherent',
+      promo_markers_json: JSON.stringify(['特']),
+      evidence_capture_version: 1,
+      price_observation_version: 1,
+    });
+  });
+
+  it('keeps line_total analytics precedence unchanged for user edits', () => {
+    const rows = buildReceiptItemIndexRows(
+      {
+        id: 'edit',
+        analysis_json: JSON.stringify({ items: [] }),
+        user_items_json: JSON.stringify([
+          {
+            name: '麦茶',
+            lineTotal: 70,
+            line_total: 69,
+            effectiveLineTotal: 69,
+            quantity: 1,
+          },
+        ]),
+      },
+      { indexedAt: 1 }
+    );
+    expect(rows[0].line_total).toBe(70);
+    expect(rows[0].gross_line_amount).toBeNull();
+    expect(rows[0].amount_provenance).toBe('legacy_user_override');
   });
 });

@@ -382,7 +382,7 @@ function hasActiveDiscountAllocation(item: DiscountableItem): boolean {
  * Do NOT treat legitimate discounted rows (gross lineTotal ≠ effective with
  * discountAllocated) as overrides.
  */
-function isStaleEffectiveAfterUserLineEdit(item: DiscountableItem): boolean {
+export function isStaleEffectiveAfterUserLineEdit(item: DiscountableItem): boolean {
   if (hasActiveDiscountAllocation(item)) return false;
   const camel = Number(item.lineTotal);
   const effective = Number(item.effectiveLineTotal);

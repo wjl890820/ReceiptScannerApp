@@ -8,13 +8,14 @@ import {
 } from './receiptItemIndex';
 import { logger } from './logger';
 
-export const RECEIPT_ITEM_INDEX_VERSION = 1;
+export const RECEIPT_ITEM_INDEX_VERSION = 2;
 export const DEFAULT_RECEIPT_ITEM_BACKFILL_BATCH_SIZE = 25;
 export const MAX_RECEIPT_ITEM_BACKFILL_FAILED_IDS = 500;
 
 const STATE_PREFIX = 'receipt_item_index_backfill_';
 const STATE_KEYS = {
   version: `${STATE_PREFIX}version`,
+  targetVersion: `${STATE_PREFIX}target_version`,
   cursor: `${STATE_PREFIX}cursor`,
   scanned: `${STATE_PREFIX}scanned`,
   succeeded: `${STATE_PREFIX}succeeded`,
@@ -37,7 +38,10 @@ export type ReceiptItemIndexBackfillCursor = {
 };
 
 export type ReceiptItemIndexBackfillStatus = {
+  /** Last fully completed index schema version. */
   version: number;
+  /** Schema version the current in-progress sweep is building. */
+  targetVersion: number;
   complete: boolean;
   cursor: ReceiptItemIndexBackfillCursor | null;
   scanned: number;
@@ -139,8 +143,10 @@ async function readState(
   );
   const values = new Map(rows.map((row) => [row.k, row.v]));
   const version = nonNegativeInteger(values.get(STATE_KEYS.version));
+  const targetVersion = nonNegativeInteger(values.get(STATE_KEYS.targetVersion));
   return {
     version,
+    targetVersion,
     complete: version >= RECEIPT_ITEM_INDEX_VERSION,
     cursor: parseCursor(values.get(STATE_KEYS.cursor)),
     scanned: nonNegativeInteger(values.get(STATE_KEYS.scanned)),
@@ -160,6 +166,7 @@ async function writeState(
 ): Promise<void> {
   const entries: [string, string][] = [
     [STATE_KEYS.version, String(state.version)],
+    [STATE_KEYS.targetVersion, String(state.targetVersion)],
     [STATE_KEYS.cursor, state.cursor ? JSON.stringify(state.cursor) : ''],
     [STATE_KEYS.scanned, String(state.scanned)],
     [STATE_KEYS.succeeded, String(state.succeeded)],
@@ -384,6 +391,7 @@ async function finishIfConsistent(
     return { ...result, hasMore: true, cursor: state.cursor };
   }
   state.version = RECEIPT_ITEM_INDEX_VERSION;
+  state.targetVersion = RECEIPT_ITEM_INDEX_VERSION;
   state.complete = true;
   state.completedAt = Date.now();
   await writeState(db, state);
@@ -406,12 +414,7 @@ export async function runReceiptItemIndexBackfillBatch(
   try {
     await ensureBackfillStateSchema(db);
     const state = await readState(db);
-    if (
-      state.version > 0 &&
-      state.version < RECEIPT_ITEM_INDEX_VERSION
-    ) {
-      state.version = 0;
-      state.complete = false;
+    if (state.targetVersion !== RECEIPT_ITEM_INDEX_VERSION) {
       state.cursor = null;
       state.scanned = 0;
       state.succeeded = 0;
@@ -419,6 +422,7 @@ export async function runReceiptItemIndexBackfillBatch(
       state.failedReceiptIds = [];
       state.failedOverflow = false;
       state.completedAt = null;
+      state.targetVersion = RECEIPT_ITEM_INDEX_VERSION;
       await writeState(db, state);
     }
     const emptyResult: ReceiptItemIndexBackfillBatchResult = {

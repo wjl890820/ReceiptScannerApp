@@ -47,6 +47,14 @@ const ROW_KEYS: readonly (keyof ReceiptItemIndexRow)[] = [
   'item_source',
   'created_at',
   'updated_at',
+  'gross_line_amount',
+  'effective_line_amount',
+  'discount_allocated',
+  'amount_provenance',
+  'item_amount_evidence_state',
+  'promo_markers_json',
+  'evidence_capture_version',
+  'price_observation_version',
 ];
 
 type StoredReceipt = {
@@ -67,7 +75,10 @@ class MemoryBackfillDb implements ReceiptItemIndexDatabase {
   readonly receipts = new Map<string, StoredReceipt>();
   readonly indexRows = new Map<string, ReceiptItemIndexRow>();
   readonly kv = new Map<string, string>();
-  readonly failReceiptIds = new Set<string>();
+  readonly tableColumns = new Set<string>(
+    ROW_KEYS.filter((key) => key !== 'id' && key !== 'receipt_id').map(String)
+  );
+  failReceiptIds = new Set<string>();
   failReconcile = false;
   mutateAfterFirstInsert: ((receiptId: string) => void) | null = null;
 
@@ -125,6 +136,14 @@ class MemoryBackfillDb implements ReceiptItemIndexDatabase {
       item_source: 'unknown',
       created_at: 0,
       updated_at: 0,
+      gross_line_amount: null,
+      effective_line_amount: null,
+      discount_allocated: null,
+      amount_provenance: null,
+      item_amount_evidence_state: null,
+      promo_markers_json: null,
+      evidence_capture_version: null,
+      price_observation_version: null,
     });
   }
 
@@ -135,6 +154,11 @@ class MemoryBackfillDb implements ReceiptItemIndexDatabase {
     params: SQLite.SQLiteBindParams
   ): Promise<{ changes: number }> {
     const values = bindValues(params);
+    if (/ALTER TABLE receipt_items ADD COLUMN/i.test(source)) {
+      const match = source.match(/ADD COLUMN ([a-z_]+)/i);
+      if (match?.[1]) this.tableColumns.add(match[1]);
+      return { changes: 1 };
+    }
     if (/INSERT OR REPLACE INTO app_kv/i.test(source)) {
       this.kv.set(String(values[0]), String(values[1]));
       return { changes: 1 };
@@ -197,6 +221,9 @@ class MemoryBackfillDb implements ReceiptItemIndexDatabase {
     params: SQLite.SQLiteBindParams
   ): Promise<T[]> {
     const values = bindValues(params);
+    if (/PRAGMA table_info\(receipt_items\)/i.test(source)) {
+      return [...this.tableColumns].map((name) => ({ name })) as T[];
+    }
     if (/FROM app_kv/i.test(source)) {
       return [...this.kv.entries()]
         .filter(([key]) => key.startsWith('receipt_item_index_backfill_'))
@@ -454,6 +481,86 @@ describe('receipt item index resumable backfill', () => {
     expect(
       (await getReceiptItemIndexRows(db, 'changing'))[0].volume_base_ml
     ).toBe(450);
+  });
+
+  it('resets completed version 1 progress when RECEIPT_ITEM_INDEX_VERSION bumps to 2', async () => {
+    db.addReceipt('a', 1, [{ name: 'A' }]);
+    db.addReceipt('b', 2, [{ name: 'B' }]);
+    db.kv.set('receipt_item_index_backfill_version', '1');
+    db.kv.set('receipt_item_index_backfill_completed_at', String(Date.now()));
+    db.kv.set('receipt_item_index_backfill_cursor', '');
+
+    const first = await runReceiptItemIndexBackfillBatch(db, { batchSize: 1 });
+    const mid = await getReceiptItemIndexBackfillStatus(db);
+
+    expect(mid.complete).toBe(false);
+    expect(mid.version).toBe(1);
+    expect(mid.targetVersion).toBe(RECEIPT_ITEM_INDEX_VERSION);
+    expect(first.hasMore).toBe(true);
+    expect(first.scanned).toBeGreaterThan(0);
+    expect(db.indexRows.has('a:0')).toBe(true);
+    expect((await getReceiptItemIndexRows(db, 'a'))[0].price_observation_version).toBe(
+      1
+    );
+
+    await runReceiptItemIndexBackfillBatch(db, { batchSize: 1 });
+    const done = await runReceiptItemIndexBackfillBatch(db, { batchSize: 1 });
+    expect(done.hasMore).toBe(false);
+    expect((await getReceiptItemIndexBackfillStatus(db)).version).toBe(
+      RECEIPT_ITEM_INDEX_VERSION
+    );
+    expect((await getReceiptItemIndexBackfillStatus(db)).targetVersion).toBe(
+      RECEIPT_ITEM_INDEX_VERSION
+    );
+  });
+
+  it('4H — partial legacy v1 sweep resets to beginning when v2 starts', async () => {
+    db.kv.set('receipt_item_index_backfill_version', '0');
+    db.kv.set(
+      'receipt_item_index_backfill_cursor',
+      JSON.stringify({ createdAt: 10, id: 'mid' })
+    );
+    db.kv.set('receipt_item_index_backfill_scanned', '5');
+    db.kv.set('receipt_item_index_backfill_succeeded', '4');
+    db.addReceipt('early', 1, [{ name: 'Early', lineTotal: 100 }]);
+    db.addReceipt('mid', 10, [{ name: 'Mid', lineTotal: 200 }]);
+    db.addReceipt('late', 11, [{ name: 'Late', lineTotal: 300 }]);
+
+    const first = await runReceiptItemIndexBackfillBatch(db, { batchSize: 1 });
+    const status = await getReceiptItemIndexBackfillStatus(db);
+
+    expect(status.targetVersion).toBe(RECEIPT_ITEM_INDEX_VERSION);
+    expect(status.scanned).toBe(1);
+    expect(status.succeeded).toBe(1);
+    expect(first.cursor).toEqual({ createdAt: 1, id: 'early' });
+    expect(db.indexRows.has('early:0')).toBe(true);
+    expect(db.indexRows.has('mid:0')).toBe(false);
+  });
+
+  it('4I — in-progress v2 sweep continues from persisted cursor without reset', async () => {
+    db.kv.set('receipt_item_index_backfill_version', '0');
+    db.kv.set(
+      'receipt_item_index_backfill_target_version',
+      String(RECEIPT_ITEM_INDEX_VERSION)
+    );
+    db.kv.set(
+      'receipt_item_index_backfill_cursor',
+      JSON.stringify({ createdAt: 1, id: 'a' })
+    );
+    db.kv.set('receipt_item_index_backfill_scanned', '1');
+    db.kv.set('receipt_item_index_backfill_succeeded', '1');
+    db.addReceipt('a', 1, [{ name: 'A' }]);
+    db.addReceipt('b', 2, [{ name: 'B' }]);
+    db.addReceipt('c', 3, [{ name: 'C' }]);
+
+    const batch = await runReceiptItemIndexBackfillBatch(db, { batchSize: 1 });
+    const status = await getReceiptItemIndexBackfillStatus(db);
+
+    expect(status.targetVersion).toBe(RECEIPT_ITEM_INDEX_VERSION);
+    expect(status.scanned).toBe(2);
+    expect(batch.cursor).toEqual({ createdAt: 2, id: 'b' });
+    expect(db.indexRows.has('a:0')).toBe(false);
+    expect(db.indexRows.has('b:0')).toBe(true);
   });
 });
 

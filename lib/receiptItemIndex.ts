@@ -7,6 +7,14 @@ import {
   type DiscountableItem,
 } from './receiptDiscountAllocation';
 import {
+  buildPriceObservationTruth,
+  parseReceiptEvidenceCaptureVersion,
+  PRICE_OBSERVATION_VERSION,
+  type PriceAmountProvenance,
+  type PriceItemAmountState,
+  type PriceObservationTruth,
+} from './priceObservationTruth';
+import {
   buildSkuKey,
   type ProductIdentity,
   type ProductIdentitySource,
@@ -59,6 +67,15 @@ export type ReceiptItemIndexRow = {
   item_source: ReceiptItemSourceKind;
   created_at: number;
   updated_at: number;
+  /** G3-1 price observation truth (nullable until backfill/rebuild). */
+  gross_line_amount: number | null;
+  effective_line_amount: number | null;
+  discount_allocated: number | null;
+  amount_provenance: PriceAmountProvenance | null;
+  item_amount_evidence_state: PriceItemAmountState | null;
+  promo_markers_json: string | null;
+  evidence_capture_version: number | null;
+  price_observation_version: number | null;
 };
 
 export type ReceiptItemIndexReceipt = ReceiptItemSource & {
@@ -101,6 +118,17 @@ const FAMILY_KEYS = new Set<ProductFamilyKey>(PRODUCT_FAMILY_KEYS);
 
 const SPEC_UNITS = new Set<ProductSpecUnit>(['ml', 'l', 'g', 'kg', 'count']);
 
+const G3_1_RECEIPT_ITEM_COLUMNS = [
+  { name: 'gross_line_amount', ddl: 'REAL' },
+  { name: 'effective_line_amount', ddl: 'REAL' },
+  { name: 'discount_allocated', ddl: 'REAL' },
+  { name: 'amount_provenance', ddl: 'TEXT' },
+  { name: 'item_amount_evidence_state', ddl: 'TEXT' },
+  { name: 'promo_markers_json', ddl: 'TEXT' },
+  { name: 'evidence_capture_version', ddl: 'INTEGER' },
+  { name: 'price_observation_version', ddl: 'INTEGER' },
+] as const;
+
 const INSERT_SQL = `
   INSERT INTO receipt_items (
     id, receipt_id, source_index, review_source_index,
@@ -113,7 +141,10 @@ const INSERT_SQL = `
     sku_key,
     identity_source, identity_confidence, identity_version,
     spec_source_text, spec_confidence,
-    item_source, created_at, updated_at
+    item_source, created_at, updated_at,
+    gross_line_amount, effective_line_amount, discount_allocated,
+    amount_provenance, item_amount_evidence_state,
+    promo_markers_json, evidence_capture_version, price_observation_version
   ) VALUES (
     ?, ?, ?, ?,
     ?, ?, ?,
@@ -123,6 +154,9 @@ const INSERT_SQL = `
     ?, ?, ?,
     ?, ?, ?,
     ?,
+    ?, ?, ?,
+    ?, ?,
+    ?, ?, ?,
     ?, ?, ?,
     ?, ?,
     ?, ?, ?
@@ -246,6 +280,32 @@ function buildSpecification(
   };
 }
 
+function priceTruthToIndexFields(
+  truth: PriceObservationTruth
+): Pick<
+  ReceiptItemIndexRow,
+  | 'gross_line_amount'
+  | 'effective_line_amount'
+  | 'discount_allocated'
+  | 'amount_provenance'
+  | 'item_amount_evidence_state'
+  | 'promo_markers_json'
+  | 'evidence_capture_version'
+  | 'price_observation_version'
+> {
+  return {
+    gross_line_amount: truth.grossLineAmount,
+    effective_line_amount: truth.effectiveLineAmount,
+    discount_allocated: truth.discountAllocated,
+    amount_provenance: truth.amountProvenance,
+    item_amount_evidence_state: truth.amountState,
+    promo_markers_json:
+      truth.promoMarkers.length > 0 ? JSON.stringify(truth.promoMarkers) : null,
+    evidence_capture_version: truth.evidenceCaptureVersion,
+    price_observation_version: PRICE_OBSERVATION_VERSION,
+  };
+}
+
 function toInsertParams(row: ReceiptItemIndexRow): SQLite.SQLiteBindParams {
   return [
     row.id,
@@ -278,6 +338,14 @@ function toInsertParams(row: ReceiptItemIndexRow): SQLite.SQLiteBindParams {
     row.item_source,
     row.created_at,
     row.updated_at,
+    row.gross_line_amount,
+    row.effective_line_amount,
+    row.discount_allocated,
+    row.amount_provenance,
+    row.item_amount_evidence_state,
+    row.promo_markers_json,
+    row.evidence_capture_version,
+    row.price_observation_version,
   ];
 }
 
@@ -285,7 +353,7 @@ function toInsertParams(row: ReceiptItemIndexRow): SQLite.SQLiteBindParams {
  * Additive schema only. No receipt scan, backfill, or mutation integration.
  */
 export async function ensureReceiptItemsSchema(
-  db: Pick<ReceiptItemIndexDatabase, 'execAsync'>
+  db: Pick<ReceiptItemIndexDatabase, 'execAsync' | 'runAsync' | 'getAllAsync'>
 ): Promise<void> {
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS receipt_items (
@@ -319,6 +387,14 @@ export async function ensureReceiptItemsSchema(
       item_source TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
+      gross_line_amount REAL,
+      effective_line_amount REAL,
+      discount_allocated REAL,
+      amount_provenance TEXT,
+      item_amount_evidence_state TEXT,
+      promo_markers_json TEXT,
+      evidence_capture_version INTEGER,
+      price_observation_version INTEGER,
       UNIQUE(receipt_id, source_index)
     );
 
@@ -337,6 +413,19 @@ export async function ensureReceiptItemsSchema(
     CREATE INDEX IF NOT EXISTS idx_receipt_items_sku
       ON receipt_items(sku_key);
   `);
+
+  const columns = await db.getAllAsync<{ name: string }>(
+    `PRAGMA table_info(receipt_items)`,
+    []
+  );
+  const existing = new Set(columns.map((column) => column.name));
+  for (const column of G3_1_RECEIPT_ITEM_COLUMNS) {
+    if (existing.has(column.name)) continue;
+    await db.runAsync(
+      `ALTER TABLE receipt_items ADD COLUMN ${column.name} ${column.ddl}`,
+      []
+    );
+  }
 }
 
 /**
@@ -351,6 +440,9 @@ export function buildReceiptItemIndexRows(
     finiteNumberOrNull(options.indexedAt) != null
       ? Number(options.indexedAt)
       : 0;
+  const evidenceCaptureVersion = parseReceiptEvidenceCaptureVersion(
+    receipt.analysis_json
+  );
 
   return sourceItems.map((sourceItem, sourceIndex) => {
     const item =
@@ -473,6 +565,11 @@ export function buildReceiptItemIndexRows(
       identityVersion: 1,
     };
 
+    const priceTruth = buildPriceObservationTruth({
+      item,
+      evidenceCaptureVersion,
+    });
+
     return {
       id: `${receipt.id}:${sourceIndex}`,
       receipt_id: receipt.id,
@@ -504,6 +601,7 @@ export function buildReceiptItemIndexRows(
       item_source: resolveItemSource(item),
       created_at: indexedAt,
       updated_at: indexedAt,
+      ...priceTruthToIndexFields(priceTruth),
     };
   });
 }
@@ -552,6 +650,9 @@ export async function projectMinimalReceiptItemIndexFromSoT(
   await ensureReceiptItemsSchema(db);
   const indexedAt = options.indexedAt ?? Date.now();
   const items = getReceiptItems(receipt);
+  const evidenceCaptureVersion = parseReceiptEvidenceCaptureVersion(
+    receipt.analysis_json
+  );
   const run = async () => {
     await db.runAsync(`DELETE FROM receipt_items WHERE receipt_id = ?`, [
       receipt.id,
@@ -582,6 +683,10 @@ export async function projectMinimalReceiptItemIndexFromSoT(
         hasAmountField && purchaseQuantity != null && purchaseQuantity > 0
           ? resolvedLineTotal / purchaseQuantity
           : null;
+      const priceTruth = buildPriceObservationTruth({
+        item,
+        evidenceCaptureVersion,
+      });
       const row: ReceiptItemIndexRow = {
         id: `${receipt.id}:${sourceIndex}`,
         receipt_id: receipt.id,
@@ -614,6 +719,7 @@ export async function projectMinimalReceiptItemIndexFromSoT(
         item_source: resolveItemSource(item),
         created_at: indexedAt,
         updated_at: indexedAt,
+        ...priceTruthToIndexFields(priceTruth),
       };
       await db.runAsync(INSERT_SQL, toInsertParams(row));
     }
