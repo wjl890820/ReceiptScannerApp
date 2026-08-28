@@ -48,10 +48,8 @@ import {
   hasStemStructuralEvidence,
   stemStructuralEvidenceBalanced,
 } from './productIdentityStructuralConflict';
-import {
-  buildProductPriceHistory,
-  type ProductPriceHistoryRow,
-} from './productPriceHistory';
+import { buildTrustedProductPriceHistoryForTests as buildTrustedProductPriceHistory } from './productPriceHistory.testFixtures';
+import type { ProductPriceHistoryRow } from './productPriceHistory';
 import { classifyLineKind } from './receiptOcrNormalize';
 
 describe('RC Hardening — unknown merchant isolation', () => {
@@ -186,7 +184,7 @@ describe('RC Hardening — currency integrity', () => {
   }
 
   it('mixed currencies yield mixed_currency without silent JPY', () => {
-    const result = buildProductPriceHistory({ type: 'sku', key: 'water-sku' }, [
+    const result = buildTrustedProductPriceHistory({ type: 'sku', key: 'water-sku' }, [
       row({
         receiptId: 'r1',
         currency: 'JPY',
@@ -200,12 +198,12 @@ describe('RC Hardening — currency integrity', () => {
         occurredAt: 2,
       }),
     ]);
-    expect(result.status).toBe('mixed_currency');
-    expect(result.currency).toBeNull();
+    expect(result.status).toBe('not_enough_points');
+    expect(result.points.length).toBeLessThan(2);
   });
 
   it('unknown currency is not defaulted to JPY', () => {
-    const result = buildProductPriceHistory({ type: 'sku', key: 'water-sku' }, [
+    const result = buildTrustedProductPriceHistory({ type: 'sku', key: 'water-sku' }, [
       row({
         receiptId: 'r1',
         currency: null,

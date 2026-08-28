@@ -30,7 +30,14 @@ import {
   type EngagementReceipt,
 } from './engagementMilestones';
 import { shouldTriggerByCount } from './analysisTriggers';
-import { buildProductPriceHistory } from './productPriceHistory';
+import {
+  buildProductPriceHistory,
+  type ProductPriceHistoryResult,
+  type ProductPriceHistoryRow,
+  type ReceiptEvidenceCache,
+} from './productPriceHistory';
+import type { ReceiptAmountBasisAssessment } from './analysisFoundation/types';
+import type { ReceiptMonetaryCoherenceEvidence } from './receiptEvidenceTruth/types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -78,11 +85,58 @@ function withItems(
   };
 }
 
+function trustedEvidenceCacheForRows(
+  rows: readonly ProductPriceHistoryRow[]
+): ReceiptEvidenceCache {
+  const cache: ReceiptEvidenceCache = new Map();
+  for (const row of rows) {
+    if (cache.has(row.receiptId)) continue;
+    const amountBasisAssessment: ReceiptAmountBasisAssessment = {
+      receiptId: row.receiptId,
+      basis: 'tax_included',
+      receiptTotal: row.receiptTotal ?? 0,
+      receiptTax: row.receiptTax ?? 0,
+      analyticsItemSum: 0,
+      unallocatedDiscountTotal: 0,
+      expectedTotalIfTaxIncluded: null,
+      expectedTotalIfTaxExcluded: null,
+      confidence: 'high',
+      taxProvenance: 'trusted',
+      exactComparisonTrusted: true,
+      evidence: [],
+      reasonCodes: [],
+    };
+    const monetaryCoherenceEvidence: ReceiptMonetaryCoherenceEvidence = {
+      receiptId: row.receiptId,
+      state: 'known_coherent',
+      authoritativeLayer: 'ocr',
+      discountOwnershipStatus: 'resolved',
+      monetaryProvenanceSufficient: true,
+      closureHypothesis: null,
+      evidence: [],
+      reasonCodes: [],
+    };
+    cache.set(row.receiptId, { amountBasisAssessment, monetaryCoherenceEvidence });
+  }
+  return cache;
+}
+
+function trustedPriceHistoryBuilder(
+  target: Parameters<typeof buildProductPriceHistory>[0],
+  rows: ProductPriceHistoryRow[]
+): ProductPriceHistoryResult {
+  return buildProductPriceHistory(target, rows, {
+    receiptEvidenceCache: trustedEvidenceCacheForRows(rows),
+  });
+}
+
 function productRow(
   receiptId: string,
   itemId: string,
   overrides: Partial<EngagementProductRow> = {}
 ): EngagementProductRow {
+  const lineTotal = overrides.lineTotal ?? 100;
+  const gross = overrides.grossLineAmount ?? lineTotal;
   return {
     receiptId,
     itemId,
@@ -94,7 +148,7 @@ function productRow(
     analysis_json: '{}',
     displayName: itemId,
     currency: 'JPY',
-    lineTotal: 100,
+    lineTotal,
     purchaseQuantity: 1,
     canonicalProductName: null,
     productFamilyKey: null,
@@ -102,6 +156,22 @@ function productRow(
     volumeBaseMl: null,
     weightBaseG: null,
     countBase: null,
+    grossLineAmount: gross,
+    effectiveLineAmount: overrides.effectiveLineAmount ?? gross,
+    priceObservationVersion: 1,
+    itemAmountEvidenceState: 'coherent',
+    amountProvenance: 'ocr_observed',
+    evidenceCaptureVersion: 1,
+    receiptAnalysisJson: JSON.stringify({
+      items: [{ name: itemId, lineTotal: gross, quantity: 1 }],
+      evidenceCaptureVersion: 1,
+      reconciliation: { ok: true },
+      amount_mismatch: false,
+    }),
+    receiptTaxIsKnown: 1,
+    receiptTotal: gross,
+    receiptTax: 8,
+    receiptCurrency: 'JPY',
     ...overrides,
   };
 }
@@ -321,7 +391,7 @@ describe('fifth receipt frequent products', () => {
       {
         rows: frequentRows(),
         queryFailed: false,
-        priceHistoryBuilder: buildProductPriceHistory,
+        priceHistoryBuilder: trustedPriceHistoryBuilder,
       },
       789
     );
@@ -353,7 +423,7 @@ describe('fifth receipt frequent products', () => {
     const result = buildFiveReceiptMilestone(fiveReceiptFixture(), {
       rows,
       queryFailed: false,
-      priceHistoryBuilder: buildProductPriceHistory,
+      priceHistoryBuilder: trustedPriceHistoryBuilder,
     });
 
     expect(
@@ -378,13 +448,108 @@ describe('fifth receipt frequent products', () => {
     const result = buildFiveReceiptMilestone(fiveReceiptFixture(), {
       rows,
       queryFailed: false,
-      priceHistoryBuilder: buildProductPriceHistory,
+      priceHistoryBuilder: trustedPriceHistoryBuilder,
     });
 
     expect(
       result?.frequentProducts.find((product) => product.key === 'tofu')
         ?.priceSummary
     ).toBeNull();
+  });
+
+  it('production-shaped rows with buildProductPriceHistory use real receipt evidence', () => {
+    const rows = [
+      productRow('r1', 'milk-1', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        grossLineAmount: 238,
+        lineTotal: 238,
+      }),
+      productRow('r2', 'milk-2', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        grossLineAmount: 248,
+        lineTotal: 248,
+      }),
+      productRow('r3', 'milk-3', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        grossLineAmount: 228,
+        lineTotal: 228,
+      }),
+      productRow('r4', 'milk-4', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        grossLineAmount: 250,
+        lineTotal: 250,
+      }),
+    ];
+    const result = buildFiveReceiptMilestone(
+      fiveReceiptFixture(),
+      {
+        rows,
+        queryFailed: false,
+        priceHistoryBuilder: buildProductPriceHistory,
+      },
+      789
+    );
+    expect(result?.frequentProducts[0].priceSummary).toMatchObject({
+      priceKind: 'per_liter',
+      currency: 'JPY',
+      latestPrice: 250,
+    });
+  });
+
+  it('missing receiptAnalysisJson fails closed for priceSummary', () => {
+    const rows = [
+      productRow('r1', 'milk-1', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        receiptAnalysisJson: null,
+      }),
+      productRow('r2', 'milk-2', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        receiptAnalysisJson: null,
+      }),
+      productRow('r3', 'milk-3', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        receiptAnalysisJson: null,
+      }),
+      productRow('r4', 'milk-4', {
+        canonicalProductName: '明治牛乳',
+        productFamilyKey: 'milk',
+        volumeBaseMl: 1000,
+        receiptAnalysisJson: null,
+      }),
+    ];
+    const result = buildFiveReceiptMilestone(fiveReceiptFixture(), {
+      rows,
+      queryFailed: false,
+      priceHistoryBuilder: buildProductPriceHistory,
+    });
+    expect(result?.frequentProducts[0].priceSummary).toBeNull();
+  });
+
+  it('readProductRows SQL selects receiptAnalysisJson alias', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, 'engagementMilestones.ts'),
+      'utf8'
+    );
+    expect(source).toMatch(
+      /receipts\.analysis_json AS receiptAnalysisJson/i
+    );
+    expect(source).not.toMatch(
+      /receipts\.analysis_json AS analysis_json/i
+    );
   });
 });
 

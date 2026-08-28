@@ -48,6 +48,7 @@ import {
 } from './productSpecification';
 import {
   buildProductPriceHistory,
+  buildReceiptEvidenceCache,
   type ProductPriceHistoryRow,
   type ProductPriceHistoryStatus,
 } from './productPriceHistory';
@@ -306,6 +307,10 @@ export type AnalysisDReportInput = {
   receipts: ReceiptRow[];
   productRows?: EngagementProductRow[];
   nowMs?: number;
+  priceHistoryBuilder?: (
+    target: { type: 'family'; key: string },
+    rows: ProductPriceHistoryRow[]
+  ) => ReturnType<typeof buildProductPriceHistory>;
 };
 
 const WINDOWS: AnalysisDWindowId[] = ['7d', '30d', 'all'];
@@ -399,6 +404,25 @@ function deriveProductRows(receipts: ReceiptRow[]): EngagementProductRow[] {
         volumeBaseMl: row.volume_base_ml,
         weightBaseG: row.weight_base_g,
         countBase: row.count_base,
+        grossLineAmount: row.gross_line_amount,
+        effectiveLineAmount: row.effective_line_amount,
+        discountAllocated: row.discount_allocated,
+        amountProvenance: row.amount_provenance,
+        itemAmountEvidenceState: row.item_amount_evidence_state,
+        promoMarkersJson: row.promo_markers_json,
+        evidenceCaptureVersion: row.evidence_capture_version,
+        priceObservationVersion: row.price_observation_version,
+        itemSource: row.item_source,
+        identitySource: row.identity_source,
+        identityConfidence: row.identity_confidence,
+        receiptAnalysisJson: receipt.analysis_json ?? null,
+        receiptUserItemsJson: receipt.user_items_json ?? null,
+        receiptUserEdited: receipt.user_edited,
+        receiptTotal: receipt.total,
+        receiptFinalTotal: receipt.final_total ?? null,
+        receiptTax: receipt.tax,
+        receiptTaxIsKnown: receipt.tax_is_known ?? 0,
+        receiptCurrency: receipt.currency,
         canonicalProductName: row.canonical_product_name,
         skuKey: row.sku_key,
         merchant_raw: receipt.merchant_raw ?? null,
@@ -730,11 +754,18 @@ function buildIdentityAndSpecCoverage(receipts: ReceiptRow[]): {
   };
 }
 
-function buildPriceCoverage(productRows: EngagementProductRow[]): {
+function buildPriceCoverage(
+  productRows: EngagementProductRow[],
+  priceHistoryBuilder: (
+    target: { type: 'family'; key: string },
+    rows: ProductPriceHistoryRow[]
+  ) => ReturnType<typeof buildProductPriceHistory> = buildProductPriceHistory
+): {
   priceCoverage: AnalysisDPriceCoverage;
   priceHistoryExamples: AnalysisDPriceHistoryExample[];
 } {
   const eligible = productRows.filter((row) => isV1SupportedReceipt(row));
+  const receiptEvidenceCache = buildReceiptEvidenceCache(eligible);
   let purchaseUnitPriceUsableRows = 0;
   let skuIdentityRows = 0;
   let skuPriceHistoryUsableRows = 0;
@@ -743,6 +774,14 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
   const bump = (reason: string) => {
     suppressionReasons[reason] = (suppressionReasons[reason] ?? 0) + 1;
   };
+
+  const buildHistory = (
+    target: { type: 'family'; key: string },
+    rows: ProductPriceHistoryRow[]
+  ) =>
+    priceHistoryBuilder
+      ? priceHistoryBuilder(target, rows)
+      : buildProductPriceHistory(target, rows, { receiptEvidenceCache });
 
   for (const row of eligible) {
     const purchaseUnitOk = isPurchaseUnitPriceUsable(row);
@@ -762,10 +801,7 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
       bump('insufficient_identity');
       continue;
     }
-    const result = buildProductPriceHistory(
-      { type: 'family', key: family },
-      [row]
-    );
+    const result = buildHistory({ type: 'family', key: family }, [row]);
     if (result.comparableOccurrenceCount > 0) {
       familyNormalizedComparableRows += 1;
     } else {
@@ -793,7 +829,7 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
   for (const [key, rows] of Array.from(familyGroups.entries())) {
     if (rows.length >= 2) familyGroupsWithAtLeast2Observations += 1;
     if (rows.length >= 3) familyGroupsWithAtLeast3Observations += 1;
-    const result = buildProductPriceHistory({ type: 'family', key }, rows);
+    const result = buildHistory({ type: 'family', key }, rows);
     exampleCandidates.push({ key, rows, result });
   }
 
@@ -816,7 +852,7 @@ function buildPriceCoverage(productRows: EngagementProductRow[]): {
         merchant: point.merchantNormalized || point.merchantRaw,
         occurredAt: point.occurredAt,
         displayName: point.displayName,
-        purchasePrice: point.lineTotal,
+        purchasePrice: point.grossLineAmount ?? point.lineTotal,
         purchaseQuantity: point.purchaseQuantity,
         specSummary: point.priceKind,
         normalizedPrice: point.priceValue,
@@ -1064,6 +1100,7 @@ function buildDataQualityFlags(
   productRows: EngagementProductRow[]
 ): AnalysisDDataQualityFlag[] {
   const flags: AnalysisDDataQualityFlag[] = [];
+  const receiptEvidenceCache = buildReceiptEvidenceCache(productRows);
   for (const receipt of receipts) {
     if (!hasValidTransactionDate(receipt)) {
       flags.push({
@@ -1129,9 +1166,11 @@ function buildDataQualityFlags(
     if (!isV1SupportedReceipt(row)) continue;
     const family = row.productFamilyKey?.trim();
     if (!family) continue;
-    const result = buildProductPriceHistory({ type: 'family', key: family }, [
-      row as ProductPriceHistoryRow,
-    ]);
+    const result = buildProductPriceHistory(
+      { type: 'family', key: family },
+      [row as ProductPriceHistoryRow],
+      { receiptEvidenceCache }
+    );
     if (result.comparableOccurrenceCount === 0) {
       flags.push({
         code: 'price_normalization_unavailable',
@@ -1194,7 +1233,7 @@ export function buildAnalysisDReport(
   const { identityCoverage, specCoverage } =
     buildIdentityAndSpecCoverage(receipts);
   const { priceCoverage, priceHistoryExamples } =
-    buildPriceCoverage(productRows);
+    buildPriceCoverage(productRows, input.priceHistoryBuilder);
   const trends = buildTrendEligibility(receipts);
   const insights = buildInsightEmissions(receipts, productRows, nowMs);
   const corrections = buildCorrectionProfile(receipts);

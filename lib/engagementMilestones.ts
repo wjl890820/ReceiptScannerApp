@@ -989,7 +989,7 @@ async function readProductRows(
        receipts.merchant_raw AS merchant_raw,
        receipts.merchant_normalized AS merchant_normalized,
        receipts.merchant_type AS merchant_type,
-       receipts.analysis_json AS analysis_json,
+       receipts.analysis_json AS receiptAnalysisJson,
        COALESCE(
          NULLIF(receipt_items.normalized_full_name, ''),
          NULLIF(receipt_items.raw_name, ''),
@@ -1005,7 +1005,25 @@ async function readProductRows(
        receipt_items.sku_key AS skuKey,
        receipt_items.volume_base_ml AS volumeBaseMl,
        receipt_items.weight_base_g AS weightBaseG,
-       receipt_items.count_base AS countBase
+       receipt_items.count_base AS countBase,
+       receipt_items.gross_line_amount AS grossLineAmount,
+       receipt_items.effective_line_amount AS effectiveLineAmount,
+       receipt_items.discount_allocated AS discountAllocated,
+       receipt_items.amount_provenance AS amountProvenance,
+       receipt_items.item_amount_evidence_state AS itemAmountEvidenceState,
+       receipt_items.promo_markers_json AS promoMarkersJson,
+       receipt_items.evidence_capture_version AS evidenceCaptureVersion,
+       receipt_items.price_observation_version AS priceObservationVersion,
+       receipt_items.item_source AS itemSource,
+       receipt_items.identity_source AS identitySource,
+       receipt_items.identity_confidence AS identityConfidence,
+       receipts.user_items_json AS receiptUserItemsJson,
+       COALESCE(receipts.user_edited, 0) AS receiptUserEdited,
+       receipts.total AS receiptTotal,
+       receipts.final_total AS receiptFinalTotal,
+       receipts.tax AS receiptTax,
+       COALESCE(receipts.tax_is_known, 0) AS receiptTaxIsKnown,
+       receipts.currency AS receiptCurrency
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
      ORDER BY

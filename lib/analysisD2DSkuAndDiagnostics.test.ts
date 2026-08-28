@@ -25,7 +25,7 @@ import {
   resolveExactProductSkuKey,
   resolveProductIdentity,
 } from './productIdentity';
-import { buildProductPriceHistory } from './productPriceHistory';
+import { buildTrustedProductPriceHistoryForTests as buildTrustedProductPriceHistory } from './productPriceHistory.testFixtures';
 import type { ReceiptRow } from './db';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -139,7 +139,7 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
         productRow('r2', 'b', { skuKey: sku!, displayName: '明治牛乳' }),
       ],
       queryFailed: false,
-      priceHistoryBuilder: buildProductPriceHistory,
+      priceHistoryBuilder: buildTrustedProductPriceHistory,
     });
     expect(result.frequentProducts[0].groupingType).toBe('sku');
     expect(result.frequentProducts[0].key).toBe(sku);
@@ -252,11 +252,11 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
         purchaseQuantity: 1,
       }),
     ];
-    const skuHistory = buildProductPriceHistory({ type: 'sku', key: SKU_A }, rows);
+    const skuHistory = buildTrustedProductPriceHistory({ type: 'sku', key: SKU_A }, rows);
     expect(skuHistory.comparableOccurrenceCount).toBeGreaterThanOrEqual(2);
     expect(skuHistory.priceKind).toBe('purchase_unit');
 
-    const familyHistory = buildProductPriceHistory(
+    const familyHistory = buildTrustedProductPriceHistory(
       { type: 'family', key: 'milk' },
       rows
     );

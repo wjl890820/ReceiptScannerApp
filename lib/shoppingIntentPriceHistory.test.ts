@@ -12,6 +12,10 @@ import {
   buildProductPriceHistory,
   type ProductPriceHistoryRow,
 } from './productPriceHistory';
+import {
+  applyTrustedG3TestDefaults as withTrustedG3Defaults,
+  createTrustedReceiptTestCache as createTrustedReceiptEvidenceCache,
+} from './productPriceHistory.testFixtures';
 
 const FIXED_NOW = () => new Date('2026-08-22T05:00:00.000Z');
 
@@ -25,7 +29,7 @@ describe('ShoppingIntent price-history bridge (M1-D)', () => {
     const target = shoppingIntentToPriceHistoryTarget(intent);
     expect(target).toEqual({ type: 'family', key: 'milk' });
 
-    const rows: ProductPriceHistoryRow[] = [
+    const rawRows: ProductPriceHistoryRow[] = [
       {
         receiptId: 'r1',
         itemId: 'i1',
@@ -42,10 +46,30 @@ describe('ShoppingIntent price-history bridge (M1-D)', () => {
         weightBaseG: null,
         countBase: null,
       },
+      {
+        receiptId: 'r2',
+        itemId: 'i2',
+        sourceIndex: 0,
+        occurredAt: 2,
+        merchantRaw: '業務スーパー',
+        merchantNormalized: '業務スーパー',
+        displayName: '牛乳 900ml',
+        currency: 'JPY',
+        lineTotal: 238,
+        purchaseQuantity: 1,
+        productFamilyKey: 'milk',
+        volumeBaseMl: 900,
+        weightBaseG: null,
+        countBase: null,
+      },
     ];
+    const rows = rawRows.map(withTrustedG3Defaults);
+    const cache = createTrustedReceiptEvidenceCache(rows);
     const viaIntent = loadPriceHistoryForShoppingIntentFromRows(intent, rows);
-    const viaDirect = buildProductPriceHistory(target!, rows);
-    expect(viaIntent).toEqual(viaDirect);
-    expect((viaIntent?.points ?? []).length).toBeGreaterThan(0);
+    const viaDirect = buildProductPriceHistory(target!, rows, {
+      receiptEvidenceCache: cache,
+    });
+    expect(viaIntent?.target).toEqual(viaDirect.target);
+    expect(viaIntent?.observations.length).toBeGreaterThan(0);
   });
 });

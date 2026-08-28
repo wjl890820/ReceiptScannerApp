@@ -1,8 +1,30 @@
 import type * as SQLite from 'expo-sqlite';
 import * as ExpoSQLite from 'expo-sqlite';
 
+import { assessReceiptAmountBasis } from './analysisFoundation/amountBasis';
+import type {
+  AmountTaxBasis,
+  ReceiptAmountBasisAssessment,
+} from './analysisFoundation/types';
 import { initIfNeeded } from './db';
+import type { ReceiptRow } from './db';
+import { normalizeProductForIdentity } from './normalizeProductForIdentity';
+import {
+  evaluatePriceObservationQuality,
+  type PriceObservationQualityLevel,
+} from './productIdentityPriceObservationQuality';
 import type { ProductDetailTarget } from './productDetailTarget';
+import type {
+  PriceAmountProvenance,
+  PriceItemAmountState,
+  PricePromoContext,
+} from './priceObservationTruth';
+import { buildReceiptMonetaryCoherenceEvidence } from './receiptEvidenceTruth/monetaryCoherenceEvidence';
+import type {
+  MonetaryCoherenceState,
+  ReceiptMonetaryCoherenceEvidence,
+} from './receiptEvidenceTruth/types';
+import { sanitizePromoMarkers } from './receiptPrintedEvidence';
 
 export type ProductPriceKind =
   | 'purchase_unit'
@@ -28,10 +50,16 @@ export type ProductPriceHistoryPoint = {
   merchantNormalized: string | null;
   displayName: string;
   currency: string;
+  /** Gross compatibility alias when seriesKind = 'gross'. */
   lineTotal: number;
   purchaseQuantity: number;
   priceValue: number;
   priceKind: ProductPriceKind;
+  seriesKind: 'gross' | null;
+  grossLineAmount: number;
+  amountBasis: AmountTaxBasis | null;
+  promoContext?: PricePromoContext;
+  promoMarkers?: string[];
 };
 
 export type ProductPriceComparisonEligibility = {
@@ -43,13 +71,38 @@ export type ProductPriceComparisonEligibility = {
   excludedOccurrenceCount: number;
 };
 
+export type ProductPriceHistoryObservation = {
+  receiptId: string;
+  itemId: string;
+  sourceIndex: number;
+  occurredAt: number;
+  level: 1;
+  seriesKind: 'gross';
+  grossLineAmount: number | null;
+  effectiveLineAmount: number | null;
+  purchaseQuantity: number | null;
+  currency: string | null;
+  amountProvenance: PriceAmountProvenance | null;
+  itemAmountEvidenceState: PriceItemAmountState | null;
+  priceObservationVersion: number | null;
+  amountBasis: AmountTaxBasis | null;
+  exactComparisonTrusted: boolean;
+  monetaryCoherenceState: MonetaryCoherenceState | null;
+  monetaryProvenanceSufficient: boolean;
+  discountOwnershipStatus: string | null;
+  promoContext: PricePromoContext;
+  promoMarkers: string[];
+  level2Eligible: boolean;
+  level2RejectReasons: string[];
+  qualityLevel: PriceObservationQualityLevel | null;
+};
+
 export type ProductPriceHistoryResult = ProductPriceComparisonEligibility & {
   target: ProductDetailTarget;
   points: ProductPriceHistoryPoint[];
-  /**
-   * Batch 5B — when identity merchant-local path wins.
-   * UI should prefer these copy keys over legacy subtitle by target type.
-   */
+  observations: ProductPriceHistoryObservation[];
+  seriesKind: 'gross' | null;
+  amountBasis: 'tax_included' | 'tax_excluded' | null;
   identityPresentation?: {
     strategy: 'same_merchant_product';
     titleKey: 'priceHistory.titleMerchantLocal';
@@ -69,12 +122,32 @@ export type ProductPriceHistoryRow = {
   merchantNormalized: string | null;
   displayName: string;
   currency: string | null;
+  /** Compatibility alias — prefer grossLineAmount for G3 comparability. */
   lineTotal: number | null;
   purchaseQuantity: number | null;
   productFamilyKey: string | null;
   volumeBaseMl: number | null;
   weightBaseG: number | null;
   countBase: number | null;
+  grossLineAmount?: number | null;
+  effectiveLineAmount?: number | null;
+  discountAllocated?: number | null;
+  amountProvenance?: PriceAmountProvenance | null;
+  itemAmountEvidenceState?: PriceItemAmountState | null;
+  promoMarkersJson?: string | null;
+  evidenceCaptureVersion?: number | null;
+  priceObservationVersion?: number | null;
+  itemSource?: string | null;
+  identitySource?: string | null;
+  identityConfidence?: number | null;
+  receiptAnalysisJson?: string | null;
+  receiptUserItemsJson?: string | null;
+  receiptUserEdited?: number | null;
+  receiptTotal?: number | null;
+  receiptFinalTotal?: number | null;
+  receiptTax?: number | null;
+  receiptTaxIsKnown?: number | null;
+  receiptCurrency?: string | null;
 };
 
 export type ProductPriceHistoryDatabase = {
@@ -84,13 +157,27 @@ export type ProductPriceHistoryDatabase = {
   ): Promise<T[]>;
 };
 
+export type ReceiptEvidenceCacheEntry = {
+  amountBasisAssessment: ReceiptAmountBasisAssessment;
+  monetaryCoherenceEvidence: ReceiptMonetaryCoherenceEvidence;
+};
+
+export type ReceiptEvidenceCache = Map<string, ReceiptEvidenceCacheEntry>;
+
+export type BuildProductPriceHistoryOptions = {
+  receiptEvidenceCache?: ReceiptEvidenceCache;
+};
+
 type PriceDimension = 'volume' | 'weight' | 'count';
 
 type ComparableCandidate = {
   row: ProductPriceHistoryRow;
+  observation: ProductPriceHistoryObservation;
   dimension: PriceDimension | null;
   currency: string | null;
   priceValue: number;
+  grossLineAmount: number;
+  amountBasis: AmountTaxBasis | null;
 };
 
 const DB_NAME = 'receipts_v2.db';
@@ -118,7 +205,6 @@ function positiveFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-/** Transaction/occurrence timestamp suitable for price history (never invent "now"). */
 function hasValidOccurredAt(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
@@ -128,6 +214,418 @@ function knownCurrency(value: unknown): string | null {
   const currency = value.trim();
   if (!currency || currency.toLowerCase() === 'unknown') return null;
   return currency;
+}
+
+function usesG3ObservationTruth(row: ProductPriceHistoryRow): boolean {
+  return row.priceObservationVersion === 1;
+}
+
+function resolveGrossLineAmount(row: ProductPriceHistoryRow): number | null {
+  if (positiveFinite(row.grossLineAmount)) return row.grossLineAmount;
+  return null;
+}
+
+function nullishNumber(value: number | null | undefined): number | null {
+  return value ?? null;
+}
+
+function rowToReceiptRow(row: ProductPriceHistoryRow): ReceiptRow {
+  return {
+    id: row.receiptId,
+    created_at: row.occurredAt,
+    transaction_at: row.occurredAt,
+    image_uri: '',
+    merchant_raw: row.merchantRaw,
+    merchant_normalized: row.merchantNormalized,
+    total: row.receiptTotal ?? 0,
+    tax: row.receiptTax ?? 0,
+    tax_is_known: row.receiptTaxIsKnown ?? 0,
+    currency: row.receiptCurrency ?? row.currency ?? '',
+    analysis_json: row.receiptAnalysisJson ?? '{}',
+    user_edited: row.receiptUserEdited ?? 0,
+    final_total: nullishNumber(row.receiptFinalTotal),
+    final_category: null,
+    note: null,
+    user_items_json: row.receiptUserItemsJson ?? null,
+  };
+}
+
+export function buildReceiptEvidenceCache(
+  rows: readonly ProductPriceHistoryRow[]
+): ReceiptEvidenceCache {
+  const cache: ReceiptEvidenceCache = new Map();
+  for (const row of rows) {
+    if (cache.has(row.receiptId)) continue;
+    const receipt = rowToReceiptRow(row);
+    cache.set(row.receiptId, {
+      amountBasisAssessment: assessReceiptAmountBasis(receipt),
+      monetaryCoherenceEvidence: buildReceiptMonetaryCoherenceEvidence(receipt),
+    });
+  }
+  return cache;
+}
+
+type DiscountFieldRead = {
+  present: boolean;
+  conflict: boolean;
+  value: number | null;
+};
+
+function readDiscountFieldFromRow(row: ProductPriceHistoryRow): DiscountFieldRead {
+  if (row.discountAllocated == null) {
+    return { present: false, conflict: false, value: null };
+  }
+  const value = row.discountAllocated;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return { present: true, conflict: true, value: null };
+  }
+  if (value > 0) {
+    return { present: true, conflict: true, value: null };
+  }
+  return { present: true, conflict: false, value };
+}
+
+function hasExplicitProductDiscount(discountRead: DiscountFieldRead): boolean {
+  return (
+    discountRead.present &&
+    !discountRead.conflict &&
+    discountRead.value != null &&
+    discountRead.value < 0
+  );
+}
+
+type PromoMarkersRead =
+  | { state: 'absent'; markers: [] }
+  | { state: 'valid'; markers: string[] }
+  | { state: 'invalid'; markers: [] };
+
+export function readPromoMarkersFromRow(
+  row: ProductPriceHistoryRow
+): PromoMarkersRead {
+  if (row.promoMarkersJson == null) {
+    return { state: 'absent', markers: [] };
+  }
+  if (typeof row.promoMarkersJson !== 'string') {
+    return { state: 'invalid', markers: [] };
+  }
+  const trimmed = row.promoMarkersJson.trim();
+  if (!trimmed) {
+    return { state: 'invalid', markers: [] };
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) {
+      return { state: 'invalid', markers: [] };
+    }
+    if (parsed.length === 0) {
+      return { state: 'invalid', markers: [] };
+    }
+    if (parsed.some((value) => typeof value !== 'string')) {
+      return { state: 'invalid', markers: [] };
+    }
+    const markers = sanitizePromoMarkers(parsed) ?? [];
+    if (markers.length === 0) {
+      return { state: 'invalid', markers: [] };
+    }
+    return { state: 'valid', markers };
+  } catch {
+    return { state: 'invalid', markers: [] };
+  }
+}
+
+export function resolvePromoContextFromRow(
+  row: ProductPriceHistoryRow
+): PricePromoContext {
+  const promoRead = readPromoMarkersFromRow(row);
+  const hasMarkers = promoRead.state === 'valid' && promoRead.markers.length > 0;
+  const discountRead = readDiscountFieldFromRow(row);
+
+  if (promoRead.state === 'invalid') {
+    return 'unknown';
+  }
+
+  if (hasMarkers) {
+    if (hasExplicitProductDiscount(discountRead)) {
+      return 'explicit_discount_and_marker';
+    }
+    return 'qualitative_marker';
+  }
+
+  if (hasExplicitProductDiscount(discountRead)) {
+    return 'explicit_discount';
+  }
+
+  if (discountRead.conflict) {
+    return 'unknown';
+  }
+
+  const coherentOcr = row.itemAmountEvidenceState === 'coherent';
+  if (
+    promoRead.state === 'absent' &&
+    row.evidenceCaptureVersion === 1 &&
+    coherentOcr
+  ) {
+    const discountAbsent = !discountRead.present;
+    const discountValidZero =
+      discountRead.present &&
+      !discountRead.conflict &&
+      discountRead.value === 0;
+    if (discountAbsent || discountValidZero) {
+      return 'none_observed';
+    }
+  }
+
+  return 'unknown';
+}
+
+function receiptEvidenceForRow(
+  row: ProductPriceHistoryRow,
+  cache: ReceiptEvidenceCache
+): ReceiptEvidenceCacheEntry | null {
+  return cache.get(row.receiptId) ?? null;
+}
+
+function trustedAmountBasisForRow(
+  row: ProductPriceHistoryRow,
+  cache: ReceiptEvidenceCache
+): AmountTaxBasis | null {
+  const evidence = receiptEvidenceForRow(row, cache);
+  if (!evidence?.amountBasisAssessment.exactComparisonTrusted) return null;
+  const basis = evidence.amountBasisAssessment.basis;
+  if (basis === 'tax_included' || basis === 'tax_excluded') return basis;
+  return null;
+}
+
+function rowObservationKey(row: ProductPriceHistoryRow): string {
+  return `${row.receiptId}:${row.sourceIndex}`;
+}
+
+type StructuralCandidate = {
+  row: ProductPriceHistoryRow;
+  priceValue: number;
+  grossLineAmount: number;
+  amountBasis: AmountTaxBasis | null;
+  currency: string | null;
+  dimension: PriceDimension | null;
+};
+
+function evaluateStructuralGates(
+  row: ProductPriceHistoryRow,
+  cache: ReceiptEvidenceCache
+): { pass: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const gross = resolveGrossLineAmount(row);
+  const qty = row.purchaseQuantity;
+  const currency = knownCurrency(row.currency);
+
+  if (!usesG3ObservationTruth(row)) {
+    reasons.push('legacy_unbackfilled');
+    return { pass: false, reasons };
+  }
+
+  if (row.priceObservationVersion !== 1) reasons.push('price_observation_version');
+  if (row.itemAmountEvidenceState !== 'coherent') {
+    reasons.push('item_amount_evidence_state');
+  }
+  if (!positiveFinite(gross)) reasons.push('invalid_gross_amount');
+  if (!positiveFinite(qty)) reasons.push('invalid_quantity');
+  if (currency !== 'JPY') reasons.push('currency_not_jpy');
+
+  const receiptEvidence = receiptEvidenceForRow(row, cache);
+  const basisAssessment = receiptEvidence?.amountBasisAssessment;
+  const monetaryEvidence = receiptEvidence?.monetaryCoherenceEvidence;
+  const trustedBasis = trustedAmountBasisForRow(row, cache);
+
+  if (
+    !basisAssessment?.exactComparisonTrusted ||
+    (trustedBasis !== 'tax_included' && trustedBasis !== 'tax_excluded')
+  ) {
+    reasons.push('amount_basis_untrusted');
+  }
+
+  if (monetaryEvidence?.state !== 'known_coherent') {
+    reasons.push('monetary_incoherent');
+  }
+  if (monetaryEvidence?.monetaryProvenanceSufficient !== true) {
+    reasons.push('monetary_provenance_insufficient');
+  }
+  if (monetaryEvidence?.discountOwnershipStatus === 'unresolved') {
+    reasons.push('discount_ownership_unresolved');
+  }
+
+  return { pass: reasons.length === 0, reasons };
+}
+
+function qualityPeersForCandidate(
+  candidate: StructuralCandidate,
+  cohort: readonly StructuralCandidate[]
+): number[] {
+  return cohort
+    .filter(
+      (peer) =>
+        rowObservationKey(peer.row) !== rowObservationKey(candidate.row) &&
+        peer.amountBasis === candidate.amountBasis &&
+        (peer.amountBasis === 'tax_included' ||
+          peer.amountBasis === 'tax_excluded')
+    )
+    .map((peer) => peer.priceValue);
+}
+
+function evaluateNormalizedGrossQuality(
+  row: ProductPriceHistoryRow,
+  candidate: StructuralCandidate,
+  peerPriceValues: readonly number[]
+): PriceObservationQualityLevel {
+  const isPurchaseUnit = candidate.dimension == null;
+  const quality = evaluatePriceObservationQuality({
+    lineTotal: isPurchaseUnit ? candidate.grossLineAmount : candidate.priceValue,
+    quantity: isPurchaseUnit ? (row.purchaseQuantity as number) : 1,
+    rawName: row.displayName,
+    peerPurchaseUnitPrices: peerPriceValues,
+    attributes: normalizeProductForIdentity(row.displayName).attributes,
+  });
+  return quality.quality;
+}
+
+function passesLevel2Quality(quality: PriceObservationQualityLevel): boolean {
+  return quality !== 'invalid' && quality !== 'suspected_anomaly';
+}
+
+function buildObservationForRow(
+  row: ProductPriceHistoryRow,
+  cache: ReceiptEvidenceCache,
+  promoRead: PromoMarkersRead,
+  promoContext: PricePromoContext,
+  structural: { pass: boolean; reasons: string[] },
+  qualityLevel: PriceObservationQualityLevel | null,
+  qualityReasons: string[]
+): ProductPriceHistoryObservation {
+  const receiptEvidence = receiptEvidenceForRow(row, cache);
+  const basisAssessment = receiptEvidence?.amountBasisAssessment;
+  const monetaryEvidence = receiptEvidence?.monetaryCoherenceEvidence;
+  const rejectReasons = [...structural.reasons, ...qualityReasons];
+  const level2Eligible =
+    structural.pass &&
+    qualityLevel != null &&
+    passesLevel2Quality(qualityLevel);
+
+  return {
+    receiptId: row.receiptId,
+    itemId: row.itemId,
+    sourceIndex: row.sourceIndex,
+    occurredAt: row.occurredAt,
+    level: 1,
+    seriesKind: 'gross',
+    grossLineAmount: nullishNumber(row.grossLineAmount),
+    effectiveLineAmount: nullishNumber(row.effectiveLineAmount),
+    purchaseQuantity: nullishNumber(row.purchaseQuantity),
+    currency: knownCurrency(row.currency),
+    amountProvenance: row.amountProvenance ?? null,
+    itemAmountEvidenceState: row.itemAmountEvidenceState ?? null,
+    priceObservationVersion: nullishNumber(row.priceObservationVersion),
+    amountBasis: basisAssessment?.basis ?? null,
+    exactComparisonTrusted: basisAssessment?.exactComparisonTrusted ?? false,
+    monetaryCoherenceState: monetaryEvidence?.state ?? null,
+    monetaryProvenanceSufficient:
+      monetaryEvidence?.monetaryProvenanceSufficient ?? false,
+    discountOwnershipStatus: monetaryEvidence?.discountOwnershipStatus ?? null,
+    promoContext,
+    promoMarkers: promoRead.state === 'valid' ? promoRead.markers : [],
+    level2Eligible,
+    level2RejectReasons: rejectReasons,
+    qualityLevel,
+  };
+}
+
+function structuralToComparableCandidates(
+  structuralCohort: readonly StructuralCandidate[],
+  observationsByKey: Map<string, ProductPriceHistoryObservation>
+): ComparableCandidate[] {
+  return structuralCohort.map((candidate) => ({
+    row: candidate.row,
+    observation:
+      observationsByKey.get(rowObservationKey(candidate.row)) ??
+      observationByRowKey([], candidate.row),
+    dimension: candidate.dimension,
+    currency: candidate.currency,
+    priceValue: candidate.priceValue,
+    grossLineAmount: candidate.grossLineAmount,
+    amountBasis: candidate.amountBasis,
+  }));
+}
+
+function comparableCandidatesFromStructural(
+  structuralCohort: readonly StructuralCandidate[],
+  cache: ReceiptEvidenceCache,
+  observationsByKey: Map<string, ProductPriceHistoryObservation>
+): ComparableCandidate[] {
+  return structuralCohort.flatMap((candidate) => {
+    const observation =
+      observationsByKey.get(rowObservationKey(candidate.row)) ?? null;
+    if (!observation?.level2Eligible) return [];
+    return [
+      {
+        row: candidate.row,
+        observation,
+        dimension: candidate.dimension,
+        currency: candidate.currency,
+        priceValue: candidate.priceValue,
+        grossLineAmount: candidate.grossLineAmount,
+        amountBasis: candidate.amountBasis,
+      },
+    ];
+  });
+}
+
+function buildObservationsAndStructuralCohort(
+  rows: readonly ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache,
+  structuralCohort: readonly StructuralCandidate[]
+): {
+  observations: ProductPriceHistoryObservation[];
+  observationsByKey: Map<string, ProductPriceHistoryObservation>;
+} {
+  const structuralByKey = new Map(
+    structuralCohort.map((candidate) => [
+      rowObservationKey(candidate.row),
+      candidate,
+    ])
+  );
+  const observations = rows.map((row) => {
+    const promoRead = readPromoMarkersFromRow(row);
+    const promoContext = resolvePromoContextFromRow(row);
+    const structural = evaluateStructuralGates(row, cache);
+    const candidate = structuralByKey.get(rowObservationKey(row));
+    let qualityLevel: PriceObservationQualityLevel | null = null;
+    const qualityReasons: string[] = [];
+    if (structural.pass && candidate) {
+      const peers = qualityPeersForCandidate(candidate, structuralCohort);
+      qualityLevel = evaluateNormalizedGrossQuality(
+        row,
+        candidate,
+        peers
+      );
+      if (!passesLevel2Quality(qualityLevel)) {
+        qualityReasons.push(`price_quality_${qualityLevel}`);
+      }
+    }
+    return buildObservationForRow(
+      row,
+      cache,
+      promoRead,
+      promoContext,
+      structural,
+      qualityLevel,
+      qualityReasons
+    );
+  });
+  const observationsByKey = new Map(
+    observations.map((observation) => [
+      `${observation.receiptId}:${observation.sourceIndex}`,
+      observation,
+    ])
+  );
+  return { observations, observationsByKey };
 }
 
 /**
@@ -172,10 +670,8 @@ function normalizedPrice(
   row: ProductPriceHistoryRow,
   dimension: PriceDimension
 ): number | null {
-  if (
-    !positiveFinite(row.lineTotal) ||
-    !positiveFinite(row.purchaseQuantity)
-  ) {
+  const gross = resolveGrossLineAmount(row);
+  if (!positiveFinite(gross) || !positiveFinite(row.purchaseQuantity)) {
     return null;
   }
   const base =
@@ -187,8 +683,9 @@ function normalizedPrice(
   if (!positiveFinite(base)) return null;
 
   const totalBase = base * row.purchaseQuantity;
-  const multiplier = dimension === 'volume' ? 1000 : dimension === 'weight' ? 100 : 1;
-  const value = (row.lineTotal / totalBase) * multiplier;
+  const multiplier =
+    dimension === 'volume' ? 1000 : dimension === 'weight' ? 100 : 1;
+  const value = (gross / totalBase) * multiplier;
   return positiveFinite(value) ? value : null;
 }
 
@@ -196,6 +693,7 @@ function emptyResult(
   target: ProductDetailTarget,
   status: ProductPriceHistoryStatus,
   totalOccurrenceCount: number,
+  observations: ProductPriceHistoryObservation[],
   priceKind: ProductPriceKind | null = null
 ): ProductPriceHistoryResult {
   return {
@@ -204,9 +702,36 @@ function emptyResult(
     priceKind,
     currency: null,
     points: [],
+    observations,
+    seriesKind: null,
+    amountBasis: null,
     totalOccurrenceCount,
     comparableOccurrenceCount: 0,
     excludedOccurrenceCount: totalOccurrenceCount,
+  };
+}
+
+function evaluateAmountBasisSeriesGate(
+  candidates: ComparableCandidate[]
+): {
+  mixedBasis: boolean;
+  amountBasis: 'tax_included' | 'tax_excluded' | null;
+} {
+  const trustedBases = new Set<'tax_included' | 'tax_excluded'>();
+  for (const candidate of candidates) {
+    if (
+      candidate.amountBasis === 'tax_included' ||
+      candidate.amountBasis === 'tax_excluded'
+    ) {
+      trustedBases.add(candidate.amountBasis);
+    }
+  }
+  if (trustedBases.size > 1) {
+    return { mixedBasis: true, amountBasis: null };
+  }
+  return {
+    mixedBasis: false,
+    amountBasis: trustedBases.size === 1 ? [...trustedBases][0]! : null,
   };
 }
 
@@ -214,9 +739,50 @@ function finalizeCandidates(
   target: ProductDetailTarget,
   totalOccurrenceCount: number,
   priceKind: ProductPriceKind,
-  candidates: ComparableCandidate[]
+  candidates: ComparableCandidate[],
+  observations: ProductPriceHistoryObservation[],
+  specCandidates: ComparableCandidate[] = candidates
 ): ProductPriceHistoryResult {
-  const knownCandidates = candidates.filter(
+  const basisGate = evaluateAmountBasisSeriesGate(candidates);
+  if (basisGate.mixedBasis) {
+    const observationsWithBasisMismatch = observations.map((observation) =>
+      observation.level2Eligible
+        ? {
+            ...observation,
+            level2Eligible: false,
+            level2RejectReasons: [
+              ...observation.level2RejectReasons,
+              'amount_basis_mismatch',
+            ],
+          }
+        : observation
+    );
+    return emptyResult(
+      target,
+      'not_enough_points',
+      totalOccurrenceCount,
+      observationsWithBasisMismatch,
+      priceKind
+    );
+  }
+
+  const selected = candidates;
+  const level2Currencies = new Set(
+    selected
+      .map((candidate) => candidate.currency)
+      .filter((currency): currency is string => currency != null)
+  );
+  if (level2Currencies.size > 1) {
+    return emptyResult(
+      target,
+      'mixed_currency',
+      totalOccurrenceCount,
+      observations,
+      priceKind
+    );
+  }
+
+  const knownCandidates = selected.filter(
     (
       candidate
     ): candidate is ComparableCandidate & { currency: string } =>
@@ -230,6 +796,7 @@ function finalizeCandidates(
       target,
       'mixed_currency',
       totalOccurrenceCount,
+      observations,
       priceKind
     );
   }
@@ -244,10 +811,15 @@ function finalizeCandidates(
       merchantNormalized: candidate.row.merchantNormalized,
       displayName: candidate.row.displayName,
       currency: candidate.currency,
-      lineTotal: candidate.row.lineTotal as number,
+      lineTotal: candidate.grossLineAmount,
       purchaseQuantity: candidate.row.purchaseQuantity as number,
       priceValue: candidate.priceValue,
       priceKind,
+      seriesKind: 'gross',
+      grossLineAmount: candidate.grossLineAmount,
+      amountBasis: candidate.amountBasis,
+      promoContext: candidate.observation.promoContext,
+      promoMarkers: candidate.observation.promoMarkers,
     }))
     .sort(
       (left, right) =>
@@ -255,7 +827,8 @@ function finalizeCandidates(
         left.receiptId.localeCompare(right.receiptId) ||
         left.sourceIndex - right.sourceIndex
     );
-  const hasUnknownCurrency = candidates.some(
+
+  const hasUnknownCurrency = specCandidates.some(
     (candidate) => candidate.currency == null
   );
   const status: ProductPriceHistoryStatus =
@@ -271,63 +844,121 @@ function finalizeCandidates(
     priceKind,
     currency: currencies.size === 1 ? [...currencies][0] : null,
     points,
+    observations,
+    seriesKind: points.length > 0 ? 'gross' : null,
+    amountBasis: points.length >= 2 ? basisGate.amountBasis : null,
     totalOccurrenceCount,
     comparableOccurrenceCount: points.length,
     excludedOccurrenceCount: totalOccurrenceCount - points.length,
   };
 }
 
-export function buildProductPriceHistory(
-  target: ProductDetailTarget,
-  rows: ProductPriceHistoryRow[]
-): ProductPriceHistoryResult {
-  const totalOccurrenceCount = rows.length;
-  if (target.type === 'occurrence') {
-    return emptyResult(target, 'not_enough_points', totalOccurrenceCount);
-  }
+function observationByRowKey(
+  observations: readonly ProductPriceHistoryObservation[],
+  row: ProductPriceHistoryRow
+): ProductPriceHistoryObservation {
+  return (
+    observations.find(
+      (observation) =>
+        observation.receiptId === row.receiptId &&
+        observation.sourceIndex === row.sourceIndex
+    ) ?? {
+      receiptId: row.receiptId,
+      itemId: row.itemId,
+      sourceIndex: row.sourceIndex,
+      occurredAt: row.occurredAt,
+      level: 1,
+      seriesKind: 'gross',
+      grossLineAmount: nullishNumber(row.grossLineAmount),
+      effectiveLineAmount: nullishNumber(row.effectiveLineAmount),
+      purchaseQuantity: nullishNumber(row.purchaseQuantity),
+      currency: knownCurrency(row.currency),
+      amountProvenance: row.amountProvenance ?? null,
+      itemAmountEvidenceState: row.itemAmountEvidenceState ?? null,
+      priceObservationVersion: nullishNumber(row.priceObservationVersion),
+      amountBasis: null,
+      exactComparisonTrusted: false,
+      monetaryCoherenceState: null,
+      monetaryProvenanceSufficient: false,
+      discountOwnershipStatus: null,
+      promoContext: resolvePromoContextFromRow(row),
+      promoMarkers: (() => {
+        const read = readPromoMarkersFromRow(row);
+        return read.state === 'valid' ? read.markers : [];
+      })(),
+      level2Eligible: false,
+      level2RejectReasons: ['missing_observation'],
+      qualityLevel: null,
+    }
+  );
+}
 
-  if (target.type === 'sku') {
-    const candidates = rows.flatMap<ComparableCandidate>((row) => {
-      if (
-        !positiveFinite(row.lineTotal) ||
-        !positiveFinite(row.purchaseQuantity)
-      ) {
-        return [];
-      }
-      const priceValue = row.lineTotal / row.purchaseQuantity;
-      return positiveFinite(priceValue)
-        ? [
-            {
-              row,
-              dimension: null,
-              currency: knownCurrency(row.currency),
-              priceValue,
-            },
-          ]
-        : [];
-    });
-    return finalizeCandidates(
-      target,
-      totalOccurrenceCount,
-      'purchase_unit',
-      candidates
-    );
-  }
+function buildSkuSpecCoverageCandidates(
+  rows: readonly ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache,
+  observationsByKey: Map<string, ProductPriceHistoryObservation>
+): ComparableCandidate[] {
+  return rows.flatMap((row) => {
+    const gross = resolveGrossLineAmount(row);
+    const qty = row.purchaseQuantity;
+    if (!positiveFinite(gross) || !positiveFinite(qty)) return [];
+    const priceValue = gross / qty;
+    if (!positiveFinite(priceValue)) return [];
+    return [
+      {
+        row,
+        observation: observationByRowKey([], row),
+        dimension: null,
+        currency: knownCurrency(row.currency),
+        priceValue,
+        grossLineAmount: gross,
+        amountBasis: trustedAmountBasisForRow(row, cache),
+      },
+    ];
+  }).map((candidate) => ({
+    ...candidate,
+    observation:
+      observationsByKey.get(rowObservationKey(candidate.row)) ??
+      candidate.observation,
+  }));
+}
 
-  if (
-    target.type === 'family' &&
-    UNSUPPORTED_PRICE_FAMILIES.has(target.key)
-  ) {
-    return emptyResult(target, 'unsupported_family', totalOccurrenceCount);
-  }
+function buildSkuStructuralCohort(
+  rows: readonly ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache
+): StructuralCandidate[] {
+  return rows.flatMap((row) => {
+    const structural = evaluateStructuralGates(row, cache);
+    if (!structural.pass) return [];
+    const gross = resolveGrossLineAmount(row);
+    const qty = row.purchaseQuantity;
+    if (!positiveFinite(gross) || !positiveFinite(qty)) return [];
+    const priceValue = gross / qty;
+    if (!positiveFinite(priceValue)) return [];
+    return [
+      {
+        row,
+        priceValue,
+        grossLineAmount: gross,
+        amountBasis: trustedAmountBasisForRow(row, cache),
+        currency: knownCurrency(row.currency),
+        dimension: null,
+      },
+    ];
+  });
+}
 
+function buildSpecStructuralCohort(
+  rows: readonly ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache,
+  target: ProductDetailTarget
+): StructuralCandidate[] {
   const requiredFamilyDimension =
     target.type === 'family' ? FAMILY_PRICE_DIMENSIONS[target.key] : null;
-  if (target.type === 'family' && !requiredFamilyDimension) {
-    return emptyResult(target, 'unsupported_family', totalOccurrenceCount);
-  }
 
-  const candidates = rows.flatMap<ComparableCandidate>((row) => {
+  return rows.flatMap((row) => {
+    const structural = evaluateStructuralGates(row, cache);
+    if (!structural.pass) return [];
     const dimension = dimensionForRow(row);
     if (!dimension) return [];
     if (requiredFamilyDimension && dimension !== requiredFamilyDimension) {
@@ -344,46 +975,143 @@ export function buildProductPriceHistory(
       return [];
     }
     const priceValue = normalizedPrice(row, dimension);
-    return priceValue == null
-      ? []
-      : [
-          {
-            row,
-            dimension,
-            currency: knownCurrency(row.currency),
-            priceValue,
-          },
-        ];
+    const gross = resolveGrossLineAmount(row);
+    if (priceValue == null || !positiveFinite(gross)) return [];
+    return [
+      {
+        row,
+        priceValue,
+        grossLineAmount: gross,
+        amountBasis: trustedAmountBasisForRow(row, cache),
+        currency: knownCurrency(row.currency),
+        dimension,
+      },
+    ];
   });
+}
 
-  if (candidates.length === 0) {
-    const priceKind = requiredFamilyDimension
-      ? priceKindForDimension(requiredFamilyDimension)
-      : null;
+export function buildObservations(
+  rows: readonly ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache
+): ProductPriceHistoryObservation[] {
+  const structuralCohort = buildSkuStructuralCohort(rows, cache);
+  return buildObservationsAndStructuralCohort(rows, cache, structuralCohort)
+    .observations;
+}
+
+export function buildProductPriceHistory(
+  target: ProductDetailTarget,
+  rows: ProductPriceHistoryRow[],
+  options: BuildProductPriceHistoryOptions = {}
+): ProductPriceHistoryResult {
+  const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rows);
+  const totalOccurrenceCount = rows.length;
+
+  if (target.type === 'occurrence') {
+    const observations = buildObservations(rows, cache);
+    return emptyResult(
+      target,
+      'not_enough_points',
+      totalOccurrenceCount,
+      observations
+    );
+  }
+
+  if (target.type === 'sku') {
+    const structuralCohort = buildSkuStructuralCohort(rows, cache);
+    const { observations, observationsByKey } =
+      buildObservationsAndStructuralCohort(rows, cache, structuralCohort);
+    const specCandidates = buildSkuSpecCoverageCandidates(
+      rows,
+      cache,
+      observationsByKey
+    );
+    const candidates = comparableCandidatesFromStructural(
+      structuralCohort,
+      cache,
+      observationsByKey
+    );
+    return finalizeCandidates(
+      target,
+      totalOccurrenceCount,
+      'purchase_unit',
+      candidates,
+      observations,
+      specCandidates
+    );
+  }
+
+  if (
+    target.type === 'family' &&
+    UNSUPPORTED_PRICE_FAMILIES.has(target.key)
+  ) {
+    const observations = buildObservations(rows, cache);
+    return emptyResult(
+      target,
+      'unsupported_family',
+      totalOccurrenceCount,
+      observations
+    );
+  }
+
+  const requiredFamilyDimension =
+    target.type === 'family' ? FAMILY_PRICE_DIMENSIONS[target.key] : null;
+  if (target.type === 'family' && !requiredFamilyDimension) {
+    const observations = buildObservations(rows, cache);
+    return emptyResult(
+      target,
+      'unsupported_family',
+      totalOccurrenceCount,
+      observations
+    );
+  }
+
+  const structuralCohort = buildSpecStructuralCohort(rows, cache, target);
+  const { observations, observationsByKey } = buildObservationsAndStructuralCohort(
+    rows,
+    cache,
+    structuralCohort
+  );
+  const specCandidates = structuralToComparableCandidates(
+    structuralCohort,
+    observationsByKey
+  );
+  const candidates = comparableCandidatesFromStructural(
+    structuralCohort,
+    cache,
+    observationsByKey
+  );
+
+  const dimensionSet = new Set(
+    specCandidates
+      .map((candidate) => candidate.dimension)
+      .filter((dimension): dimension is PriceDimension => dimension != null)
+  );
+  if (dimensionSet.size > 1) {
+    return emptyResult(
+      target,
+      'ambiguous_dimension',
+      totalOccurrenceCount,
+      observations
+    );
+  }
+  if (specCandidates.length === 0) {
     return emptyResult(
       target,
       'no_comparable_spec',
       totalOccurrenceCount,
-      priceKind
+      observations
     );
   }
 
-  const dimensions = new Set(
-    candidates.map((candidate) => candidate.dimension)
-  );
-  if (dimensions.size !== 1) {
-    return emptyResult(
-      target,
-      'ambiguous_dimension',
-      totalOccurrenceCount
-    );
-  }
-  const dimension = [...dimensions][0] as PriceDimension;
+  const dimension = [...dimensionSet][0]!;
   return finalizeCandidates(
     target,
     totalOccurrenceCount,
     priceKindForDimension(dimension),
-    candidates
+    candidates,
+    observations,
+    specCandidates
   );
 }
 
@@ -401,7 +1129,6 @@ function filterForTarget(target: Exclude<ProductDetailTarget, { type: 'occurrenc
     };
   }
   if (target.type === 'merchant_product') {
-    // Resolve across merchant items, then filter by MerchantProduct id in memory.
     return { sql: '1 = 1', params: [] };
   }
   return {
@@ -418,6 +1145,194 @@ async function getProductPriceHistoryDb(): Promise<SQLite.SQLiteDatabase> {
   return _db;
 }
 
+const PRICE_HISTORY_SELECT_SQL = `
+  SELECT
+    receipt_items.receipt_id AS receiptId,
+    receipt_items.id AS itemId,
+    receipt_items.source_index AS sourceIndex,
+    COALESCE(receipts.transaction_at, receipts.created_at) AS occurredAt,
+    receipts.merchant_raw AS merchantRaw,
+    receipts.merchant_normalized AS merchantNormalized,
+    COALESCE(
+      NULLIF(receipt_items.normalized_full_name, ''),
+      NULLIF(receipt_items.raw_name, ''),
+      NULLIF(receipt_items.canonical_product_name, ''),
+      receipt_items.normalized_name,
+      ''
+    ) AS displayName,
+    receipts.currency AS currency,
+    receipt_items.line_total AS lineTotal,
+    receipt_items.purchase_quantity AS purchaseQuantity,
+    receipt_items.product_family_key AS productFamilyKey,
+    receipt_items.volume_base_ml AS volumeBaseMl,
+    receipt_items.weight_base_g AS weightBaseG,
+    receipt_items.count_base AS countBase,
+    receipt_items.gross_line_amount AS grossLineAmount,
+    receipt_items.effective_line_amount AS effectiveLineAmount,
+    receipt_items.discount_allocated AS discountAllocated,
+    receipt_items.amount_provenance AS amountProvenance,
+    receipt_items.item_amount_evidence_state AS itemAmountEvidenceState,
+    receipt_items.promo_markers_json AS promoMarkersJson,
+    receipt_items.evidence_capture_version AS evidenceCaptureVersion,
+    receipt_items.price_observation_version AS priceObservationVersion,
+    receipt_items.item_source AS itemSource,
+    receipt_items.identity_source AS identitySource,
+    receipt_items.identity_confidence AS identityConfidence,
+    receipts.analysis_json AS receiptAnalysisJson,
+    receipts.user_items_json AS receiptUserItemsJson,
+    COALESCE(receipts.user_edited, 0) AS receiptUserEdited,
+    receipts.total AS receiptTotal,
+    receipts.final_total AS receiptFinalTotal,
+    receipts.tax AS receiptTax,
+    COALESCE(receipts.tax_is_known, 0) AS receiptTaxIsKnown,
+    receipts.currency AS receiptCurrency
+  FROM receipt_items
+  INNER JOIN receipts ON receipts.id = receipt_items.receipt_id`;
+
+function applyIdentityG3Gates(
+  target: ProductDetailTarget,
+  filtered: ProductPriceHistoryRow[],
+  identityView: {
+    merchantProductId: string;
+    merchantKey: string;
+    trendInsightEligible: boolean;
+    stats: { qualityExcludedCount: number };
+    historyPoints: Array<{
+      receiptId: string;
+      itemSourceIndex: number;
+      occurredAt: number;
+      rawName: string;
+      purchaseUnitPrice: number;
+    }>;
+  },
+  cache: ReceiptEvidenceCache
+): ProductPriceHistoryResult {
+  const identityRows = identityView.historyPoints.flatMap((point) => {
+    const src =
+      filtered.find(
+        (row) =>
+          row.receiptId === point.receiptId &&
+          row.sourceIndex === point.itemSourceIndex
+      ) ?? null;
+    return src ? [src] : [];
+  });
+
+  const structuralCohort = buildSkuStructuralCohort(identityRows, cache);
+  const { observations, observationsByKey } = buildObservationsAndStructuralCohort(
+    filtered,
+    cache,
+    structuralCohort
+  );
+
+  const pointCurrencies = identityRows.map((row) => knownCurrency(row.currency));
+  const currencyGate = gateIdentityHistoryCurrencies(pointCurrencies);
+  if (currencyGate.status !== 'ok') {
+    return {
+      target,
+      status: currencyGate.status,
+      priceKind: 'purchase_unit',
+      currency: null,
+      totalOccurrenceCount: filtered.length,
+      comparableOccurrenceCount: 0,
+      excludedOccurrenceCount: filtered.length,
+      points: [],
+      observations,
+      seriesKind: null,
+      amountBasis: null,
+      identityPresentation: null,
+    };
+  }
+
+  const candidates = comparableCandidatesFromStructural(
+    structuralCohort,
+    cache,
+    observationsByKey
+  ).map((candidate) => ({
+    ...candidate,
+    currency: currencyGate.currency,
+  }));
+
+  const basisGate = evaluateAmountBasisSeriesGate(candidates);
+  if (basisGate.mixedBasis) {
+    const observationsWithBasisMismatch = observations.map((observation) =>
+      observation.level2Eligible
+        ? {
+            ...observation,
+            level2Eligible: false,
+            level2RejectReasons: [
+              ...observation.level2RejectReasons,
+              'amount_basis_mismatch',
+            ],
+          }
+        : observation
+    );
+    return {
+      target,
+      status: 'not_enough_points',
+      priceKind: 'purchase_unit',
+      currency: currencyGate.currency,
+      totalOccurrenceCount: filtered.length,
+      comparableOccurrenceCount: 0,
+      excludedOccurrenceCount: filtered.length,
+      points: [],
+      observations: observationsWithBasisMismatch,
+      seriesKind: null,
+      amountBasis: null,
+      identityPresentation: null,
+    };
+  }
+
+  const points = candidates
+    .map<ProductPriceHistoryPoint>((candidate) => ({
+      receiptId: candidate.row.receiptId,
+      itemId: candidate.row.itemId,
+      sourceIndex: candidate.row.sourceIndex,
+      occurredAt: candidate.row.occurredAt,
+      merchantRaw: candidate.row.merchantRaw,
+      merchantNormalized:
+        candidate.row.merchantNormalized ?? identityView.merchantKey,
+      displayName: candidate.row.displayName,
+      currency: currencyGate.currency,
+      lineTotal: candidate.grossLineAmount,
+      purchaseQuantity: candidate.row.purchaseQuantity as number,
+      priceValue: candidate.priceValue,
+      priceKind: 'purchase_unit',
+      seriesKind: 'gross',
+      grossLineAmount: candidate.grossLineAmount,
+      amountBasis: candidate.amountBasis,
+      promoContext: candidate.observation.promoContext,
+      promoMarkers: candidate.observation.promoMarkers,
+    }))
+    .sort(
+      (left, right) =>
+        left.occurredAt - right.occurredAt ||
+        left.receiptId.localeCompare(right.receiptId) ||
+        left.sourceIndex - right.sourceIndex
+    );
+
+  return {
+    target,
+    status: points.length >= 2 ? 'ready' : 'not_enough_points',
+    priceKind: 'purchase_unit',
+    currency: currencyGate.currency,
+    totalOccurrenceCount: filtered.length,
+    comparableOccurrenceCount: points.length,
+    excludedOccurrenceCount: Math.max(0, filtered.length - points.length),
+    points,
+    observations,
+    seriesKind: points.length > 0 ? 'gross' : null,
+    amountBasis: points.length >= 2 ? basisGate.amountBasis : null,
+    identityPresentation: {
+      strategy: 'same_merchant_product',
+      titleKey: 'priceHistory.titleMerchantLocal',
+      subtitleKey: 'priceHistory.subtitle.merchantProduct',
+      trendInsightEligible: identityView.trendInsightEligible,
+      qualityExcludedCount: identityView.stats.qualityExcludedCount,
+      merchantProductId: identityView.merchantProductId,
+    },
+  };
+}
+
 export async function loadProductPriceHistoryWithDb(
   db: ProductPriceHistoryDatabase,
   target: ProductDetailTarget,
@@ -428,29 +1343,7 @@ export async function loadProductPriceHistoryWithDb(
   }
   const filter = filterForTarget(target);
   const rows = await db.getAllAsync<ProductPriceHistoryRow>(
-    `SELECT
-       receipt_items.receipt_id AS receiptId,
-       receipt_items.id AS itemId,
-       receipt_items.source_index AS sourceIndex,
-       COALESCE(receipts.transaction_at, receipts.created_at) AS occurredAt,
-       receipts.merchant_raw AS merchantRaw,
-       receipts.merchant_normalized AS merchantNormalized,
-       COALESCE(
-         NULLIF(receipt_items.normalized_full_name, ''),
-         NULLIF(receipt_items.raw_name, ''),
-         NULLIF(receipt_items.canonical_product_name, ''),
-         receipt_items.normalized_name,
-         ''
-       ) AS displayName,
-       receipts.currency AS currency,
-       receipt_items.line_total AS lineTotal,
-       receipt_items.purchase_quantity AS purchaseQuantity,
-       receipt_items.product_family_key AS productFamilyKey,
-       receipt_items.volume_base_ml AS volumeBaseMl,
-       receipt_items.weight_base_g AS weightBaseG,
-       receipt_items.count_base AS countBase
-     FROM receipt_items
-     INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
+    `${PRICE_HISTORY_SELECT_SQL}
      WHERE ${filter.sql}
      ORDER BY
        COALESCE(receipts.transaction_at, receipts.created_at) ASC,
@@ -463,8 +1356,8 @@ export async function loadProductPriceHistoryWithDb(
     excluded && excluded.size > 0
       ? rows.filter((row) => !excluded.has(row.receiptId))
       : rows;
+  const cache = buildReceiptEvidenceCache(filtered);
 
-  // Batch 5B: identity merchant-local path (flagged), else legacy.
   try {
     const { isProductIdentityPriceHistoryV1Enabled } = await import('./env');
     if (isProductIdentityPriceHistoryV1Enabled()) {
@@ -478,76 +1371,15 @@ export async function loadProductPriceHistoryWithDb(
         preferredMpId
       );
       if (identityView) {
-        // Selected MP history: every accepted observation must share one known currency.
-        // Any unknown currency among selected history points → not eligible.
-        const pointCurrencies: Array<string | null> = [];
-        for (const pt of identityView.historyPoints) {
-          const src = filtered.find(
-            (r) =>
-              r.receiptId === pt.receiptId &&
-              r.sourceIndex === pt.itemSourceIndex
-          );
-          pointCurrencies.push(knownCurrency(src?.currency));
-        }
-        const currencyGate = gateIdentityHistoryCurrencies(pointCurrencies);
-        if (currencyGate.status !== 'ok') {
-          return {
-            target,
-            status: currencyGate.status,
-            priceKind: 'purchase_unit',
-            currency: null,
-            totalOccurrenceCount: filtered.length,
-            comparableOccurrenceCount: 0,
-            excludedOccurrenceCount: filtered.length,
-            points: [],
-            identityPresentation: null,
-          };
-        }
-        const currency = currencyGate.currency;
-        const points: ProductPriceHistoryPoint[] = identityView.historyPoints.map(
-          (pt) => {
-            const src =
-              filtered.find(
-                (r) =>
-                  r.receiptId === pt.receiptId &&
-                  r.sourceIndex === pt.itemSourceIndex
-              ) ?? null;
-            return {
-              receiptId: pt.receiptId,
-              itemId: src?.itemId ?? `${pt.receiptId}:${pt.itemSourceIndex}`,
-              sourceIndex: pt.itemSourceIndex,
-              occurredAt: pt.occurredAt,
-              merchantRaw: src?.merchantRaw ?? null,
-              merchantNormalized: src?.merchantNormalized ?? identityView.merchantKey,
-              displayName: pt.rawName,
-              currency,
-              lineTotal: src?.lineTotal ?? pt.purchaseUnitPrice,
-              purchaseQuantity: src?.purchaseQuantity ?? 1,
-              priceValue: pt.purchaseUnitPrice,
-              priceKind: 'purchase_unit' as const,
-            };
-          }
-        );
-        return {
+        return applyIdentityG3Gates(
           target,
-          status: points.length >= 2 ? 'ready' : 'not_enough_points',
-          priceKind: 'purchase_unit',
-          currency,
-          totalOccurrenceCount: filtered.length,
-          comparableOccurrenceCount: points.length,
-          excludedOccurrenceCount: Math.max(0, filtered.length - points.length),
-          points,
-          identityPresentation: {
-            strategy: 'same_merchant_product',
-            titleKey: 'priceHistory.titleMerchantLocal',
-            subtitleKey: 'priceHistory.subtitle.merchantProduct',
-            trendInsightEligible: identityView.trendInsightEligible,
-            qualityExcludedCount: identityView.stats.qualityExcludedCount,
-            merchantProductId: identityView.merchantProductId,
-          },
-        };
+          filtered,
+          identityView,
+          cache
+        );
       }
       if (target.type === 'merchant_product') {
+        const observations = buildObservations(filtered, cache);
         return {
           target,
           status: 'not_enough_points',
@@ -557,13 +1389,16 @@ export async function loadProductPriceHistoryWithDb(
           comparableOccurrenceCount: 0,
           excludedOccurrenceCount: filtered.length,
           points: [],
+          observations,
+          seriesKind: null,
+          amountBasis: null,
           identityPresentation: null,
         };
       }
     }
   } catch {
-    // merchant_product must NEVER fall through to broad legacy history.
     if (target.type === 'merchant_product') {
+      const observations = buildObservations(filtered, cache);
       return {
         target,
         status: 'not_enough_points',
@@ -573,13 +1408,16 @@ export async function loadProductPriceHistoryWithDb(
         comparableOccurrenceCount: 0,
         excludedOccurrenceCount: filtered.length,
         points: [],
+        observations,
+        seriesKind: null,
+        amountBasis: null,
         identityPresentation: null,
       };
     }
-    // Legacy target types only: fall through on identity-path failure.
   }
 
   if (target.type === 'merchant_product') {
+    const observations = buildObservations(filtered, cache);
     return {
       target,
       status: 'not_enough_points',
@@ -589,11 +1427,14 @@ export async function loadProductPriceHistoryWithDb(
       comparableOccurrenceCount: 0,
       excludedOccurrenceCount: filtered.length,
       points: [],
+      observations,
+      seriesKind: null,
+      amountBasis: null,
       identityPresentation: null,
     };
   }
 
-  return buildProductPriceHistory(target, filtered);
+  return buildProductPriceHistory(target, filtered, { receiptEvidenceCache: cache });
 }
 
 export async function loadProductPriceHistory(

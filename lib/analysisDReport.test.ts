@@ -9,6 +9,7 @@ import {
   occurrenceCountIgnoringQuantity,
   serializeAnalysisDReport,
 } from './analysisDReport';
+import { buildTrustedProductPriceHistoryForTests as buildTrustedProductPriceHistory } from './productPriceHistory.testFixtures';
 import type { ReceiptRow } from './db';
 import { V1_SPENDING_CATEGORIES } from './productTaxonomy';
 import {
@@ -40,6 +41,7 @@ function makeReceipt(args: {
   const itemSum = args.items.reduce((sum, item) => sum + (item.lineTotal || 0), 0);
   const analysis = {
     items: args.items,
+    evidenceCaptureVersion: 1,
     ...(args.analysisExtras ?? {}),
   };
   return {
@@ -50,6 +52,7 @@ function makeReceipt(args: {
     image_uri: '',
     total: args.total ?? itemSum,
     tax: 0,
+    tax_is_known: 1,
     currency: 'JPY',
     analysis_json: JSON.stringify(analysis),
     merchant_raw: args.merchantNormalized ?? 'イオン',
@@ -327,7 +330,12 @@ describe('analysisDReport (D0 fixtures A–N)', () => {
       ],
     });
 
-    const report = buildAnalysisDReport({ receipts: [receipt], nowMs });
+    const report = buildAnalysisDReport({
+      receipts: [receipt],
+      nowMs,
+      priceHistoryBuilder: (target, rows) =>
+        buildTrustedProductPriceHistory(target, rows),
+    });
     expect(report.priceCoverage.familyNormalizedComparableRows).toBeGreaterThanOrEqual(
       2
     );

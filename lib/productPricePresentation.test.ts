@@ -19,6 +19,9 @@ function point(itemId: string, priceValue: number): ProductPriceHistoryPoint {
     purchaseQuantity: 1,
     priceValue,
     priceKind: 'purchase_unit',
+    seriesKind: 'gross',
+    grossLineAmount: priceValue,
+    amountBasis: 'tax_included',
   };
 }
 

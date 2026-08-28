@@ -25,10 +25,8 @@ import {
 } from './merchantAnalytics';
 import { canonicalizeMerchantChain } from './receiptOcrNormalize';
 import { normalizeMerchantName } from './productNormalizer';
-import {
-  buildProductPriceHistory,
-  type ProductPriceHistoryRow,
-} from './productPriceHistory';
+import { buildTrustedProductPriceHistoryForTests as buildTrustedProductPriceHistory } from './productPriceHistory.testFixtures';
+import type { ProductPriceHistoryRow } from './productPriceHistory';
 import { buildReceiptItemIndexRows } from './receiptItemIndex';
 
 function receipt(overrides: Partial<ReceiptRow> = {}): ReceiptRow {
@@ -217,7 +215,7 @@ describe('Phase C1 — price history amounts / quantity / dates', () => {
     );
     expect(rows[0].line_total).toBe(70);
 
-    const history = buildProductPriceHistory(
+    const history = buildTrustedProductPriceHistory(
       { type: 'sku', key: 'sku-mugicha' },
       [
         priceRow('1', { lineTotal: rows[0].line_total, occurredAt: 100 }),
@@ -248,7 +246,7 @@ describe('Phase C1 — price history amounts / quantity / dates', () => {
   });
 
   it('7 — quantity > 1 does not double-multiply line total', () => {
-    const history = buildProductPriceHistory(
+    const history = buildTrustedProductPriceHistory(
       { type: 'sku', key: 'eggs' },
       [
         priceRow('1', { lineTotal: 220, purchaseQuantity: 2 }),
@@ -259,7 +257,7 @@ describe('Phase C1 — price history amounts / quantity / dates', () => {
   });
 
   it('8 — deleted purchase excluded (no receipt join → absent from input rows)', () => {
-    const history = buildProductPriceHistory(
+    const history = buildTrustedProductPriceHistory(
       { type: 'sku', key: 'sku' },
       [priceRow('kept', { lineTotal: 100, occurredAt: 1 })]
     );
@@ -295,7 +293,7 @@ describe('Phase C1 — price history amounts / quantity / dates', () => {
   });
 
   it('13 — transaction date ordering survives restore (occurredAt sort)', () => {
-    const history = buildProductPriceHistory(
+    const history = buildTrustedProductPriceHistory(
       { type: 'sku', key: 'sku' },
       [
         priceRow('late', { occurredAt: 300, lineTotal: 130 }),
@@ -307,7 +305,7 @@ describe('Phase C1 — price history amounts / quantity / dates', () => {
   });
 
   it('14 — null/invalid date degrades safely (excluded, no fake now)', () => {
-    const history = buildProductPriceHistory(
+    const history = buildTrustedProductPriceHistory(
       { type: 'sku', key: 'sku' },
       [
         priceRow('ok1', { occurredAt: 100, lineTotal: 100 }),
@@ -322,7 +320,7 @@ describe('Phase C1 — price history amounts / quantity / dates', () => {
 
 describe('Phase C1 — family / identity / comparable specs', () => {
   it('10 — known same-product family history aggregates with normalized unit', () => {
-    const history = buildProductPriceHistory(
+    const history = buildTrustedProductPriceHistory(
       { type: 'family', key: 'milk' },
       [
         priceRow('1', {
@@ -345,7 +343,7 @@ describe('Phase C1 — family / identity / comparable specs', () => {
   });
 
   it('11 — unrelated products remain separate (different family keys)', () => {
-    const milk = buildProductPriceHistory(
+    const milk = buildTrustedProductPriceHistory(
       { type: 'family', key: 'milk' },
       [
         priceRow('1', {
@@ -360,7 +358,7 @@ describe('Phase C1 — family / identity / comparable specs', () => {
         }),
       ]
     );
-    const tea = buildProductPriceHistory(
+    const tea = buildTrustedProductPriceHistory(
       { type: 'family', key: 'tea' },
       [
         priceRow('3', {
@@ -381,7 +379,7 @@ describe('Phase C1 — family / identity / comparable specs', () => {
   });
 
   it('12 — same-family incompatible specs do not produce misleading comparison', () => {
-    const coffee = buildProductPriceHistory(
+    const coffee = buildTrustedProductPriceHistory(
       { type: 'family', key: 'coffee' },
       [
         priceRow('1', {
@@ -405,7 +403,7 @@ describe('Phase C1 — family / identity / comparable specs', () => {
     expect(coffee.points).toHaveLength(2);
     expect(coffee.excludedOccurrenceCount ?? coffee.totalOccurrenceCount - coffee.points.length).toBe(1);
 
-    const tofu = buildProductPriceHistory(
+    const tofu = buildTrustedProductPriceHistory(
       { type: 'family', key: 'tofu' },
       [
         priceRow('1', { lineTotal: 100, weightBaseG: 300 }),
@@ -415,7 +413,7 @@ describe('Phase C1 — family / identity / comparable specs', () => {
     expect(tofu.status).toBe('unsupported_family');
     expect(tofu.points).toEqual([]);
 
-    const riceMissingSpec = buildProductPriceHistory(
+    const riceMissingSpec = buildTrustedProductPriceHistory(
       { type: 'family', key: 'rice' },
       [
         priceRow('1', { lineTotal: 2000, productFamilyKey: 'rice' }),

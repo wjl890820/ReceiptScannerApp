@@ -21,7 +21,7 @@ import {
 import { resolveItemFinalCategory } from './homeMetricsHelpers';
 import { normalizeProductCategory } from './productCategory';
 import { buildSkuKey, resolveProductIdentity } from './productIdentity';
-import { buildProductPriceHistory } from './productPriceHistory';
+import { buildTrustedProductPriceHistoryForTests as buildTrustedProductPriceHistory } from './productPriceHistory.testFixtures';
 import { V1_SPENDING_CATEGORIES } from './productTaxonomy';
 import { calculateStats } from './statsCalculator';
 import type { ReceiptRow } from './db';
@@ -324,7 +324,7 @@ describe('D2-C frequent SKU fallback', () => {
     const result = frequentProductGroups(fiveReceipts, {
       rows,
       queryFailed: false,
-      priceHistoryBuilder: buildProductPriceHistory,
+      priceHistoryBuilder: buildTrustedProductPriceHistory,
     });
     expect(result.frequentProducts).toHaveLength(1);
     expect(result.frequentProducts[0].groupingType).toBe('sku');
@@ -400,7 +400,7 @@ describe('D2-C frequent SKU fallback', () => {
     const result = frequentProductGroups(fiveReceipts, {
       rows,
       queryFailed: false,
-      priceHistoryBuilder: buildProductPriceHistory,
+      priceHistoryBuilder: buildTrustedProductPriceHistory,
     });
     expect(
       result.frequentProducts.map((p) => ({ type: p.groupingType, key: p.key }))
@@ -452,7 +452,7 @@ describe('D2-C frequent SKU fallback', () => {
         displayName: 'Water 1000ml',
       }),
     ];
-    const skuHistory = buildProductPriceHistory({ type: 'sku', key: SKU_A }, rows);
+    const skuHistory = buildTrustedProductPriceHistory({ type: 'sku', key: SKU_A }, rows);
     expect(skuHistory.priceKind).toBe('purchase_unit');
     expect(skuHistory.points.every((p) => p.priceKind === 'purchase_unit')).toBe(
       true
@@ -461,7 +461,7 @@ describe('D2-C frequent SKU fallback', () => {
     const milestone = buildFiveReceiptMilestone(fiveReceipts, {
       rows,
       queryFailed: false,
-      priceHistoryBuilder: buildProductPriceHistory,
+      priceHistoryBuilder: buildTrustedProductPriceHistory,
     });
     const skuGroup = milestone?.frequentProducts.find((p) => p.groupingType === 'sku');
     expect(skuGroup).toBeTruthy();
