@@ -8,8 +8,15 @@ jest.mock('./db', () => ({
   initIfNeeded: jest.fn(async () => undefined),
 }));
 
+const mockResolveIdentityConsumerObservations = jest.fn();
+jest.mock('./productIdentityConsumer', () => ({
+  resolveIdentityConsumerObservations: (...args: unknown[]) =>
+    mockResolveIdentityConsumerObservations(...args),
+}));
+
 import {
   aggregateProductMerchantsByAnalyticsKey,
+  countDistinctPurchaseReceiptIds,
   formatProductSpecification,
   loadProductHistoryWithDb,
   type ProductHistoryDatabase,
@@ -57,18 +64,37 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
   readonly queries: string[] = [];
 
   matching(source: string, params: SQLite.SQLiteBindParams): ItemFixture[] {
-    const key = String(bindValues(params)[0]);
-    return this.items.filter((item) => {
-      if (!this.receipts.has(item.receiptId)) return false;
-      if (/receipt_items\.sku_key = \?/i.test(source)) return item.skuKey === key;
-      if (/receipt_items\.canonical_product_name = \?/i.test(source)) {
-        return item.canonicalProductName === key;
-      }
-      if (/receipt_items\.product_family_key = \?/i.test(source)) {
-        return item.family === key;
-      }
-      return false;
-    });
+    const values = bindValues(params);
+    let paramIndex = 0;
+    let items = this.items.filter((item) => this.receipts.has(item.receiptId));
+
+    if (/receipt_items\.sku_key = \?/i.test(source)) {
+      const key = values[paramIndex++];
+      items = items.filter((item) => item.skuKey === key);
+    } else if (/receipt_items\.canonical_product_name = \?/i.test(source)) {
+      const key = values[paramIndex++];
+      items = items.filter((item) => item.canonicalProductName === key);
+    } else if (/receipt_items\.product_family_key = \?/i.test(source)) {
+      const key = values[paramIndex++];
+      items = items.filter((item) => item.family === key);
+    } else if (!/1\s*=\s*1/i.test(source)) {
+      return [];
+    }
+
+    const notInMatch = source.match(
+      /receipt_items\.receipt_id NOT IN \(([^)]*)\)/i
+    );
+    const excludedCount = notInMatch
+      ? (notInMatch[1].match(/\?/g) || []).length
+      : 0;
+    if (excludedCount > 0) {
+      const excluded = new Set(
+        values.slice(paramIndex, paramIndex + excludedCount).map(String)
+      );
+      items = items.filter((item) => !excluded.has(item.receiptId));
+    }
+
+    return items;
   }
 
   purchasedAt(item: ItemFixture): number {
@@ -82,7 +108,11 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
   ): Promise<T | null> {
     this.queries.push(source);
     const matching = this.matching(source, params);
-    if (/COUNT\(\*\) AS purchaseOccurrenceCount/i.test(source)) {
+    if (
+      /COUNT\(DISTINCT receipt_items\.receipt_id\) AS purchaseOccurrenceCount/i.test(
+        source
+      )
+    ) {
       if (matching.length === 0) {
         return {
           purchaseOccurrenceCount: 0,
@@ -95,7 +125,9 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
       }
       const dates = matching.map((item) => this.purchasedAt(item));
       return {
-        purchaseOccurrenceCount: matching.length,
+        purchaseOccurrenceCount: countDistinctPurchaseReceiptIds(
+          matching.map((item) => item.receiptId)
+        ),
         totalPurchaseQuantity: matching.reduce(
           (sum, item) => sum + item.quantity,
           0
@@ -151,20 +183,26 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
     if (
       /AS merchantRaw/i.test(source) &&
       /AS purchasedAt/i.test(source) &&
-      !/AS receiptId/i.test(source)
+      /AS receiptId/i.test(source) &&
+      !/AS displayName/i.test(source) &&
+      !/GROUP BY/i.test(source)
     ) {
-      // R1-B3c: merchant evidence rows; grouping happens via merchantAnalyticsKey in app layer.
+      // R1-B3c + G2-1: merchant evidence rows; grouping via merchantAnalyticsKey in app layer.
       return matching.map((item) => {
         const receipt = this.receipts.get(item.receiptId)!;
         return {
           merchantRaw: receipt.merchantRaw,
           merchantNormalized: receipt.merchantNormalized,
           purchasedAt: this.purchasedAt(item),
+          receiptId: item.receiptId,
         };
       }) as T[];
     }
     if (/GROUP BY\s+receipt_items\.spec_size_value/i.test(source)) {
-      const variants = new Map<string, ItemFixture & { count: number }>();
+      const variants = new Map<
+        string,
+        ItemFixture & { receiptIds: Set<string> }
+      >();
       for (const item of matching) {
         if (
           item.specSizeValue == null &&
@@ -184,8 +222,12 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
           item.specSourceText,
         ]);
         const current = variants.get(key);
-        if (current) current.count += 1;
-        else variants.set(key, { ...item, count: 1 });
+        if (current) current.receiptIds.add(item.receiptId);
+        else
+          variants.set(key, {
+            ...item,
+            receiptIds: new Set([item.receiptId]),
+          });
       }
       return [...variants.values()].map((item) => ({
         sizeValue: item.specSizeValue,
@@ -195,8 +237,34 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
         weightBaseG: item.weightBaseG,
         countBase: item.countBase,
         sourceText: item.specSourceText,
-        purchaseOccurrenceCount: item.count,
+        purchaseOccurrenceCount: item.receiptIds.size,
       })) as T[];
+    }
+
+    if (/AS receiptId/i.test(source) && /ORDER BY COALESCE\(receipts\.transaction_at/i.test(source)) {
+      return [...matching]
+        .sort(
+          (left, right) =>
+            this.purchasedAt(right) - this.purchasedAt(left) ||
+            left.sourceIndex - right.sourceIndex
+        )
+        .map((item) => {
+          const receipt = this.receipts.get(item.receiptId)!;
+          return {
+            receiptId: item.receiptId,
+            itemId: item.id,
+            sourceIndex: item.sourceIndex,
+            displayName: item.normalizedFullName || item.rawName,
+            category: item.category,
+            purchaseQuantity: item.quantity,
+            lineTotal: item.lineTotal,
+            currency: receipt.currency,
+            purchasedAt: this.purchasedAt(item),
+            merchantRaw: receipt.merchantRaw,
+            merchantNormalized: receipt.merchantNormalized,
+            rawName: item.rawName,
+          };
+        }) as T[];
     }
 
     const limit = Number(bindValues(params)[1] ?? 30);
@@ -564,11 +632,13 @@ describe('R1-B3c product merchant grouping via merchantAnalyticsKey', () => {
         merchantRaw: 'セブン-イレブン渋谷店',
         merchantNormalized: 'セブン-イレブン',
         purchasedAt: 1,
+        receiptId: 'r-a',
       },
       {
         merchantRaw: 'セブン-イレブン',
         merchantNormalized: 'セブン-イレブン',
         purchasedAt: 2,
+        receiptId: 'r-b',
       },
     ]);
     expect(merchants).toHaveLength(1);
@@ -603,16 +673,19 @@ describe('R1-B3c product merchant grouping via merchantAnalyticsKey', () => {
         merchantRaw: '業務スーパー古川',
         merchantNormalized: '業務スーパー古川',
         purchasedAt: 1,
+        receiptId: 'r-gyomu-f',
       },
       {
         merchantRaw: '業務スーパー仙台',
         merchantNormalized: '業務スーパー仙台',
         purchasedAt: 2,
+        receiptId: 'r-gyomu-s',
       },
       {
         merchantRaw: 'ヨークベニマル古川店',
         merchantNormalized: 'ヨークベニマル古川店',
         purchasedAt: 3,
+        receiptId: 'r-york',
       },
     ]);
     expect(merchants).toHaveLength(3);
@@ -631,16 +704,19 @@ describe('R1-B3c product merchant grouping via merchantAnalyticsKey', () => {
         merchantRaw: 'FamilyMart A',
         merchantNormalized: 'ファミリーマート',
         purchasedAt: 1,
+        receiptId: 'r-fm-a',
       },
       {
         merchantRaw: 'ファミリーマート 駅前店',
         merchantNormalized: 'ファミリーマート',
         purchasedAt: 3,
+        receiptId: 'r-fm-b',
       },
       {
         merchantRaw: 'ローソン',
         merchantNormalized: 'ローソン',
         purchasedAt: 2,
+        receiptId: 'r-lawson',
       },
     ]);
     expect(merchants).toHaveLength(2);
@@ -657,6 +733,7 @@ describe('R1-B3c product merchant grouping via merchantAnalyticsKey', () => {
         merchantRaw: 'ヨークベニマル古川店',
         merchantNormalized: 'ヨークベニマル',
         purchasedAt: 5,
+        receiptId: 'r-york-display',
       },
     ]);
     const key = merchantAnalyticsKey({
@@ -679,11 +756,13 @@ describe('R1-B3c product merchant grouping via merchantAnalyticsKey', () => {
         merchantRaw: edited.merchant_raw,
         merchantNormalized: edited.merchant_normalized,
         purchasedAt: 10,
+        receiptId: 'r-seven-a',
       },
       {
         merchantRaw: 'セブンイレブン 渋谷店',
         merchantNormalized: 'セブン-イレブン',
         purchasedAt: 11,
+        receiptId: 'r-seven-b',
       },
     ]);
     expect(merchants).toHaveLength(1);
@@ -693,5 +772,218 @@ describe('R1-B3c product merchant grouping via merchantAnalyticsKey', () => {
         merchant_normalized: 'セブン-イレブン',
       })
     ).toBe(key);
+  });
+
+  it('dedupes multiple item rows on the same receipt into one purchase event', () => {
+    const merchants = aggregateProductMerchantsByAnalyticsKey([
+      {
+        merchantRaw: 'York',
+        merchantNormalized: 'York',
+        purchasedAt: 1,
+        receiptId: 'r1',
+      },
+      {
+        merchantRaw: 'York',
+        merchantNormalized: 'York',
+        purchasedAt: 2,
+        receiptId: 'r1',
+      },
+      {
+        merchantRaw: 'York',
+        merchantNormalized: 'York',
+        purchasedAt: 3,
+        receiptId: 'r2',
+      },
+    ]);
+    expect(merchants).toHaveLength(1);
+    expect(merchants[0].purchaseOccurrenceCount).toBe(2);
+  });
+});
+
+function g2PurchaseEventCoreFixture(): MemoryProductHistoryDb {
+  const db = new MemoryProductHistoryDb();
+  addReceipt(db, 'r1', 100, 'York');
+  addReceipt(db, 'r2', 200, 'York');
+
+  const shared = {
+    rawName: 'Product A 900ml',
+    canonicalProductName: 'Product A',
+    family: 'product-a',
+    skuKey: 'sku-a-900',
+    specSizeValue: 900,
+    specSizeUnit: 'ml',
+    volumeBaseMl: 900,
+    specSourceText: '900ml',
+  };
+
+  addItem(db, 'r1', 'r1:0', { ...shared, sourceIndex: 0, quantity: 1, lineTotal: 100 });
+  addItem(db, 'r1', 'r1:1', { ...shared, sourceIndex: 1, quantity: 2, lineTotal: 200 });
+  addItem(db, 'r2', 'r2:0', { ...shared, sourceIndex: 0, quantity: 3, lineTotal: 300 });
+  return db;
+}
+
+function g2MultiRowSameProductFixture(): MemoryProductHistoryDb {
+  const db = g2PurchaseEventCoreFixture();
+  addReceipt(db, 'r3', 150, 'FamilyMart');
+  addItem(db, 'r3', 'r3:0', {
+    rawName: 'Product A 900ml',
+    canonicalProductName: 'Product A',
+    family: 'product-a',
+    skuKey: 'sku-a-900',
+    sourceIndex: 0,
+    quantity: 1,
+    lineTotal: 110,
+    specSizeValue: 900,
+    specSizeUnit: 'ml',
+    volumeBaseMl: 900,
+    specSourceText: '900ml',
+  });
+  return db;
+}
+
+describe('G2-1 purchase event truth', () => {
+  it('A — same receipt split across two rows counts as one purchase event', async () => {
+    const db = new MemoryProductHistoryDb();
+    addReceipt(db, 'r1', 100, 'York');
+    addItem(db, 'r1', 'r1:0', {
+      rawName: 'Product A',
+      canonicalProductName: 'Product A',
+      skuKey: 'sku-a',
+      sourceIndex: 0,
+      quantity: 1,
+      lineTotal: 100,
+    });
+    addItem(db, 'r1', 'r1:1', {
+      rawName: 'Product A',
+      canonicalProductName: 'Product A',
+      skuKey: 'sku-a',
+      sourceIndex: 1,
+      quantity: 2,
+      lineTotal: 200,
+    });
+
+    const summary = await load(db, { type: 'sku', key: 'sku-a' });
+    expect(summary.purchaseOccurrenceCount).toBe(1);
+    expect(summary.totalPurchaseQuantity).toBe(3);
+    expect(summary.totalSpend).toBe(300);
+  });
+
+  it('B/C/D — required multi-row fixture: events, units, merchant, and spec variant', async () => {
+    const db = g2PurchaseEventCoreFixture();
+    const summary = await load(db, { type: 'sku', key: 'sku-a-900' });
+
+    expect(summary.purchaseOccurrenceCount).toBe(2);
+    expect(summary.totalPurchaseQuantity).toBe(6);
+    expect(summary.totalSpend).toBe(600);
+
+    const york = summary.merchants.find((m) => m.merchantName === 'York');
+    expect(york?.purchaseOccurrenceCount).toBe(2);
+
+    const variant900 = summary.specificationVariants.find(
+      (v) => formatProductSpecification(v, 'en') === '900ml'
+    );
+    expect(variant900?.purchaseOccurrenceCount).toBe(2);
+  });
+
+  it('merchant grouping stays distinct across analytics keys', async () => {
+    const summary = await load(g2MultiRowSameProductFixture(), {
+      type: 'sku',
+      key: 'sku-a-900',
+    });
+    expect(summary.merchants.map((m) => m.merchantName)).toEqual(
+      expect.arrayContaining(['York', 'FamilyMart'])
+    );
+    const familyMart = summary.merchants.find((m) => m.merchantName === 'FamilyMart');
+    expect(familyMart?.purchaseOccurrenceCount).toBe(1);
+  });
+
+  it('F — excluded duplicate receipt does not add purchase events or quantity', async () => {
+    const canonical = await load(g2PurchaseEventCoreFixture(), {
+      type: 'sku',
+      key: 'sku-a-900',
+    });
+    const db = g2PurchaseEventCoreFixture();
+    addReceipt(db, 'r-dup', 250, 'York');
+    addItem(db, 'r-dup', 'r-dup:0', {
+      rawName: 'Product A 900ml',
+      canonicalProductName: 'Product A',
+      family: 'product-a',
+      skuKey: 'sku-a-900',
+      sourceIndex: 0,
+      quantity: 5,
+      lineTotal: 500,
+      specSizeValue: 900,
+      specSizeUnit: 'ml',
+      volumeBaseMl: 900,
+      specSourceText: '900ml',
+    });
+
+    const withDuplicate = await loadProductHistoryWithDb(db, {
+      type: 'sku',
+      key: 'sku-a-900',
+    });
+    const excluded = await loadProductHistoryWithDb(
+      db,
+      { type: 'sku', key: 'sku-a-900' },
+      { excludedReceiptIds: new Set(['r-dup']) }
+    );
+
+    expect(withDuplicate!.purchaseOccurrenceCount).toBe(
+      canonical.purchaseOccurrenceCount + 1
+    );
+    expect(excluded).not.toBeNull();
+    expect(excluded!.purchaseOccurrenceCount).toBe(canonical.purchaseOccurrenceCount);
+    expect(excluded!.totalPurchaseQuantity).toBe(canonical.totalPurchaseQuantity);
+    expect(excluded!.totalSpend).toBe(canonical.totalSpend);
+    expect(excluded!.merchants).toHaveLength(1);
+    expect(excluded!.merchants[0]!.purchaseOccurrenceCount).toBe(2);
+  });
+
+  it('G — ordinary one-row-per-receipt fixtures remain unchanged', async () => {
+    const summary = await load(fixtureDb(), { type: 'family', key: 'milk' });
+    expect(summary.purchaseOccurrenceCount).toBe(6);
+    expect(summary.merchants.map((m) => m.purchaseOccurrenceCount)).toEqual([
+      3, 2, 1,
+    ]);
+  });
+
+  it('countDistinctPurchaseReceiptIds helper matches frozen definition', () => {
+    expect(countDistinctPurchaseReceiptIds(['r1', 'r1', 'r2'])).toBe(2);
+  });
+});
+
+describe('G2-1 merchant_product purchase event truth', () => {
+  beforeEach(() => {
+    mockResolveIdentityConsumerObservations.mockReset();
+    mockResolveIdentityConsumerObservations.mockImplementation(
+      (observations: Array<{ receiptId: string; itemSourceIndex: number }>) => ({
+        store: {},
+        qualified: observations
+          .filter((obs) => obs.receiptId === 'r1' || obs.receiptId === 'r2')
+          .map((obs) => ({
+            ...obs,
+            merchantProductId: 'mp_g2_test',
+            purchaseUnitPrice: 100,
+            quality: 'trusted',
+            includeInHistory: true,
+            includeInTrend: true,
+            suspectedIntegerMultiple: null,
+          })),
+      })
+    );
+  });
+
+  it('E — merchant_product counts distinct receipts, not item rows', async () => {
+    const db = g2PurchaseEventCoreFixture();
+    const summary = await loadProductHistoryWithDb(db, {
+      type: 'merchant_product',
+      key: 'mp_g2_test',
+    });
+    expect(summary).not.toBeNull();
+    expect(summary!.purchaseOccurrenceCount).toBe(2);
+    expect(summary!.totalPurchaseQuantity).toBe(6);
+    expect(summary!.merchants.find((m) => m.merchantName === 'York')?.purchaseOccurrenceCount).toBe(
+      2
+    );
   });
 });

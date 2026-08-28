@@ -13,6 +13,7 @@ import type { ReceiptRow } from './db';
 import {
   buildFiveReceiptMilestone,
   buildTenReceiptMilestone,
+  distinctReceiptCount,
   frequentProductGroups,
   type EngagementProductRow,
   type EngagementReceipt,
@@ -421,27 +422,55 @@ describe('R2-F3B milestone / frequentProductGroups freeze', () => {
     expect(source).toContain('frequentProductGroups(receipts');
   });
 
-  it('frequentProductGroups keeps row-occurrence semantics + top-5', () => {
+  it('frequentProductGroups uses distinct receipt purchase events + top-5', () => {
     const receipts = [receipt('r1'), receipt('r2')];
     const sameReceiptRows = [
       productRow('r1', 'a', {
         canonicalProductName: 'SameReceiptMilk',
         sourceIndex: 0,
+        purchaseQuantity: 1,
       }),
       productRow('r1', 'b', {
         canonicalProductName: 'SameReceiptMilk',
         sourceIndex: 1,
+        purchaseQuantity: 2,
+      }),
+    ];
+    expect(
+      frequentProductGroups(receipts, {
+        rows: sameReceiptRows,
+        queryFailed: false,
+      }).frequentProducts
+    ).toHaveLength(0);
+    expect(distinctReceiptCount(sameReceiptRows)).toBe(1);
+
+    const withSecondReceipt = [
+      ...sameReceiptRows,
+      productRow('r2', 'c', {
+        canonicalProductName: 'SameReceiptMilk',
+        sourceIndex: 0,
+        purchaseQuantity: 3,
       }),
     ];
     const milestone = frequentProductGroups(receipts, {
-      rows: sameReceiptRows,
+      rows: withSecondReceipt,
       queryFailed: false,
     });
     expect(milestone.frequentProducts).toHaveLength(1);
     expect(milestone.frequentProducts[0].purchaseOccurrenceCount).toBe(2);
+    expect(milestone.frequentProducts[0].totalPurchaseQuantity).toBe(6);
     expect(
       buildLongTermFrequentProductProfiles(receipts, sameReceiptRows)
     ).toEqual([]);
+    expect(
+      buildLongTermFrequentProductProfiles(receipts, withSecondReceipt)
+    ).toEqual([
+      expect.objectContaining({
+        key: 'SameReceiptMilk',
+        distinctReceiptCount: 2,
+        targetType: 'canonical',
+      }),
+    ]);
 
     const manyRows: EngagementProductRow[] = [];
     for (let i = 0; i < 8; i += 1) {

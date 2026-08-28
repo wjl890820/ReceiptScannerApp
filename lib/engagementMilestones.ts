@@ -88,6 +88,7 @@ export type MilestoneFrequentProduct = {
   key: string;
   displayLabel: string;
   displayLabelKey: string | null;
+  /** V1 frozen: distinct receipt_id purchase events — not item-row count. */
   purchaseOccurrenceCount: number;
   totalPurchaseQuantity: number;
   lastPurchasedAt: number;
@@ -255,6 +256,22 @@ function finitePositive(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? value
     : null;
+}
+
+/**
+ * V1 frozen purchase-event count: one event per distinct receiptId.
+ * Rows without a usable receiptId do not add confirmed events (fail-closed).
+ */
+export function distinctReceiptCount(
+  rows: ReadonlyArray<{ receiptId?: string | null }>
+): number {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const id = typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
+    if (!id) continue;
+    ids.add(id);
+  }
+  return ids.size;
 }
 
 function receiptTimestamp(receipt: EngagementReceipt): number {
@@ -697,8 +714,9 @@ export function frequentProductGroups(
   }
 
   const frequentProducts = [...groups.values()]
-    .filter((group) => group.rows.length >= 2)
+    .filter((group) => distinctReceiptCount(group.rows) >= 2)
     .map<MilestoneFrequentProduct>((group) => {
+      const purchaseOccurrenceCount = distinctReceiptCount(group.rows);
       const sortedRows = [...group.rows].sort(
         (left, right) =>
           left.occurredAt - right.occurredAt ||
@@ -736,8 +754,8 @@ export function frequentProductGroups(
           group.groupingType === 'family'
             ? `productDetail.family.${group.key}`
             : null,
-        // Occurrence = row count (not quantity). Quantity summed separately.
-        purchaseOccurrenceCount: group.rows.length,
+        // Occurrence = distinct receipt events (not row count, not quantity).
+        purchaseOccurrenceCount,
         totalPurchaseQuantity: group.rows.reduce(
           (sum, row) => sum + (finitePositive(row.purchaseQuantity) ?? 0),
           0

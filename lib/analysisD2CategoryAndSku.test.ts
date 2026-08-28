@@ -333,7 +333,7 @@ describe('D2-C frequent SKU fallback', () => {
     expect(result.frequentProducts[0].displayLabel).not.toContain('v1|');
   });
 
-  it('occurrence is row count, not quantity', () => {
+  it('occurrence is distinct receipt count, not quantity', () => {
     const rows = [
       productRow('r1', 'a', { skuKey: SKU_A, purchaseQuantity: 10 }),
       productRow('r2', 'b', { skuKey: SKU_A, purchaseQuantity: 10 }),

@@ -17,15 +17,18 @@ export type ProductSpecificationVariant = {
   weightBaseG: number | null;
   countBase: number | null;
   sourceText: string | null;
+  /** Distinct purchase-event receipts where this variant appeared (not item-row count). */
   purchaseOccurrenceCount: number;
 };
 
 export type ProductMerchantSummary = {
   merchantName: string | null;
+  /** Distinct purchase-event receipts at this merchant (not item-row count). */
   purchaseOccurrenceCount: number;
   lastPurchasedAt: number;
 };
 
+/** Item-level historical row; one receipt may contribute multiple rows. */
 export type ProductPurchaseOccurrence = {
   receiptId: string;
   itemId: string;
@@ -49,6 +52,7 @@ export type ProductCurrencyTotal = {
 export type ProductHistorySummary = {
   target: AggregatableProductDetailTarget;
   title: string | null;
+  /** V1 frozen: distinct canonical receipt_id purchase events (after duplicate exclusions). */
   purchaseOccurrenceCount: number;
   totalPurchaseQuantity: number;
   totalSpend: number | null;
@@ -61,6 +65,10 @@ export type ProductHistorySummary = {
   skuCount: number;
   specificationVariants: ProductSpecificationVariant[];
   merchants: ProductMerchantSummary[];
+  /**
+   * Item-level purchase rows for display/history — NOT purchase events.
+   * Do not use recentPurchases.length as purchaseOccurrenceCount.
+   */
   recentPurchases: ProductPurchaseOccurrence[];
 };
 
@@ -117,7 +125,18 @@ export type ProductMerchantEvidenceRow = {
   merchantRaw: string | null;
   merchantNormalized: string | null;
   purchasedAt: number;
+  receiptId: string;
 };
+
+/**
+ * V1 frozen purchase-event count: one event per distinct canonical receipt_id
+ * after duplicate exclusions. Item rows and quantity do not add events.
+ */
+export function countDistinctPurchaseReceiptIds(
+  receiptIds: Iterable<string>
+): number {
+  return new Set(receiptIds).size;
+}
 
 /**
  * Group product-history merchant observations by the frozen production identity
@@ -134,10 +153,13 @@ export function aggregateProductMerchantsByAnalyticsKey(
     merchantName: string | null;
     purchaseOccurrenceCount: number;
     lastPurchasedAt: number;
+    seenReceiptIds: Set<string>;
   };
   const byKey = new Map<string, Acc>();
 
   for (const row of rows) {
+    const receiptId = typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
+    if (!receiptId) continue;
     const key = merchantAnalyticsKey({
       merchant_raw: row.merchantRaw,
       merchant_normalized: row.merchantNormalized,
@@ -159,10 +181,14 @@ export function aggregateProductMerchantsByAnalyticsKey(
         merchantName: display,
         purchaseOccurrenceCount: 1,
         lastPurchasedAt: purchasedAt,
+        seenReceiptIds: new Set([receiptId]),
       });
       continue;
     }
-    current.purchaseOccurrenceCount += 1;
+    if (!current.seenReceiptIds.has(receiptId)) {
+      current.seenReceiptIds.add(receiptId);
+      current.purchaseOccurrenceCount = current.seenReceiptIds.size;
+    }
     if (purchasedAt >= current.lastPurchasedAt) {
       current.lastPurchasedAt = purchasedAt;
       // Prefer latest observation's display evidence.
@@ -415,30 +441,21 @@ async function loadMerchantProductHistorySummaryWithDb(
   const purchasedAts = matchedRows
     .map((r) => Number(r.purchasedAt))
     .filter((t) => Number.isFinite(t) && t > 0);
-  const merchantMap = new Map<string, ProductMerchantSummary>();
-  for (const r of matchedRows) {
-    const key =
-      (r.merchantNormalized || r.merchantRaw || '').trim() || 'unknown';
-    const existing = merchantMap.get(key);
-    const purchasedAt = Number(r.purchasedAt) || 0;
-    if (!existing) {
-      merchantMap.set(key, {
-        merchantName: key === 'unknown' ? null : key,
-        purchaseOccurrenceCount: 1,
-        lastPurchasedAt: purchasedAt,
-      });
-    } else {
-      existing.purchaseOccurrenceCount += 1;
-      if (purchasedAt > existing.lastPurchasedAt) {
-        existing.lastPurchasedAt = purchasedAt;
-      }
-    }
-  }
+  const merchants = aggregateProductMerchantsByAnalyticsKey(
+    matchedRows.map((r) => ({
+      merchantRaw: r.merchantRaw,
+      merchantNormalized: r.merchantNormalized,
+      purchasedAt: Number(r.purchasedAt) || 0,
+      receiptId: r.receiptId,
+    }))
+  );
 
   return {
     target,
     title,
-    purchaseOccurrenceCount: matchedRows.length,
+    purchaseOccurrenceCount: countDistinctPurchaseReceiptIds(
+      matchedRows.map((r) => r.receiptId)
+    ),
     totalPurchaseQuantity: matchedRows.reduce((sum, r) => {
       const q = finiteNumber(r.purchaseQuantity);
       return sum + (q > 0 ? q : 0);
@@ -448,15 +465,11 @@ async function loadMerchantProductHistorySummaryWithDb(
     currencyTotals,
     firstPurchasedAt: purchasedAts.length ? Math.min(...purchasedAts) : null,
     lastPurchasedAt: purchasedAts.length ? Math.max(...purchasedAts) : null,
-    merchantCount: merchantMap.size,
+    merchantCount: merchants.length,
     canonicalProductCount: 0,
     skuCount: 0,
     specificationVariants: [],
-    merchants: [...merchantMap.values()].sort(
-      (a, b) =>
-        b.purchaseOccurrenceCount - a.purchaseOccurrenceCount ||
-        b.lastPurchasedAt - a.lastPurchasedAt
-    ),
+    merchants,
     recentPurchases: matchedRows.slice(0, recentLimit).map((row) => ({
       receiptId: row.receiptId,
       itemId: row.itemId,
@@ -508,7 +521,7 @@ export async function loadProductHistoryWithDb(
 
   const aggregate = await db.getFirstAsync<AggregateRow>(
     `SELECT
-       COUNT(*) AS purchaseOccurrenceCount,
+       COUNT(DISTINCT receipt_items.receipt_id) AS purchaseOccurrenceCount,
        COALESCE(SUM(
          CASE
            WHEN receipt_items.purchase_quantity > 0
@@ -573,7 +586,8 @@ export async function loadProductHistoryWithDb(
     `SELECT
        receipts.merchant_raw AS merchantRaw,
        receipts.merchant_normalized AS merchantNormalized,
-       COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt
+       COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt,
+       receipt_items.receipt_id AS receiptId
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
      WHERE ${whereSql}`,
@@ -590,7 +604,7 @@ export async function loadProductHistoryWithDb(
        receipt_items.weight_base_g AS weightBaseG,
        receipt_items.count_base AS countBase,
        receipt_items.spec_source_text AS sourceText,
-       COUNT(*) AS purchaseOccurrenceCount
+       COUNT(DISTINCT receipt_items.receipt_id) AS purchaseOccurrenceCount
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
      WHERE ${whereSql}

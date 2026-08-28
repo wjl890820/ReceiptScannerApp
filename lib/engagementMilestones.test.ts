@@ -19,9 +19,11 @@ import {
   buildTenReceiptMilestone,
   buildThreeReceiptMilestone,
   countSupportedReceipts,
+  distinctReceiptCount,
   evaluateCurrentEngagementMilestoneWithDb,
   evaluateEngagementMilestonesWithDb,
   evaluateSavedReceiptMilestoneWithDb,
+  frequentProductGroups,
   getEngagementMilestoneStatus,
   type EngagementMilestoneDatabase,
   type EngagementProductRow,
@@ -610,6 +612,101 @@ describe('database evaluation and graceful degradation', () => {
       nextMilestone: 3,
     });
     expect(evaluation.unlockedResult).toBeNull();
+  });
+});
+
+describe('G2-1 frequentProductGroups purchase event truth', () => {
+  const five = [1, 2, 3, 4, 5].map((n) => receipt(`r${n}`));
+
+  it('A — same receipt split rows count as one event and do not qualify alone', () => {
+    const rows = [
+      productRow('r1', 'a', {
+        canonicalProductName: 'SplitProduct',
+        sourceIndex: 0,
+        purchaseQuantity: 1,
+      }),
+      productRow('r1', 'b', {
+        canonicalProductName: 'SplitProduct',
+        sourceIndex: 1,
+        purchaseQuantity: 2,
+      }),
+    ];
+    const result = frequentProductGroups(five, { rows, queryFailed: false });
+    expect(result.frequentProducts).toHaveLength(0);
+    expect(distinctReceiptCount(rows)).toBe(1);
+  });
+
+  it('B — second receipt qualifies with distinct receipt count and summed quantity', () => {
+    const rows = [
+      productRow('r1', 'a', {
+        canonicalProductName: 'SplitProduct',
+        sourceIndex: 0,
+        purchaseQuantity: 1,
+      }),
+      productRow('r1', 'b', {
+        canonicalProductName: 'SplitProduct',
+        sourceIndex: 1,
+        purchaseQuantity: 2,
+      }),
+      productRow('r2', 'c', {
+        canonicalProductName: 'SplitProduct',
+        sourceIndex: 0,
+        purchaseQuantity: 3,
+      }),
+    ];
+    const result = frequentProductGroups(five, { rows, queryFailed: false });
+    expect(result.frequentProducts).toHaveLength(1);
+    expect(result.frequentProducts[0].purchaseOccurrenceCount).toBe(2);
+    expect(result.frequentProducts[0].totalPurchaseQuantity).toBe(6);
+  });
+
+  it('C — ranking uses distinct receipt count, not inflated row count', () => {
+    const rows = [
+      productRow('r1', 'a0', {
+        canonicalProductName: 'RowHeavy',
+        sourceIndex: 0,
+      }),
+      productRow('r1', 'a1', {
+        canonicalProductName: 'RowHeavy',
+        sourceIndex: 1,
+      }),
+      productRow('r1', 'a2', {
+        canonicalProductName: 'RowHeavy',
+        sourceIndex: 2,
+      }),
+      productRow('r2', 'a3', {
+        canonicalProductName: 'RowHeavy',
+        sourceIndex: 0,
+      }),
+      productRow('r1', 'b0', {
+        canonicalProductName: 'EventHeavy',
+        sourceIndex: 0,
+      }),
+      productRow('r2', 'b1', {
+        canonicalProductName: 'EventHeavy',
+        sourceIndex: 0,
+      }),
+      productRow('r3', 'b2', {
+        canonicalProductName: 'EventHeavy',
+        sourceIndex: 0,
+      }),
+    ];
+    const result = frequentProductGroups(five, { rows, queryFailed: false });
+    expect(result.frequentProducts.map((product) => product.key)).toEqual([
+      'EventHeavy',
+      'RowHeavy',
+    ]);
+    expect(result.frequentProducts[0].purchaseOccurrenceCount).toBe(3);
+    expect(result.frequentProducts[1].purchaseOccurrenceCount).toBe(2);
+  });
+
+  it('D — one row per receipt behavior unchanged', () => {
+    const rows = [
+      productRow('r1', 'a', { canonicalProductName: 'Normal' }),
+      productRow('r2', 'b', { canonicalProductName: 'Normal' }),
+    ];
+    const result = frequentProductGroups(five, { rows, queryFailed: false });
+    expect(result.frequentProducts[0].purchaseOccurrenceCount).toBe(2);
   });
 });
 
