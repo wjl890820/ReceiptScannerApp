@@ -13,6 +13,7 @@ import {
 } from './receiptItemIndex';
 import { ensureShoppingIntentsSchema } from './shoppingIntentSchema';
 import { ensureProductIdentityEntitySchema } from './productIdentityEntitySchema';
+import { ensurePersonalProductIdentitySchema } from './personalProductIdentitySchema';
 import { getReceiptItems } from './receiptItems';
 import {
   runReceiptItemIndexBackfillBatch,
@@ -280,6 +281,8 @@ async function initIfNeeded() {
       await ensureShoppingIntentsSchema(db);
       // Batch 1: empty Product Identity entity tables (no writers / no backfill).
       await ensureProductIdentityEntitySchema(db);
+      // G4-1: durable personal manual identity decisions (separate lifecycle).
+      await ensurePersonalProductIdentitySchema(db);
 
       // 安全迁移：检查并添加新字段（如果不存在）
       // 使用 PRAGMA table_info 获取现有列，确保幂等性
