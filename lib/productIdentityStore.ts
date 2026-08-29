@@ -84,6 +84,7 @@ export type ProductIdentityStore = {
     merchantKey: string,
     comparisonKey: string
   ): MerchantProductRecord | null;
+  getMerchantProduct(merchantProductId: string): MerchantProductRecord | null;
   upsertMerchantProduct(input: UpsertMerchantProductInput): MerchantProductRecord;
   /** Persist AI semantic cache on MerchantProduct (Batch 4). */
   saveMerchantProductSemantic(
@@ -198,6 +199,11 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
 
     findMerchantProductByComparisonKey(merchantKey, comparisonKey) {
       return findMerchantProductByExactKey(merchantKey, comparisonKey);
+    },
+
+    getMerchantProduct(merchantProductId) {
+      const id = merchantProductId.trim();
+      return id ? merchants.get(id) ?? null : null;
     },
 
     upsertMerchantProduct(input) {
