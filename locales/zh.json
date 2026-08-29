@@ -385,6 +385,7 @@
     "specificationVariants": "购买过的规格",
     "seriesScopeNote": "汇总同一商品系列下购买过的不同规格。",
     "familyScopeNote": "汇总这一商品类别中的不同商品。",
+    "personalScopeNote": "这些记录根据你的确认，被作为同一个商品整理。",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品系列",
@@ -429,7 +430,8 @@
       "sku": "同一规格的购买价格记录",
       "canonical": "已按规格换算为统一单位",
       "family": "不同品牌按统一规格单位展示",
-      "merchantProduct": "同一商店中该商品的购买价格记录"
+      "merchantProduct": "同一商店中该商品的购买价格记录",
+      "personalProduct": "根据你的确认合并同一商品的价格记录"
     },
     "kind": {
       "purchase_unit": "成交单价",
@@ -498,6 +500,33 @@
     "tenth": {
       "frequency": "已记录的购物平均约每 {days} 天一次。",
       "windowCompared": "已比较最近 10 次记录中较早 5 次与较近 5 次（非全部历史）。"
+    },
+    "identityPrompt": {
+      "title": "这是同一个商品吗？",
+      "currentLabel": "本次购买",
+      "historicalLabel": "以前购买",
+      "priorPurchase": "购买于 {date}",
+      "yes": "是，同一个",
+      "no": "不是",
+      "unsure": "暂不确定",
+      "yesAccessibility": "是，同一个商品",
+      "noAccessibility": "不是同一个商品",
+      "unsureAccessibility": "暂不确定是否为同一商品",
+      "helper": "确认后，Meruno 会把它们作为同一个商品记住。",
+      "explanation": {
+        "crossMerchant": "你以前在另一家店买过一个很像的商品。",
+        "repeatMerchant": "你以前买过一个很像的商品。"
+      },
+      "saveFailed": "这次确认没有保存成功，请重试。"
+    },
+    "identityFeedback": {
+      "savedTitle": "已记住为同一个商品",
+      "historyConnected": "购买记录已连接。",
+      "historyConnectedDetail": "现在可以把这些购买记录作为同一个商品查看。",
+      "priceConnected": "价格记录也已连接",
+      "purchaseCount": "已记录 {count} 次购买",
+      "merchantCount": "来自 {count} 家店",
+      "viewHistory": "查看商品历史"
     }
   },
   "engagementMilestone": {

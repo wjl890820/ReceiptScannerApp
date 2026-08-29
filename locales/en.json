@@ -385,6 +385,7 @@
     "specificationVariants": "Specifications purchased",
     "seriesScopeNote": "Includes different specifications purchased from the same product series.",
     "familyScopeNote": "Includes different products purchased in this product category.",
+    "personalScopeNote": "These records are grouped as the same product based on your confirmation.",
     "targetType": {
       "sku": "Specific product",
       "canonical": "Product series",
@@ -429,7 +430,8 @@
       "sku": "Purchase prices for the same specification",
       "canonical": "Specifications are normalized to a common unit",
       "family": "Different brands shown using a common specification unit",
-      "merchantProduct": "Prices for this product at the same store"
+      "merchantProduct": "Prices for this product at the same store",
+      "personalProduct": "Price history grouped by your same-product confirmation"
     },
     "kind": {
       "purchase_unit": "Purchase price",
@@ -498,6 +500,33 @@
     "tenth": {
       "frequency": "Recorded shopping averages about once every {days} days.",
       "windowCompared": "Compared the earlier 5 vs later 5 within your latest 10 trips (not all history)."
+    },
+    "identityPrompt": {
+      "title": "Is this the same product?",
+      "currentLabel": "This purchase",
+      "historicalLabel": "Earlier purchase",
+      "priorPurchase": "Purchased {date}",
+      "yes": "Yes, same product",
+      "no": "No",
+      "unsure": "Not sure yet",
+      "yesAccessibility": "Yes, same product",
+      "noAccessibility": "Not the same product",
+      "unsureAccessibility": "Not sure if same product",
+      "helper": "After you confirm, Meruno will remember them as the same product.",
+      "explanation": {
+        "crossMerchant": "You previously bought a very similar product at another store.",
+        "repeatMerchant": "You previously bought a very similar product."
+      },
+      "saveFailed": "Couldn't save this confirmation. Please try again."
+    },
+    "identityFeedback": {
+      "savedTitle": "Saved as the same product",
+      "historyConnected": "Purchase records are now connected.",
+      "historyConnectedDetail": "You can now view these purchases as one product.",
+      "priceConnected": "Price records are connected too",
+      "purchaseCount": "{count} purchases recorded",
+      "merchantCount": "from {count} stores",
+      "viewHistory": "View product history"
     }
   },
   "engagementMilestone": {

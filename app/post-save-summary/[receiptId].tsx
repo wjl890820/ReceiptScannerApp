@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -12,8 +12,22 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MilestoneProgress } from '@/components/MilestoneProgress';
 import { MilestoneUnlockCard } from '@/components/MilestoneUnlockCard';
+import {
+  PersonalIdentityFeedbackCard,
+  PersonalIdentityPromptCard,
+} from '@/components/PersonalIdentityPromptCard';
 import { getCategoryLabel } from '@/lib/categoryPalette';
-import { getReceipt } from '@/lib/db';
+import { getReceipt, getReceiptsDatabase } from '@/lib/db';
+import { getCurrentLocale } from '@/lib/i18n';
+import {
+  confirmPersonalIdentityCandidateWithDb,
+  type PersonalIdentityConfirmationChoice,
+  type PersonalIdentityConfirmationFeedback,
+} from '@/lib/personalProductIdentityConfirmationCoordinator';
+import {
+  findPersonalIdentityPromptCandidateForSavedReceipt,
+  type PersonalIdentityPromptCandidateV1,
+} from '@/lib/personalProductIdentityCandidateService';
 import {
   buildReceiptShoppingSummary,
   evaluateSavedReceiptMilestone,
@@ -29,6 +43,7 @@ import {
   getPostSavePrimaryDestination,
   parsePostSaveSummaryRouteContext,
 } from '@/lib/postSaveSummaryNavigation';
+import { shouldApplyPostSaveIdentityUpdate } from '@/lib/postSaveSummaryIdentityLifecycle';
 import type { ProductCategory } from '@/lib/productCategory';
 
 function formatAmount(amount: number, currency: string): string {
@@ -57,6 +72,47 @@ export default function PostSaveSummaryScreen() {
   const [supported, setSupported] = useState(false);
   const [evaluation, setEvaluation] =
     useState<EngagementMilestoneEvaluation | null>(null);
+  const [identityCandidate, setIdentityCandidate] =
+    useState<PersonalIdentityPromptCandidateV1 | null>(null);
+  const [identityCandidateLoading, setIdentityCandidateLoading] = useState(false);
+  const [identityChoiceProcessing, setIdentityChoiceProcessing] =
+    useState<PersonalIdentityConfirmationChoice | null>(null);
+  const [identityConfirmationError, setIdentityConfirmationError] =
+    useState(false);
+  const [identityFeedback, setIdentityFeedback] =
+    useState<PersonalIdentityConfirmationFeedback | null>(null);
+  const locale = getCurrentLocale();
+  const identityGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      identityGenerationRef.current += 1;
+    };
+  }, []);
+
+  const identityUpdateAllowed = (
+    generation: number,
+    receiptId: string | null | undefined
+  ) =>
+    shouldApplyPostSaveIdentityUpdate({
+      mounted: mountedRef.current,
+      capturedGeneration: generation,
+      currentGeneration: identityGenerationRef.current,
+      capturedReceiptId: receiptId ?? null,
+      currentReceiptId: routeContext?.receiptId ?? null,
+    });
+
+  useEffect(() => {
+    identityGenerationRef.current += 1;
+    setIdentityCandidate(null);
+    setIdentityCandidateLoading(false);
+    setIdentityChoiceProcessing(null);
+    setIdentityConfirmationError(false);
+    setIdentityFeedback(null);
+  }, [routeContext?.receiptId]);
 
   useEffect(() => {
     let active = true;
@@ -64,6 +120,11 @@ export default function PostSaveSummaryScreen() {
     setSummary(null);
     setSupported(false);
     setEvaluation(null);
+    setIdentityCandidate(null);
+    setIdentityCandidateLoading(false);
+    setIdentityChoiceProcessing(null);
+    setIdentityConfirmationError(false);
+    setIdentityFeedback(null);
     if (!routeContext) {
       setLoading(false);
       return () => {
@@ -93,6 +154,128 @@ export default function PostSaveSummaryScreen() {
       active = false;
     };
   }, [routeContext]);
+
+  useEffect(() => {
+    const generation = identityGenerationRef.current;
+    const receiptId = routeContext?.receiptId;
+    if (!receiptId || identityFeedback) {
+      return;
+    }
+
+    setIdentityCandidateLoading(true);
+    void (async () => {
+      try {
+        const db = await getReceiptsDatabase();
+        const result = await findPersonalIdentityPromptCandidateForSavedReceipt(
+          receiptId,
+          db
+        );
+        if (!identityUpdateAllowed(generation, receiptId)) return;
+        if (result.status === 'candidate') {
+          setIdentityCandidate(result.candidate);
+        } else {
+          setIdentityCandidate(null);
+        }
+      } catch (error) {
+        console.error('[PostSaveSummary] identity candidate load failed', error);
+        if (identityUpdateAllowed(generation, receiptId)) {
+          setIdentityCandidate(null);
+        }
+      } finally {
+        if (identityUpdateAllowed(generation, receiptId)) {
+          setIdentityCandidateLoading(false);
+        }
+      }
+    })();
+  }, [identityFeedback, routeContext?.receiptId]);
+
+  const reloadIdentityCandidate = async (
+    generation: number,
+    receiptId: string
+  ) => {
+    if (!identityUpdateAllowed(generation, receiptId)) return;
+    setIdentityCandidateLoading(true);
+    try {
+      const db = await getReceiptsDatabase();
+      const result = await findPersonalIdentityPromptCandidateForSavedReceipt(
+        receiptId,
+        db
+      );
+      if (!identityUpdateAllowed(generation, receiptId)) return;
+      if (result.status === 'candidate') {
+        setIdentityCandidate(result.candidate);
+      } else {
+        setIdentityCandidate(null);
+      }
+    } catch (error) {
+      console.error('[PostSaveSummary] identity candidate refresh failed', error);
+      if (identityUpdateAllowed(generation, receiptId)) {
+        setIdentityCandidate(null);
+      }
+    } finally {
+      if (identityUpdateAllowed(generation, receiptId)) {
+        setIdentityCandidateLoading(false);
+      }
+    }
+  };
+
+  const handleIdentityChoice = async (
+    choice: PersonalIdentityConfirmationChoice
+  ) => {
+    if (!identityCandidate || identityChoiceProcessing || !routeContext?.receiptId) {
+      return;
+    }
+    const generation = identityGenerationRef.current;
+    const receiptId = routeContext.receiptId;
+    const candidate = identityCandidate;
+    setIdentityConfirmationError(false);
+    setIdentityChoiceProcessing(choice);
+    try {
+      const db = await getReceiptsDatabase();
+      const result = await confirmPersonalIdentityCandidateWithDb(
+        db,
+        candidate,
+        choice,
+        undefined,
+        { locale }
+      );
+      if (!identityUpdateAllowed(generation, receiptId)) return;
+      if (result.status === 'saved') {
+        setIdentityCandidate(null);
+        if (result.feedback) {
+          setIdentityFeedback(result.feedback);
+        }
+        return;
+      }
+      if (result.status === 'stale_candidate') {
+        setIdentityCandidate(null);
+        await reloadIdentityCandidate(generation, receiptId);
+        return;
+      }
+      if (
+        result.status === 'decision_conflict' ||
+        result.status === 'current_endpoint_context_incomplete'
+      ) {
+        setIdentityCandidate(null);
+        await reloadIdentityCandidate(generation, receiptId);
+        return;
+      }
+      if (result.status === 'write_failed') {
+        setIdentityConfirmationError(true);
+        return;
+      }
+      setIdentityCandidate(null);
+    } catch (error) {
+      console.error('[PostSaveSummary] identity confirmation failed', error);
+      if (identityUpdateAllowed(generation, receiptId)) {
+        setIdentityConfirmationError(true);
+      }
+    } finally {
+      if (identityUpdateAllowed(generation, receiptId)) {
+        setIdentityChoiceProcessing(null);
+      }
+    }
+  };
 
   const milestoneViewModel = buildPostSaveMilestoneViewModel(
     supported,
@@ -182,6 +365,26 @@ export default function PostSaveSummaryScreen() {
                 {t('postSaveSummary.unsupported')}
               </Text>
             )}
+
+            {identityFeedback ? (
+              <PersonalIdentityFeedbackCard feedback={identityFeedback} />
+            ) : identityCandidate ? (
+              <PersonalIdentityPromptCard
+                candidate={identityCandidate}
+                processingChoice={identityChoiceProcessing}
+                onChoice={handleIdentityChoice}
+              />
+            ) : identityCandidateLoading ? (
+              <View style={styles.identityLoading}>
+                <ActivityIndicator color="#777" />
+              </View>
+            ) : null}
+
+            {identityConfirmationError ? (
+              <Text style={styles.identityError}>
+                {t('postSaveSummary.identityPrompt.saveFailed')}
+              </Text>
+            ) : null}
 
             {supported && evaluation?.unlockedResult && (
               <MilestoneUnlockCard result={evaluation.unlockedResult} />
@@ -363,6 +566,17 @@ const styles = StyleSheet.create({
   unsupportedNote: {
     marginTop: 12,
     color: '#777',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  identityLoading: {
+    marginTop: 20,
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  identityError: {
+    marginTop: 10,
+    color: '#b33',
     fontSize: 12,
     lineHeight: 18,
   },

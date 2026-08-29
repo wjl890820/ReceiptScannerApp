@@ -77,7 +77,9 @@ export function ProductPriceHistoryChart({
         ? 'priceHistory.subtitle.canonical'
         : result.target.type === 'merchant_product'
           ? 'priceHistory.subtitle.merchantProduct'
-          : 'priceHistory.subtitle.family');
+          : result.target.type === 'personal_product'
+            ? 'priceHistory.subtitle.personalProduct'
+            : 'priceHistory.subtitle.family');
   const titleKey =
     result.identityPresentation?.titleKey ?? 'priceHistory.title';
   const visualMode = resolveProductPriceVisualMode(

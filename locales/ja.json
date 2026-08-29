@@ -385,6 +385,7 @@
     "specificationVariants": "購入した規格",
     "seriesScopeNote": "同じ商品シリーズで購入した異なる規格をまとめています。",
     "familyScopeNote": "この商品カテゴリで購入した異なる商品をまとめています。",
+    "personalScopeNote": "あなたの確認に基づき、同じ商品としてまとめています。",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品シリーズ",
@@ -429,7 +430,8 @@
       "sku": "同一規格の購入価格記録",
       "canonical": "規格を共通単位に換算しています",
       "family": "異なるブランドを共通規格単位で表示します",
-      "merchantProduct": "同じ店舗で購入した同一商品の価格記録"
+      "merchantProduct": "同じ店舗で購入した同一商品の価格記録",
+      "personalProduct": "あなたの確認に基づく同一商品の価格履歴"
     },
     "kind": {
       "purchase_unit": "購入単価",
@@ -498,6 +500,33 @@
     "tenth": {
       "frequency": "記録された買い物は平均約{days}日に1回です。",
       "windowCompared": "直近10回のうち、前半5回と後半5回を比較しています（全履歴ではありません）。"
+    },
+    "identityPrompt": {
+      "title": "これは同じ商品ですか？",
+      "currentLabel": "今回の購入",
+      "historicalLabel": "以前の購入",
+      "priorPurchase": "{date} に購入",
+      "yes": "はい、同じ商品",
+      "no": "いいえ",
+      "unsure": "まだわからない",
+      "yesAccessibility": "はい、同じ商品です",
+      "noAccessibility": "同じ商品ではありません",
+      "unsureAccessibility": "同じ商品かまだわかりません",
+      "helper": "確認後、Meruno はこれらを同じ商品として記憶します。",
+      "explanation": {
+        "crossMerchant": "以前、別の店でとても似た商品を購入しています。",
+        "repeatMerchant": "以前、とても似た商品を購入しています。"
+      },
+      "saveFailed": "確認を保存できませんでした。もう一度お試しください。"
+    },
+    "identityFeedback": {
+      "savedTitle": "同じ商品として記憶しました",
+      "historyConnected": "購入記録がつながりました。",
+      "historyConnectedDetail": "これらの購入記録を同じ商品として見られるようになりました。",
+      "priceConnected": "価格記録もつながりました",
+      "purchaseCount": "{count} 回の購入を記録",
+      "merchantCount": "{count} 店舗から",
+      "viewHistory": "商品履歴を見る"
     }
   },
   "engagementMilestone": {

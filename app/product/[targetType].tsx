@@ -33,6 +33,7 @@ import {
   type ProductHistorySummary,
 } from '@/lib/productHistory';
 import { parseProductDetailTarget } from '@/lib/productDetailTarget';
+import { loadPersonalProductDetailDataWithDb } from '@/lib/productDetailPersonalLoader';
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
 import { UI_COLORS, UI_LAYOUT, UI_RADIUS } from '@/lib/uiTokens';
 import {
@@ -93,6 +94,27 @@ export default function ProductDetailScreen() {
           selectAnalyticsReceipts(allReceipts).excludedDuplicateReceiptIds;
       } catch (e) {
         console.error('[ProductDetail] analytics selection failed', e);
+      }
+
+      if (target.type === 'personal_product') {
+        const personalResult = await loadPersonalProductDetailDataWithDb(
+          target.key,
+          { locale, excludedReceiptIds }
+        );
+        if (!active) return;
+        if (personalResult.ok) {
+          setSummary(personalResult.history);
+          setPriceHistory(personalResult.priceHistory);
+        } else {
+          console.error(
+            '[ProductDetail] personal product load failed',
+            personalResult.reason
+          );
+          setLoadFailed(true);
+          setPriceLoadFailed(true);
+        }
+        if (active) setLoading(false);
+        return;
       }
 
       const [historyResult, priceResult] = await Promise.allSettled([
@@ -212,6 +234,11 @@ export default function ProductDetailScreen() {
           {target.type === 'family' && (
             <Text style={styles.scopeNote}>
               {t('productDetail.familyScopeNote')}
+            </Text>
+          )}
+          {target.type === 'personal_product' && (
+            <Text style={styles.scopeNote}>
+              {t('productDetail.personalScopeNote')}
             </Text>
           )}
 
