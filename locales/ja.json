@@ -527,6 +527,13 @@
       "purchaseCount": "{count} 回の購入を記録",
       "merchantCount": "{count} 店舗から",
       "viewHistory": "商品履歴を見る"
+    },
+    "purchaseMemory": {
+      "title": "以前にも買った商品です",
+      "purchaseCount": "記録上、今回で{count}回目の購入です。",
+      "previousPurchase": "前回の購入：{date}",
+      "previousMerchant": "前回は{merchant}",
+      "viewHistory": "商品履歴を見る"
     }
   },
   "engagementMilestone": {

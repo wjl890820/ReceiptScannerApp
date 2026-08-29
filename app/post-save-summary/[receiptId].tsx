@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MilestoneProgress } from '@/components/MilestoneProgress';
 import { MilestoneUnlockCard } from '@/components/MilestoneUnlockCard';
+import { PostSavePurchaseMemoryCard } from '@/components/PostSavePurchaseMemoryCard';
 import {
   PersonalIdentityFeedbackCard,
   PersonalIdentityPromptCard,
@@ -43,6 +44,11 @@ import {
   getPostSavePrimaryDestination,
   parsePostSaveSummaryRouteContext,
 } from '@/lib/postSaveSummaryNavigation';
+import {
+  loadPostSavePurchaseMemoryWithDb,
+  type PostSavePurchaseMemory,
+} from '@/lib/postSavePurchaseMemory';
+import { shouldLoadPostSavePurchaseMemory } from '@/lib/postSaveSummaryProductSurface';
 import { shouldApplyPostSaveIdentityUpdate } from '@/lib/postSaveSummaryIdentityLifecycle';
 import type { ProductCategory } from '@/lib/productCategory';
 
@@ -81,6 +87,9 @@ export default function PostSaveSummaryScreen() {
     useState(false);
   const [identityFeedback, setIdentityFeedback] =
     useState<PersonalIdentityConfirmationFeedback | null>(null);
+  const [purchaseMemory, setPurchaseMemory] =
+    useState<PostSavePurchaseMemory | null>(null);
+  const [purchaseMemoryLoading, setPurchaseMemoryLoading] = useState(false);
   const locale = getCurrentLocale();
   const identityGenerationRef = useRef(0);
   const mountedRef = useRef(true);
@@ -112,6 +121,8 @@ export default function PostSaveSummaryScreen() {
     setIdentityChoiceProcessing(null);
     setIdentityConfirmationError(false);
     setIdentityFeedback(null);
+    setPurchaseMemory(null);
+    setPurchaseMemoryLoading(false);
   }, [routeContext?.receiptId]);
 
   useEffect(() => {
@@ -163,27 +174,62 @@ export default function PostSaveSummaryScreen() {
     }
 
     setIdentityCandidateLoading(true);
+    setPurchaseMemoryLoading(true);
     void (async () => {
       try {
         const db = await getReceiptsDatabase();
-        const result = await findPersonalIdentityPromptCandidateForSavedReceipt(
+        const g4Result = await findPersonalIdentityPromptCandidateForSavedReceipt(
           receiptId,
           db
         );
         if (!identityUpdateAllowed(generation, receiptId)) return;
-        if (result.status === 'candidate') {
-          setIdentityCandidate(result.candidate);
-        } else {
-          setIdentityCandidate(null);
+
+        if (g4Result.status === 'candidate') {
+          setIdentityCandidate(g4Result.candidate);
+          setPurchaseMemory(null);
+          return;
         }
+
+        setIdentityCandidate(null);
+
+        if (
+          !shouldLoadPostSavePurchaseMemory({
+            hasIdentityFeedback: false,
+            g4CandidateStatus: g4Result.status,
+          })
+        ) {
+          setPurchaseMemory(null);
+          return;
+        }
+
+        const memoryResult = await loadPostSavePurchaseMemoryWithDb(
+          receiptId,
+          db
+        );
+        if (!identityUpdateAllowed(generation, receiptId)) return;
+
+        if (memoryResult.status === 'identity_candidate') {
+          setIdentityCandidate(memoryResult.candidate);
+          setPurchaseMemory(null);
+          return;
+        }
+
+        if (memoryResult.status === 'memory') {
+          setPurchaseMemory(memoryResult.memory);
+          return;
+        }
+
+        setPurchaseMemory(null);
       } catch (error) {
-        console.error('[PostSaveSummary] identity candidate load failed', error);
+        console.error('[PostSaveSummary] product memory load failed', error);
         if (identityUpdateAllowed(generation, receiptId)) {
           setIdentityCandidate(null);
+          setPurchaseMemory(null);
         }
       } finally {
         if (identityUpdateAllowed(generation, receiptId)) {
           setIdentityCandidateLoading(false);
+          setPurchaseMemoryLoading(false);
         }
       }
     })();
@@ -242,6 +288,7 @@ export default function PostSaveSummaryScreen() {
       if (!identityUpdateAllowed(generation, receiptId)) return;
       if (result.status === 'saved') {
         setIdentityCandidate(null);
+        setPurchaseMemory(null);
         if (result.feedback) {
           setIdentityFeedback(result.feedback);
         }
@@ -374,7 +421,9 @@ export default function PostSaveSummaryScreen() {
                 processingChoice={identityChoiceProcessing}
                 onChoice={handleIdentityChoice}
               />
-            ) : identityCandidateLoading ? (
+            ) : purchaseMemory ? (
+              <PostSavePurchaseMemoryCard memory={purchaseMemory} />
+            ) : identityCandidateLoading || purchaseMemoryLoading ? (
               <View style={styles.identityLoading}>
                 <ActivityIndicator color="#777" />
               </View>

@@ -527,6 +527,13 @@
       "purchaseCount": "{count} purchases recorded",
       "merchantCount": "from {count} stores",
       "viewHistory": "View product history"
+    },
+    "purchaseMemory": {
+      "title": "You've bought this before",
+      "purchaseCount": "This is purchase #{count} in your records.",
+      "previousPurchase": "Previous purchase: {date}",
+      "previousMerchant": "Previously at {merchant}",
+      "viewHistory": "View product history"
     }
   },
   "engagementMilestone": {

@@ -527,6 +527,13 @@
       "purchaseCount": "已记录 {count} 次购买",
       "merchantCount": "来自 {count} 家店",
       "viewHistory": "查看商品历史"
+    },
+    "purchaseMemory": {
+      "title": "你以前买过这个商品",
+      "purchaseCount": "这是你记录的第 {count} 次购买。",
+      "previousPurchase": "上次购买：{date}",
+      "previousMerchant": "上次是在 {merchant}",
+      "viewHistory": "查看商品历史"
     }
   },
   "engagementMilestone": {
