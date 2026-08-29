@@ -8,6 +8,11 @@ import type {
 } from './analysisFoundation/types';
 import { initIfNeeded } from './db';
 import type { ReceiptRow } from './db';
+import {
+  buildOwnerScopedInventoryPredicates,
+  buildPersonalProductInventoryRowKey,
+} from './personalProductEndpointInventory';
+import type { ResolvedPersonalProductTarget } from './personalProductTargetResolver';
 import type { ProductIdentityLevel } from './productIdentityContract';
 import { normalizeProductForIdentity } from './normalizeProductForIdentity';
 import {
@@ -116,6 +121,20 @@ export type ProductPriceHistoryObservation = {
   discountAllocated: number | null;
 };
 
+export type PersonalProductPriceAuthority = {
+  kind: 'personal_product';
+  identityLevel: 'product_exact';
+  sourceTier: 'personal_manual';
+  anchorMerchantProductId: string;
+  memberMerchantProductIds: string[];
+  authorizedRows: Array<{
+    receiptId: string;
+    itemId: string;
+    sourceIndex: number;
+    merchantProductId: string;
+  }>;
+};
+
 export type ProductPriceHistoryResult = ProductPriceComparisonEligibility & {
   target: ProductDetailTarget;
   points: ProductPriceHistoryPoint[];
@@ -128,6 +147,7 @@ export type ProductPriceHistoryResult = ProductPriceComparisonEligibility & {
   amountBasis: 'tax_included' | 'tax_excluded' | null;
   /** True only when caller positively applied canonical duplicate selection. */
   canonicalDuplicateSelectionApplied: boolean;
+  personalProductPriceAuthority?: PersonalProductPriceAuthority | null;
   identityPresentation?: {
     strategy: 'same_merchant_product';
     titleKey: 'priceHistory.titleMerchantLocal';
@@ -193,16 +213,129 @@ export type ReceiptEvidenceCache = Map<string, ReceiptEvidenceCacheEntry>;
 export type BuildProductPriceHistoryOptions = {
   receiptEvidenceCache?: ReceiptEvidenceCache;
   canonicalDuplicateSelectionApplied?: boolean;
+  personalProductContext?: ResolvedPersonalProductTarget;
 };
 
 type RowIdentityMetadata = {
   skuKey: string | null;
   merchantProductId: string | null;
   identityLevel: ProductIdentityLevel;
-  identityConfidence: number;
-  identitySource: string;
+  identityConfidence: number | null;
+  identitySource: string | null;
   merchantScopeKey: string;
 };
+
+function isValidOpaqueIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value === value.trim();
+}
+
+function personalPriceRowMatchesInventory(
+  resolved: ResolvedPersonalProductTarget,
+  row: ProductPriceHistoryRow,
+  inventoryItem: NonNullable<
+    ReturnType<ResolvedPersonalProductTarget['inventory']['itemsByRowKey']['get']>
+  >
+): boolean {
+  const memberSet = new Set(resolved.memberMerchantProductIds);
+  if (!memberSet.has(inventoryItem.merchantProductId)) {
+    return false;
+  }
+  if (row.receiptId !== inventoryItem.receiptId) {
+    return false;
+  }
+  if (row.sourceIndex !== inventoryItem.sourceIndex) {
+    return false;
+  }
+  if (!isValidOpaqueIdentifier(row.itemId)) {
+    return false;
+  }
+  if (!isValidOpaqueIdentifier(inventoryItem.itemId)) {
+    return false;
+  }
+  if (row.itemId !== inventoryItem.itemId) {
+    return false;
+  }
+  return true;
+}
+
+function retainedAuthorizedRowKeys(
+  resolved: ResolvedPersonalProductTarget
+): string[] | null {
+  const excluded = resolved.inventory.excludedDuplicateReceiptIds;
+  const retained: string[] = [];
+  for (const rowKey of resolved.authorizedRowKeys) {
+    const inventoryItem = resolved.inventory.itemsByRowKey.get(rowKey);
+    if (!inventoryItem) {
+      return null;
+    }
+    if (excluded.has(inventoryItem.receiptId)) {
+      continue;
+    }
+    retained.push(rowKey);
+  }
+  return retained.sort();
+}
+
+export type SelectAuthorizedPersonalProductPriceRowsResult =
+  | { ok: true; rows: ProductPriceHistoryRow[] }
+  | { ok: false; reason: 'membership_inconsistent' };
+
+export function selectAuthorizedPersonalProductPriceRows(
+  resolved: ResolvedPersonalProductTarget,
+  rows: readonly ProductPriceHistoryRow[]
+): SelectAuthorizedPersonalProductPriceRowsResult {
+  const memberSet = new Set(resolved.memberMerchantProductIds);
+  const expectedRetainedKeys = retainedAuthorizedRowKeys(resolved);
+  if (expectedRetainedKeys == null) {
+    return { ok: false, reason: 'membership_inconsistent' };
+  }
+
+  for (const rowKey of expectedRetainedKeys) {
+    const inventoryItem = resolved.inventory.itemsByRowKey.get(rowKey)!;
+    if (!memberSet.has(inventoryItem.merchantProductId)) {
+      return { ok: false, reason: 'membership_inconsistent' };
+    }
+  }
+
+  const queriedByAuthorizedKey = new Map<string, ProductPriceHistoryRow>();
+  for (const row of rows) {
+    const rowKey = buildPersonalProductInventoryRowKey(
+      row.receiptId,
+      row.sourceIndex
+    );
+    if (!resolved.authorizedRowKeys.has(rowKey)) {
+      continue;
+    }
+    const existing = queriedByAuthorizedKey.get(rowKey);
+    if (existing) {
+      if (
+        existing.receiptId !== row.receiptId ||
+        existing.sourceIndex !== row.sourceIndex ||
+        existing.itemId !== row.itemId
+      ) {
+        return { ok: false, reason: 'membership_inconsistent' };
+      }
+      continue;
+    }
+    queriedByAuthorizedKey.set(rowKey, row);
+  }
+
+  const selected: ProductPriceHistoryRow[] = [];
+
+  for (const rowKey of expectedRetainedKeys) {
+    const inventoryItem = resolved.inventory.itemsByRowKey.get(rowKey)!;
+    const queriedRow = queriedByAuthorizedKey.get(rowKey);
+    if (!queriedRow) {
+      return { ok: false, reason: 'membership_inconsistent' };
+    }
+    if (!personalPriceRowMatchesInventory(resolved, queriedRow, inventoryItem)) {
+      return { ok: false, reason: 'membership_inconsistent' };
+    }
+    selected.push(queriedRow);
+  }
+
+  return { ok: true, rows: selected };
+}
 
 type PriceDimension = 'volume' | 'weight' | 'count';
 
@@ -555,6 +688,119 @@ function buildRowIdentityMetadataByKey(
     });
   }
   return metadataByKey;
+}
+
+function buildPersonalInventoryRowIdentityMetadataByKey(
+  resolved: ResolvedPersonalProductTarget,
+  rows: readonly ProductPriceHistoryRow[]
+): Map<string, RowIdentityMetadata> {
+  const metadataByKey = new Map<string, RowIdentityMetadata>();
+  for (const row of rows) {
+    const key = rowObservationKey(row);
+    const inventoryRowKey = buildPersonalProductInventoryRowKey(
+      row.receiptId,
+      row.sourceIndex
+    );
+    const item = resolved.inventory.itemsByRowKey.get(inventoryRowKey);
+    if (!item) continue;
+    metadataByKey.set(key, {
+      skuKey: item.skuKey,
+      merchantProductId: item.merchantProductId,
+      identityLevel: item.identityLevel,
+      identityConfidence: null,
+      identitySource: null,
+      merchantScopeKey: item.merchantScopeKey,
+    });
+  }
+  return metadataByKey;
+}
+
+function buildPersonalProductPriceAuthority(
+  resolved: ResolvedPersonalProductTarget,
+  rows: readonly ProductPriceHistoryRow[]
+): PersonalProductPriceAuthority {
+  const authorizedRows = rows
+    .map((row) => {
+      const inventoryItem = resolved.inventory.itemsByRowKey.get(
+        buildPersonalProductInventoryRowKey(row.receiptId, row.sourceIndex)
+      )!;
+      return {
+        receiptId: inventoryItem.receiptId,
+        itemId: inventoryItem.itemId,
+        sourceIndex: inventoryItem.sourceIndex,
+        merchantProductId: inventoryItem.merchantProductId,
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.receiptId.localeCompare(right.receiptId) ||
+        left.sourceIndex - right.sourceIndex
+    );
+
+  return {
+    kind: 'personal_product',
+    identityLevel: 'product_exact',
+    sourceTier: 'personal_manual',
+    anchorMerchantProductId: resolved.anchorMerchantProductId,
+    memberMerchantProductIds: [...resolved.memberMerchantProductIds],
+    authorizedRows,
+  };
+}
+
+function failClosedPersonalProductPriceResult(
+  target: Extract<ProductDetailTarget, { type: 'personal_product' }>
+): ProductPriceHistoryResult {
+  return {
+    target,
+    status: 'not_enough_points',
+    priceKind: null,
+    currency: null,
+    totalOccurrenceCount: 0,
+    comparableOccurrenceCount: 0,
+    excludedOccurrenceCount: 0,
+    points: [],
+    observations: [],
+    seriesKind: null,
+    amountBasis: null,
+    canonicalDuplicateSelectionApplied: false,
+    personalProductPriceAuthority: null,
+    identityPresentation: null,
+  };
+}
+
+function buildExactPurchaseUnitPriceHistory(
+  target: ProductDetailTarget,
+  rows: ProductPriceHistoryRow[],
+  identityByRowKey: Map<string, RowIdentityMetadata>,
+  options: BuildProductPriceHistoryOptions = {}
+): ProductPriceHistoryResult {
+  const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rows);
+  const canonicalDuplicateSelectionApplied =
+    options.canonicalDuplicateSelectionApplied === true;
+  const totalOccurrenceCount = rows.length;
+  const structuralCohort = buildSkuStructuralCohort(rows, cache);
+  const { observations, observationsByKey } =
+    buildObservationsAndStructuralCohort(rows, cache, structuralCohort);
+  const specCandidates = buildSkuSpecCoverageCandidates(
+    rows,
+    cache,
+    observationsByKey
+  );
+  const candidates = comparableCandidatesFromStructural(
+    structuralCohort,
+    cache,
+    observationsByKey
+  );
+  return finalizeCandidates(
+    target,
+    totalOccurrenceCount,
+    'purchase_unit',
+    candidates,
+    observations,
+    identityByRowKey,
+    specCandidates,
+    canonicalDuplicateSelectionApplied
+  );
 }
 
 function buildHistoryPoint(
@@ -1219,28 +1465,11 @@ export function buildProductPriceHistory(
   }
 
   if (target.type === 'sku') {
-    const structuralCohort = buildSkuStructuralCohort(rows, cache);
-    const { observations, observationsByKey } =
-      buildObservationsAndStructuralCohort(rows, cache, structuralCohort);
-    const specCandidates = buildSkuSpecCoverageCandidates(
-      rows,
-      cache,
-      observationsByKey
-    );
-    const candidates = comparableCandidatesFromStructural(
-      structuralCohort,
-      cache,
-      observationsByKey
-    );
-    return finalizeCandidates(
+    return buildExactPurchaseUnitPriceHistory(
       target,
-      totalOccurrenceCount,
-      'purchase_unit',
-      candidates,
-      observations,
+      rows,
       identityByRowKey,
-      specCandidates,
-      canonicalDuplicateSelectionApplied
+      options
     );
   }
 
@@ -1557,13 +1786,94 @@ function applyIdentityG3Gates(
   };
 }
 
+async function loadPersonalProductPriceHistoryWithDb(
+  db: ProductPriceHistoryDatabase,
+  target: Extract<ProductDetailTarget, { type: 'personal_product' }>,
+  options: BuildProductPriceHistoryOptions = {}
+): Promise<ProductPriceHistoryResult> {
+  const resolveResult =
+    options.personalProductContext &&
+    (await import('./personalProductTargetResolver')).assertPersonalProductContextMatchesTarget(
+      target,
+      options.personalProductContext
+    )
+      ? { status: 'ready' as const, resolved: options.personalProductContext }
+      : await (
+          await import('./personalProductTargetResolver')
+        ).resolvePersonalProductTargetWithDb(target.key, db as never);
+
+  if (resolveResult.status !== 'ready') {
+    return failClosedPersonalProductPriceResult(target);
+  }
+
+  const resolved = resolveResult.resolved;
+  const predicates = buildOwnerScopedInventoryPredicates(resolved.ownerKey);
+  if (!predicates) {
+    return failClosedPersonalProductPriceResult(target);
+  }
+
+  const rows = await db.getAllAsync<ProductPriceHistoryRow>(
+    `${PRICE_HISTORY_SELECT_SQL}
+     WHERE ${predicates.itemWhereSql}
+     ORDER BY
+       COALESCE(receipts.transaction_at, receipts.created_at) ASC,
+       receipt_items.receipt_id ASC,
+       receipt_items.source_index ASC`,
+    predicates.params
+  );
+
+  const selection = selectAuthorizedPersonalProductPriceRows(resolved, rows);
+  if (!selection.ok) {
+    return failClosedPersonalProductPriceResult(target);
+  }
+
+  const filtered = selection.rows;
+  const cache = buildReceiptEvidenceCache(filtered);
+  const identityByRowKey = buildPersonalInventoryRowIdentityMetadataByKey(
+    resolved,
+    filtered
+  );
+  const canonicalTarget = resolved.canonicalTarget;
+  const result = buildExactPurchaseUnitPriceHistory(
+    canonicalTarget,
+    filtered,
+    identityByRowKey,
+    {
+      receiptEvidenceCache: cache,
+      canonicalDuplicateSelectionApplied: true,
+    }
+  );
+
+  if (filtered.length === 0) {
+    return {
+      ...result,
+      target: canonicalTarget,
+      personalProductPriceAuthority: null,
+    };
+  }
+
+  return {
+    ...result,
+    target: canonicalTarget,
+    personalProductPriceAuthority: buildPersonalProductPriceAuthority(
+      resolved,
+      filtered
+    ),
+  };
+}
+
 export async function loadProductPriceHistoryWithDb(
   db: ProductPriceHistoryDatabase,
   target: ProductDetailTarget,
-  options: { excludedReceiptIds?: ReadonlySet<string> } = {}
+  options: BuildProductPriceHistoryOptions & {
+    excludedReceiptIds?: ReadonlySet<string>;
+  } = {}
 ): Promise<ProductPriceHistoryResult> {
   if (target.type === 'occurrence') {
     return buildProductPriceHistory(target, []);
+  }
+  if (target.type === 'personal_product') {
+    return loadPersonalProductPriceHistoryWithDb(db, target, options);
   }
   const filter = filterForTarget(target);
   const rows = await db.getAllAsync<ProductPriceHistoryRow>(
@@ -1654,7 +1964,9 @@ export async function loadProductPriceHistoryWithDb(
 
 export async function loadProductPriceHistory(
   target: ProductDetailTarget,
-  options: { excludedReceiptIds?: ReadonlySet<string> } = {}
+  options: BuildProductPriceHistoryOptions & {
+    excludedReceiptIds?: ReadonlySet<string>;
+  } = {}
 ): Promise<ProductPriceHistoryResult> {
   const db = await getProductPriceHistoryDb();
   return loadProductPriceHistoryWithDb(db, target, options);

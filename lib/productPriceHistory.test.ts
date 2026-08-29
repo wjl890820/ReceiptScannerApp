@@ -1580,3 +1580,830 @@ describe('G3-2A Codex blocker regressions', () => {
     });
   });
 });
+
+describe('G4-2B personal_product price history', () => {
+  it('selectAuthorizedPersonalProductPriceRows keeps only authorized member rows', async () => {
+    const {
+      buildPersonalProductEndpointInventory,
+      buildPersonalProductInventoryRowKey,
+    } = await import('./personalProductEndpointInventory');
+    const { buildPersonalMerchantProductEndpointV1 } = await import(
+      './personalProductIdentityContract'
+    );
+    const { buildProductAttributes } = await import('./productIdentityContract');
+    const { createMemoryProductIdentityStore } = await import('./productIdentityStore');
+    const { resolvePersonalProductTargetFromInventory } = await import(
+      './personalProductTargetResolver'
+    );
+    const { selectAuthorizedPersonalProductPriceRows } = await import(
+      './productPriceHistory'
+    );
+
+    const store = createMemoryProductIdentityStore();
+    const sourceRows = [
+      {
+        receiptId: 'r-aeon',
+        itemId: 'r-aeon:0',
+        sourceIndex: 0,
+        occurredAt: 1,
+        merchantRaw: 'AEON',
+        merchantNormalized: 'aeon',
+        displayName: 'コカ・コーラ 500ml',
+        rawName: 'コカ・コーラ 500ml',
+        lineTotal: 100,
+        purchaseQuantity: 1,
+        skuKey: null,
+        brand: null,
+      },
+      {
+        receiptId: 'r-york',
+        itemId: 'r-york:0',
+        sourceIndex: 0,
+        occurredAt: 2,
+        merchantRaw: 'York',
+        merchantNormalized: 'york',
+        displayName: 'コカ・コーラ 500ml',
+        rawName: 'コカ・コーラ 500ml',
+        lineTotal: 120,
+        purchaseQuantity: 1,
+        skuKey: null,
+        brand: null,
+      },
+      {
+        receiptId: 'r-other',
+        itemId: 'r-other:0',
+        sourceIndex: 0,
+        occurredAt: 3,
+        merchantRaw: 'Seven',
+        merchantNormalized: 'seven',
+        displayName: '別商品',
+        rawName: '別商品',
+        lineTotal: 80,
+        purchaseQuantity: 1,
+        skuKey: null,
+        brand: null,
+      },
+    ];
+    const receipts = [
+      {
+        id: 'r-aeon',
+        created_at: 1,
+        transaction_at: 1,
+        image_uri: '',
+        merchant_raw: 'AEON',
+        merchant_normalized: 'aeon',
+        merchant_type: 'convenience' as const,
+        total: 100,
+        tax: 0,
+        tax_is_known: 0,
+        currency: 'JPY',
+        analysis_json: '{}',
+        user_edited: 0,
+        final_total: null,
+        final_category: null,
+        note: null,
+        user_items_json: null,
+        user_id: 'price-owner',
+        installation_id: null,
+      },
+      {
+        id: 'r-york',
+        created_at: 2,
+        transaction_at: 2,
+        image_uri: '',
+        merchant_raw: 'York',
+        merchant_normalized: 'york',
+        merchant_type: 'convenience' as const,
+        total: 120,
+        tax: 0,
+        tax_is_known: 0,
+        currency: 'JPY',
+        analysis_json: '{}',
+        user_edited: 0,
+        final_total: null,
+        final_category: null,
+        note: null,
+        user_items_json: null,
+        user_id: 'price-owner',
+        installation_id: null,
+      },
+      {
+        id: 'r-other',
+        created_at: 3,
+        transaction_at: 3,
+        image_uri: '',
+        merchant_raw: 'Seven',
+        merchant_normalized: 'seven',
+        merchant_type: 'convenience' as const,
+        total: 80,
+        tax: 0,
+        tax_is_known: 0,
+        currency: 'JPY',
+        analysis_json: '{}',
+        user_edited: 0,
+        final_total: null,
+        final_category: null,
+        note: null,
+        user_items_json: null,
+        user_id: 'price-owner',
+        installation_id: null,
+      },
+    ];
+
+    const preliminary = buildPersonalProductEndpointInventory({
+      ownerKey: 'user:price-owner',
+      sourceRows,
+      receipts,
+      decisionRows: [],
+      store,
+    });
+    expect(preliminary.status).toBe('ready');
+    if (preliminary.status !== 'ready') return;
+    const [mpA, mpB] = [...preliminary.inventory.endpointsById.keys()].sort();
+    const leftEndpoint = preliminary.inventory.endpointsById.get(mpA!)!;
+    const rightEndpoint = preliminary.inventory.endpointsById.get(mpB!)!;
+
+    const inventoryResult = buildPersonalProductEndpointInventory({
+      ownerKey: 'user:price-owner',
+      sourceRows,
+      receipts,
+      decisionRows: [
+        {
+          ownerKey: 'user:price-owner',
+          leftMerchantProductId: mpA!,
+          rightMerchantProductId: mpB!,
+          leftMerchantScopeKey: leftEndpoint.merchantScopeKey,
+          rightMerchantScopeKey: rightEndpoint.merchantScopeKey,
+          leftComparisonKey: leftEndpoint.comparisonKey,
+          rightComparisonKey: rightEndpoint.comparisonKey,
+          leftStructuralSignature: leftEndpoint.structuralSignature,
+          rightStructuralSignature: rightEndpoint.structuralSignature,
+          identityPipelineVersion: leftEndpoint.identityPipelineVersion,
+          decision: 'same_product',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      store,
+      excludedDuplicateReceiptIds: new Set(['r-dup']),
+    });
+    expect(inventoryResult.status).toBe('ready');
+    if (inventoryResult.status !== 'ready') return;
+
+    const resolved = resolvePersonalProductTargetFromInventory(
+      mpA!,
+      inventoryResult.inventory
+    );
+    expect(resolved.status).toBe('ready');
+    if (resolved.status !== 'ready') return;
+
+    const selected = selectAuthorizedPersonalProductPriceRows(resolved.resolved, [
+      trustedG3Row('aeon', {
+        receiptId: 'r-aeon',
+        itemId: 'r-aeon:0',
+        sourceIndex: 0,
+        occurredAt: 1,
+      }),
+      trustedG3Row('york', {
+        receiptId: 'r-york',
+        itemId: 'r-york:0',
+        sourceIndex: 0,
+        occurredAt: 2,
+      }),
+      trustedG3Row('other', {
+        receiptId: 'r-other',
+        itemId: 'r-other:0',
+        sourceIndex: 0,
+        occurredAt: 3,
+      }),
+      trustedG3Row('dup', {
+        receiptId: 'r-dup',
+        itemId: 'r-dup:0',
+        sourceIndex: 0,
+        occurredAt: 4,
+      }),
+    ]);
+
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.rows.map((row) => row.receiptId)).toEqual(['r-aeon', 'r-york']);
+    expect(
+      resolved.resolved.authorizedRowKeys.has(
+        buildPersonalProductInventoryRowKey('r-aeon', 0)
+      )
+    ).toBe(true);
+  });
+
+  async function buildPersonalProductionFixture() {
+    const { buildPersonalProductEndpointInventory } = await import(
+      './personalProductEndpointInventory'
+    );
+    const { resolvePersonalProductTargetFromInventory } = await import(
+      './personalProductTargetResolver'
+    );
+    const store = createMemoryProductIdentityStore();
+    const sourceRows = [
+      {
+        receiptId: 'r-aeon',
+        itemId: 'r-aeon:0',
+        sourceIndex: 0,
+        occurredAt: 86_400_000,
+        merchantRaw: 'AEON',
+        merchantNormalized: 'aeon',
+        displayName: 'コカ・コーラ 500ml',
+        rawName: 'コカ・コーラ 500ml',
+        lineTotal: 100,
+        purchaseQuantity: 1,
+        skuKey: null,
+        brand: null,
+      },
+      {
+        receiptId: 'r-york',
+        itemId: 'r-york:0',
+        sourceIndex: 0,
+        occurredAt: 172_800_000,
+        merchantRaw: 'York',
+        merchantNormalized: 'york',
+        displayName: 'コカ・コーラ 500ml',
+        rawName: 'コカ・コーラ 500ml',
+        lineTotal: 120,
+        purchaseQuantity: 1,
+        skuKey: null,
+        brand: null,
+      },
+      {
+        receiptId: 'r-dup',
+        itemId: 'r-dup:0',
+        sourceIndex: 0,
+        occurredAt: 259_200_000,
+        merchantRaw: 'AEON',
+        merchantNormalized: 'aeon',
+        displayName: 'コカ・コーラ 500ml',
+        rawName: 'コカ・コーラ 500ml',
+        lineTotal: 110,
+        purchaseQuantity: 1,
+        skuKey: null,
+        brand: null,
+      },
+      {
+        receiptId: 'r-other',
+        itemId: 'r-other:0',
+        sourceIndex: 0,
+        occurredAt: 345_600_000,
+        merchantRaw: 'Seven',
+        merchantNormalized: 'seven',
+        displayName: '別商品',
+        rawName: '別商品',
+        lineTotal: 80,
+        purchaseQuantity: 1,
+        skuKey: null,
+        brand: null,
+      },
+    ];
+    const receipts = [
+      {
+        id: 'r-aeon',
+        created_at: 86_400_000,
+        transaction_at: 86_400_000,
+        image_uri: '',
+        merchant_raw: 'AEON',
+        merchant_normalized: 'aeon',
+        merchant_type: 'convenience' as const,
+        total: 100,
+        tax: 8,
+        tax_is_known: 1,
+        currency: 'JPY',
+        analysis_json: '{}',
+        user_edited: 0,
+        final_total: null,
+        final_category: null,
+        note: null,
+        user_items_json: null,
+        user_id: 'price-owner',
+        installation_id: null,
+      },
+      {
+        id: 'r-york',
+        created_at: 172_800_000,
+        transaction_at: 172_800_000,
+        image_uri: '',
+        merchant_raw: 'York',
+        merchant_normalized: 'york',
+        merchant_type: 'convenience' as const,
+        total: 120,
+        tax: 10,
+        tax_is_known: 1,
+        currency: 'JPY',
+        analysis_json: '{}',
+        user_edited: 0,
+        final_total: null,
+        final_category: null,
+        note: null,
+        user_items_json: null,
+        user_id: 'price-owner',
+        installation_id: null,
+      },
+      {
+        id: 'r-dup',
+        created_at: 259_200_000,
+        transaction_at: 259_200_000,
+        image_uri: '',
+        merchant_raw: 'AEON',
+        merchant_normalized: 'aeon',
+        merchant_type: 'convenience' as const,
+        total: 110,
+        tax: 8,
+        tax_is_known: 1,
+        currency: 'JPY',
+        analysis_json: '{}',
+        user_edited: 0,
+        final_total: null,
+        final_category: null,
+        note: null,
+        user_items_json: null,
+        user_id: 'price-owner',
+        installation_id: null,
+      },
+      {
+        id: 'r-other',
+        created_at: 345_600_000,
+        transaction_at: 345_600_000,
+        image_uri: '',
+        merchant_raw: 'Seven',
+        merchant_normalized: 'seven',
+        merchant_type: 'convenience' as const,
+        total: 80,
+        tax: 6,
+        tax_is_known: 1,
+        currency: 'JPY',
+        analysis_json: '{}',
+        user_edited: 0,
+        final_total: null,
+        final_category: null,
+        note: null,
+        user_items_json: null,
+        user_id: 'price-owner',
+        installation_id: null,
+      },
+    ];
+
+    const preliminary = buildPersonalProductEndpointInventory({
+      ownerKey: 'user:price-owner',
+      sourceRows,
+      receipts,
+      decisionRows: [],
+      store,
+    });
+    if (preliminary.status !== 'ready') {
+      throw new Error('preliminary inventory failed');
+    }
+    const [mpA, mpB] = [...preliminary.inventory.endpointsById.keys()].sort();
+    const leftEndpoint = preliminary.inventory.endpointsById.get(mpA!)!;
+    const rightEndpoint = preliminary.inventory.endpointsById.get(mpB!)!;
+
+    const inventoryResult = buildPersonalProductEndpointInventory({
+      ownerKey: 'user:price-owner',
+      sourceRows,
+      receipts,
+      decisionRows: [
+        {
+          ownerKey: 'user:price-owner',
+          leftMerchantProductId: mpA!,
+          rightMerchantProductId: mpB!,
+          leftMerchantScopeKey: leftEndpoint.merchantScopeKey,
+          rightMerchantScopeKey: rightEndpoint.merchantScopeKey,
+          leftComparisonKey: leftEndpoint.comparisonKey,
+          rightComparisonKey: rightEndpoint.comparisonKey,
+          leftStructuralSignature: leftEndpoint.structuralSignature,
+          rightStructuralSignature: rightEndpoint.structuralSignature,
+          identityPipelineVersion: leftEndpoint.identityPipelineVersion,
+          decision: 'same_product',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      store,
+      excludedDuplicateReceiptIds: new Set(['r-dup']),
+    });
+    if (inventoryResult.status !== 'ready') {
+      throw new Error('inventory failed');
+    }
+
+    const resolved = resolvePersonalProductTargetFromInventory(
+      mpA!,
+      inventoryResult.inventory
+    );
+    if (resolved.status !== 'ready') {
+      throw new Error('resolve failed');
+    }
+
+    return {
+      mpA: mpA!,
+      mpB: mpB!,
+      resolved: resolved.resolved,
+      inventory: inventoryResult.inventory,
+    };
+  }
+
+  function trustedPersonalPriceRow(
+    receiptId: string,
+    itemId: string,
+    occurredAt: number,
+    gross: number,
+    merchantNormalized: string,
+    overrides: Partial<ProductPriceHistoryRow> = {}
+  ): ProductPriceHistoryRow {
+    return trustedG3Row(receiptId, {
+      receiptId,
+      itemId,
+      sourceIndex: 0,
+      occurredAt,
+      grossLineAmount: gross,
+      lineTotal: gross,
+      effectiveLineAmount: gross,
+      merchantNormalized,
+      merchantRaw: merchantNormalized,
+      purchaseQuantity: 1,
+      currency: 'JPY',
+      ...overrides,
+    });
+  }
+
+  function observationRowKey(
+    receiptId: string,
+    sourceIndex: number
+  ): string {
+    return `${receiptId}:${sourceIndex}`;
+  }
+
+  it('loadProductPriceHistoryWithDb personal_product runs production path end-to-end', async () => {
+    const { mpA, mpB, resolved } = await buildPersonalProductionFixture();
+    const dbRows = [
+      trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+      trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      trustedPersonalPriceRow('r-dup', 'r-dup:0', 259_200_000, 110, 'aeon'),
+      trustedPersonalPriceRow('r-other', 'r-other:0', 345_600_000, 80, 'seven'),
+    ];
+    const db: ProductPriceHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return dbRows as never;
+        }
+        return [] as never;
+      },
+    };
+
+    const history = await loadProductPriceHistoryWithDb(
+      db,
+      { type: 'personal_product', key: mpB },
+      { personalProductContext: resolved }
+    );
+
+    expect(history.status).toBe('ready');
+    expect(history.canonicalDuplicateSelectionApplied).toBe(true);
+    expect(history.personalProductPriceAuthority).not.toBeNull();
+    expect(history.personalProductPriceAuthority!.memberMerchantProductIds).toEqual(
+      expect.arrayContaining([mpA, mpB])
+    );
+    expect(history.observations.map((row) => row.receiptId).sort()).toEqual([
+      'r-aeon',
+      'r-york',
+    ]);
+    expect(history.points.map((point) => point.receiptId).sort()).toEqual([
+      'r-aeon',
+      'r-york',
+    ]);
+
+    const observationKeys = new Set(
+      history.observations.map((row) =>
+        observationRowKey(row.receiptId, row.sourceIndex)
+      )
+    );
+    const certificateKeys = new Set(
+      history.personalProductPriceAuthority!.authorizedRows.map((row) =>
+        observationRowKey(row.receiptId, row.sourceIndex)
+      )
+    );
+    expect(observationKeys).toEqual(certificateKeys);
+    expect(observationKeys.has(observationRowKey('r-dup', 0))).toBe(false);
+    expect(observationKeys.has(observationRowKey('r-other', 0))).toBe(false);
+
+    const { interpretProductPriceChange } = await import(
+      './productPriceChangeInterpretation'
+    );
+    const interpretation = interpretProductPriceChange({
+      history,
+      targetType: 'personal_product',
+      targetKey: mpB,
+    });
+    expect(interpretation.status).toBe('available');
+    if (interpretation.status === 'available') {
+      expect(interpretation.identityAuthority).toEqual({
+        kind: 'personal_product',
+        anchorMerchantProductId: mpA,
+        memberMerchantProductIds: [mpA, mpB],
+      });
+    }
+
+    for (const point of history.points) {
+      expect(point.identityLevel).not.toBe('product_exact');
+      expect(point.identityConfidence).toBeNull();
+      expect(point.identitySource).toBeNull();
+    }
+  });
+
+  it('loadProductPriceHistoryWithDb keeps latest noncomparable row as Level-1 observation', async () => {
+    const { mpA, mpB, resolved } = await buildPersonalProductionFixture();
+    const trustedOlder = trustedPersonalPriceRow(
+      'r-aeon',
+      'r-aeon:0',
+      86_400_000,
+      100,
+      'aeon'
+    );
+    const untrustedLatest = trustedPersonalPriceRow(
+      'r-york',
+      'r-york:0',
+      172_800_000,
+      120,
+      'york',
+      {
+        itemAmountEvidenceState: 'conflict',
+      }
+    );
+    const db: ProductPriceHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return [trustedOlder, untrustedLatest] as never;
+        }
+        return [] as never;
+      },
+    };
+
+    const history = await loadProductPriceHistoryWithDb(
+      db,
+      { type: 'personal_product', key: mpA },
+      { personalProductContext: resolved }
+    );
+
+    expect(
+      history.observations.some(
+        (row) => row.receiptId === 'r-york' && row.sourceIndex === 0
+      )
+    ).toBe(true);
+    expect(history.points.some((point) => point.receiptId === 'r-york')).toBe(
+      false
+    );
+    expect(history.personalProductPriceAuthority).not.toBeNull();
+    expect(
+      history.personalProductPriceAuthority!.authorizedRows.map((row) => row.receiptId).sort()
+    ).toEqual(['r-aeon', 'r-york']);
+
+    const { interpretProductPriceChange } = await import(
+      './productPriceChangeInterpretation'
+    );
+    const interpretation = interpretProductPriceChange({
+      history,
+      targetType: 'personal_product',
+      targetKey: mpA,
+    });
+    expect(interpretation.status).toBe('unavailable');
+  });
+
+  it('loadProductPriceHistoryWithDb fails closed when queried itemId mismatches inventory', async () => {
+    const { mpA, resolved } = await buildPersonalProductionFixture();
+    const db: ProductPriceHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return [
+            trustedPersonalPriceRow('r-aeon', 'wrong-item-id', 86_400_000, 100, 'aeon'),
+          ] as never;
+        }
+        return [] as never;
+      },
+    };
+
+    const history = await loadProductPriceHistoryWithDb(
+      db,
+      { type: 'personal_product', key: mpA },
+      { personalProductContext: resolved }
+    );
+
+    expect(history.points).toEqual([]);
+    expect(history.personalProductPriceAuthority).toBeNull();
+    expect(history.canonicalDuplicateSelectionApplied).toBe(false);
+  });
+
+  it('loadProductPriceHistoryWithDb fails closed when queried itemId is blank', async () => {
+    const { mpA, resolved } = await buildPersonalProductionFixture();
+    const db: ProductPriceHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return [
+            trustedPersonalPriceRow('r-aeon', '   ', 86_400_000, 100, 'aeon'),
+          ] as never;
+        }
+        return [] as never;
+      },
+    };
+
+    const history = await loadProductPriceHistoryWithDb(
+      db,
+      { type: 'personal_product', key: mpA },
+      { personalProductContext: resolved }
+    );
+
+    expect(history.points).toEqual([]);
+    expect(history.personalProductPriceAuthority).toBeNull();
+  });
+
+  it('loadProductPriceHistoryWithDb fails closed when latest authorized row is missing from query', async () => {
+    const { mpA, mpB, resolved } = await buildPersonalProductionFixture();
+    const db: ProductPriceHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return [
+            trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+          ] as never;
+        }
+        return [] as never;
+      },
+    };
+
+    const history = await loadProductPriceHistoryWithDb(
+      db,
+      { type: 'personal_product', key: mpB },
+      { personalProductContext: resolved }
+    );
+
+    expect(history.points).toEqual([]);
+    expect(history.personalProductPriceAuthority).toBeNull();
+    expect(history.canonicalDuplicateSelectionApplied).toBe(false);
+
+    const { interpretProductPriceChange } = await import(
+      './productPriceChangeInterpretation'
+    );
+    expect(
+      interpretProductPriceChange({
+        history,
+        targetType: 'personal_product',
+        targetKey: mpB,
+      }).status
+    ).toBe('unavailable');
+  });
+
+  it('loadProductPriceHistoryWithDb fails closed when latest authorized row has padded itemId', async () => {
+    const { mpA, mpB, resolved } = await buildPersonalProductionFixture();
+    const db: ProductPriceHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return [
+            trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+            trustedPersonalPriceRow('r-york', ' r-york:0', 172_800_000, 120, 'york'),
+          ] as never;
+        }
+        return [] as never;
+      },
+    };
+
+    const history = await loadProductPriceHistoryWithDb(
+      db,
+      { type: 'personal_product', key: mpB },
+      { personalProductContext: resolved }
+    );
+
+    expect(history.points).toEqual([]);
+    expect(history.personalProductPriceAuthority).toBeNull();
+    expect(history.canonicalDuplicateSelectionApplied).toBe(false);
+  });
+
+  describe('selectAuthorizedPersonalProductPriceRows fail-closed selection', () => {
+    it('fails when queried itemId is padded relative to inventory itemId', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(resolved, [
+        trustedPersonalPriceRow('r-aeon', ' r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      ]);
+      expect(result).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('fails when inventory item is missing for authorized row key', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const brokenInventory = {
+        ...resolved.inventory,
+        itemsByRowKey: new Map(
+          [...resolved.inventory.itemsByRowKey].filter(
+            ([key]) => key !== 'r-york:0'
+          )
+        ),
+      };
+      const brokenResolved = { ...resolved, inventory: brokenInventory };
+      const result = selectAuthorizedPersonalProductPriceRows(brokenResolved, [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      ]);
+      expect(result).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('fails when inventory merchantProductId is outside member set', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const yorkKey = 'r-york:0';
+      const yorkItem = resolved.inventory.itemsByRowKey.get(yorkKey)!;
+      const brokenItems = new Map(resolved.inventory.itemsByRowKey);
+      brokenItems.set(yorkKey, {
+        ...yorkItem,
+        merchantProductId: 'mp_outside',
+      });
+      const brokenResolved = {
+        ...resolved,
+        inventory: { ...resolved.inventory, itemsByRowKey: brokenItems },
+      };
+      const result = selectAuthorizedPersonalProductPriceRows(brokenResolved, [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      ]);
+      expect(result).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('fails when expected retained authorized row is missing from queried rows', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(resolved, [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+      ]);
+      expect(result).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('fails when duplicate authorized query rows disagree on itemId', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(resolved, [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0-alt', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      ]);
+      expect(result).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('ignores duplicate-excluded authorized rows without failing selection', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(resolved, [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      ]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows.map((row) => row.receiptId).sort()).toEqual([
+        'r-aeon',
+        'r-york',
+      ]);
+      expect(result.rows.some((row) => row.receiptId === 'r-dup')).toBe(false);
+    });
+
+    it('ignores unrelated owner rows outside authorizedRowKeys', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(resolved, [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+        trustedPersonalPriceRow('r-other', 'r-other:0', 345_600_000, 80, 'seven'),
+      ]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows).toHaveLength(2);
+    });
+
+    it('succeeds when all expected retained authorized rows match exactly', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(resolved, [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+        trustedPersonalPriceRow('r-dup', 'r-dup:0', 259_200_000, 110, 'aeon'),
+      ]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows).toHaveLength(2);
+    });
+  });
+});

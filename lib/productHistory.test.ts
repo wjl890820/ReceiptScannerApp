@@ -987,3 +987,245 @@ describe('G2-1 merchant_product purchase event truth', () => {
     );
   });
 });
+
+describe('G4-2B personal_product product history', () => {
+  it('aggregates cross-store authorized rows and canonicalizes target to anchor', async () => {
+    const {
+      buildPersonalProductEndpointInventory,
+    } = await import('./personalProductEndpointInventory');
+    const { buildPersonalMerchantProductEndpointV1 } = await import(
+      './personalProductIdentityContract'
+    );
+    const { buildProductAttributes } = await import('./productIdentityContract');
+    const { createMemoryProductIdentityStore } = await import('./productIdentityStore');
+    const { resolvePersonalProductTargetFromInventory } = await import(
+      './personalProductTargetResolver'
+    );
+    const { selectAuthorizedPersonalProductHistoryRows } = await import(
+      './productHistory'
+    );
+
+    const store = createMemoryProductIdentityStore();
+
+    const preliminary = buildPersonalProductEndpointInventory({
+      ownerKey: 'user:history-owner',
+      sourceRows: [
+        {
+          receiptId: 'r-aeon',
+          itemId: 'r-aeon:0',
+          sourceIndex: 0,
+          occurredAt: 1,
+          merchantRaw: 'AEON',
+          merchantNormalized: 'aeon',
+          displayName: 'AEON Cola',
+          rawName: 'AEON Cola',
+          lineTotal: 100,
+          purchaseQuantity: 1,
+          skuKey: null,
+          brand: null,
+        },
+        {
+          receiptId: 'r-york',
+          itemId: 'r-york:0',
+          sourceIndex: 0,
+          occurredAt: 2,
+          merchantRaw: 'York',
+          merchantNormalized: 'york',
+          displayName: 'York Cola',
+          rawName: 'York Cola',
+          lineTotal: 120,
+          purchaseQuantity: 1,
+          skuKey: null,
+          brand: null,
+        },
+      ],
+      receipts: [
+        {
+          id: 'r-aeon',
+          created_at: 1,
+          transaction_at: 1,
+          image_uri: '',
+          merchant_raw: 'AEON',
+          merchant_normalized: 'aeon',
+          merchant_type: 'convenience',
+          total: 100,
+          tax: 0,
+          tax_is_known: 0,
+          currency: 'JPY',
+          analysis_json: '{}',
+          user_edited: 0,
+          final_total: null,
+          final_category: null,
+          note: null,
+          user_items_json: null,
+          user_id: 'history-owner',
+          installation_id: null,
+        },
+        {
+          id: 'r-york',
+          created_at: 2,
+          transaction_at: 2,
+          image_uri: '',
+          merchant_raw: 'York',
+          merchant_normalized: 'york',
+          merchant_type: 'convenience',
+          total: 120,
+          tax: 0,
+          tax_is_known: 0,
+          currency: 'JPY',
+          analysis_json: '{}',
+          user_edited: 0,
+          final_total: null,
+          final_category: null,
+          note: null,
+          user_items_json: null,
+          user_id: 'history-owner',
+          installation_id: null,
+        },
+      ],
+      decisionRows: [],
+      store,
+    });
+    expect(preliminary.status).toBe('ready');
+    if (preliminary.status !== 'ready') return;
+    const [mpA, mpB] = [...preliminary.inventory.endpointsById.keys()].sort();
+    const leftEndpoint = preliminary.inventory.endpointsById.get(mpA!)!;
+    const rightEndpoint = preliminary.inventory.endpointsById.get(mpB!)!;
+
+    const inventoryResult = buildPersonalProductEndpointInventory({
+      ownerKey: 'user:history-owner',
+      sourceRows: [
+        {
+          receiptId: 'r-aeon',
+          itemId: 'r-aeon:0',
+          sourceIndex: 0,
+          occurredAt: 1,
+          merchantRaw: 'AEON',
+          merchantNormalized: 'aeon',
+          displayName: 'AEON Cola',
+          rawName: 'AEON Cola',
+          lineTotal: 100,
+          purchaseQuantity: 1,
+          skuKey: null,
+          brand: null,
+        },
+        {
+          receiptId: 'r-york',
+          itemId: 'r-york:0',
+          sourceIndex: 0,
+          occurredAt: 2,
+          merchantRaw: 'York',
+          merchantNormalized: 'york',
+          displayName: 'York Cola',
+          rawName: 'York Cola',
+          lineTotal: 120,
+          purchaseQuantity: 1,
+          skuKey: null,
+          brand: null,
+        },
+      ],
+      receipts: preliminary.inventory.receiptsById
+        ? [...preliminary.inventory.receiptsById.values()]
+        : [],
+      decisionRows: [
+        {
+          ownerKey: 'user:history-owner',
+          leftMerchantProductId: mpA!,
+          rightMerchantProductId: mpB!,
+          leftMerchantScopeKey: leftEndpoint.merchantScopeKey,
+          rightMerchantScopeKey: rightEndpoint.merchantScopeKey,
+          leftComparisonKey: leftEndpoint.comparisonKey,
+          rightComparisonKey: rightEndpoint.comparisonKey,
+          leftStructuralSignature: leftEndpoint.structuralSignature,
+          rightStructuralSignature: rightEndpoint.structuralSignature,
+          identityPipelineVersion: leftEndpoint.identityPipelineVersion,
+          decision: 'same_product',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      store,
+    });
+    expect(inventoryResult.status).toBe('ready');
+    if (inventoryResult.status !== 'ready') return;
+
+    const resolved = resolvePersonalProductTargetFromInventory(
+      mpB!,
+      inventoryResult.inventory
+    );
+    expect(resolved.status).toBe('ready');
+    if (resolved.status !== 'ready') return;
+
+    const selected = selectAuthorizedPersonalProductHistoryRows(resolved.resolved, [
+      {
+        receiptId: 'r-aeon',
+        itemId: 'r-aeon:0',
+        sourceIndex: 0,
+        displayName: 'AEON Cola',
+        category: null,
+        purchaseQuantity: 1,
+        lineTotal: 100,
+        currency: 'JPY',
+        purchasedAt: 1,
+        merchantRaw: 'AEON',
+        merchantNormalized: 'aeon',
+        rawName: 'AEON Cola',
+        specSizeValue: null,
+        specSizeUnit: null,
+        specPackCount: null,
+        volumeBaseMl: null,
+        weightBaseG: null,
+        countBase: null,
+        specSourceText: null,
+      },
+      {
+        receiptId: 'r-york',
+        itemId: 'r-york:0',
+        sourceIndex: 0,
+        displayName: 'York Cola',
+        category: null,
+        purchaseQuantity: 1,
+        lineTotal: 120,
+        currency: 'JPY',
+        purchasedAt: 2,
+        merchantRaw: 'York',
+        merchantNormalized: 'york',
+        rawName: 'York Cola',
+        specSizeValue: null,
+        specSizeUnit: null,
+        specPackCount: null,
+        volumeBaseMl: null,
+        weightBaseG: null,
+        countBase: null,
+        specSourceText: null,
+      },
+    ]);
+
+    expect(selected).toHaveLength(2);
+    expect(
+      countDistinctPurchaseReceiptIds(selected.map((row) => row.receiptId))
+    ).toBe(2);
+
+    const db: ProductHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return selected as never;
+        }
+        return [] as never;
+      },
+      async getFirstAsync() {
+        return null;
+      },
+    };
+
+    const summary = await loadProductHistoryWithDb(
+      db,
+      { type: 'personal_product', key: mpB! },
+      { personalProductContext: resolved.resolved }
+    );
+    expect(summary).not.toBeNull();
+    expect(summary!.target).toEqual({ type: 'personal_product', key: mpA });
+    expect(summary!.purchaseOccurrenceCount).toBe(2);
+    expect(summary!.merchantCount).toBe(2);
+  });
+});

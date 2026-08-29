@@ -4,6 +4,7 @@ import type {
   ProductPriceHistoryObservation,
   ProductPriceHistoryPoint,
   ProductPriceHistoryResult,
+  PersonalProductPriceAuthority,
 } from './productPriceHistory';
 import type { PricePromoContext } from './priceObservationTruth';
 
@@ -29,6 +30,11 @@ export type ProductPriceChangeIdentityAuthority =
       kind: 'merchant_product';
       merchantProductId: string;
       merchantScopeKey: string;
+    }
+  | {
+      kind: 'personal_product';
+      anchorMerchantProductId: string;
+      memberMerchantProductIds: string[];
     };
 
 export type ProductPriceChangePromoState =
@@ -381,15 +387,184 @@ function merchantIdentityAuthorized(
   );
 }
 
+type ExactPointAuthorizer = (point: ProductPriceHistoryPoint) => boolean;
+
+function isValidOpaqueIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value === value.trim();
+}
+
+function personalIdentityAuthorized(
+  point: ProductPriceHistoryPoint,
+  certificate: PersonalProductPriceAuthority
+): boolean {
+  if (!isValidOpaqueIdentifier(point.itemId)) {
+    return false;
+  }
+  if (!isValidOpaqueIdentifier(point.merchantProductId)) {
+    return false;
+  }
+  if (!validCertificateSourceIndex(point.sourceIndex)) {
+    return false;
+  }
+
+  const entry = certificate.authorizedRows.find(
+    (row) =>
+      row.receiptId === point.receiptId && row.sourceIndex === point.sourceIndex
+  );
+  if (!entry) {
+    return false;
+  }
+
+  if (!isValidOpaqueIdentifier(entry.itemId)) {
+    return false;
+  }
+  if (!isValidOpaqueIdentifier(entry.merchantProductId)) {
+    return false;
+  }
+
+  if (point.itemId !== entry.itemId) {
+    return false;
+  }
+  if (point.merchantProductId !== entry.merchantProductId) {
+    return false;
+  }
+  if (!certificate.memberMerchantProductIds.includes(entry.merchantProductId)) {
+    return false;
+  }
+
+  return true;
+}
+
+function validCertificateSourceIndex(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0
+  );
+}
+
+function certificateRowKey(receiptId: string, sourceIndex: number): string {
+  return `${receiptId}:${sourceIndex}`;
+}
+
+function validatePersonalProductCertificate(
+  certificate: PersonalProductPriceAuthority | null | undefined,
+  targetKey: string,
+  observations: readonly ProductPriceHistoryObservation[],
+  points: readonly ProductPriceHistoryPoint[]
+): ProductPriceChangeUnavailableReason | null {
+  if (!certificate) {
+    return 'identity_not_exact';
+  }
+  if (
+    certificate.kind !== 'personal_product' ||
+    certificate.identityLevel !== 'product_exact' ||
+    certificate.sourceTier !== 'personal_manual'
+  ) {
+    return 'identity_not_exact';
+  }
+
+  const anchorMerchantProductId = isValidOpaqueIdentifier(
+    certificate.anchorMerchantProductId
+  )
+    ? certificate.anchorMerchantProductId
+    : null;
+  if (!anchorMerchantProductId) {
+    return 'identity_not_exact';
+  }
+
+  if (
+    !certificate.memberMerchantProductIds.every((memberId) =>
+      isValidOpaqueIdentifier(memberId)
+    )
+  ) {
+    return 'identity_not_exact';
+  }
+  const uniqueMemberIds = [...new Set(certificate.memberMerchantProductIds)].sort();
+  if (
+    uniqueMemberIds.length === 0 ||
+    uniqueMemberIds.length !== certificate.memberMerchantProductIds.length
+  ) {
+    return 'identity_not_exact';
+  }
+  if (!uniqueMemberIds.includes(anchorMerchantProductId)) {
+    return 'identity_not_exact';
+  }
+
+  if (!isValidOpaqueIdentifier(targetKey) || !uniqueMemberIds.includes(targetKey)) {
+    return 'identity_not_exact';
+  }
+
+  const certificateIndex = new Map<
+    string,
+    PersonalProductPriceAuthority['authorizedRows'][number]
+  >();
+
+  for (const row of certificate.authorizedRows) {
+    if (
+      !isValidOpaqueIdentifier(row.receiptId) ||
+      !isValidOpaqueIdentifier(row.itemId) ||
+      !isValidOpaqueIdentifier(row.merchantProductId) ||
+      !validCertificateSourceIndex(row.sourceIndex)
+    ) {
+      return 'identity_not_exact';
+    }
+    if (!uniqueMemberIds.includes(row.merchantProductId)) {
+      return 'identity_not_exact';
+    }
+
+    const key = certificateRowKey(row.receiptId, row.sourceIndex);
+    const existing = certificateIndex.get(key);
+    if (existing) {
+      if (
+        existing.itemId !== row.itemId ||
+        existing.merchantProductId !== row.merchantProductId
+      ) {
+        return 'identity_not_exact';
+      }
+      continue;
+    }
+    certificateIndex.set(key, row);
+  }
+
+  for (const observation of observations) {
+    if (
+      !isValidOpaqueIdentifier(observation.receiptId) ||
+      !validCertificateSourceIndex(observation.sourceIndex)
+    ) {
+      return 'identity_not_exact';
+    }
+    const entry = certificateIndex.get(
+      certificateRowKey(observation.receiptId, observation.sourceIndex)
+    );
+    if (!entry) {
+      return 'identity_not_exact';
+    }
+    if (!uniqueMemberIds.includes(entry.merchantProductId)) {
+      return 'identity_not_exact';
+    }
+  }
+
+  for (const point of points) {
+    if (!personalIdentityAuthorized(point, certificate)) {
+      return 'identity_not_exact';
+    }
+  }
+
+  return null;
+}
+
 function collapseReceiptPoints(
   points: readonly ProductPriceHistoryPoint[],
-  targetType: 'sku' | 'merchant_product',
-  targetKey: string,
-  scopeKey: string | null
+  authorizer: ExactPointAuthorizer
 ):
   | { ok: true; event: ProductPriceChangePurchaseEvent }
   | { ok: false; reason: ProductPriceChangeUnavailableReason } {
   if (points.length === 1) {
+    if (!authorizer(points[0]!)) {
+      return { ok: false, reason: 'identity_not_exact' };
+    }
     return { ok: true, event: pointToEvent(points[0]!) };
   }
 
@@ -420,13 +595,7 @@ function collapseReceiptPoints(
     ) {
       return { ok: false, reason: 'invalid_price' };
     }
-    if (targetType === 'sku' && !skuIdentityAuthorized(point, targetKey)) {
-      return { ok: false, reason: 'identity_not_exact' };
-    }
-    if (
-      targetType === 'merchant_product' &&
-      !merchantIdentityAuthorized(point, targetKey, scopeKey)
-    ) {
+    if (!authorizer(point)) {
       return { ok: false, reason: 'identity_not_exact' };
     }
   }
@@ -476,8 +645,7 @@ function collapseReceiptPoints(
 
 function collapsePointsToEvents(
   points: readonly ProductPriceHistoryPoint[],
-  targetType: 'sku' | 'merchant_product',
-  targetKey: string
+  authorizer: ExactPointAuthorizer
 ):
   | { ok: true; events: ProductPriceChangePurchaseEvent[] }
   | { ok: false; reason: ProductPriceChangeUnavailableReason } {
@@ -488,27 +656,9 @@ function collapsePointsToEvents(
     byReceipt.set(point.receiptId, list);
   }
 
-  let scopeKey: string | null = null;
-  if (targetType === 'merchant_product') {
-    const scopes = new Set(
-      points
-        .map((point) => point.merchantScopeKey)
-        .filter((value): value is string => typeof value === 'string' && !!value)
-    );
-    if (scopes.size !== 1) {
-      return { ok: false, reason: 'identity_not_exact' };
-    }
-    scopeKey = [...scopes][0]!;
-  }
-
   const events: ProductPriceChangePurchaseEvent[] = [];
   for (const receiptPoints of byReceipt.values()) {
-    const collapsed = collapseReceiptPoints(
-      receiptPoints,
-      targetType,
-      targetKey,
-      scopeKey
-    );
+    const collapsed = collapseReceiptPoints(receiptPoints, authorizer);
     if (!collapsed.ok) return collapsed;
     events.push(collapsed.event);
   }
@@ -532,7 +682,11 @@ export function interpretProductPriceChange(
 ): ProductPriceChangeInterpretation {
   const { history, targetType, targetKey } = input;
 
-  if (targetType !== 'sku' && targetType !== 'merchant_product') {
+  if (
+    targetType !== 'sku' &&
+    targetType !== 'merchant_product' &&
+    targetType !== 'personal_product'
+  ) {
     return unavailable('identity_not_exact');
   }
 
@@ -607,10 +761,30 @@ export function interpretProductPriceChange(
   }
 
   let identityAuthority: ProductPriceChangeIdentityAuthority;
-  if (targetType === 'sku') {
+  let authorizer: ExactPointAuthorizer;
+
+  if (targetType === 'personal_product') {
+    const certificateIssue = validatePersonalProductCertificate(
+      history.personalProductPriceAuthority,
+      targetKey,
+      history.observations,
+      trustedPoints
+    );
+    if (certificateIssue) {
+      return unavailable(certificateIssue);
+    }
+    const certificate = history.personalProductPriceAuthority!;
+    authorizer = (point) => personalIdentityAuthorized(point, certificate);
+    identityAuthority = {
+      kind: 'personal_product',
+      anchorMerchantProductId: certificate.anchorMerchantProductId,
+      memberMerchantProductIds: [...certificate.memberMerchantProductIds],
+    };
+  } else if (targetType === 'sku') {
     if (!trustedPoints.every((point) => skuIdentityAuthorized(point, targetKey))) {
       return unavailable('identity_not_exact');
     }
+    authorizer = (point) => skuIdentityAuthorized(point, targetKey);
     identityAuthority = { kind: 'sku', skuKey: targetKey };
   } else {
     const scopeKeys = new Set(
@@ -629,6 +803,8 @@ export function interpretProductPriceChange(
     ) {
       return unavailable('identity_not_exact');
     }
+    authorizer = (point) =>
+      merchantIdentityAuthorized(point, targetKey, merchantScopeKey);
     identityAuthority = {
       kind: 'merchant_product',
       merchantProductId: targetKey,
@@ -636,11 +812,7 @@ export function interpretProductPriceChange(
     };
   }
 
-  const collapsed = collapsePointsToEvents(
-    trustedPoints,
-    targetType,
-    targetKey
-  );
+  const collapsed = collapsePointsToEvents(trustedPoints, authorizer);
   if (!collapsed.ok) {
     return unavailable(collapsed.reason);
   }

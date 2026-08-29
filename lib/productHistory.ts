@@ -3,6 +3,11 @@ import * as ExpoSQLite from 'expo-sqlite';
 
 import { initIfNeeded } from './db';
 import { merchantAnalyticsKey } from './merchantAnalytics';
+import {
+  buildOwnerScopedInventoryPredicates,
+  buildPersonalProductInventoryRowKey,
+} from './personalProductEndpointInventory';
+import type { ResolvedPersonalProductTarget } from './personalProductTargetResolver';
 import type {
   AggregatableProductDetailTarget,
   ProductDetailTarget,
@@ -336,6 +341,248 @@ async function getProductHistoryDb(): Promise<SQLite.SQLiteDatabase> {
   return _db;
 }
 
+type PersonalProductHistoryDbRow = {
+  receiptId: string;
+  itemId: string;
+  sourceIndex: number;
+  displayName: string;
+  category: string | null;
+  purchaseQuantity: number;
+  lineTotal: number | null;
+  currency: string | null;
+  purchasedAt: number;
+  merchantRaw: string | null;
+  merchantNormalized: string | null;
+  rawName: string | null;
+  specSizeValue: number | null;
+  specSizeUnit: string | null;
+  specPackCount: number | null;
+  volumeBaseMl: number | null;
+  weightBaseG: number | null;
+  countBase: number | null;
+  specSourceText: string | null;
+};
+
+export function selectAuthorizedPersonalProductHistoryRows(
+  resolved: ResolvedPersonalProductTarget,
+  rows: readonly PersonalProductHistoryDbRow[]
+): PersonalProductHistoryDbRow[] {
+  const memberSet = new Set(resolved.memberMerchantProductIds);
+  const excluded = resolved.inventory.excludedDuplicateReceiptIds;
+  const seen = new Set<string>();
+  const selected: PersonalProductHistoryDbRow[] = [];
+
+  for (const row of rows) {
+    const rowKey = buildPersonalProductInventoryRowKey(
+      row.receiptId,
+      row.sourceIndex
+    );
+    if (!resolved.authorizedRowKeys.has(rowKey)) continue;
+    const inventoryItem = resolved.inventory.itemsByRowKey.get(rowKey);
+    if (!inventoryItem || !memberSet.has(inventoryItem.merchantProductId)) {
+      continue;
+    }
+    if (excluded.has(row.receiptId)) continue;
+    if (seen.has(rowKey)) continue;
+    seen.add(rowKey);
+    selected.push(row);
+  }
+
+  return selected;
+}
+
+async function loadPersonalProductHistorySummaryWithDb(
+  db: ProductHistoryDatabase,
+  target: Extract<AggregatableProductDetailTarget, { type: 'personal_product' }>,
+  options: {
+    recentLimit?: number;
+    locale?: Locale;
+    excludedReceiptIds?: ReadonlySet<string>;
+    personalProductContext?: ResolvedPersonalProductTarget;
+  }
+): Promise<ProductHistorySummary | null> {
+  const resolveResult =
+    options.personalProductContext &&
+    (await import('./personalProductTargetResolver')).assertPersonalProductContextMatchesTarget(
+      target,
+      options.personalProductContext
+    )
+      ? { status: 'ready' as const, resolved: options.personalProductContext }
+      : await (
+          await import('./personalProductTargetResolver')
+        ).resolvePersonalProductTargetWithDb(target.key, db as never);
+
+  if (resolveResult.status !== 'ready') {
+    return null;
+  }
+
+  const resolved = resolveResult.resolved;
+  const predicates = buildOwnerScopedInventoryPredicates(resolved.ownerKey);
+  if (!predicates) {
+    return null;
+  }
+
+  const recentLimit = Math.max(
+    1,
+    Math.min(
+      100,
+      Math.floor(finiteNumber(options.recentLimit, DEFAULT_RECENT_PURCHASE_LIMIT))
+    )
+  );
+
+  const rows = await db.getAllAsync<PersonalProductHistoryDbRow>(
+    `SELECT
+       receipt_items.receipt_id AS receiptId,
+       receipt_items.id AS itemId,
+       receipt_items.source_index AS sourceIndex,
+       COALESCE(
+         NULLIF(receipt_items.normalized_full_name, ''),
+         NULLIF(receipt_items.raw_name, ''),
+         NULLIF(receipt_items.canonical_product_name, ''),
+         ''
+       ) AS displayName,
+       receipt_items.category AS category,
+       receipt_items.purchase_quantity AS purchaseQuantity,
+       receipt_items.line_total AS lineTotal,
+       receipts.currency AS currency,
+       COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt,
+       receipts.merchant_raw AS merchantRaw,
+       receipts.merchant_normalized AS merchantNormalized,
+       receipt_items.raw_name AS rawName,
+       receipt_items.spec_size_value AS specSizeValue,
+       receipt_items.spec_size_unit AS specSizeUnit,
+       receipt_items.spec_pack_count AS specPackCount,
+       receipt_items.volume_base_ml AS volumeBaseMl,
+       receipt_items.weight_base_g AS weightBaseG,
+       receipt_items.count_base AS countBase,
+       receipt_items.spec_source_text AS specSourceText
+     FROM receipt_items
+     INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
+     WHERE ${predicates.itemWhereSql}
+     ORDER BY COALESCE(receipts.transaction_at, receipts.created_at) DESC,
+       receipt_items.source_index ASC`,
+    predicates.params
+  );
+
+  const matchedRows = selectAuthorizedPersonalProductHistoryRows(resolved, rows);
+  if (!matchedRows.length) {
+    return null;
+  }
+
+  const titleRow = [...matchedRows].sort(
+    (left, right) =>
+      Number(right.purchasedAt) - Number(left.purchasedAt) ||
+      left.receiptId.localeCompare(right.receiptId) ||
+      left.sourceIndex - right.sourceIndex
+  )[0]!;
+  const title =
+    (titleRow.displayName || titleRow.rawName || '').trim() || null;
+
+  const currencyBuckets = new Map<string, number>();
+  for (const row of matchedRows) {
+    const currency = typeof row.currency === 'string' ? row.currency.trim() : '';
+    if (!currency || currency.toLowerCase() === 'unknown') continue;
+    const spend = row.lineTotal == null ? 0 : finiteNumber(row.lineTotal);
+    currencyBuckets.set(currency, (currencyBuckets.get(currency) ?? 0) + spend);
+  }
+  const currencyTotals = [...currencyBuckets.entries()].map(
+    ([currency, totalSpend]) => ({ currency, totalSpend })
+  );
+  const singleCurrency = currencyTotals.length === 1 ? currencyTotals[0]! : null;
+
+  const purchasedAts = matchedRows
+    .map((row) => Number(row.purchasedAt))
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+  const merchants = aggregateProductMerchantsByAnalyticsKey(
+    matchedRows.map((row) => ({
+      merchantRaw: row.merchantRaw,
+      merchantNormalized: row.merchantNormalized,
+      purchasedAt: Number(row.purchasedAt) || 0,
+      receiptId: row.receiptId,
+    }))
+  );
+
+  const specBuckets = new Map<string, ProductSpecificationVariant & { receiptIds: Set<string> }>();
+  for (const row of matchedRows) {
+    const key = [
+      row.specSizeValue,
+      row.specSizeUnit,
+      row.specPackCount,
+      row.volumeBaseMl,
+      row.weightBaseG,
+      row.countBase,
+      row.specSourceText,
+    ].join('|');
+    const bucket = specBuckets.get(key) ?? {
+      ...toSpecificationVariant({
+        specSizeValue: row.specSizeValue,
+        specSizeUnit: row.specSizeUnit,
+        specPackCount: row.specPackCount,
+        volumeBaseMl: row.volumeBaseMl,
+        weightBaseG: row.weightBaseG,
+        countBase: row.countBase,
+        specSourceText: row.specSourceText,
+        purchaseOccurrenceCount: 0,
+      }),
+      receiptIds: new Set<string>(),
+    };
+    bucket.receiptIds.add(row.receiptId);
+    specBuckets.set(key, bucket);
+  }
+
+  return {
+    target: resolved.canonicalTarget,
+    title,
+    purchaseOccurrenceCount: countDistinctPurchaseReceiptIds(
+      matchedRows.map((row) => row.receiptId)
+    ),
+    totalPurchaseQuantity: matchedRows.reduce((sum, row) => {
+      const quantity = finiteNumber(row.purchaseQuantity);
+      return sum + (quantity > 0 ? quantity : 0);
+    }, 0),
+    totalSpend: singleCurrency ? singleCurrency.totalSpend : null,
+    currency: singleCurrency?.currency ?? null,
+    currencyTotals,
+    firstPurchasedAt: purchasedAts.length ? Math.min(...purchasedAts) : null,
+    lastPurchasedAt: purchasedAts.length ? Math.max(...purchasedAts) : null,
+    merchantCount: merchants.length,
+    canonicalProductCount: 0,
+    skuCount: 0,
+    specificationVariants: [...specBuckets.values()].map((variant) => ({
+      sizeValue: variant.sizeValue,
+      sizeUnit: variant.sizeUnit,
+      packCount: variant.packCount,
+      volumeBaseMl: variant.volumeBaseMl,
+      weightBaseG: variant.weightBaseG,
+      countBase: variant.countBase,
+      sourceText: variant.sourceText,
+      purchaseOccurrenceCount: variant.receiptIds.size,
+    })),
+    merchants,
+    recentPurchases: matchedRows.slice(0, recentLimit).map((row) => ({
+      receiptId: row.receiptId,
+      itemId: row.itemId,
+      sourceIndex: row.sourceIndex,
+      displayName: row.displayName,
+      category: row.category,
+      purchaseQuantity: finiteNumber(row.purchaseQuantity, 1),
+      lineTotal: row.lineTotal == null ? null : finiteNumber(row.lineTotal),
+      currency: (row.currency || '').trim(),
+      purchasedAt: Number(row.purchasedAt) || 0,
+      merchantRaw: row.merchantRaw,
+      merchantNormalized: row.merchantNormalized,
+      specification: toSpecificationVariant({
+        specSizeValue: row.specSizeValue,
+        specSizeUnit: row.specSizeUnit,
+        specPackCount: row.specPackCount,
+        volumeBaseMl: row.volumeBaseMl,
+        weightBaseG: row.weightBaseG,
+        countBase: row.countBase,
+        specSourceText: row.specSourceText,
+      }),
+    })),
+  };
+}
 
 async function loadMerchantProductHistorySummaryWithDb(
   db: ProductHistoryDatabase,
@@ -502,9 +749,14 @@ export async function loadProductHistoryWithDb(
     recentLimit?: number;
     locale?: Locale;
     excludedReceiptIds?: ReadonlySet<string>;
+    personalProductContext?: ResolvedPersonalProductTarget;
   } = {}
 ): Promise<ProductHistorySummary | null> {
   if (target.type === 'occurrence') return null;
+
+  if (target.type === 'personal_product') {
+    return loadPersonalProductHistorySummaryWithDb(db, target, options);
+  }
 
   // MerchantProduct detail: never treat mp_* as product_family_key.
   if (target.type === 'merchant_product') {
@@ -732,6 +984,7 @@ export async function loadProductHistory(
     recentLimit?: number;
     locale?: Locale;
     excludedReceiptIds?: ReadonlySet<string>;
+    personalProductContext?: ResolvedPersonalProductTarget;
   } = {}
 ): Promise<ProductHistorySummary | null> {
   const db = await getProductHistoryDb();

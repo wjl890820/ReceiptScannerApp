@@ -788,3 +788,460 @@ function merchantPoint(
     promoContext: 'none_observed',
   };
 }
+
+describe('G4-2B personal_product interpretation authority', () => {
+  const ANCHOR = 'mp_aeon';
+  const MEMBER = 'mp_york';
+  const OUTSIDE = 'mp_outside';
+
+  function personalCertificate(
+    rows: Array<{
+      receiptId: string;
+      itemId: string;
+      sourceIndex: number;
+      merchantProductId: string;
+    }>,
+    overrides: Partial<{
+      anchorMerchantProductId: string;
+      memberMerchantProductIds: string[];
+    }> = {}
+  ) {
+    return {
+      kind: 'personal_product' as const,
+      identityLevel: 'product_exact' as const,
+      sourceTier: 'personal_manual' as const,
+      anchorMerchantProductId: overrides.anchorMerchantProductId ?? ANCHOR,
+      memberMerchantProductIds:
+        overrides.memberMerchantProductIds ?? [ANCHOR, MEMBER],
+      authorizedRows: rows,
+    };
+  }
+
+  function readyPersonalHistory(
+    rows: ReturnType<typeof trustedSkuRow>[],
+    certificateRows: Array<{
+      receiptId: string;
+      itemId: string;
+      sourceIndex: number;
+      merchantProductId: string;
+    }>,
+    certificateOverrides: Partial<{
+      anchorMerchantProductId: string;
+      memberMerchantProductIds: string[];
+    }> = {}
+  ): ProductPriceHistoryResult {
+    const cache = createTrustedReceiptTestCache(rows);
+    const base = buildProductPriceHistory(
+      { type: 'sku', key: SKU },
+      rows,
+      {
+        receiptEvidenceCache: cache,
+        canonicalDuplicateSelectionApplied: true,
+      }
+    );
+    const certificate = personalCertificate(certificateRows, certificateOverrides);
+    return {
+      ...base,
+      target: { type: 'personal_product', key: ANCHOR },
+      points: base.points.map((point) => {
+        const cert = certificateRows.find(
+          (row) =>
+            row.receiptId === point.receiptId &&
+            row.sourceIndex === point.sourceIndex
+        );
+        return {
+          ...point,
+          qualityLevel: 'trusted' as const,
+          itemId: cert?.itemId ?? point.itemId,
+          merchantProductId: cert?.merchantProductId ?? point.merchantProductId,
+        };
+      }),
+      personalProductPriceAuthority: certificate,
+    };
+  }
+
+  function interpretPersonal(
+    history: ProductPriceHistoryResult,
+    targetKey = ANCHOR
+  ) {
+    return interpretProductPriceChange({
+      history,
+      targetType: 'personal_product',
+      targetKey,
+    });
+  }
+
+  const twoEventRows = [
+    trustedSkuRow('1', 100, {
+      receiptId: 'r-aeon',
+      itemId: 'item-aeon',
+      occurredAt: 86_400_000,
+      merchantNormalized: 'aeon',
+    }),
+    trustedSkuRow('2', 120, {
+      receiptId: 'r-york',
+      itemId: 'item-york',
+      occurredAt: 172_800_000,
+      merchantNormalized: 'york',
+    }),
+  ];
+
+  const fullCertificateRows = [
+    {
+      receiptId: 'r-aeon',
+      itemId: 'item-aeon',
+      sourceIndex: 0,
+      merchantProductId: ANCHOR,
+    },
+    {
+      receiptId: 'r-york',
+      itemId: 'item-york',
+      sourceIndex: 0,
+      merchantProductId: MEMBER,
+    },
+  ];
+
+  it('requires personal certificate for personal_product target', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    const withoutCertificate = { ...history, personalProductPriceAuthority: null };
+    expect(interpretPersonal(withoutCertificate)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('accepts valid cross-store personal certificate when G3 gates pass', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    const result = interpretPersonal(history, MEMBER);
+    expect(result.status).toBe('available');
+    if (result.status !== 'available') return;
+    expect(result.identityAuthority).toEqual({
+      kind: 'personal_product',
+      anchorMerchantProductId: ANCHOR,
+      memberMerchantProductIds: [ANCHOR, MEMBER],
+    });
+  });
+
+  it('rejects targetKey outside member list', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    expect(interpretPersonal(history, OUTSIDE)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects anchor outside member list', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows, {
+      anchorMerchantProductId: OUTSIDE,
+      memberMerchantProductIds: [ANCHOR, MEMBER],
+    });
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects certificate authorizedRows with MP outside component even if unused', () => {
+    const history = readyPersonalHistory(twoEventRows, [
+      ...fullCertificateRows,
+      {
+        receiptId: 'r-unused',
+        itemId: 'item-unused',
+        sourceIndex: 0,
+        merchantProductId: OUTSIDE,
+      },
+    ]);
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects observation outside authorizedRows', () => {
+    const history = readyPersonalHistory(twoEventRows, [fullCertificateRows[0]!]);
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects point outside authorizedRows', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    history.points = history.points.map((point) =>
+      point.receiptId === 'r-york'
+        ? { ...point, sourceIndex: 99 }
+        : point
+    );
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects point merchantProductId differing from certificate row', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    history.points = history.points.map((point) =>
+      point.receiptId === 'r-york'
+        ? { ...point, merchantProductId: OUTSIDE }
+        : point
+    );
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects point itemId differing from certificate row', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    history.points = history.points.map((point) =>
+      point.receiptId === 'r-york'
+        ? { ...point, itemId: 'different-item' }
+        : point
+    );
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects blank point itemId', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    history.points = history.points.map((point) => ({ ...point, itemId: '  ' }));
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects blank certificate itemId', () => {
+    const history = readyPersonalHistory(twoEventRows, [
+      {
+        receiptId: 'r-aeon',
+        itemId: '   ',
+        sourceIndex: 0,
+        merchantProductId: ANCHOR,
+      },
+      fullCertificateRows[1]!,
+    ]);
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects duplicate certificate row key with conflicting merchantProductId', () => {
+    const history = readyPersonalHistory(twoEventRows, [
+      fullCertificateRows[0]!,
+      {
+        receiptId: 'r-aeon',
+        itemId: 'item-aeon',
+        sourceIndex: 0,
+        merchantProductId: OUTSIDE,
+      },
+      fullCertificateRows[1]!,
+    ]);
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('allows valid old member locator targetKey', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    expect(interpretPersonal(history, MEMBER).status).toBe('available');
+  });
+
+  it('keeps canonical and family targets identity_not_exact', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    expect(
+      interpretProductPriceChange({
+        history,
+        targetType: 'canonical',
+        targetKey: 'Product',
+      }).status
+    ).toBe('unavailable');
+    expect(
+      interpretProductPriceChange({
+        history,
+        targetType: 'family',
+        targetKey: 'milk',
+      }).status
+    ).toBe('unavailable');
+  });
+
+  it('same-receipt multi-row aggregation succeeds when every row is authorized', () => {
+    const rows = [
+      trustedSkuRow('1', 60, {
+        receiptId: 'r-shared',
+        itemId: 'item-shared-a',
+        sourceIndex: 0,
+        occurredAt: 86_400_000,
+      }),
+      trustedSkuRow('2', 40, {
+        receiptId: 'r-shared',
+        itemId: 'item-shared-b',
+        sourceIndex: 1,
+        occurredAt: 86_400_000,
+      }),
+      trustedSkuRow('3', 120, {
+        receiptId: 'r-york',
+        itemId: 'item-york',
+        sourceIndex: 0,
+        occurredAt: 172_800_000,
+      }),
+    ];
+    const history = readyPersonalHistory(rows, [
+      {
+        receiptId: 'r-shared',
+        itemId: 'item-shared-a',
+        sourceIndex: 0,
+        merchantProductId: ANCHOR,
+      },
+      {
+        receiptId: 'r-shared',
+        itemId: 'item-shared-b',
+        sourceIndex: 1,
+        merchantProductId: ANCHOR,
+      },
+      {
+        receiptId: 'r-york',
+        itemId: 'item-york',
+        sourceIndex: 0,
+        merchantProductId: MEMBER,
+      },
+    ]);
+    expect(interpretPersonal(history).status).toBe('available');
+  });
+
+  it('same-receipt multi-row aggregation fails when one row is unauthorized', () => {
+    const rows = [
+      trustedSkuRow('1', 60, {
+        receiptId: 'r-shared',
+        itemId: 'item-shared-a',
+        sourceIndex: 0,
+        occurredAt: 86_400_000,
+      }),
+      trustedSkuRow('2', 40, {
+        receiptId: 'r-shared',
+        itemId: 'item-shared-b',
+        sourceIndex: 1,
+        occurredAt: 86_400_000,
+      }),
+      trustedSkuRow('3', 120, {
+        receiptId: 'r-york',
+        itemId: 'item-york',
+        sourceIndex: 0,
+        occurredAt: 172_800_000,
+      }),
+    ];
+    const history = readyPersonalHistory(rows, [
+      {
+        receiptId: 'r-shared',
+        itemId: 'item-shared-a',
+        sourceIndex: 0,
+        merchantProductId: ANCHOR,
+      },
+      {
+        receiptId: 'r-york',
+        itemId: 'item-york',
+        sourceIndex: 0,
+        merchantProductId: MEMBER,
+      },
+    ]);
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('latest Level-1 observation noncomparable blocks exact interpretation', () => {
+    const rows = [
+      trustedSkuRow('1', 100, {
+        receiptId: 'r-aeon',
+        itemId: 'item-aeon',
+        occurredAt: 86_400_000,
+      }),
+      trustedSkuRow('2', 120, {
+        receiptId: 'r-york',
+        itemId: 'item-york',
+        occurredAt: 172_800_000,
+        itemAmountEvidenceState: 'conflict',
+      }),
+    ];
+    const history = readyPersonalHistory(rows, fullCertificateRows);
+    history.observations = history.observations.map((observation) =>
+      observation.receiptId === 'r-york'
+        ? {
+            ...observation,
+            level2Eligible: false,
+            level2RejectReasons: ['item_amount_evidence_state'],
+          }
+        : observation
+    );
+    history.points = history.points.filter((point) => point.receiptId !== 'r-york');
+    expect(interpretPersonal(history).status).toBe('unavailable');
+  });
+
+  it('rejects padded point itemId against unpadded certificate itemId', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    history.points = history.points.map((point) =>
+      point.receiptId === 'r-aeon'
+        ? { ...point, itemId: ' item-aeon' }
+        : point
+    );
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects padded certificate itemId as invalid certificate', () => {
+    const history = readyPersonalHistory(twoEventRows, [
+      {
+        ...fullCertificateRows[0]!,
+        itemId: ' item-aeon',
+      },
+      fullCertificateRows[1]!,
+    ]);
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects padded point merchantProductId against unpadded certificate row', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    history.points = history.points.map((point) =>
+      point.receiptId === 'r-aeon'
+        ? { ...point, merchantProductId: ' mp_aeon' }
+        : point
+    );
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('rejects padded certificate merchantProductId outside exact member list', () => {
+    const history = readyPersonalHistory(
+      twoEventRows,
+      [
+        {
+          ...fullCertificateRows[0]!,
+          merchantProductId: ' mp_aeon',
+        },
+        fullCertificateRows[1]!,
+      ],
+      { memberMerchantProductIds: [ANCHOR, MEMBER] }
+    );
+    expect(interpretPersonal(history)).toMatchObject({
+      status: 'unavailable',
+      reasonCodes: ['identity_not_exact'],
+    });
+  });
+
+  it('accepts exact unpadded identifiers for personal authorization', () => {
+    const history = readyPersonalHistory(twoEventRows, fullCertificateRows);
+    expect(interpretPersonal(history, ANCHOR).status).toBe('available');
+  });
+});

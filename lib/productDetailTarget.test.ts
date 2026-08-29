@@ -185,3 +185,27 @@ describe('Receipt Detail → Product Detail affordance (R2-B1)', () => {
     });
   });
 });
+
+describe('G4-2B personal_product target contract', () => {
+  it('parses and builds personal_product routes', () => {
+    const target = { type: 'personal_product' as const, key: 'mp_b' };
+    expect(parseProductDetailTarget('personal_product', 'mp_b')).toEqual(target);
+    expect(buildProductDetailHref(target)).toBe('/product/personal_product?key=mp_b');
+  });
+
+  it('keeps existing target precedence and does not invent personal_product from receipt items', () => {
+    const occurrence = { receiptId: 'receipt-1', itemId: 'receipt-1:0' };
+    expect(
+      resolveProductDetailTarget({
+        ...occurrence,
+        skuKey: 'sku-900',
+        canonicalProductName: '明治 おいしい牛乳',
+        productFamilyKey: 'milk',
+      })
+    ).toEqual({ type: 'sku', key: 'sku-900' });
+    expect(resolveProductDetailTarget(occurrence)).toEqual({
+      type: 'occurrence',
+      ...occurrence,
+    });
+  });
+});
