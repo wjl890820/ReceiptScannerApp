@@ -182,6 +182,7 @@ export function buildTrustedProductPriceHistoryForTests(
   options: {
     basisByReceipt?: Record<string, 'tax_included' | 'tax_excluded'>;
     monetaryOverrides?: Record<string, Partial<ReceiptMonetaryCoherenceEvidence>>;
+    canonicalDuplicateSelectionApplied?: boolean;
   } = {}
 ): ProductPriceHistoryResult {
   const trustedRows = rows.map((row) =>
@@ -210,5 +211,7 @@ export function buildTrustedProductPriceHistoryForTests(
   }
   return buildProductPriceHistory(target, trustedRows, {
     receiptEvidenceCache: cache,
+    canonicalDuplicateSelectionApplied:
+      options.canonicalDuplicateSelectionApplied === true,
   });
 }

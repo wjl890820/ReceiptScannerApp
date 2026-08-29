@@ -97,11 +97,17 @@ describe('Round2 — identity price-history currency completeness', () => {
 describe('Round2 — merchant_product never falls through to broad legacy', () => {
   it('identity loader exception cannot return another product history', async () => {
     jest.resetModules();
-    jest.doMock('./productIdentityConsumer', () => ({
-      tryBuildIdentityPriceHistoryForRows: () => {
-        throw new Error('injected identity failure');
-      },
-    }));
+    jest.doMock('./productIdentityConsumer', () => {
+      const actual = jest.requireActual(
+        './productIdentityConsumer'
+      ) as typeof import('./productIdentityConsumer');
+      return {
+        ...actual,
+        tryBuildIdentityPriceHistoryForRows: () => {
+          throw new Error('injected identity failure');
+        },
+      };
+    });
     jest.doMock('./env', () => ({
       isProductIdentityPriceHistoryV1Enabled: () => true,
     }));

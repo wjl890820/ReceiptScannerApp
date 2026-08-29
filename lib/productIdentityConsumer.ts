@@ -16,9 +16,11 @@ import {
   type PriceObservationQualityLevel,
 } from './productIdentityPriceObservationQuality';
 import { resolveMerchantProductDisplayName } from './productIdentityPresentationContract';
+import type { ProductIdentityLevel } from './productIdentityContract';
 import {
   isUnknownMerchantScopeKey,
   resolveReceiptItemIdentity,
+  scopeMerchantKeyForIdentity,
 } from './productIdentityResolver';
 import { classifyLineKind } from './receiptOcrNormalize';
 import {
@@ -55,6 +57,10 @@ export type QualifiedIdentityObservation = IdentityConsumerObservation & {
   includeInHistory: boolean;
   includeInTrend: boolean;
   suspectedIntegerMultiple: number | null;
+  identityLevel: ProductIdentityLevel;
+  identityConfidence: number;
+  identitySource: string;
+  merchantScopeKey: string;
 };
 
 export type IdentityMerchantProductHistoryView = {
@@ -93,6 +99,8 @@ export type IdentityMerchantProductHistoryView = {
   };
   presentationTitleKey: 'priceHistory.titleMerchantLocal';
   presentationSubtitleKey: 'priceHistory.subtitle.merchantProduct';
+  /** All qualified identity rows belonging to this merchant product target (Level-1 scope). */
+  targetMembershipRowKeys: Array<{ receiptId: string; itemSourceIndex: number }>;
 };
 
 export type IdentityFrequentProductGroup = {
@@ -153,12 +161,20 @@ export function resolveIdentityConsumerObservations(
   type Draft = IdentityConsumerObservation & {
     merchantProductId: string | null;
     purchaseUnitPrice: number | null;
+    identityLevel: ProductIdentityLevel;
+    identityConfidence: number;
+    identitySource: string;
+    merchantScopeKey: string;
   };
   const draft: Draft[] = [];
 
   for (const obs of observations) {
     const name = (obs.rawName || '').trim();
     if (!name) continue;
+    const merchantScopeKey = scopeMerchantKeyForIdentity(
+      obs.merchantKey || 'unknown_merchant',
+      obs.receiptId
+    );
     const result = resolveReceiptItemIdentity(
       {
         rawName: name,
@@ -174,6 +190,10 @@ export function resolveIdentityConsumerObservations(
       ...obs,
       merchantProductId: result.link.merchantProductId,
       purchaseUnitPrice: computePurchaseUnitPrice(obs.lineTotal, obs.quantity),
+      identityLevel: result.link.identityLevel,
+      identityConfidence: result.link.identityConfidence,
+      identitySource: result.link.identitySource,
+      merchantScopeKey,
     });
   }
 
@@ -211,6 +231,10 @@ export function resolveIdentityConsumerObservations(
       includeInHistory: quality.includeInHistory,
       includeInTrend: quality.includeInTrend,
       suspectedIntegerMultiple: quality.suspectedIntegerMultiple,
+      identityLevel: row.identityLevel,
+      identityConfidence: row.identityConfidence,
+      identitySource: row.identitySource,
+      merchantScopeKey: row.merchantScopeKey,
     });
   }
 
@@ -275,6 +299,11 @@ export function buildIdentityMerchantProductHistoryView(
       rawName: r.rawName,
       purchaseUnitPrice: r.purchaseUnitPrice!,
       quality: r.quality,
+      merchantProductId: r.merchantProductId,
+      identityLevel: r.identityLevel,
+      identityConfidence: r.identityConfidence,
+      identitySource: r.identitySource,
+      merchantScopeKey: r.merchantScopeKey,
     })),
     trendPoints: trendRows.map((r) => ({
       receiptId: r.receiptId,
@@ -306,6 +335,10 @@ export function buildIdentityMerchantProductHistoryView(
     },
     presentationTitleKey: 'priceHistory.titleMerchantLocal',
     presentationSubtitleKey: 'priceHistory.subtitle.merchantProduct',
+    targetMembershipRowKeys: rows.map((r) => ({
+      receiptId: r.receiptId,
+      itemSourceIndex: r.itemSourceIndex,
+    })),
   };
 }
 
@@ -420,6 +453,21 @@ export function identityObservationsFromPriceHistoryRows(
     quantity: r.purchaseQuantity,
     displayName: r.displayName,
   }));
+}
+
+export function resolveMerchantProductTargetMembershipRowKeys(
+  rows: Parameters<typeof identityObservationsFromPriceHistoryRows>[0],
+  merchantProductId: string
+): Array<{ receiptId: string; itemSourceIndex: number }> {
+  const { qualified } = resolveIdentityConsumerObservations(
+    identityObservationsFromPriceHistoryRows(rows)
+  );
+  return qualified
+    .filter((row) => row.merchantProductId === merchantProductId)
+    .map((row) => ({
+      receiptId: row.receiptId,
+      itemSourceIndex: row.itemSourceIndex,
+    }));
 }
 
 /**

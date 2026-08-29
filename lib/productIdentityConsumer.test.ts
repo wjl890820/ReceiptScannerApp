@@ -301,4 +301,35 @@ describe('Product Identity Batch 5B — frequent + history consumers', () => {
     expect(groups[0]!.distinctReceiptCount).toBe(18);
     expect(groups[0]!.totalPurchaseQuantity).toBe(47);
   });
+
+  it('propagates resolver identity metadata through qualified observations', () => {
+    const { qualified } = resolveIdentityConsumerObservations([
+      {
+        receiptId: 'r1',
+        itemSourceIndex: 0,
+        rawName: '東北恵牛乳1L',
+        merchantKey: 'ヨークベニマル',
+        occurredAt: 1,
+        lineTotal: 238,
+        quantity: 1,
+      },
+      {
+        receiptId: 'r2',
+        itemSourceIndex: 0,
+        rawName: '東北恵 牛乳１０００ＭＬ',
+        merchantKey: 'ヨークベニマル',
+        occurredAt: 2,
+        lineTotal: 248,
+        quantity: 1,
+      },
+    ]);
+    expect(qualified.length).toBeGreaterThan(0);
+    for (const row of qualified) {
+      expect(row.identityLevel).toBeTruthy();
+      expect(typeof row.identityConfidence).toBe('number');
+      expect(row.identitySource).toBeTruthy();
+      expect(row.merchantScopeKey).toBeTruthy();
+    }
+    expect(qualified[0]!.merchantProductId).toBe(qualified[1]!.merchantProductId);
+  });
 });

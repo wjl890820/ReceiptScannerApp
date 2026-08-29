@@ -214,7 +214,8 @@ function merchantProductHistoryDb(
 describe('G3-2A merchant_product production path', () => {
   async function runMerchantProductPriceHistory(
     rows: ProductPriceHistoryRow[],
-    merchantProductId: string
+    merchantProductId: string,
+    options: { excludedReceiptIds?: ReadonlySet<string> } = {}
   ) {
     jest.resetModules();
     jest.doMock('./env', () => ({
@@ -225,11 +226,27 @@ describe('G3-2A merchant_product production path', () => {
     );
     const result = await load(
       merchantProductHistoryDb(rows),
-      { type: 'merchant_product', key: merchantProductId }
+      { type: 'merchant_product', key: merchantProductId },
+      options
     );
     jest.dontMock('./env');
     jest.resetModules();
     return result;
+  }
+
+  function resolveMerchantProductIdForName(displayName: string): string {
+    const store = createMemoryProductIdentityStore();
+    const link = resolveReceiptItemIdentity(
+      {
+        rawName: displayName,
+        merchantKey: MERCHANT_FIXTURE_KEY,
+        receiptId: 'mp-seed-receipt-alt',
+        itemSourceIndex: 0,
+      },
+      store
+    ).link;
+    expect(link.merchantProductId).toBeTruthy();
+    return link.merchantProductId!;
   }
 
   it('merchant_product uses same-target gross peers to exclude anomalies before readiness', async () => {
@@ -362,6 +379,271 @@ describe('G3-2A merchant_product production path', () => {
     );
     expect(result.status).toBe('ready');
     expect(result.points).toHaveLength(3);
+  });
+
+  it('G3-2B-1 excludes unrelated merchant_product rows from target observations', async () => {
+    const mpA = resolveFixtureMerchantProductId();
+    const mpB = resolveMerchantProductIdForName('普通商品');
+    expect(mpB).not.toBe(mpA);
+
+    const rows = [
+      merchantTrustedG3Row('1', {
+        grossLineAmount: 100,
+        receiptId: 'mp-a-old',
+        occurredAt: 1 * 86_400_000,
+      }),
+      merchantTrustedG3Row('2', {
+        grossLineAmount: 100,
+        receiptId: 'mp-a-current',
+        occurredAt: 2 * 86_400_000,
+      }),
+      merchantTrustedG3Row('3', {
+        grossLineAmount: 150,
+        receiptId: 'mp-b-unrelated',
+        occurredAt: 3 * 86_400_000,
+        displayName: '普通商品',
+      }),
+    ];
+
+    const result = await runMerchantProductPriceHistory(rows, mpA);
+
+    expect(result.observations.some((o) => o.receiptId === 'mp-b-unrelated')).toBe(
+      false
+    );
+    expect(result.observations).toHaveLength(2);
+    expect(result.status).toBe('ready');
+    expect(result.points).toHaveLength(2);
+  });
+
+  it('G3-2B-1 retains same-target unsafe newer row in target observations', async () => {
+    const merchantProductId = resolveFixtureMerchantProductId();
+    const rows = [
+      merchantTrustedG3Row('1', {
+        grossLineAmount: 100,
+        itemId: 'scoped-mp-a',
+        receiptId: 'scoped-mp-receipt-a',
+        occurredAt: 1 * 86_400_000,
+      }),
+      merchantTrustedG3Row('2', {
+        grossLineAmount: 100,
+        itemId: 'scoped-mp-b',
+        receiptId: 'scoped-mp-receipt-b',
+        occurredAt: 2 * 86_400_000,
+      }),
+      row('scoped-legacy', {
+        receiptId: 'scoped-mp-receipt-c',
+        itemId: 'scoped-mp-c',
+        sourceIndex: 0,
+        occurredAt: 3 * 86_400_000,
+        merchantRaw: MERCHANT_FIXTURE_KEY,
+        merchantNormalized: MERCHANT_FIXTURE_KEY,
+        displayName: MERCHANT_FIXTURE_NAME,
+        currency: 'JPY',
+        lineTotal: 100,
+        purchaseQuantity: 1,
+        grossLineAmount: null,
+        priceObservationVersion: null,
+        itemAmountEvidenceState: null,
+      }),
+    ];
+
+    const result = await runMerchantProductPriceHistory(rows, merchantProductId);
+
+    expect(
+      result.observations.some(
+        (observation) => observation.receiptId === 'scoped-mp-receipt-c'
+      )
+    ).toBe(true);
+    expect(
+      result.points.some((point) => point.receiptId === 'scoped-mp-receipt-c')
+    ).toBe(false);
+    expect(result.status).toBe('ready');
+    expect(result.points).toHaveLength(2);
+  });
+
+  it('G3-2B-1 unrelated newer merchant row does not block Level 3 interpretation', async () => {
+    const { interpretProductPriceChange } = await import(
+      './productPriceChangeInterpretation'
+    );
+    const mpA = resolveFixtureMerchantProductId();
+    const mpB = resolveMerchantProductIdForName('普通商品');
+    expect(mpB).not.toBe(mpA);
+
+    const rows = [
+      merchantTrustedG3Row('1', {
+        grossLineAmount: 100,
+        receiptId: 'interp-mp-a-old',
+        occurredAt: 1 * 86_400_000,
+      }),
+      merchantTrustedG3Row('2', {
+        grossLineAmount: 120,
+        receiptId: 'interp-mp-a-current',
+        occurredAt: 2 * 86_400_000,
+      }),
+      merchantTrustedG3Row('3', {
+        grossLineAmount: 200,
+        receiptId: 'interp-mp-b-unrelated',
+        occurredAt: 3 * 86_400_000,
+        displayName: '普通商品',
+      }),
+    ];
+
+    const result = await runMerchantProductPriceHistory(rows, mpA, {
+      excludedReceiptIds: new Set(),
+    });
+    const interpretation = interpretProductPriceChange({
+      history: result,
+      targetType: 'merchant_product',
+      targetKey: mpA,
+    });
+
+    expect(result.observations.some((o) => o.receiptId === 'interp-mp-b-unrelated')).toBe(
+      false
+    );
+    expect(interpretation.status).toBe('available');
+    if (interpretation.status === 'available') {
+      expect(interpretation.grossDirection).toBe('increased');
+      expect(interpretation.grossDelta).toBe(20);
+    }
+  });
+
+  it('G3-2B-1 same-target unsafe newer row blocks Level 3 interpretation', async () => {
+    const { interpretProductPriceChange } = await import(
+      './productPriceChangeInterpretation'
+    );
+    const merchantProductId = resolveFixtureMerchantProductId();
+    const rows = [
+      merchantTrustedG3Row('1', {
+        grossLineAmount: 100,
+        receiptId: 'block-mp-a',
+        occurredAt: 1 * 86_400_000,
+      }),
+      merchantTrustedG3Row('2', {
+        grossLineAmount: 120,
+        receiptId: 'block-mp-b',
+        occurredAt: 2 * 86_400_000,
+      }),
+      row('block-legacy', {
+        receiptId: 'block-mp-c',
+        itemId: 'block-mp-c',
+        sourceIndex: 0,
+        occurredAt: 3 * 86_400_000,
+        merchantRaw: MERCHANT_FIXTURE_KEY,
+        merchantNormalized: MERCHANT_FIXTURE_KEY,
+        displayName: MERCHANT_FIXTURE_NAME,
+        currency: 'JPY',
+        lineTotal: 100,
+        purchaseQuantity: 1,
+        grossLineAmount: null,
+        priceObservationVersion: null,
+        itemAmountEvidenceState: null,
+      }),
+    ];
+
+    const result = await runMerchantProductPriceHistory(rows, merchantProductId, {
+      excludedReceiptIds: new Set(),
+    });
+    const interpretation = interpretProductPriceChange({
+      history: result,
+      targetType: 'merchant_product',
+      targetKey: merchantProductId,
+    });
+
+    expect(
+      result.observations.some((o) => o.receiptId === 'block-mp-c')
+    ).toBe(true);
+    expect(interpretation.status).toBe('unavailable');
+    if (interpretation.status === 'unavailable') {
+      expect(interpretation.reasonCodes).toContain('latest_purchase_not_comparable');
+    }
+  });
+
+  it('G3-2B-1 rejects identity fallback when requested MP-A is absent from candidates', async () => {
+    const mpA = resolveFixtureMerchantProductId();
+    const mpB = resolveMerchantProductIdForName('普通商品');
+    expect(mpB).not.toBe(mpA);
+
+    const rows = [
+      merchantTrustedG3Row('1', {
+        grossLineAmount: 100,
+        displayName: '普通商品',
+        receiptId: 'fallback-mp-b-1',
+        occurredAt: 1 * 86_400_000,
+      }),
+      merchantTrustedG3Row('2', {
+        grossLineAmount: 110,
+        displayName: '普通商品',
+        receiptId: 'fallback-mp-b-2',
+        occurredAt: 2 * 86_400_000,
+      }),
+      merchantTrustedG3Row('3', {
+        grossLineAmount: 120,
+        displayName: '普通商品',
+        receiptId: 'fallback-mp-b-3',
+        occurredAt: 3 * 86_400_000,
+      }),
+    ];
+
+    jest.resetModules();
+    jest.doMock('./env', () => ({
+      isProductIdentityPriceHistoryV1Enabled: () => true,
+    }));
+    const { tryBuildIdentityPriceHistoryForRows } = await import(
+      './productIdentityConsumer'
+    );
+    const fallbackView = tryBuildIdentityPriceHistoryForRows(rows, mpA);
+    expect(fallbackView?.merchantProductId).toBe(mpB);
+    jest.dontMock('./env');
+    jest.resetModules();
+
+    const result = await runMerchantProductPriceHistory(rows, mpA);
+
+    expect(result.target).toEqual({ type: 'merchant_product', key: mpA });
+    expect(result.status).not.toBe('ready');
+    expect(result.identityPresentation).toBeNull();
+    expect(result.identityPresentation?.merchantProductId).not.toBe(mpB);
+    expect(result.points).toHaveLength(0);
+    expect(result.observations).toHaveLength(0);
+  });
+
+  it('G3-2B-1 absent requested MP-A cannot yield Level-3 from MP-B fallback history', async () => {
+    const { interpretProductPriceChange } = await import(
+      './productPriceChangeInterpretation'
+    );
+    const mpA = resolveFixtureMerchantProductId();
+    const mpB = resolveMerchantProductIdForName('普通商品');
+    expect(mpB).not.toBe(mpA);
+
+    const rows = [
+      merchantTrustedG3Row('1', {
+        grossLineAmount: 100,
+        displayName: '普通商品',
+        receiptId: 'interp-fallback-b-1',
+        occurredAt: 1 * 86_400_000,
+      }),
+      merchantTrustedG3Row('2', {
+        grossLineAmount: 110,
+        displayName: '普通商品',
+        receiptId: 'interp-fallback-b-2',
+        occurredAt: 2 * 86_400_000,
+      }),
+    ];
+
+    const result = await runMerchantProductPriceHistory(rows, mpA, {
+      excludedReceiptIds: new Set(),
+    });
+    const interpretation = interpretProductPriceChange({
+      history: result,
+      targetType: 'merchant_product',
+      targetKey: mpA,
+    });
+
+    expect(result.points).toHaveLength(0);
+    expect(result.observations).toHaveLength(0);
+    expect(interpretation.status).toBe('unavailable');
+    if (interpretation.status === 'unavailable') {
+      expect(interpretation.reasonCodes).toContain('history_not_ready');
+    }
   });
 });
 
@@ -1038,6 +1320,45 @@ describe('G3-2A comparable gross gates', () => {
     expect(result.points.every((point) => point.receiptId !== 'receipt-dup')).toBe(
       true
     );
+  });
+});
+
+describe('G3-2B-1 Level-3 metadata', () => {
+  it('defaults duplicate provenance to false on direct builder', () => {
+    const rows = [
+      trustedG3Row('1', { grossLineAmount: 100, skuKey: 'sku-a' }),
+      trustedG3Row('2', { grossLineAmount: 110, skuKey: 'sku-a' }),
+    ];
+    const result = buildWithTrusted({ type: 'sku', key: 'sku-a' }, rows);
+    expect(result.canonicalDuplicateSelectionApplied).toBe(false);
+  });
+
+  it('may opt into duplicate provenance on direct builder', () => {
+    const rows = [
+      trustedG3Row('1', { grossLineAmount: 100, skuKey: 'sku-a' }),
+      trustedG3Row('2', { grossLineAmount: 110, skuKey: 'sku-a' }),
+    ];
+    const cache = buildTrustedCache(rows);
+    const result = buildProductPriceHistory(
+      { type: 'sku', key: 'sku-a' },
+      rows,
+      {
+        receiptEvidenceCache: cache,
+        canonicalDuplicateSelectionApplied: true,
+      }
+    );
+    expect(result.canonicalDuplicateSelectionApplied).toBe(true);
+  });
+
+  it('propagates skuKey and qualityLevel on ready points', () => {
+    const rows = [
+      trustedG3Row('1', { grossLineAmount: 100, skuKey: 'sku-a' }),
+      trustedG3Row('2', { grossLineAmount: 110, skuKey: 'sku-a' }),
+    ];
+    const result = buildWithTrusted({ type: 'sku', key: 'sku-a' }, rows);
+    expect(result.points[0]?.skuKey).toBe('sku-a');
+    expect(result.points[0]?.qualityLevel).toBeTruthy();
+    expect(result.points[0]?.discountAllocated).toBeDefined();
   });
 });
 

@@ -8,7 +8,16 @@ import type {
 } from './analysisFoundation/types';
 import { initIfNeeded } from './db';
 import type { ReceiptRow } from './db';
+import type { ProductIdentityLevel } from './productIdentityContract';
 import { normalizeProductForIdentity } from './normalizeProductForIdentity';
+import {
+  resolveReceiptItemIdentity,
+  scopeMerchantKeyForIdentity,
+} from './productIdentityResolver';
+import {
+  createMemoryProductIdentityStore,
+  type ProductIdentityStore,
+} from './productIdentityStore';
 import {
   evaluatePriceObservationQuality,
   type PriceObservationQualityLevel,
@@ -60,6 +69,15 @@ export type ProductPriceHistoryPoint = {
   amountBasis: AmountTaxBasis | null;
   promoContext?: PricePromoContext;
   promoMarkers?: string[];
+  effectiveLineAmount?: number | null;
+  discountAllocated?: number | null;
+  qualityLevel?: PriceObservationQualityLevel | null;
+  skuKey?: string | null;
+  merchantProductId?: string | null;
+  identityLevel?: ProductIdentityLevel | null;
+  identityConfidence?: number | null;
+  identitySource?: string | null;
+  merchantScopeKey?: string | null;
 };
 
 export type ProductPriceComparisonEligibility = {
@@ -95,14 +113,21 @@ export type ProductPriceHistoryObservation = {
   level2Eligible: boolean;
   level2RejectReasons: string[];
   qualityLevel: PriceObservationQualityLevel | null;
+  discountAllocated: number | null;
 };
 
 export type ProductPriceHistoryResult = ProductPriceComparisonEligibility & {
   target: ProductDetailTarget;
   points: ProductPriceHistoryPoint[];
+  /**
+   * Level-1 target-scoped observations (duplicate-excluded). Receipt events here are
+   * a superset of receipt events represented in `points` (Level-2 comparable subset).
+   */
   observations: ProductPriceHistoryObservation[];
   seriesKind: 'gross' | null;
   amountBasis: 'tax_included' | 'tax_excluded' | null;
+  /** True only when caller positively applied canonical duplicate selection. */
+  canonicalDuplicateSelectionApplied: boolean;
   identityPresentation?: {
     strategy: 'same_merchant_product';
     titleKey: 'priceHistory.titleMerchantLocal';
@@ -125,6 +150,7 @@ export type ProductPriceHistoryRow = {
   /** Compatibility alias — prefer grossLineAmount for G3 comparability. */
   lineTotal: number | null;
   purchaseQuantity: number | null;
+  skuKey?: string | null;
   productFamilyKey: string | null;
   volumeBaseMl: number | null;
   weightBaseG: number | null;
@@ -166,6 +192,16 @@ export type ReceiptEvidenceCache = Map<string, ReceiptEvidenceCacheEntry>;
 
 export type BuildProductPriceHistoryOptions = {
   receiptEvidenceCache?: ReceiptEvidenceCache;
+  canonicalDuplicateSelectionApplied?: boolean;
+};
+
+type RowIdentityMetadata = {
+  skuKey: string | null;
+  merchantProductId: string | null;
+  identityLevel: ProductIdentityLevel;
+  identityConfidence: number;
+  identitySource: string;
+  merchantScopeKey: string;
 };
 
 type PriceDimension = 'volume' | 'weight' | 'count';
@@ -400,6 +436,167 @@ function rowObservationKey(row: ProductPriceHistoryRow): string {
   return `${row.receiptId}:${row.sourceIndex}`;
 }
 
+function membershipRowKeysToSet(
+  keys: ReadonlyArray<{ receiptId: string; itemSourceIndex: number }>
+): Set<string> {
+  return new Set(keys.map((key) => `${key.receiptId}:${key.itemSourceIndex}`));
+}
+
+function filterRowsByMembershipKeys(
+  rows: readonly ProductPriceHistoryRow[],
+  membershipKeys: ReadonlySet<string>
+): ProductPriceHistoryRow[] {
+  return rows.filter((row) => membershipKeys.has(rowObservationKey(row)));
+}
+
+function buildObservationsForRows(
+  rows: readonly ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache
+): {
+  observations: ProductPriceHistoryObservation[];
+  observationsByKey: Map<string, ProductPriceHistoryObservation>;
+} {
+  const structuralCohort = buildSkuStructuralCohort(rows, cache);
+  return buildObservationsAndStructuralCohort(rows, cache, structuralCohort);
+}
+
+function resolveMerchantTargetMembershipRowKeys(
+  filtered: ProductPriceHistoryRow[],
+  merchantProductId: string
+): Array<{ receiptId: string; itemSourceIndex: number }> {
+  const { resolveMerchantProductTargetMembershipRowKeys } =
+    require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
+  return resolveMerchantProductTargetMembershipRowKeys(filtered, merchantProductId);
+}
+
+function buildMerchantTargetObservations(
+  filtered: ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache,
+  merchantProductId: string,
+  membershipRowKeys?: ReadonlyArray<{
+    receiptId: string;
+    itemSourceIndex: number;
+  }>
+): ProductPriceHistoryObservation[] {
+  const keys =
+    membershipRowKeys ??
+    resolveMerchantTargetMembershipRowKeys(filtered, merchantProductId);
+  const targetRows = filterRowsByMembershipKeys(
+    filtered,
+    membershipRowKeysToSet(keys)
+  );
+  return buildObservationsForRows(targetRows, cache).observations;
+}
+
+function failClosedRequestedMerchantProductTargetResult(
+  target: Extract<ProductDetailTarget, { type: 'merchant_product' }>,
+  filtered: ProductPriceHistoryRow[],
+  cache: ReceiptEvidenceCache,
+  canonicalDuplicateSelectionApplied: boolean
+): ProductPriceHistoryResult {
+  const observations = buildMerchantTargetObservations(
+    filtered,
+    cache,
+    target.key
+  );
+  const targetRows = filterRowsByMembershipKeys(
+    filtered,
+    membershipRowKeysToSet(
+      resolveMerchantTargetMembershipRowKeys(filtered, target.key)
+    )
+  );
+  return {
+    target,
+    status: 'not_enough_points',
+    priceKind: 'purchase_unit',
+    currency: null,
+    totalOccurrenceCount: targetRows.length,
+    comparableOccurrenceCount: 0,
+    excludedOccurrenceCount: targetRows.length,
+    points: [],
+    observations,
+    seriesKind: null,
+    amountBasis: null,
+    canonicalDuplicateSelectionApplied,
+    identityPresentation: null,
+  };
+}
+
+function buildRowIdentityMetadataByKey(
+  rows: readonly ProductPriceHistoryRow[],
+  store: ProductIdentityStore = createMemoryProductIdentityStore()
+): Map<string, RowIdentityMetadata> {
+  const metadataByKey = new Map<string, RowIdentityMetadata>();
+  for (const row of rows) {
+    const key = rowObservationKey(row);
+    if (metadataByKey.has(key)) continue;
+    const merchantScopeKey = scopeMerchantKeyForIdentity(
+      row.merchantNormalized ?? row.merchantRaw ?? 'unknown_merchant',
+      row.receiptId
+    );
+    const resolved = resolveReceiptItemIdentity(
+      {
+        rawName: row.displayName,
+        merchantKey: row.merchantNormalized ?? row.merchantRaw ?? 'unknown_merchant',
+        receiptId: row.receiptId,
+        itemSourceIndex: row.sourceIndex,
+        quantity: row.purchaseQuantity,
+        lineTotal: row.lineTotal,
+      },
+      store
+    );
+    metadataByKey.set(key, {
+      skuKey: row.skuKey?.trim() || resolved.link.skuId,
+      merchantProductId: resolved.link.merchantProductId,
+      identityLevel: resolved.link.identityLevel,
+      identityConfidence: resolved.link.identityConfidence,
+      identitySource: resolved.link.identitySource,
+      merchantScopeKey,
+    });
+  }
+  return metadataByKey;
+}
+
+function buildHistoryPoint(
+  candidate: ComparableCandidate,
+  priceKind: ProductPriceKind,
+  currency: string,
+  identityByRowKey: Map<string, RowIdentityMetadata>,
+  merchantNormalizedOverride?: string | null
+): ProductPriceHistoryPoint {
+  const identity =
+    identityByRowKey.get(rowObservationKey(candidate.row)) ?? null;
+  return {
+    receiptId: candidate.row.receiptId,
+    itemId: candidate.row.itemId,
+    sourceIndex: candidate.row.sourceIndex,
+    occurredAt: candidate.row.occurredAt,
+    merchantRaw: candidate.row.merchantRaw,
+    merchantNormalized:
+      merchantNormalizedOverride ?? candidate.row.merchantNormalized,
+    displayName: candidate.row.displayName,
+    currency,
+    lineTotal: candidate.grossLineAmount,
+    purchaseQuantity: candidate.row.purchaseQuantity as number,
+    priceValue: candidate.priceValue,
+    priceKind,
+    seriesKind: 'gross',
+    grossLineAmount: candidate.grossLineAmount,
+    amountBasis: candidate.amountBasis,
+    promoContext: candidate.observation.promoContext,
+    promoMarkers: candidate.observation.promoMarkers,
+    effectiveLineAmount: candidate.observation.effectiveLineAmount,
+    discountAllocated: nullishNumber(candidate.row.discountAllocated),
+    qualityLevel: candidate.observation.qualityLevel,
+    skuKey: candidate.row.skuKey ?? identity?.skuKey ?? null,
+    merchantProductId: identity?.merchantProductId ?? null,
+    identityLevel: identity?.identityLevel ?? null,
+    identityConfidence: identity?.identityConfidence ?? null,
+    identitySource: identity?.identitySource ?? null,
+    merchantScopeKey: identity?.merchantScopeKey ?? null,
+  };
+}
+
 type StructuralCandidate = {
   row: ProductPriceHistoryRow;
   priceValue: number;
@@ -534,6 +731,7 @@ function buildObservationForRow(
     level2Eligible,
     level2RejectReasons: rejectReasons,
     qualityLevel,
+    discountAllocated: nullishNumber(row.discountAllocated),
   };
 }
 
@@ -694,7 +892,8 @@ function emptyResult(
   status: ProductPriceHistoryStatus,
   totalOccurrenceCount: number,
   observations: ProductPriceHistoryObservation[],
-  priceKind: ProductPriceKind | null = null
+  priceKind: ProductPriceKind | null = null,
+  canonicalDuplicateSelectionApplied = false
 ): ProductPriceHistoryResult {
   return {
     target,
@@ -705,6 +904,7 @@ function emptyResult(
     observations,
     seriesKind: null,
     amountBasis: null,
+    canonicalDuplicateSelectionApplied,
     totalOccurrenceCount,
     comparableOccurrenceCount: 0,
     excludedOccurrenceCount: totalOccurrenceCount,
@@ -741,7 +941,9 @@ function finalizeCandidates(
   priceKind: ProductPriceKind,
   candidates: ComparableCandidate[],
   observations: ProductPriceHistoryObservation[],
-  specCandidates: ComparableCandidate[] = candidates
+  identityByRowKey: Map<string, RowIdentityMetadata>,
+  specCandidates: ComparableCandidate[] = candidates,
+  canonicalDuplicateSelectionApplied = false
 ): ProductPriceHistoryResult {
   const basisGate = evaluateAmountBasisSeriesGate(candidates);
   if (basisGate.mixedBasis) {
@@ -762,7 +964,8 @@ function finalizeCandidates(
       'not_enough_points',
       totalOccurrenceCount,
       observationsWithBasisMismatch,
-      priceKind
+      priceKind,
+      canonicalDuplicateSelectionApplied
     );
   }
 
@@ -778,7 +981,8 @@ function finalizeCandidates(
       'mixed_currency',
       totalOccurrenceCount,
       observations,
-      priceKind
+      priceKind,
+      canonicalDuplicateSelectionApplied
     );
   }
 
@@ -797,30 +1001,20 @@ function finalizeCandidates(
       'mixed_currency',
       totalOccurrenceCount,
       observations,
-      priceKind
+      priceKind,
+      canonicalDuplicateSelectionApplied
     );
   }
 
   const points = knownCandidates
-    .map<ProductPriceHistoryPoint>((candidate) => ({
-      receiptId: candidate.row.receiptId,
-      itemId: candidate.row.itemId,
-      sourceIndex: candidate.row.sourceIndex,
-      occurredAt: candidate.row.occurredAt,
-      merchantRaw: candidate.row.merchantRaw,
-      merchantNormalized: candidate.row.merchantNormalized,
-      displayName: candidate.row.displayName,
-      currency: candidate.currency,
-      lineTotal: candidate.grossLineAmount,
-      purchaseQuantity: candidate.row.purchaseQuantity as number,
-      priceValue: candidate.priceValue,
-      priceKind,
-      seriesKind: 'gross',
-      grossLineAmount: candidate.grossLineAmount,
-      amountBasis: candidate.amountBasis,
-      promoContext: candidate.observation.promoContext,
-      promoMarkers: candidate.observation.promoMarkers,
-    }))
+    .map<ProductPriceHistoryPoint>((candidate) =>
+      buildHistoryPoint(
+        candidate,
+        priceKind,
+        candidate.currency,
+        identityByRowKey
+      )
+    )
     .sort(
       (left, right) =>
         left.occurredAt - right.occurredAt ||
@@ -847,6 +1041,7 @@ function finalizeCandidates(
     observations,
     seriesKind: points.length > 0 ? 'gross' : null,
     amountBasis: points.length >= 2 ? basisGate.amountBasis : null,
+    canonicalDuplicateSelectionApplied,
     totalOccurrenceCount,
     comparableOccurrenceCount: points.length,
     excludedOccurrenceCount: totalOccurrenceCount - points.length,
@@ -889,6 +1084,7 @@ function observationByRowKey(
       level2Eligible: false,
       level2RejectReasons: ['missing_observation'],
       qualityLevel: null,
+      discountAllocated: nullishNumber(row.discountAllocated),
     }
   );
 }
@@ -1005,6 +1201,9 @@ export function buildProductPriceHistory(
   options: BuildProductPriceHistoryOptions = {}
 ): ProductPriceHistoryResult {
   const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rows);
+  const canonicalDuplicateSelectionApplied =
+    options.canonicalDuplicateSelectionApplied === true;
+  const identityByRowKey = buildRowIdentityMetadataByKey(rows);
   const totalOccurrenceCount = rows.length;
 
   if (target.type === 'occurrence') {
@@ -1013,7 +1212,9 @@ export function buildProductPriceHistory(
       target,
       'not_enough_points',
       totalOccurrenceCount,
-      observations
+      observations,
+      null,
+      canonicalDuplicateSelectionApplied
     );
   }
 
@@ -1037,7 +1238,9 @@ export function buildProductPriceHistory(
       'purchase_unit',
       candidates,
       observations,
-      specCandidates
+      identityByRowKey,
+      specCandidates,
+      canonicalDuplicateSelectionApplied
     );
   }
 
@@ -1050,7 +1253,9 @@ export function buildProductPriceHistory(
       target,
       'unsupported_family',
       totalOccurrenceCount,
-      observations
+      observations,
+      null,
+      canonicalDuplicateSelectionApplied
     );
   }
 
@@ -1062,7 +1267,9 @@ export function buildProductPriceHistory(
       target,
       'unsupported_family',
       totalOccurrenceCount,
-      observations
+      observations,
+      null,
+      canonicalDuplicateSelectionApplied
     );
   }
 
@@ -1092,7 +1299,9 @@ export function buildProductPriceHistory(
       target,
       'ambiguous_dimension',
       totalOccurrenceCount,
-      observations
+      observations,
+      null,
+      canonicalDuplicateSelectionApplied
     );
   }
   if (specCandidates.length === 0) {
@@ -1100,7 +1309,9 @@ export function buildProductPriceHistory(
       target,
       'no_comparable_spec',
       totalOccurrenceCount,
-      observations
+      observations,
+      null,
+      canonicalDuplicateSelectionApplied
     );
   }
 
@@ -1111,7 +1322,9 @@ export function buildProductPriceHistory(
     priceKindForDimension(dimension),
     candidates,
     observations,
-    specCandidates
+    identityByRowKey,
+    specCandidates,
+    canonicalDuplicateSelectionApplied
   );
 }
 
@@ -1167,6 +1380,7 @@ const PRICE_HISTORY_SELECT_SQL = `
     receipt_items.volume_base_ml AS volumeBaseMl,
     receipt_items.weight_base_g AS weightBaseG,
     receipt_items.count_base AS countBase,
+    receipt_items.sku_key AS skuKey,
     receipt_items.gross_line_amount AS grossLineAmount,
     receipt_items.effective_line_amount AS effectiveLineAmount,
     receipt_items.discount_allocated AS discountAllocated,
@@ -1197,6 +1411,10 @@ function applyIdentityG3Gates(
     merchantKey: string;
     trendInsightEligible: boolean;
     stats: { qualityExcludedCount: number };
+    targetMembershipRowKeys: Array<{
+      receiptId: string;
+      itemSourceIndex: number;
+    }>;
     historyPoints: Array<{
       receiptId: string;
       itemSourceIndex: number;
@@ -1205,8 +1423,18 @@ function applyIdentityG3Gates(
       purchaseUnitPrice: number;
     }>;
   },
-  cache: ReceiptEvidenceCache
+  cache: ReceiptEvidenceCache,
+  identityByRowKey: Map<string, RowIdentityMetadata>,
+  canonicalDuplicateSelectionApplied: boolean
 ): ProductPriceHistoryResult {
+  const targetScopedRows =
+    target.type === 'merchant_product'
+      ? filterRowsByMembershipKeys(
+          filtered,
+          membershipRowKeysToSet(identityView.targetMembershipRowKeys)
+        )
+      : filtered;
+
   const identityRows = identityView.historyPoints.flatMap((point) => {
     const src =
       filtered.find(
@@ -1217,12 +1445,16 @@ function applyIdentityG3Gates(
     return src ? [src] : [];
   });
 
-  const structuralCohort = buildSkuStructuralCohort(identityRows, cache);
-  const { observations, observationsByKey } = buildObservationsAndStructuralCohort(
-    filtered,
-    cache,
-    structuralCohort
+  const { observations, observationsByKey } = buildObservationsForRows(
+    targetScopedRows,
+    cache
   );
+  const totalOccurrenceCount =
+    target.type === 'merchant_product'
+      ? targetScopedRows.length
+      : filtered.length;
+
+  const structuralCohort = buildSkuStructuralCohort(identityRows, cache);
 
   const pointCurrencies = identityRows.map((row) => knownCurrency(row.currency));
   const currencyGate = gateIdentityHistoryCurrencies(pointCurrencies);
@@ -1232,13 +1464,14 @@ function applyIdentityG3Gates(
       status: currencyGate.status,
       priceKind: 'purchase_unit',
       currency: null,
-      totalOccurrenceCount: filtered.length,
+      totalOccurrenceCount,
       comparableOccurrenceCount: 0,
-      excludedOccurrenceCount: filtered.length,
+      excludedOccurrenceCount: totalOccurrenceCount,
       points: [],
       observations,
       seriesKind: null,
       amountBasis: null,
+      canonicalDuplicateSelectionApplied,
       identityPresentation: null,
     };
   }
@@ -1271,38 +1504,28 @@ function applyIdentityG3Gates(
       status: 'not_enough_points',
       priceKind: 'purchase_unit',
       currency: currencyGate.currency,
-      totalOccurrenceCount: filtered.length,
+      totalOccurrenceCount,
       comparableOccurrenceCount: 0,
-      excludedOccurrenceCount: filtered.length,
+      excludedOccurrenceCount: totalOccurrenceCount,
       points: [],
       observations: observationsWithBasisMismatch,
       seriesKind: null,
       amountBasis: null,
+      canonicalDuplicateSelectionApplied,
       identityPresentation: null,
     };
   }
 
   const points = candidates
-    .map<ProductPriceHistoryPoint>((candidate) => ({
-      receiptId: candidate.row.receiptId,
-      itemId: candidate.row.itemId,
-      sourceIndex: candidate.row.sourceIndex,
-      occurredAt: candidate.row.occurredAt,
-      merchantRaw: candidate.row.merchantRaw,
-      merchantNormalized:
-        candidate.row.merchantNormalized ?? identityView.merchantKey,
-      displayName: candidate.row.displayName,
-      currency: currencyGate.currency,
-      lineTotal: candidate.grossLineAmount,
-      purchaseQuantity: candidate.row.purchaseQuantity as number,
-      priceValue: candidate.priceValue,
-      priceKind: 'purchase_unit',
-      seriesKind: 'gross',
-      grossLineAmount: candidate.grossLineAmount,
-      amountBasis: candidate.amountBasis,
-      promoContext: candidate.observation.promoContext,
-      promoMarkers: candidate.observation.promoMarkers,
-    }))
+    .map((candidate) =>
+      buildHistoryPoint(
+        candidate,
+        'purchase_unit',
+        currencyGate.currency,
+        identityByRowKey,
+        candidate.row.merchantNormalized ?? identityView.merchantKey
+      )
+    )
     .sort(
       (left, right) =>
         left.occurredAt - right.occurredAt ||
@@ -1315,13 +1538,14 @@ function applyIdentityG3Gates(
     status: points.length >= 2 ? 'ready' : 'not_enough_points',
     priceKind: 'purchase_unit',
     currency: currencyGate.currency,
-    totalOccurrenceCount: filtered.length,
+    totalOccurrenceCount,
     comparableOccurrenceCount: points.length,
-    excludedOccurrenceCount: Math.max(0, filtered.length - points.length),
+    excludedOccurrenceCount: Math.max(0, totalOccurrenceCount - points.length),
     points,
     observations,
     seriesKind: points.length > 0 ? 'gross' : null,
     amountBasis: points.length >= 2 ? basisGate.amountBasis : null,
+    canonicalDuplicateSelectionApplied,
     identityPresentation: {
       strategy: 'same_merchant_product',
       titleKey: 'priceHistory.titleMerchantLocal',
@@ -1352,11 +1576,13 @@ export async function loadProductPriceHistoryWithDb(
     filter.params
   );
   const excluded = options.excludedReceiptIds;
+  const canonicalDuplicateSelectionApplied = excluded !== undefined;
   const filtered =
     excluded && excluded.size > 0
       ? rows.filter((row) => !excluded.has(row.receiptId))
       : rows;
   const cache = buildReceiptEvidenceCache(filtered);
+  const identityByRowKey = buildRowIdentityMetadataByKey(filtered);
 
   try {
     const { isProductIdentityPriceHistoryV1Enabled } = await import('./env');
@@ -1371,70 +1597,59 @@ export async function loadProductPriceHistoryWithDb(
         preferredMpId
       );
       if (identityView) {
+        if (
+          target.type === 'merchant_product' &&
+          identityView.merchantProductId !== target.key
+        ) {
+          return failClosedRequestedMerchantProductTargetResult(
+            target,
+            filtered,
+            cache,
+            canonicalDuplicateSelectionApplied
+          );
+        }
         return applyIdentityG3Gates(
           target,
           filtered,
           identityView,
-          cache
+          cache,
+          identityByRowKey,
+          canonicalDuplicateSelectionApplied
         );
       }
       if (target.type === 'merchant_product') {
-        const observations = buildObservations(filtered, cache);
-        return {
+        return failClosedRequestedMerchantProductTargetResult(
           target,
-          status: 'not_enough_points',
-          priceKind: 'purchase_unit',
-          currency: null,
-          totalOccurrenceCount: filtered.length,
-          comparableOccurrenceCount: 0,
-          excludedOccurrenceCount: filtered.length,
-          points: [],
-          observations,
-          seriesKind: null,
-          amountBasis: null,
-          identityPresentation: null,
-        };
+          filtered,
+          cache,
+          canonicalDuplicateSelectionApplied
+        );
       }
     }
   } catch {
     if (target.type === 'merchant_product') {
-      const observations = buildObservations(filtered, cache);
-      return {
+      return failClosedRequestedMerchantProductTargetResult(
         target,
-        status: 'not_enough_points',
-        priceKind: 'purchase_unit',
-        currency: null,
-        totalOccurrenceCount: filtered.length,
-        comparableOccurrenceCount: 0,
-        excludedOccurrenceCount: filtered.length,
-        points: [],
-        observations,
-        seriesKind: null,
-        amountBasis: null,
-        identityPresentation: null,
-      };
+        filtered,
+        cache,
+        canonicalDuplicateSelectionApplied
+      );
     }
   }
 
   if (target.type === 'merchant_product') {
-    const observations = buildObservations(filtered, cache);
-    return {
+    return failClosedRequestedMerchantProductTargetResult(
       target,
-      status: 'not_enough_points',
-      priceKind: 'purchase_unit',
-      currency: null,
-      totalOccurrenceCount: filtered.length,
-      comparableOccurrenceCount: 0,
-      excludedOccurrenceCount: filtered.length,
-      points: [],
-      observations,
-      seriesKind: null,
-      amountBasis: null,
-      identityPresentation: null,
-    };
+      filtered,
+      cache,
+      canonicalDuplicateSelectionApplied
+    );
   }
 
-  return buildProductPriceHistory(target, filtered, { receiptEvidenceCache: cache });
+  return buildProductPriceHistory(target, filtered, {
+    receiptEvidenceCache: cache,
+    canonicalDuplicateSelectionApplied,
+  });
 }
 
 export async function loadProductPriceHistory(
