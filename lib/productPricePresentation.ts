@@ -1,8 +1,26 @@
+import type { ProductPriceChangeInterpretation } from './productPriceChangeInterpretation';
 import type {
   ProductPriceHistoryPoint,
   ProductPriceHistoryStatus,
   ProductPriceKind,
 } from './productPriceHistory';
+
+export type ProductPriceChangePresentation = {
+  change:
+    | null
+    | {
+        key:
+          | 'priceHistory.change.unchanged'
+          | 'priceHistory.change.increased'
+          | 'priceHistory.change.decreased';
+        deltaAmount: number | null;
+      };
+  promo:
+    | null
+    | {
+        key: 'priceHistory.promo.started' | 'priceHistory.promo.ended';
+      };
+};
 
 export type ProductPriceVisualMode =
   | 'status'
@@ -44,4 +62,41 @@ export function resolveProductPriceKindLabel(
   const key = `priceHistory.kind.${priceKind}`;
   const translated = translate(key).trim();
   return translated && translated !== key ? translated : null;
+}
+
+export function resolveProductPriceChangePresentation(
+  interpretation: ProductPriceChangeInterpretation
+): ProductPriceChangePresentation {
+  if (interpretation.status === 'unavailable') {
+    return { change: null, promo: null };
+  }
+
+  const { grossDirection, grossDelta, promoTransition } = interpretation;
+
+  let change: ProductPriceChangePresentation['change'];
+  if (grossDirection === 'unchanged') {
+    change = {
+      key: 'priceHistory.change.unchanged',
+      deltaAmount: null,
+    };
+  } else if (grossDirection === 'increased') {
+    change = {
+      key: 'priceHistory.change.increased',
+      deltaAmount: Math.abs(grossDelta),
+    };
+  } else {
+    change = {
+      key: 'priceHistory.change.decreased',
+      deltaAmount: Math.abs(grossDelta),
+    };
+  }
+
+  let promo: ProductPriceChangePresentation['promo'] = null;
+  if (promoTransition === 'started') {
+    promo = { key: 'priceHistory.promo.started' };
+  } else if (promoTransition === 'ended') {
+    promo = { key: 'priceHistory.promo.ended' };
+  }
+
+  return { change, promo };
 }

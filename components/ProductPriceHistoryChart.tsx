@@ -4,6 +4,7 @@ import Svg, { Circle, Line, Polyline } from 'react-native-svg';
 
 import { formatDate } from '@/lib/formatDate';
 import { t } from '@/lib/i18n';
+import { interpretProductPriceChange } from '@/lib/productPriceChangeInterpretation';
 import {
   buildPriceChartCoordinates,
   PRODUCT_PRICE_CHART_HEIGHT,
@@ -14,10 +15,28 @@ import type {
 } from '@/lib/productPriceHistory';
 import {
   formatProductPriceAmount,
+  resolveProductPriceChangePresentation,
   resolveProductPriceKindLabel,
   resolveProductPriceVisualMode,
+  type ProductPriceChangePresentation,
 } from '@/lib/productPricePresentation';
 import { UI_COLORS, UI_RADIUS } from '@/lib/uiTokens';
+
+function formatChangePresentationText(
+  presentation: ProductPriceChangePresentation,
+  currency: string | null
+): string | null {
+  if (!presentation.change) return null;
+  if (presentation.change.deltaAmount != null && currency) {
+    return t(presentation.change.key, {
+      amount: formatProductPriceAmount(
+        presentation.change.deltaAmount,
+        currency
+      ),
+    });
+  }
+  return t(presentation.change.key);
+}
 
 function statusMessageKey(
   status: ProductPriceHistoryResult['status']
@@ -65,6 +84,25 @@ export function ProductPriceHistoryChart({
     result.status,
     result.points
   );
+  const interpretation = useMemo(() => {
+    const target = result.target;
+    return interpretProductPriceChange({
+      history: result,
+      targetType: target.type,
+      targetKey: 'key' in target ? target.key : '',
+    });
+  }, [result]);
+  const changePresentation = useMemo(
+    () => resolveProductPriceChangePresentation(interpretation),
+    [interpretation]
+  );
+  const changePresentationText = formatChangePresentationText(
+    changePresentation,
+    result.currency
+  );
+  const promoPresentationText = changePresentation.promo
+    ? t(changePresentation.promo.key)
+    : null;
   const priceKindLabel = result.priceKind
     ? resolveProductPriceKindLabel(result.priceKind, t)
     : null;
@@ -126,10 +164,17 @@ export function ProductPriceHistoryChart({
                     result.currency
                   )}
                 </Text>
-                <Text style={styles.flatPriceStatus}>
-                  {t('priceHistory.flatUnchanged')}
-                </Text>
+                {changePresentationText ? (
+                  <Text style={styles.flatPriceStatus}>
+                    {changePresentationText}
+                  </Text>
+                ) : null}
               </View>
+              {promoPresentationText ? (
+                <Text style={styles.flatPromoStatus}>
+                  {promoPresentationText}
+                </Text>
+              ) : null}
               <View style={styles.flatTimeline}>
                 <View style={styles.flatDot} />
                 <View style={styles.flatLine} />
@@ -204,6 +249,17 @@ export function ProductPriceHistoryChart({
               </View>
             </>
           )}
+          {visualMode === 'chart' &&
+          (changePresentationText || promoPresentationText) ? (
+            <View style={styles.changeSection}>
+              {changePresentationText ? (
+                <Text style={styles.changeText}>{changePresentationText}</Text>
+              ) : null}
+              {promoPresentationText ? (
+                <Text style={styles.promoText}>{promoPresentationText}</Text>
+              ) : null}
+            </View>
+          ) : null}
           {latest && minimumPoint && maximumPoint && result.priceKind && result.currency && (
             <View style={styles.factGrid}>
               <View style={[styles.fact, styles.latestFact]}>
@@ -330,6 +386,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     textAlign: 'right',
+  },
+  flatPromoStatus: {
+    marginTop: 6,
+    color: UI_COLORS.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'right',
+  },
+  changeSection: {
+    marginTop: 10,
+    gap: 4,
+  },
+  changeText: {
+    color: UI_COLORS.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  promoText: {
+    color: UI_COLORS.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
   },
   flatTimeline: {
     marginTop: 17,

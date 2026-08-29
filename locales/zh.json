@@ -413,6 +413,15 @@
     "minimum": "最低记录",
     "maximum": "最高记录",
     "flatUnchanged": "价格保持不变",
+    "change": {
+      "unchanged": "与上次相比价格未变",
+      "increased": "比上次高 {amount}",
+      "decreased": "比上次低 {amount}"
+    },
+    "promo": {
+      "started": "本次有优惠",
+      "ended": "上次的优惠本次已结束"
+    },
     "coverage": "基于 {comparable}/{total} 条可比较记录，排除 {excluded} 条",
     "coverageComparable": "基于 {comparable} 次可比较购买",
     "coverageExcludedCurrent": "已忽略 {excluded} 条可能异常的价格记录",

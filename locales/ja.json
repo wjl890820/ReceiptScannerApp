@@ -413,6 +413,15 @@
     "minimum": "最低記録",
     "maximum": "最高記録",
     "flatUnchanged": "価格は変わっていません",
+    "change": {
+      "unchanged": "前回と同じ価格です",
+      "increased": "前回より {amount} 高くなりました",
+      "decreased": "前回より {amount} 安くなりました"
+    },
+    "promo": {
+      "started": "今回は割引があります",
+      "ended": "前回の割引は今回はありません"
+    },
     "coverage": "比較可能な記録 {comparable}/{total} 件を使用、{excluded} 件を除外",
     "coverageComparable": "{comparable}回の比較可能な購入に基づく",
     "coverageExcludedCurrent": "異常の可能性がある価格記録を{excluded}件除外",
