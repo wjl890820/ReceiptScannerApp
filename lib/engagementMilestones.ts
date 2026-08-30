@@ -71,7 +71,8 @@ export type MilestoneHighestItem = {
 export type ReceiptShoppingSummary = {
   receiptId: string;
   merchant: string | null;
-  transactionAt: number;
+  /** Confirmed stored transaction_at only; null when purchase date is unknown. */
+  transactionAt: number | null;
   total: number;
   currency: string;
   itemCount: number;
@@ -142,7 +143,7 @@ export type FirstReceiptMilestone = EngagementMilestoneBase & {
   milestone: 1;
   receiptId: string;
   merchant: string | null;
-  transactionAt: number;
+  transactionAt: number | null;
   total: number;
   currency: string;
   itemCount: number;
@@ -283,10 +284,19 @@ export function distinctReceiptCount(
   return ids.size;
 }
 
-function receiptTimestamp(receipt: EngagementReceipt): number {
+/** Ordering/recency only — may fall back to created_at. */
+export function receiptOrderingTimestamp(receipt: EngagementReceipt): number {
   return finitePositive(receipt.transaction_at) ??
     finitePositive(receipt.created_at) ??
     0;
+}
+
+function confirmedReceiptTransactionAt(receipt: EngagementReceipt): number | null {
+  return finitePositive(receipt.transaction_at);
+}
+
+function receiptTimestamp(receipt: EngagementReceipt): number {
+  return receiptOrderingTimestamp(receipt);
 }
 
 function receiptTotal(receipt: EngagementReceipt): number {
@@ -527,7 +537,7 @@ export function buildReceiptShoppingSummary(
       receipt.merchant_raw?.trim() ||
       receipt.merchant_normalized?.trim() ||
       null,
-    transactionAt: receiptTimestamp(receipt),
+    transactionAt: confirmedReceiptTransactionAt(receipt),
     total: receiptTotal(receipt),
     currency: receipt.currency,
     itemCount: items.length,

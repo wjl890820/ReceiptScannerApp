@@ -120,9 +120,11 @@ describe('DS-1 SectionTitle migration', () => {
       'components/MilestoneProgressCard.tsx',
       'components/MilestoneProgress.tsx',
       'components/MilestoneUnlockCard.tsx',
+      'components/ProgressiveHomeInsights.tsx',
+      'components/home/HomeScanAction.tsx',
+      'components/home/HomeFrequentProductList.tsx',
     ];
     const notYetMigrated = [
-      'components/ProgressiveHomeInsights.tsx',
       'components/MerunoGroupedList.tsx',
     ];
 

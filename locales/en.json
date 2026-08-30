@@ -57,7 +57,10 @@
       "profile": {
         "title": "Shopping Profile",
         "category": "Category mix of recorded purchases",
-        "frequency": "Recorded purchases average about {days} days apart."
+        "frequency": "Recorded purchases average about {days} days apart.",
+        "frequencyLabel": "Average shopping interval",
+        "frequencyValue": "{days} days",
+        "recentChangeLabel": "Recent change"
       },
       "analyticsUnavailable": "Shopping insights are temporarily unavailable. You can still scan receipts.",
       "analysisCta": "View spending analysis"

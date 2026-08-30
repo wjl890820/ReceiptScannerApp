@@ -369,7 +369,9 @@ export default function PostSaveSummaryScreen() {
                     {summary.merchant || t('common.unknownMerchant')}
                   </Text>
                   <Text style={styles.date}>
-                    {formatDate(summary.transactionAt)}
+                    {summary.transactionAt != null
+                      ? formatDate(summary.transactionAt)
+                      : t('history.detail.dateUnknown')}
                   </Text>
                 </View>
                 <Text style={styles.total}>

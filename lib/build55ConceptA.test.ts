@@ -7,10 +7,10 @@ function source(relativePath: string): string {
 
 describe('Build 55 Concept A production contracts', () => {
   it('uses the approved blue primary modules on Home and Analysis', () => {
-    const home = source('components/ProgressiveHomeInsights.tsx');
+    const scan = source('components/home/HomeScanAction.tsx');
     const analysis = source('app/(tabs)/analysis.tsx');
-    expect(home).toContain('styles.scanHero');
-    expect(home).toContain('backgroundColor: UI_COLORS.accent');
+    expect(scan).toContain('styles.scanHero');
+    expect(scan).toContain('backgroundColor: UI_COLORS.accent');
     expect(analysis).toContain('styles.overviewBlueHero');
     expect(analysis).not.toContain('styles.overviewDarkAnchor');
   });

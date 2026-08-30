@@ -9,6 +9,7 @@ import {
   type EngagementMilestoneStatus,
   type MilestoneFrequentProduct,
   type ReceiptShoppingSummary,
+  receiptOrderingTimestamp,
   type TenReceiptMilestone,
   type ThreeReceiptMilestone,
 } from './engagementMilestones';
@@ -62,10 +63,7 @@ export function resolveProgressiveHomeStage(
 }
 
 function receiptTimestamp(receipt: ReceiptRow): number {
-  const timestamp = receipt.transaction_at ?? receipt.created_at;
-  return typeof timestamp === 'number' && Number.isFinite(timestamp)
-    ? timestamp
-    : 0;
+  return receiptOrderingTimestamp(receipt);
 }
 
 export function filterHomeIdentityProductRows<

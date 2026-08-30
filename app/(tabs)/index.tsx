@@ -64,6 +64,7 @@ import {
   UI_COLORS,
   UI_LAYOUT,
   UI_RADIUS,
+  UI_SHADOW,
   UI_TYPOGRAPHY,
 } from '@/lib/uiTokens';
 import {
@@ -835,12 +836,8 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 40,
     borderTopWidth: 1,
-    borderTopColor: '#e7e9ec',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
+    borderTopColor: UI_COLORS.border,
+    ...UI_SHADOW.sticky,
   },
   continueReviewCard: {
     flexDirection: 'row',

@@ -6,11 +6,14 @@ function source(relativePath: string): string {
 }
 
 describe('Build 56 Concept A composition contracts', () => {
-  it('uses a bold Home action hero and a real profile composition', () => {
+  it('uses a bold Home action hero and profile memory summary on Home', () => {
     const home = source('components/ProgressiveHomeInsights.tsx');
-    expect(home).toContain('styles.scanCornerDetail');
-    expect(home).toContain('function ProfileComposition');
-    expect(home).toContain('<CategoryDonut');
+    const scan = source('components/home/HomeScanAction.tsx');
+    expect(scan).toContain('styles.scanCornerDetail');
+    expect(scan).toContain('UI_COLORS.accent');
+    expect(home).not.toContain('CategoryDonut');
+    expect(home).toContain('home.progressive.profile.frequencyLabel');
+    expect(home).toContain('formatMilestoneRecentChange');
   });
 
   it('keeps Analysis dense and grouped instead of restoring metric cards', () => {

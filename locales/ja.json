@@ -57,7 +57,10 @@
       "profile": {
         "title": "買い物プロフィール",
         "category": "記録済みの買い物のカテゴリ構成",
-        "frequency": "記録済みの買い物の平均間隔は約 {days} 日です。"
+        "frequency": "記録済みの買い物の平均間隔は約 {days} 日です。",
+        "frequencyLabel": "平均購入間隔",
+        "frequencyValue": "{days} 日",
+        "recentChangeLabel": "最近の変化"
       },
       "analyticsUnavailable": "買い物インサイトを読み込めませんでした。レシートのスキャンは続けられます。",
       "analysisCta": "支出分析を見る"

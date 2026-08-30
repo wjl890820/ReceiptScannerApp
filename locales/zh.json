@@ -57,7 +57,10 @@
       "profile": {
         "title": "购物画像",
         "category": "已记录购物的分类构成",
-        "frequency": "已记录购物的平均间隔约为 {days} 天。"
+        "frequency": "已记录购物的平均间隔约为 {days} 天。",
+        "frequencyLabel": "平均购物间隔",
+        "frequencyValue": "{days} 天",
+        "recentChangeLabel": "最近变化"
       },
       "analyticsUnavailable": "购物洞察暂时无法载入，你仍可继续扫描小票。",
       "analysisCta": "查看支出分析"

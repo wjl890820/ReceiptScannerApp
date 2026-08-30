@@ -185,11 +185,15 @@ describe('R2-B6 release UX contracts', () => {
   });
 
   it('I — Build 52: Frequent quantity omits unreliable zero; no viewHistory duplicate CTA', () => {
+    const homeFrequent = fs.readFileSync(
+      path.join(__dirname, '../components/home/HomeFrequentProductList.tsx'),
+      'utf8'
+    );
     const home = fs.readFileSync(
       path.join(__dirname, '../components/ProgressiveHomeInsights.tsx'),
       'utf8'
     );
-    expect(home).toContain('totalPurchaseQuantity > 0');
+    expect(homeFrequent).toContain('totalPurchaseQuantity > 0');
     expect(home).not.toContain('home.progressive.frequent.viewHistory');
     // Duplicate Analysis-tab CTA removed from Home JSX (styles/dead props OK).
     expect(home).not.toContain("t('home.progressive.analysisCta'");

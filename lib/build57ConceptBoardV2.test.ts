@@ -63,13 +63,13 @@ describe('Build 57 Concept Board v2.0 presentation contracts', () => {
   });
 
   it('uses blue finance heroes and multi-color category presentation', () => {
-    const home = source('components/ProgressiveHomeInsights.tsx');
+    const scan = source('components/home/HomeScanAction.tsx');
     const analysis = source('app/(tabs)/analysis.tsx');
-    expect(home).toContain('backgroundColor: UI_COLORS.accent');
-    expect(home).toContain('CategoryDonut');
+    expect(scan).toContain('backgroundColor: UI_COLORS.accent');
     expect(analysis).toContain('styles.overviewBlueHero');
     expect(analysis).toContain('CategoryRatioRow');
     expect(analysis).toContain('MerchantIdentityTile');
+    expect(source('components/CategoryDonut.tsx')).toContain('getCategoryColor');
   });
 
   it('does not expose internal price keys or global audit exclusions', () => {

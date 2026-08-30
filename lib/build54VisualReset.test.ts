@@ -28,9 +28,10 @@ describe('Build 54 visual reset contracts', () => {
   });
 
   it('keeps frequent products and History purchases as divided rows', () => {
-    const home = source('components/ProgressiveHomeInsights.tsx');
+    const homeFrequent = source('components/home/HomeFrequentProductList.tsx');
     const history = source('app/(tabs)/history/index.tsx');
-    expect(home).toContain('index > 0 && styles.borderTop');
+    expect(homeFrequent).toContain('showDivider={index < products.length - 1}');
+    expect(homeFrequent).toContain('MerunoGroupedRow');
     expect(history).toContain('ItemSeparatorComponent');
     expect(history).toContain('MerchantIdentityTile');
   });
