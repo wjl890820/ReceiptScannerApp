@@ -22,7 +22,7 @@ jest.mock('expo-localization', () => ({
 
 import { getCategoryLabel } from './categoryPalette';
 import { initI18n, setLocalePreference, t } from './i18n';
-import { buildProductSearchResultHref } from './productDetailTarget';
+import { buildPersonalAwareProductSearchResultHref } from './personalProductReturnTarget';
 
 const localesDir = path.resolve(__dirname, '../locales');
 const historyScreenPath = path.resolve(
@@ -95,18 +95,24 @@ describe('R2-F2 History search category presentation', () => {
     expect(source).toContain('normalizeReceiptItemSearchQuery');
   });
 
-  it('F — Product Detail search href contract remains unchanged', () => {
+  it('F — Product Detail search href contract remains unchanged without personal inventory', () => {
     const source = fs.readFileSync(historyScreenPath, 'utf8');
-    expect(source).toContain('buildProductSearchResultHref');
+    expect(source).toContain('buildPersonalAwareProductSearchResultHref');
     expect(source).toContain('onProductSearchResultPress');
 
-    const href = buildProductSearchResultHref({
-      skuKey: 'sku-chicken-1',
-      canonicalProductName: null,
-      productFamilyKey: null,
-      receiptId: 'receipt-1',
-      itemId: 'item-1',
-    });
+    const href = buildPersonalAwareProductSearchResultHref(
+      {
+        source: {
+          skuKey: 'sku-chicken-1',
+          canonicalProductName: null,
+          productFamilyKey: null,
+          receiptId: 'receipt-1',
+          itemId: 'item-1',
+        },
+        sourceIndex: 0,
+      },
+      null
+    );
     expect(href).toBe('/product/sku?key=sku-chicken-1');
     expect(href).not.toContain('food_ingredients');
   });

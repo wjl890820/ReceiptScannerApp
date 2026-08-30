@@ -1,6 +1,6 @@
 // app/(tabs)/history/[id].tsx
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,7 @@ import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import {
   deleteReceipts,
   getReceipt,
+  getReceiptsDatabase,
   listReceipts,
   updateReceipt,
   type ReceiptRow,
@@ -39,7 +40,17 @@ import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
 import { navigateBackOrHistory } from '@/lib/navigationBack';
 import {
-  buildAggregatableProductDetailHref,
+  shouldApplyReceiptDetailLoadUpdate,
+} from '@/lib/receiptDetailLoadLifecycle';
+import {
+  loadPersonalProductEndpointInventoryWithDb,
+  type PersonalProductEndpointInventory,
+} from '@/lib/personalProductEndpointInventory';
+import {
+  buildPersonalAwareAggregatableProductDetailHref,
+  resolveReceiptItemPersistedSourceIndex,
+} from '@/lib/personalProductReturnTarget';
+import {
   productDetailTargetSourceFromReceiptItem,
 } from '@/lib/productDetailTarget';
 import { learnFromUserEdit } from '@/lib/receiptEnricher';
@@ -166,6 +177,36 @@ export default function ReceiptDetailScreen() {
 
   const [loading, setLoading] = useState(true);
   const [receipt, setReceipt] = useState<ReceiptRow | null>(null);
+  const [personalInventory, setPersonalInventory] =
+    useState<PersonalProductEndpointInventory | null>(null);
+  const loadGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const routeIdRef = useRef<string | undefined>(id);
+
+  useEffect(() => {
+    routeIdRef.current = id;
+  }, [id]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadGenerationRef.current += 1;
+    };
+  }, []);
+
+  const loadUpdateAllowed = useCallback(
+    (generation: number, capturedReceiptId: string) =>
+      shouldApplyReceiptDetailLoadUpdate({
+        mounted: mountedRef.current,
+        capturedGeneration: generation,
+        currentGeneration: loadGenerationRef.current,
+        capturedReceiptId,
+        currentReceiptId:
+          routeIdRef.current != null ? String(routeIdRef.current) : null,
+      }),
+    []
+  );
 
   const onBack = useCallback(() => {
     navigateBackOrHistory(router);
@@ -247,22 +288,70 @@ export default function ReceiptDetailScreen() {
 
   const load = useCallback(async () => {
     if (!id) {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
       return;
     }
 
-    try {
+    const generation = ++loadGenerationRef.current;
+    const capturedId = String(id);
+
+    if (loadUpdateAllowed(generation, capturedId)) {
       setLoading(true);
-      const row = await getReceipt(String(id));
-      setReceipt(row ?? null);
+    }
+
+    try {
+      const [receiptResult, inventoryResult] = await Promise.allSettled([
+        getReceipt(capturedId),
+        (async () => {
+          try {
+            const db = await getReceiptsDatabase();
+            return await loadPersonalProductEndpointInventoryWithDb(db);
+          } catch (personalInventoryError) {
+            console.error(
+              '[ReceiptDetail] personal inventory enrichment skipped',
+              personalInventoryError
+            );
+            return null;
+          }
+        })(),
+      ]);
+
+      if (!loadUpdateAllowed(generation, capturedId)) {
+        return;
+      }
+
+      if (receiptResult.status === 'fulfilled') {
+        setReceipt(receiptResult.value ?? null);
+        if (
+          inventoryResult.status === 'fulfilled' &&
+          inventoryResult.value?.status === 'ready'
+        ) {
+          setPersonalInventory(inventoryResult.value.inventory);
+        } else {
+          setPersonalInventory(null);
+        }
+      } else {
+        console.error(receiptResult.reason);
+        Alert.alert(t('history.errors.loadTitle'), t('history.detail.loadMessage'));
+        setReceipt(null);
+        setPersonalInventory(null);
+      }
     } catch (e: any) {
+      if (!loadUpdateAllowed(generation, capturedId)) {
+        return;
+      }
       console.error(e);
       Alert.alert(t('history.errors.loadTitle'), t('history.detail.loadMessage'));
       setReceipt(null);
+      setPersonalInventory(null);
     } finally {
-      setLoading(false);
+      if (loadUpdateAllowed(generation, capturedId)) {
+        setLoading(false);
+      }
     }
-  }, [id]);
+  }, [id, loadUpdateAllowed]);
 
   useEffect(() => {
     load();
@@ -593,12 +682,20 @@ export default function ReceiptDetailScreen() {
         {displayItems.length > 0 ? (
           <MerunoGroupedList>
             {displayItems.map((it, idx) => {
-              const productHref = buildAggregatableProductDetailHref(
-                productDetailTargetSourceFromReceiptItem(
-                  it as unknown as Record<string, unknown>,
-                  receipt.id,
-                  idx
-                )
+              const sourceIndex = resolveReceiptItemPersistedSourceIndex(
+                it as unknown as Record<string, unknown>,
+                idx
+              );
+              const productHref = buildPersonalAwareAggregatableProductDetailHref(
+                {
+                  source: productDetailTargetSourceFromReceiptItem(
+                    it as unknown as Record<string, unknown>,
+                    receipt.id,
+                    sourceIndex
+                  ),
+                  sourceIndex,
+                },
+                personalInventory
               );
               const tag = getItemTagDisplay(it as any);
               return (

@@ -24,7 +24,7 @@ import {
   MerunoGroupedRow,
 } from '@/components/MerunoGroupedList';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
-import { deleteReceipts, listReceipts, type ReceiptListRow } from '@/lib/db';
+import { deleteReceipts, getReceiptsDatabase, listReceipts, type ReceiptListRow } from '@/lib/db';
 import type { AnalysisDDuplicateGroup } from '@/lib/analysisDDuplicateAudit';
 import { formatJPY } from '@/lib/formatJPY';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -60,14 +60,27 @@ import {
   shouldApplyHistorySearchQueryChange,
 } from '@/lib/historySearchUi';
 import {
-  buildProductSearchResultHref,
-} from '@/lib/productDetailTarget';
+  buildPersonalAwareProductSearchResultHref,
+} from '@/lib/personalProductReturnTarget';
+import {
+  beginAsyncRequestGeneration,
+  invalidateAsyncRequestGeneration,
+  shouldApplyAsyncRequestGeneration,
+} from '@/lib/asyncRequestGeneration';
+import {
+  loadPersonalProductEndpointInventoryWithDb,
+  type PersonalProductEndpointInventory,
+} from '@/lib/personalProductEndpointInventory';
 
 /** Matches Home tab content clearance so rows clear the bottom tab bar. */
 const TAB_BAR_CONTENT_CLEARANCE = UI_LAYOUT.tabContentClearance;
 
+type HistoryProjectedItemSearchResult = ReceiptItemSearchResult & {
+  personalEvidenceReceiptId: string;
+};
+
 type HistorySearchEntry =
-  | { kind: 'item'; result: ReceiptItemSearchResult }
+  | { kind: 'item'; result: HistoryProjectedItemSearchResult }
   | { kind: 'receipt'; result: ReceiptListRow };
 
 export default function HistoryScreen() {
@@ -83,14 +96,47 @@ export default function HistoryScreen() {
   const [deleting, setDeleting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
-  const [itemResults, setItemResults] = useState<ReceiptItemSearchResult[]>([]);
+  const [itemResults, setItemResults] = useState<HistoryProjectedItemSearchResult[]>([]);
   const [receiptResults, setReceiptResults] = useState<ReceiptListRow[]>([]);
+  const [personalInventory, setPersonalInventory] =
+    useState<PersonalProductEndpointInventory | null>(null);
   const searchQueryRef = useRef('');
   const searchRequestSequence = useRef(0);
   const lastCompletedNormalizedQueryRef = useRef('');
   const purchaseTruthRef = useRef<ReturnType<
     typeof buildHistoryPurchaseTruthView
   > | null>(null);
+  const personalInventoryGenerationRef = useRef(0);
+
+  const loadPersonalInventory = useCallback(async () => {
+    const generation = beginAsyncRequestGeneration(personalInventoryGenerationRef);
+    try {
+      const db = await getReceiptsDatabase();
+      const inventoryResult = await loadPersonalProductEndpointInventoryWithDb(db);
+      if (
+        !shouldApplyAsyncRequestGeneration(
+          generation,
+          personalInventoryGenerationRef.current
+        )
+      ) {
+        return;
+      }
+      setPersonalInventory(
+        inventoryResult.status === 'ready' ? inventoryResult.inventory : null
+      );
+    } catch (e) {
+      console.error('[History] personal inventory enrichment skipped', e);
+      if (
+        !shouldApplyAsyncRequestGeneration(
+          generation,
+          personalInventoryGenerationRef.current
+        )
+      ) {
+        return;
+      }
+      setPersonalInventory(null);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -151,9 +197,15 @@ export default function HistoryScreen() {
         setRows(truth.visibleRows);
       }
 
+      const withProvenance = (
+        outcome.itemResults as ReceiptItemSearchResult[]
+      ).map((result) => ({
+        ...result,
+        personalEvidenceReceiptId: result.receiptId,
+      }));
       const projected = projectHistorySearchToPurchaseTruth(
         {
-          itemResults: outcome.itemResults as ReceiptItemSearchResult[],
+          itemResults: withProvenance as HistoryProjectedItemSearchResult[],
           receiptResults: outcome.receiptResults as ReceiptListRow[],
         },
         truth.selection
@@ -179,23 +231,28 @@ export default function HistoryScreen() {
   useFocusEffect(
     React.useCallback(() => {
       void load();
+      void loadPersonalInventory();
       const currentQuery = searchQueryRef.current;
       if (normalizeReceiptItemSearchQuery(currentQuery)) {
         void executeSearch(currentQuery);
       }
-    }, [executeSearch, load])
+      return () => {
+        invalidateAsyncRequestGeneration(personalInventoryGenerationRef);
+      };
+    }, [executeSearch, load, loadPersonalInventory])
   );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([
       load(),
+      loadPersonalInventory(),
       normalizeReceiptItemSearchQuery(searchQueryRef.current)
         ? executeSearch(searchQueryRef.current)
         : Promise.resolve(),
     ]);
     setRefreshing(false);
-  }, [executeSearch, load]);
+  }, [executeSearch, load, loadPersonalInventory]);
 
   const onSearchQueryChange = useCallback((value: string) => {
     // IME confirm / keyboard Search may re-fire the same text. Resetting
@@ -334,10 +391,25 @@ export default function HistoryScreen() {
   );
 
   const onProductSearchResultPress = useCallback(
-    (result: ReceiptItemSearchResult) => {
-      router.push(buildProductSearchResultHref(result) as Href);
+    (result: HistoryProjectedItemSearchResult) => {
+      router.push(
+        buildPersonalAwareProductSearchResultHref(
+          {
+            source: {
+              receiptId: result.receiptId,
+              itemId: result.itemId,
+              skuKey: result.skuKey,
+              canonicalProductName: result.canonicalProductName,
+              productFamilyKey: result.productFamilyKey,
+            },
+            sourceIndex: result.sourceIndex,
+            personalEvidenceReceiptId: result.personalEvidenceReceiptId,
+          },
+          personalInventory
+        ) as Href
+      );
     },
-    [router]
+    [router, personalInventory]
   );
 
   const searchActive =

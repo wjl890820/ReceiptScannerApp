@@ -106,7 +106,7 @@ describe('History / Receipt Detail freeze proofs (R2-B4)', () => {
       path.join(__dirname, '../app/(tabs)/history/index.tsx'),
       'utf8'
     );
-    expect(historyIndex).toContain('buildProductSearchResultHref');
+    expect(historyIndex).toContain('buildPersonalAwareProductSearchResultHref');
     expect(historyIndex).toContain('performHistoryPurchaseSearch');
     expect(historyIndex).toContain('searchHistoryPurchases');
     expect(historyIndex).not.toMatch(/merchantAnalyticsKey/);
@@ -118,7 +118,7 @@ describe('History / Receipt Detail freeze proofs (R2-B4)', () => {
       'utf8'
     );
     expect(detail).toContain('openItemEditor');
-    expect(detail).toContain('buildAggregatableProductDetailHref');
+    expect(detail).toContain('buildPersonalAwareAggregatableProductDetailHref');
     expect(detail).toContain('styles.editAction');
     expect(detail).toContain('styles.itemProductLink');
     expect(detail).toContain('kind="crossEntity"');
