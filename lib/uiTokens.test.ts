@@ -35,7 +35,7 @@ describe('uiTokens contract (R2-B5)', () => {
       ].sort()
     );
     expect(Object.keys(UI_SPACING).sort()).toEqual(
-      ['lg', 'md', 'sm', 'xl', 'xs'].sort()
+      ['lg', 'md', 'sm', 'xl', 'xs', 'xxl', 'xxxl'].sort()
     );
     expect(Object.keys(UI_RADIUS).sort()).toEqual(
       ['card', 'control', 'hero', 'input', 'panel', 'pill'].sort()
