@@ -1,8 +1,10 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
+import { MerunoText } from '@/components/primitives/MerunoText';
 import { t } from '@/lib/i18n';
 import type { PostSaveMilestoneViewModel } from '@/lib/milestonePresentation';
+import { milestoneProgressVisual } from '@/lib/milestoneProgressVisual';
 
 export function MilestoneProgress({
   viewModel,
@@ -14,10 +16,10 @@ export function MilestoneProgress({
   }
   if (viewModel.profileEstablished) {
     return (
-      <View style={styles.card}>
-        <Text style={styles.title}>
+      <View style={[milestoneProgressVisual.card, styles.cardSpacing]}>
+        <MerunoText role="chip" tone="primary" style={styles.title}>
           {t('postSaveSummary.progress.profileEstablished')}
-        </Text>
+        </MerunoText>
       </View>
     );
   }
@@ -39,29 +41,28 @@ export function MilestoneProgress({
         : 'postSaveSummary.progress.unlockProfile';
 
   return (
-    <View style={styles.card}>
+    <View style={[milestoneProgressVisual.card, styles.cardSpacing]}>
       <View style={styles.row}>
-        <Text style={styles.title}>{t('postSaveSummary.progress.title')}</Text>
-        <Text style={styles.count}>
+        <MerunoText role="chip" tone="primary" style={styles.title}>
+          {t('postSaveSummary.progress.title')}
+        </MerunoText>
+        <MerunoText role="chip" tone="accent" style={styles.count}>
           {viewModel.supportedReceiptCount} / {viewModel.nextMilestone}
-        </Text>
+        </MerunoText>
       </View>
-      <View style={styles.track}>
-        <View style={[styles.fill, { width: `${ratio * 100}%` }]} />
+      <View style={[milestoneProgressVisual.track, styles.track]}>
+        <View style={[milestoneProgressVisual.fill, { width: `${ratio * 100}%` }]} />
       </View>
-      <Text style={styles.hint}>
+      <MerunoText role="meta" tone="secondary" style={styles.hint}>
         {t(unlockKey, { count: viewModel.receiptsUntilNext })}
-      </Text>
+      </MerunoText>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
+  cardSpacing: {
     marginTop: 18,
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: '#f3f3f3',
   },
   row: {
     flexDirection: 'row',
@@ -69,31 +70,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   title: {
-    color: '#222',
-    fontSize: 14,
     fontWeight: '700',
   },
   count: {
-    color: '#222',
-    fontSize: 14,
     fontWeight: '800',
+    fontVariant: ['tabular-nums'],
   },
   track: {
-    height: 7,
     marginTop: 12,
-    borderRadius: 999,
-    overflow: 'hidden',
-    backgroundColor: '#ddd',
-  },
-  fill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#222',
   },
   hint: {
     marginTop: 10,
-    color: '#666',
-    fontSize: 13,
-    lineHeight: 19,
   },
 });

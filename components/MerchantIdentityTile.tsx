@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { merchantAccentColor } from '@/lib/merchantAccent';
 import { normalizeMerchantName } from '@/lib/productNormalizer';
+import { UI_COLORS } from '@/lib/uiTokens';
 
 export function MerchantIdentityTile({
   merchant,
@@ -35,7 +36,7 @@ export function MerchantIdentityTile({
       <MaterialIcons
         name="storefront"
         size={Math.max(17, Math.round(size * 0.5))}
-        color="#FFFFFF"
+        color={UI_COLORS.surface}
       />
     </View>
   );

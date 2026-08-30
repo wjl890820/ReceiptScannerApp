@@ -1,6 +1,7 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
+import { MerunoText } from '@/components/primitives/MerunoText';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import type {
   EngagementMilestoneResult,
@@ -16,6 +17,7 @@ import {
   formatMilestoneSummary,
 } from '@/lib/milestonePresentation';
 import type { ProductCategory } from '@/lib/productCategory';
+import { UI_COLORS, UI_RADIUS, UI_SPACING } from '@/lib/uiTokens';
 
 function formatAmount(amount: number, currency: string): string {
   return currency === 'JPY'
@@ -40,13 +42,13 @@ function CategoryStructure({
     <View style={styles.chips}>
       {visible.map((entry) => (
         <View key={entry.category} style={styles.chip}>
-          <Text style={styles.chipText}>
+          <MerunoText role="chip" tone="secondary">
             {categoryLabel(entry.category)}{' '}
             {Math.round(
               entry.spend > 0 ? entry.spendShare * 100 : entry.itemShare * 100
             )}
             %
-          </Text>
+          </MerunoText>
         </View>
       ))}
     </View>
@@ -65,10 +67,10 @@ function FrequentProducts({
           key={`${product.groupingType}:${product.key}`}
           style={[styles.productRow, index > 0 && styles.borderTop]}
         >
-          <Text style={styles.productName}>
+          <MerunoText role="chip" tone="primary" style={styles.productName}>
             {formatFrequentProductLabel(product, t)}
-          </Text>
-          <Text style={styles.productMeta}>
+          </MerunoText>
+          <MerunoText role="caption" tone="muted" style={styles.productMeta}>
             {t('postSaveSummary.frequent.occurrences', {
               count: product.purchaseOccurrenceCount,
             })}
@@ -76,21 +78,21 @@ function FrequentProducts({
             {t('postSaveSummary.frequent.quantity', {
               count: product.totalPurchaseQuantity,
             })}
-          </Text>
-          <Text style={styles.productMeta}>
+          </MerunoText>
+          <MerunoText role="caption" tone="muted" style={styles.productMeta}>
             {t('postSaveSummary.frequent.lastPurchased', {
               date: formatDate(product.lastPurchasedAt),
             })}
-          </Text>
+          </MerunoText>
           {product.priceSummary && (
-            <Text style={styles.productPrice}>
+            <MerunoText role="caption" tone="primary" style={styles.productPrice}>
               {t('postSaveSummary.frequent.latestPrice', {
                 amount: formatAmount(
                   product.priceSummary.latestPrice,
                   product.priceSummary.currency
                 ),
               })}
-            </Text>
+            </MerunoText>
           )}
         </View>
       ))}
@@ -114,29 +116,35 @@ export function MilestoneUnlockCard({
 
   return (
     <View style={styles.card}>
-      <Text style={styles.badge}>{t('postSaveSummary.unlock.badge')}</Text>
-      <Text style={styles.title}>{t(titleKey)}</Text>
+      <MerunoText role="navLabel" tone="inverse" style={styles.badge}>
+        {t('postSaveSummary.unlock.badge')}
+      </MerunoText>
+      <MerunoText role="heroTitle" tone="primary" style={styles.title}>
+        {t(titleKey)}
+      </MerunoText>
 
       {result.milestone === 1 && (
         <>
           <View style={styles.metrics}>
             <View style={styles.metric}>
-              <Text style={styles.metricLabel}>
+              <MerunoText role="caption" tone="muted">
                 {t('postSaveSummary.current.total')}
-              </Text>
-              <Text style={styles.metricValue}>
+              </MerunoText>
+              <MerunoText role="amount" tone="primary" style={styles.metricValue}>
                 {formatAmount(result.total, result.currency)}
-              </Text>
+              </MerunoText>
             </View>
             <View style={styles.metric}>
-              <Text style={styles.metricLabel}>
+              <MerunoText role="caption" tone="muted">
                 {t('postSaveSummary.current.itemCount')}
-              </Text>
-              <Text style={styles.metricValue}>{result.itemCount}</Text>
+              </MerunoText>
+              <MerunoText role="amount" tone="primary" style={styles.metricValue}>
+                {result.itemCount}
+              </MerunoText>
             </View>
           </View>
           {result.highestItem && (
-            <Text style={styles.body}>
+            <MerunoText role="meta" tone="secondary" style={styles.body}>
               {t('postSaveSummary.current.highestItemValue', {
                 name: result.highestItem.displayName,
                 amount: formatAmount(
@@ -144,12 +152,12 @@ export function MilestoneUnlockCard({
                   result.currency
                 ),
               })}
-            </Text>
+            </MerunoText>
           )}
           <CategoryStructure structure={result.categoryStructure} />
-          <Text style={styles.summary}>
+          <MerunoText role="bodySmall" tone="primary" style={styles.summary}>
             {formatMilestoneSummary(result.summary, t, categoryLabel)}
-          </Text>
+          </MerunoText>
         </>
       )}
 
@@ -157,26 +165,26 @@ export function MilestoneUnlockCard({
         <>
           <View style={styles.metrics}>
             <View style={styles.metric}>
-              <Text style={styles.metricLabel}>
+              <MerunoText role="caption" tone="muted">
                 {t('postSaveSummary.third.totalSpend')}
-              </Text>
-              <Text style={styles.metricValue}>
+              </MerunoText>
+              <MerunoText role="amount" tone="primary" style={styles.metricValue}>
                 {formatJPY(result.totalSpend)}
-              </Text>
+              </MerunoText>
             </View>
             <View style={styles.metric}>
-              <Text style={styles.metricLabel}>
+              <MerunoText role="caption" tone="muted">
                 {t('postSaveSummary.third.averageSpend')}
-              </Text>
-              <Text style={styles.metricValue}>
+              </MerunoText>
+              <MerunoText role="amount" tone="primary" style={styles.metricValue}>
                 {formatJPY(result.averageSpendPerReceipt)}
-              </Text>
+              </MerunoText>
             </View>
           </View>
           <CategoryStructure structure={result.categoryStructure} />
-          <Text style={styles.summary}>
+          <MerunoText role="bodySmall" tone="primary" style={styles.summary}>
             {formatMilestoneSummary(result.summary, t, categoryLabel)}
-          </Text>
+          </MerunoText>
         </>
       )}
 
@@ -185,9 +193,9 @@ export function MilestoneUnlockCard({
           {result.frequentProducts.length > 0 ? (
             <FrequentProducts products={result.frequentProducts} />
           ) : (
-            <Text style={styles.body}>
+            <MerunoText role="meta" tone="secondary" style={styles.body}>
               {t('postSaveSummary.frequent.dataPreparing')}
-            </Text>
+            </MerunoText>
           )}
         </>
       )}
@@ -200,30 +208,30 @@ export function MilestoneUnlockCard({
           )}
           {result.dataCoverageIncomplete &&
             result.frequentProducts.length === 0 && (
-              <Text style={styles.body}>
+              <MerunoText role="meta" tone="secondary" style={styles.body}>
                 {t('postSaveSummary.frequent.dataPreparing')}
-              </Text>
+              </MerunoText>
             )}
           {result.shoppingFrequency && (
-            <Text style={styles.summary}>
+            <MerunoText role="bodySmall" tone="primary" style={styles.summary}>
               {t('postSaveSummary.tenth.frequency', {
                 days: Number(
                   result.shoppingFrequency.averageIntervalDays.toFixed(1)
                 ),
               })}
-            </Text>
+            </MerunoText>
           )}
-          <Text style={styles.body}>
+          <MerunoText role="meta" tone="secondary" style={styles.body}>
             {t('postSaveSummary.tenth.windowCompared')}
-          </Text>
+          </MerunoText>
           {result.recentChange && (
-            <Text style={styles.summary}>
+            <MerunoText role="bodySmall" tone="primary" style={styles.summary}>
               {formatMilestoneRecentChange(
                 result.recentChange,
                 t,
                 categoryLabel
               )}
-            </Text>
+            </MerunoText>
           )}
         </>
       )}
@@ -235,26 +243,24 @@ const styles = StyleSheet.create({
   card: {
     marginTop: 20,
     padding: 18,
-    borderRadius: 16,
-    backgroundColor: '#ececec',
+    borderRadius: UI_RADIUS.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
   badge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
+    paddingVertical: UI_SPACING.xs,
+    borderRadius: UI_RADIUS.pill,
     overflow: 'hidden',
-    backgroundColor: '#222',
-    color: '#fff',
-    fontSize: 11,
+    backgroundColor: UI_COLORS.charcoal,
     fontWeight: '800',
   },
   title: {
-    marginTop: 12,
-    color: '#111',
+    marginTop: UI_SPACING.md,
     fontSize: 21,
     lineHeight: 27,
-    fontWeight: '800',
   },
   metrics: {
     marginTop: 15,
@@ -263,35 +269,26 @@ const styles = StyleSheet.create({
   },
   metric: {
     flex: 1,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#fff',
-  },
-  metricLabel: {
-    color: '#777',
-    fontSize: 11,
+    padding: UI_SPACING.md,
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.borderSubtle,
   },
   metricValue: {
     marginTop: 5,
-    color: '#111',
     fontSize: 17,
-    fontWeight: '800',
+    lineHeight: 22,
   },
   body: {
     marginTop: 13,
-    color: '#555',
-    fontSize: 13,
-    lineHeight: 19,
   },
   summary: {
     marginTop: 14,
-    color: '#222',
-    fontSize: 14,
-    lineHeight: 21,
     fontWeight: '600',
   },
   chips: {
-    marginTop: 12,
+    marginTop: UI_SPACING.md,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 7,
@@ -299,41 +296,34 @@ const styles = StyleSheet.create({
   chip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#fff',
-  },
-  chipText: {
-    color: '#444',
-    fontSize: 12,
-    fontWeight: '600',
+    borderRadius: UI_RADIUS.pill,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.borderSubtle,
   },
   list: {
-    marginTop: 12,
+    marginTop: UI_SPACING.md,
     paddingHorizontal: 13,
-    borderRadius: 12,
-    backgroundColor: '#fff',
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.borderSubtle,
   },
   productRow: {
-    paddingVertical: 12,
+    paddingVertical: UI_SPACING.md,
   },
   borderTop: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#ddd',
+    borderTopColor: UI_COLORS.borderSubtle,
   },
   productName: {
-    color: '#222',
-    fontSize: 14,
     fontWeight: '700',
   },
   productMeta: {
-    marginTop: 4,
-    color: '#777',
-    fontSize: 12,
+    marginTop: UI_SPACING.xs,
   },
   productPrice: {
     marginTop: 5,
-    color: '#333',
-    fontSize: 12,
     fontWeight: '700',
   },
 });

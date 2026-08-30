@@ -114,21 +114,23 @@ describe('DS-1 SectionTitle migration', () => {
     expect(sectionTitle).not.toContain('<Text style={styles.title}');
   });
 
-  it('keeps primitives isolated to SectionTitle in production components', () => {
-    const componentFiles = [
+  it('keeps primitives limited to DS-approved shared components', () => {
+    const primitiveConsumers = [
       'components/SectionTitle.tsx',
+      'components/MilestoneProgressCard.tsx',
+      'components/MilestoneProgress.tsx',
+      'components/MilestoneUnlockCard.tsx',
+    ];
+    const notYetMigrated = [
       'components/ProgressiveHomeInsights.tsx',
       'components/MerunoGroupedList.tsx',
-      'components/MilestoneProgressCard.tsx',
     ];
 
-    for (const file of componentFiles) {
-      const contents = source(file);
-      if (file === 'components/SectionTitle.tsx') {
-        expect(contents).toContain('@/components/primitives/MerunoText');
-        continue;
-      }
-      expect(contents).not.toContain('@/components/primitives/');
+    for (const file of primitiveConsumers) {
+      expect(source(file)).toContain('@/components/primitives/MerunoText');
+    }
+    for (const file of notYetMigrated) {
+      expect(source(file)).not.toContain('@/components/primitives/');
     }
   });
 });

@@ -1,8 +1,10 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
-import { t } from '@/lib/i18n';
+import { MerunoText } from '@/components/primitives/MerunoText';
 import type { EngagementMilestoneStatus } from '@/lib/engagementMilestones';
+import { t } from '@/lib/i18n';
+import { milestoneProgressVisual } from '@/lib/milestoneProgressVisual';
 
 export function MilestoneProgressCard({
   status,
@@ -14,13 +16,13 @@ export function MilestoneProgressCard({
     status.receiptsUntilNext == null
   ) {
     return (
-      <View style={styles.card}>
-        <Text style={styles.title}>
+      <View style={milestoneProgressVisual.card}>
+        <MerunoText role="bodySmall" tone="primary" style={styles.title}>
           {t('home.progressive.progress.profileEstablished')}
-        </Text>
-        <Text style={styles.subtitle}>
+        </MerunoText>
+        <MerunoText role="meta" tone="secondary" style={styles.profileHint}>
           {t('home.progressive.progress.profileEstablishedHint')}
-        </Text>
+        </MerunoText>
       </View>
     );
   }
@@ -36,62 +38,49 @@ export function MilestoneProgressCard({
         : 'home.progressive.progress.unlockProfile';
 
   return (
-    <View style={styles.card}>
+    <View style={milestoneProgressVisual.card}>
       <View style={styles.row}>
-        <Text style={styles.title}>{t('home.progressive.progress.title')}</Text>
-        <Text style={styles.count}>
+        <MerunoText role="bodySmall" tone="primary" style={styles.title}>
+          {t('home.progressive.progress.title')}
+        </MerunoText>
+        <MerunoText
+          role="bodySmall"
+          tone="accent"
+          style={styles.count}
+        >
           {status.supportedReceiptCount} / {status.nextMilestone}
-        </Text>
+        </MerunoText>
       </View>
-      <View style={styles.track}>
-        <View style={[styles.fill, { width: `${ratio * 100}%` }]} />
+      <View style={[milestoneProgressVisual.track, styles.track]}>
+        <View style={[milestoneProgressVisual.fill, { width: `${ratio * 100}%` }]} />
       </View>
-      <Text style={styles.subtitle}>
+      <MerunoText role="meta" tone="secondary" style={styles.hint}>
         {t(hintKey, { count: status.receiptsUntilNext })}
-      </Text>
+      </MerunoText>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
-    backgroundColor: '#fff',
-  },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   title: {
-    color: '#16181b',
-    fontSize: 15,
     fontWeight: '700',
   },
   count: {
-    color: '#1677ff',
-    fontSize: 15,
     fontWeight: '800',
+    fontVariant: ['tabular-nums'],
   },
   track: {
-    height: 7,
     marginTop: 13,
-    borderRadius: 999,
-    overflow: 'hidden',
-    backgroundColor: '#e9edf2',
   },
-  fill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#1677ff',
-  },
-  subtitle: {
+  hint: {
     marginTop: 10,
-    color: '#68707a',
-    fontSize: 13,
-    lineHeight: 19,
+  },
+  profileHint: {
+    marginTop: 10,
   },
 });

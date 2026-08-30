@@ -9,7 +9,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { UI_COLORS, UI_RADIUS } from '@/lib/uiTokens';
+import { UI_COLORS, UI_OPACITY, UI_RADIUS } from '@/lib/uiTokens';
 
 export function MerunoGroupedList({ children }: { children: ReactNode }) {
   return <View style={styles.group}>{children}</View>;
@@ -102,7 +102,7 @@ const styles = StyleSheet.create({
     backgroundColor: UI_COLORS.surfaceMuted,
   },
   rowDisabled: {
-    opacity: 0.55,
+    opacity: UI_OPACITY.disabled,
   },
   divider: {
     position: 'absolute',
