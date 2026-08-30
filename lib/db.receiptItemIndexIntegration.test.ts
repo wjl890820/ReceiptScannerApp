@@ -106,6 +106,23 @@ function bindValues(params: SQLite.SQLiteBindParams | undefined): SQLite.SQLiteB
   return Array.isArray(params) ? params : [];
 }
 
+function rowMatchesOwnerPredicate(
+  row: MutableReceiptRow,
+  sql: string,
+  params: SQLite.SQLiteBindValue[]
+): boolean {
+  if (/receipts\.user_id = \?/i.test(sql) && !/IS NULL/i.test(sql)) {
+    return row.user_id === params[0];
+  }
+  if (/receipts\.user_id IS NULL AND receipts\.installation_id = \?/i.test(sql)) {
+    return (
+      (row.user_id == null || row.user_id === '') &&
+      row.installation_id === params[0]
+    );
+  }
+  return true;
+}
+
 class MemoryReceiptDb {
   readonly rows = new Map<string, MutableReceiptRow>();
   failNextReceiptInsert = false;
@@ -127,18 +144,41 @@ class MemoryReceiptDb {
     await task();
   }
 
+  async withExclusiveTransactionAsync(
+    task: (txn: MemoryReceiptDb) => Promise<void>
+  ): Promise<void> {
+    const rowsSnapshot = new Map(
+      [...this.rows.entries()].map(([id, row]) => [id, { ...row }])
+    );
+    try {
+      await task(this);
+    } catch (error) {
+      this.rows.clear();
+      for (const [id, row] of rowsSnapshot) {
+        this.rows.set(id, { ...row });
+      }
+      throw error;
+    }
+  }
+
   async getAllAsync<T>(
     source: string,
     params?: SQLite.SQLiteBindParams
   ): Promise<T[]> {
+    const values = bindValues(params);
     if (/PRAGMA table_info/i.test(source)) {
       return RECEIPT_COLUMNS.map((name) => ({ name, type: 'TEXT' })) as T[];
     }
     if (/SELECT id, user_id FROM receipts WHERE id IN/i.test(source)) {
-      const ids = bindValues(params).map(String);
+      const ownerParam = values[values.length - 1];
+      const ids = values.slice(0, values.length - 1).map(String);
       return [...this.rows.values()]
-        .filter((r) => ids.includes(String(r.id)))
-        .map((r) => ({ id: r.id, user_id: (r as any).user_id ?? null })) as T[];
+        .filter(
+          (row) =>
+            ids.includes(String(row.id)) &&
+            rowMatchesOwnerPredicate(row as MutableReceiptRow, source, [ownerParam])
+        )
+        .map((row) => ({ id: row.id, user_id: (row as any).user_id ?? null })) as T[];
     }
     return [];
   }
@@ -148,13 +188,25 @@ class MemoryReceiptDb {
     params?: SQLite.SQLiteBindParams
   ): Promise<T | null> {
     if (/SELECT user_id FROM receipts/i.test(source)) {
-      const [id] = bindValues(params);
+      const [id, ownerParam] = bindValues(params);
       const row = this.rows.get(String(id));
-      return (row ? { user_id: (row as any).user_id ?? null } : null) as T | null;
+      if (!row) return null;
+      return (
+        rowMatchesOwnerPredicate(row, source, [ownerParam])
+          ? { user_id: (row as any).user_id ?? null }
+          : null
+      ) as T | null;
     }
     if (/FROM receipts/i.test(source)) {
-      const [id] = bindValues(params);
+      const values = bindValues(params);
+      const [id, ownerParam] = values;
       const row = this.rows.get(String(id));
+      if (!row) return null;
+      if (values.length > 1 && /WHERE/i.test(source)) {
+        return (
+          rowMatchesOwnerPredicate(row, source, [ownerParam]) ? { ...row } : null
+        ) as T | null;
+      }
       return (row ? { ...row } : null) as T | null;
     }
     return null;
@@ -240,9 +292,12 @@ class MemoryReceiptDb {
         this.failNextReceiptUpdate = false;
         throw new Error('receipt update failed');
       }
-      const id = String(values[values.length - 1]);
+      const ownerParam = values[values.length - 1];
+      const id = String(values[values.length - 2]);
       const row = this.rows.get(id);
-      if (!row) return { changes: 0 };
+      if (!row || !rowMatchesOwnerPredicate(row, source, [ownerParam])) {
+        return { changes: 0 };
+      }
       const setClause = source.match(/SET\s+([\s\S]*?)\s+WHERE\s+id\s*=\s*\?/i)?.[1] ?? '';
       let valueIndex = 0;
       for (const assignment of setClause.split(',')) {
@@ -265,9 +320,14 @@ class MemoryReceiptDb {
         throw new Error('receipt delete failed');
       }
       if (/WHERE id IN/i.test(source)) {
+        const ownerParam = values[values.length - 1];
+        const ids = values.slice(0, values.length - 1).map(String);
         let changes = 0;
-        for (const id of values) {
-          if (this.rows.delete(String(id))) changes += 1;
+        for (const id of ids) {
+          const row = this.rows.get(id);
+          if (row && rowMatchesOwnerPredicate(row, source, [ownerParam])) {
+            if (this.rows.delete(id)) changes += 1;
+          }
         }
         return { changes };
       }

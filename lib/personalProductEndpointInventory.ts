@@ -33,6 +33,11 @@ import {
 } from './productIdentityStore';
 import { classifyLineKind } from './receiptOcrNormalize';
 import type { LocalOwnershipStamp } from './receiptOwnershipContext';
+import {
+  buildOwnerScopedInventoryPredicates,
+} from './receiptOwnershipScope';
+
+export { buildOwnerScopedInventoryPredicates } from './receiptOwnershipScope';
 
 const PERSONAL_IDENTITY_STRUCTURAL_DIMENSIONS = [
   'volume',
@@ -184,41 +189,6 @@ const OWNER_RECEIPT_SELECT_SQL = `
     receipts.user_edited AS user_edited,
     receipts.note AS note
   FROM receipts`;
-
-function parseOwnerKey(
-  ownerKey: string
-): { kind: 'user' | 'installation'; id: string } | null {
-  if (ownerKey.startsWith('user:')) {
-    const id = ownerKey.slice('user:'.length).trim();
-    return id ? { kind: 'user', id } : null;
-  }
-  if (ownerKey.startsWith('installation:')) {
-    const id = ownerKey.slice('installation:'.length).trim();
-    return id ? { kind: 'installation', id } : null;
-  }
-  return null;
-}
-
-export function buildOwnerScopedInventoryPredicates(ownerKey: string): {
-  itemWhereSql: string;
-  receiptWhereSql: string;
-  params: string[];
-} | null {
-  const parsed = parseOwnerKey(ownerKey);
-  if (!parsed) return null;
-  if (parsed.kind === 'user') {
-    return {
-      itemWhereSql: 'receipts.user_id = ?',
-      receiptWhereSql: 'receipts.user_id = ?',
-      params: [parsed.id],
-    };
-  }
-  return {
-    itemWhereSql: 'receipts.user_id IS NULL AND receipts.installation_id = ?',
-    receiptWhereSql: 'receipts.user_id IS NULL AND receipts.installation_id = ?',
-    params: [parsed.id],
-  };
-}
 
 function isProductInventoryRow(row: PersonalProductEndpointInventorySourceRow): boolean {
   const name = (row.rawName || row.displayName || '').trim();

@@ -100,6 +100,23 @@ function bindValues(params: SQLite.SQLiteBindParams | undefined): SQLite.SQLiteB
   return Array.isArray(params) ? params : [];
 }
 
+function rowMatchesOwnerPredicate(
+  row: MutableReceiptRow,
+  sql: string,
+  params: SQLite.SQLiteBindValue[]
+): boolean {
+  if (/receipts\.user_id = \?/i.test(sql) && !/IS NULL/i.test(sql)) {
+    return row.user_id === params[0];
+  }
+  if (/receipts\.user_id IS NULL AND receipts\.installation_id = \?/i.test(sql)) {
+    return (
+      (row.user_id == null || row.user_id === '') &&
+      row.installation_id === params[0]
+    );
+  }
+  return true;
+}
+
 class MemoryReceiptDb {
   readonly rows = new Map<string, MutableReceiptRow>();
 
@@ -113,12 +130,30 @@ class MemoryReceiptDb {
     await task();
   }
 
+  async withExclusiveTransactionAsync(
+    task: (txn: MemoryReceiptDb) => Promise<void>
+  ): Promise<void> {
+    await task(this);
+  }
+
   async getAllAsync<T>(
     source: string,
-    _params?: SQLite.SQLiteBindParams
+    params?: SQLite.SQLiteBindParams
   ): Promise<T[]> {
+    const values = bindValues(params);
     if (/PRAGMA table_info/i.test(source)) {
       return RECEIPT_COLUMNS.map((name) => ({ name, type: 'TEXT' })) as T[];
+    }
+    if (/SELECT id, user_id FROM receipts WHERE id IN/i.test(source)) {
+      const ownerParam = values[values.length - 1];
+      const ids = values.slice(0, values.length - 1).map(String);
+      return [...this.rows.values()]
+        .filter(
+          (row) =>
+            ids.includes(String(row.id)) &&
+            rowMatchesOwnerPredicate(row, source, [ownerParam])
+        )
+        .map((row) => ({ id: row.id, user_id: row.user_id ?? null })) as T[];
     }
     return [];
   }
@@ -127,9 +162,26 @@ class MemoryReceiptDb {
     source: string,
     params?: SQLite.SQLiteBindParams
   ): Promise<T | null> {
-    if (/FROM receipts/i.test(source)) {
-      const [id] = bindValues(params);
+    const values = bindValues(params);
+    if (/SELECT user_id FROM receipts/i.test(source)) {
+      const [id, ownerParam] = values;
       const row = this.rows.get(String(id));
+      if (!row) return null;
+      return (
+        rowMatchesOwnerPredicate(row, source, [ownerParam])
+          ? { user_id: row.user_id ?? null }
+          : null
+      ) as T | null;
+    }
+    if (/FROM receipts/i.test(source)) {
+      const [id, ownerParam] = values;
+      const row = this.rows.get(String(id));
+      if (!row) return null;
+      if (values.length > 1 && /WHERE/i.test(source)) {
+        return (
+          rowMatchesOwnerPredicate(row, source, [ownerParam]) ? { ...row } : null
+        ) as T | null;
+      }
       return (row ? { ...row } : null) as T | null;
     }
     return null;
@@ -211,9 +263,12 @@ class MemoryReceiptDb {
     }
 
     if (/UPDATE receipts/i.test(source)) {
-      const id = String(values[values.length - 1]);
+      const ownerParam = values[values.length - 1];
+      const id = String(values[values.length - 2]);
       const row = this.rows.get(id);
-      if (!row) return { changes: 0 };
+      if (!row || !rowMatchesOwnerPredicate(row, source, [ownerParam])) {
+        return { changes: 0 };
+      }
       const setClause =
         source.match(/SET\s+([\s\S]*?)\s+WHERE\s+id\s*=\s*\?/i)?.[1] ?? '';
       let valueIndex = 0;

@@ -56,6 +56,23 @@ jest.mock('./cloudBackupWorker', () => ({
 
 type MutableRow = Record<string, unknown>;
 
+function rowMatchesOwnerPredicate(
+  row: MutableRow,
+  sql: string,
+  params: unknown[]
+): boolean {
+  if (/receipts\.user_id = \?/i.test(sql) && !/IS NULL/i.test(sql)) {
+    return row.user_id === params[0];
+  }
+  if (/receipts\.user_id IS NULL AND receipts\.installation_id = \?/i.test(sql)) {
+    return (
+      (row.user_id == null || row.user_id === '') &&
+      row.installation_id === params[0]
+    );
+  }
+  return true;
+}
+
 class MemoryDb {
   rows = new Map<string, MutableRow>();
   columns = new Set([
@@ -93,27 +110,50 @@ class MemoryDb {
   async withTransactionAsync(task: () => Promise<void>): Promise<void> {
     await task();
   }
+  async withExclusiveTransactionAsync(
+    task: (txn: MemoryDb) => Promise<void>
+  ): Promise<void> {
+    await task(this);
+  }
   async getAllAsync<T>(source: string, params?: unknown[]): Promise<T[]> {
+    const values = Array.isArray(params) ? params : [];
     if (/PRAGMA table_info/i.test(source)) {
       return [...this.columns].map((name) => ({ name, type: 'TEXT' })) as T[];
     }
     if (/SELECT id, user_id FROM receipts WHERE id IN/i.test(source)) {
-      const ids = (Array.isArray(params) ? params : []).map(String);
+      const ownerParam = values[values.length - 1];
+      const ids = values.slice(0, values.length - 1).map(String);
       return [...this.rows.values()]
-        .filter((r) => ids.includes(String(r.id)))
-        .map((r) => ({ id: r.id, user_id: r.user_id ?? null })) as T[];
+        .filter(
+          (row) =>
+            ids.includes(String(row.id)) &&
+            rowMatchesOwnerPredicate(row, source, [ownerParam])
+        )
+        .map((row) => ({ id: row.id, user_id: row.user_id ?? null })) as T[];
     }
     return [];
   }
   async getFirstAsync<T>(source: string, params?: unknown[]): Promise<T | null> {
+    const values = Array.isArray(params) ? params : [];
     if (/SELECT user_id FROM receipts/i.test(source)) {
-      const id = String(Array.isArray(params) ? params[0] : '');
-      const row = this.rows.get(id);
-      return (row ? { user_id: row.user_id ?? null } : null) as T | null;
+      const [id, ownerParam] = values;
+      const row = this.rows.get(String(id));
+      if (!row) return null;
+      return (
+        rowMatchesOwnerPredicate(row, source, [ownerParam])
+          ? { user_id: row.user_id ?? null }
+          : null
+      ) as T | null;
     }
     if (/FROM receipts/i.test(source)) {
-      const id = String(Array.isArray(params) ? params[0] : '');
-      const row = this.rows.get(id);
+      const [id, ownerParam] = values;
+      const row = this.rows.get(String(id));
+      if (!row) return null;
+      if (values.length > 1 && /WHERE/i.test(source)) {
+        return (
+          rowMatchesOwnerPredicate(row, source, [ownerParam]) ? { ...row } : null
+        ) as T | null;
+      }
       return (row ? { ...row } : null) as T | null;
     }
     return null;
@@ -181,9 +221,12 @@ class MemoryDb {
       return { changes: 1 };
     }
     if (/UPDATE receipts/i.test(source)) {
-      const id = String(values[values.length - 1]);
+      const ownerParam = values[values.length - 1];
+      const id = String(values[values.length - 2]);
       const row = this.rows.get(id);
-      if (!row) return { changes: 0 };
+      if (!row || !rowMatchesOwnerPredicate(row, source, [ownerParam])) {
+        return { changes: 0 };
+      }
       const setClause = source.match(/SET\s+([\s\S]*?)\s+WHERE\s+id\s*=\s*\?/i)?.[1] ?? '';
       let valueIndex = 0;
       for (const assignment of setClause.split(',')) {

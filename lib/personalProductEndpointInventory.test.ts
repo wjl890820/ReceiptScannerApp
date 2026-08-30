@@ -2,6 +2,14 @@
 jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn(),
 }));
+jest.mock('./anonAuth', () => ({
+  getAuthState: jest.fn(() => ({ status: 'unauthenticated', userId: null })),
+  subscribeAuthState: jest.fn(() => () => undefined),
+  ensureAnonAuth: jest.fn(async () => undefined),
+}));
+jest.mock('./installationId', () => ({
+  getOrCreateInstallationId: jest.fn(async () => 'install-test'),
+}));
 
 jest.mock('./analyticsReceiptSelection', () => ({
   selectAnalyticsReceipts: (receipts: unknown[]) => ({

@@ -22,11 +22,30 @@ import {
 import { logger } from './logger';
 import { resolveOwnershipStamp, TRANSACTION_SOURCE_RECEIPT_OCR } from './receiptOwnershipContext';
 import {
+  composeReceiptListWhereClause,
+  resolveCurrentLocalReceiptOwnerScope,
+  type LocalReceiptOwnerScopeReady,
+} from './receiptOwnershipScope';
+import {
   ensureSyncOutboxSchema,
   generateSyncIntentId,
   replaceSyncOutboxIntent,
 } from './syncOutbox';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
+
+type DbMutationTestHooks = {
+  afterUpdateAuthorizedBeforeMutation?: () => void | Promise<void>;
+  afterDeleteSelectedBeforeMutation?: () => void | Promise<void>;
+};
+
+let dbMutationTestHooks: DbMutationTestHooks | null = null;
+
+/** Test-only seam for ownership-transition race coverage. */
+export function __setDbMutationTestHooksForTests(
+  hooks: DbMutationTestHooks | null
+): void {
+  dbMutationTestHooks = hooks;
+}
 
 /**
  * 说明：
@@ -705,6 +724,21 @@ async function readReceiptItemIndexSource(
   );
 }
 
+async function readReceiptItemIndexSourceForScope(
+  db: SQLite.SQLiteDatabase,
+  receiptId: string,
+  scope: LocalReceiptOwnerScopeReady
+): Promise<ReceiptItemIndexReceipt | null> {
+  return db.getFirstAsync<ReceiptItemIndexReceipt>(
+    `SELECT id, analysis_json, user_items_json
+     FROM receipts
+     WHERE id = ?
+       AND ${scope.receiptWhereSql}
+     LIMIT 1`,
+    [receiptId, ...scope.params]
+  );
+}
+
 function receiptItemsSignature(receipt: ReceiptItemIndexReceipt): string {
   return JSON.stringify(getReceiptItems(receipt));
 }
@@ -742,11 +776,15 @@ async function bestEffortRebuildReceiptItemIndex(
 async function bestEffortRebuildReceiptItemIndexIfChanged(
   db: SQLite.SQLiteDatabase,
   receiptId: string,
-  previousItemsSignature: string | undefined
+  previousItemsSignature: string | undefined,
+  knownPostUpdateReceipt?: ReceiptItemIndexReceipt | null
 ): Promise<void> {
   let receiptForFallback: ReceiptItemIndexReceipt | null = null;
   try {
-    const receipt = await readReceiptItemIndexSource(db, receiptId);
+    const receipt =
+      knownPostUpdateReceipt !== undefined
+        ? knownPostUpdateReceipt
+        : await readReceiptItemIndexSource(db, receiptId);
     receiptForFallback = receipt;
     if (!receipt) return;
     const nextItemsSignature = receiptItemsSignature(receipt);
@@ -1055,6 +1093,10 @@ export async function saveReceipt(
  */
 async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
   await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    return [];
+  }
   const db = await getDb();
 
   const sql = `
@@ -1072,13 +1114,14 @@ async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
       note,
       user_items_json
     FROM receipts
+    WHERE ${scope.receiptWhereSql}
     ORDER BY COALESCE(transaction_at, created_at) DESC
     ${limit == null ? '' : 'LIMIT ?'}
     `;
   const rows =
     limit == null
-      ? await db.getAllAsync<ReceiptRow>(sql)
-      : await db.getAllAsync<ReceiptRow>(sql, [limit]);
+      ? await db.getAllAsync<ReceiptRow>(sql, scope.params)
+      : await db.getAllAsync<ReceiptRow>(sql, [...scope.params, limit]);
 
   return rows ?? [];
 }
@@ -1100,8 +1143,18 @@ export async function listReceiptsForList(
   options?: ListReceiptsOptions | number
 ): Promise<ReceiptListRow[]> {
   await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    return [];
+  }
   const db = await getDb();
-  const { orderBy, limit, offset, whereClause, whereParams } = listReceiptsForListParams(options);
+  const { orderBy, limit, offset, whereClause, whereParams } =
+    listReceiptsForListParams(options);
+  const composed = composeReceiptListWhereClause(
+    scope,
+    whereClause,
+    whereParams
+  );
 
   const rows = await db.getAllAsync<ReceiptListRow>(
     `
@@ -1118,11 +1171,11 @@ export async function listReceiptsForList(
       note,
       user_items_json
     FROM receipts
-    ${whereClause}
+    ${composed.whereClause}
     ORDER BY ${orderBy}
     LIMIT ? OFFSET ?
     `,
-    [...whereParams, limit, offset]
+    [...composed.whereParams, limit, offset]
   );
 
   return rows ?? [];
@@ -1194,6 +1247,10 @@ export async function countManualProductDictionaryEntries(): Promise<number> {
 
 export async function getReceipt(id: string): Promise<ReceiptRow | null> {
   await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    return null;
+  }
   const db = await getDb();
 
   const row = await db.getFirstAsync<ReceiptRow>(
@@ -1214,9 +1271,10 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       user_items_json
     FROM receipts
     WHERE id = ?
+      AND ${scope.receiptWhereSql}
     LIMIT 1
     `,
-    [id]
+    [id, ...scope.params]
   );
 
   return row ?? null;
@@ -1229,21 +1287,33 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
 export async function deleteReceipts(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    return;
+  }
   const db = await getDb();
   const uniqueIds = [...new Set(ids)];
   const now = Date.now();
+  let provenDeletedIds: string[] = [];
 
-  await db.withTransactionAsync(async () => {
+  await db.withExclusiveTransactionAsync(async (txn) => {
     const placeholders = uniqueIds.map(() => '?').join(',');
-    const owners = await db.getAllAsync<{ id: string; user_id: string | null }>(
-      `SELECT id, user_id FROM receipts WHERE id IN (${placeholders})`,
-      uniqueIds
+    const owners = await txn.getAllAsync<{ id: string; user_id: string | null }>(
+      `SELECT id, user_id FROM receipts WHERE id IN (${placeholders}) AND ${scope.receiptWhereSql}`,
+      [...uniqueIds, ...scope.params]
     );
+    if ((owners ?? []).length === 0) {
+      return;
+    }
+
+    const candidateIds = (owners ?? []).map((row) => row.id);
+    const deletedPlaceholders = candidateIds.map(() => '?').join(',');
 
     for (const row of owners ?? []) {
-      const uid = row.user_id && String(row.user_id).trim() ? String(row.user_id).trim() : null;
+      const uid =
+        row.user_id && String(row.user_id).trim() ? String(row.user_id).trim() : null;
       if (!uid) continue;
-      await replaceSyncOutboxIntent(db, {
+      await replaceSyncOutboxIntent(txn, {
         receiptId: row.id,
         userId: uid,
         operation: 'delete',
@@ -1253,14 +1323,28 @@ export async function deleteReceipts(ids: string[]): Promise<void> {
       });
     }
 
-    await db.runAsync(`DELETE FROM receipts WHERE id IN (${placeholders})`, uniqueIds);
+    await dbMutationTestHooks?.afterDeleteSelectedBeforeMutation?.();
+
+    const deleteResult = await txn.runAsync(
+      `DELETE FROM receipts WHERE id IN (${deletedPlaceholders}) AND ${scope.receiptWhereSql}`,
+      [...candidateIds, ...scope.params]
+    );
+    const deletedCount = deleteResult.changes ?? 0;
+    if (deletedCount !== candidateIds.length) {
+      throw new Error(
+        `deleteReceipts ownership delete mismatch: expected ${candidateIds.length}, got ${deletedCount}`
+      );
+    }
+    provenDeletedIds = candidateIds;
   });
 
-  for (const id of uniqueIds) {
+  for (const id of provenDeletedIds) {
     await bestEffortDeleteReceiptItemIndex(db, id);
   }
 
-  void requestCloudBackupFlush();
+  if (provenDeletedIds.length > 0) {
+    void requestCloudBackupFlush();
+  }
 }
 
 /**
@@ -1299,207 +1383,235 @@ export async function clearReceipts(options: {
  */
 export async function updateReceipt(params: UpdateReceiptParams): Promise<void> {
   await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    return;
+  }
   const db = await getDb();
   const mayChangeReceiptItems = updateCanChangeReceiptItems(params);
   let previousItemsSignature: string | undefined;
-  if (mayChangeReceiptItems) {
-    try {
-      const previousReceipt = await readReceiptItemIndexSource(db, params.id);
-      if (previousReceipt) {
-        previousItemsSignature = receiptItemsSignature(previousReceipt);
-      }
-    } catch {
-      // The receipt UPDATE remains authoritative. Rebuild conservatively afterward.
+  let postUpdateReceiptForIndex: ReceiptItemIndexReceipt | null | undefined;
+  let mutationConfirmed = false;
+  let ownedUserId: string | null = null;
+
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    const authorized = await txn.getFirstAsync<{ id: string }>(
+      `SELECT id FROM receipts WHERE id = ? AND ${scope.receiptWhereSql} LIMIT 1`,
+      [params.id, ...scope.params]
+    );
+    if (!authorized) {
+      return;
     }
-  }
 
-  const sets: string[] = [];
-  const values: any[] = [];
+    if (mayChangeReceiptItems) {
+      try {
+        const previousReceipt = await readReceiptItemIndexSourceForScope(
+          txn,
+          params.id,
+          scope
+        );
+        if (previousReceipt) {
+          previousItemsSignature = receiptItemsSignature(previousReceipt);
+        }
+      } catch {
+        // The receipt UPDATE remains authoritative. Rebuild conservatively afterward.
+      }
+    }
 
-  if (typeof params.imageUri === 'string') {
-    sets.push(`image_uri = ?`);
-    values.push(params.imageUri);
-  }
+    const sets: string[] = [];
+    const values: any[] = [];
 
-  if (params.analysis && typeof params.analysis === 'object') {
-    const {
-      resolvePersistedMerchantObservation,
-      merchantObservationEquals,
-    } = await import('./merchantObservationPersist');
+    if (typeof params.imageUri === 'string') {
+      sets.push(`image_uri = ?`);
+      values.push(params.imageUri);
+    }
 
-    const existingMerchant = await db.getFirstAsync<{
-      merchant_raw: string | null;
-      merchant_normalized: string | null;
-      merchant_type: string | null;
-    }>(
-      `SELECT merchant_raw, merchant_normalized, merchant_type FROM receipts WHERE id = ? LIMIT 1`,
-      [params.id]
-    );
+    if (params.analysis && typeof params.analysis === 'object') {
+      const {
+        resolvePersistedMerchantObservation,
+        merchantObservationEquals,
+      } = await import('./merchantObservationPersist');
 
-    const incomingRaw =
-      typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
-    const merchantChanged = !merchantObservationEquals(
-      existingMerchant?.merchant_raw,
-      incomingRaw
-    );
-
-    const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
-    const { persistReceiptTaxFields } = await import('./receiptOcrNormalize');
-    const persistedTax = persistReceiptTaxFields(
-      params.analysis as import('./receiptAnalyzer').ReceiptAnalysis & Record<string, unknown>
-    );
-    const tax = persistedTax.tax;
-    const taxIsKnown = persistedTax.taxIsKnown;
-    const currency =
-      typeof params.analysis.currency === 'string' && params.analysis.currency.trim()
-        ? params.analysis.currency
-        : 'JPY';
-
-    let analysisPayload: Record<string, unknown> = {
-      ...params.analysis,
-      tax,
-      tax_is_known: taxIsKnown === 1,
-    };
-
-    if (merchantChanged) {
-      const persistedMerchant = resolvePersistedMerchantObservation(
-        {
-          merchant: params.analysis.merchant,
-          merchant_normalized: (params.analysis as { merchant_normalized?: unknown })
-            .merchant_normalized,
-          merchant_type: (params.analysis as { merchant_type?: unknown }).merchant_type,
-          items: Array.isArray(params.analysis.items) ? params.analysis.items : null,
-          ocr_raw_text:
-            (params.analysis as { ocr_raw_text?: string | null }).ocr_raw_text ?? null,
-          rawText: (params.analysis as { rawText?: string | null }).rawText ?? null,
-        },
-        { recomputeType: true }
+      const existingMerchant = await txn.getFirstAsync<{
+        merchant_raw: string | null;
+        merchant_normalized: string | null;
+        merchant_type: string | null;
+      }>(
+        `SELECT merchant_raw, merchant_normalized, merchant_type FROM receipts WHERE id = ? AND ${scope.receiptWhereSql} LIMIT 1`,
+        [params.id, ...scope.params]
       );
 
-      sets.push(`merchant_raw = ?`);
-      values.push(persistedMerchant.merchantRaw);
+      const incomingRaw =
+        typeof params.analysis.merchant === 'string' ? params.analysis.merchant : null;
+      const merchantChanged = !merchantObservationEquals(
+        existingMerchant?.merchant_raw,
+        incomingRaw
+      );
 
-      sets.push(`merchant_normalized = ?`);
-      values.push(persistedMerchant.merchantNormalized);
+      const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
+      const { persistReceiptTaxFields } = await import('./receiptOcrNormalize');
+      const persistedTax = persistReceiptTaxFields(
+        params.analysis as import('./receiptAnalyzer').ReceiptAnalysis & Record<string, unknown>
+      );
+      const tax = persistedTax.tax;
+      const taxIsKnown = persistedTax.taxIsKnown;
+      const currency =
+        typeof params.analysis.currency === 'string' && params.analysis.currency.trim()
+          ? params.analysis.currency
+          : 'JPY';
 
-      sets.push(`merchant_type = ?`);
-      values.push(persistedMerchant.merchantType);
-
-      // LEGACY / PLACEHOLDER MIRROR — keep consistent with merchant_* only.
-      sets.push(`store_raw = ?`);
-      values.push(persistedMerchant.merchantRaw);
-
-      sets.push(`store_normalized = ?`);
-      values.push(persistedMerchant.merchantNormalized);
-
-      analysisPayload = {
-        ...analysisPayload,
-        merchant: persistedMerchant.merchantRaw ?? undefined,
-        merchant_normalized: persistedMerchant.merchantNormalized,
-        merchant_type: persistedMerchant.merchantType,
+      let analysisPayload: Record<string, unknown> = {
+        ...params.analysis,
+        tax,
+        tax_is_known: taxIsKnown === 1,
       };
-    } else {
-      // Non-merchant analysis updates must not churn merchant-derived columns.
-      analysisPayload = {
-        ...analysisPayload,
-        merchant: existingMerchant?.merchant_raw ?? params.analysis.merchant,
-        merchant_normalized:
-          existingMerchant?.merchant_normalized ??
-          (params.analysis as { merchant_normalized?: unknown }).merchant_normalized,
-        merchant_type:
-          existingMerchant?.merchant_type ??
-          (params.analysis as { merchant_type?: unknown }).merchant_type,
-      };
+
+      if (merchantChanged) {
+        const persistedMerchant = resolvePersistedMerchantObservation(
+          {
+            merchant: params.analysis.merchant,
+            merchant_normalized: (params.analysis as { merchant_normalized?: unknown })
+              .merchant_normalized,
+            merchant_type: (params.analysis as { merchant_type?: unknown }).merchant_type,
+            items: Array.isArray(params.analysis.items) ? params.analysis.items : null,
+            ocr_raw_text:
+              (params.analysis as { ocr_raw_text?: string | null }).ocr_raw_text ?? null,
+            rawText: (params.analysis as { rawText?: string | null }).rawText ?? null,
+          },
+          { recomputeType: true }
+        );
+
+        sets.push(`merchant_raw = ?`);
+        values.push(persistedMerchant.merchantRaw);
+
+        sets.push(`merchant_normalized = ?`);
+        values.push(persistedMerchant.merchantNormalized);
+
+        sets.push(`merchant_type = ?`);
+        values.push(persistedMerchant.merchantType);
+
+        sets.push(`store_raw = ?`);
+        values.push(persistedMerchant.merchantRaw);
+
+        sets.push(`store_normalized = ?`);
+        values.push(persistedMerchant.merchantNormalized);
+
+        analysisPayload = {
+          ...analysisPayload,
+          merchant: persistedMerchant.merchantRaw ?? undefined,
+          merchant_normalized: persistedMerchant.merchantNormalized,
+          merchant_type: persistedMerchant.merchantType,
+        };
+      } else {
+        analysisPayload = {
+          ...analysisPayload,
+          merchant: existingMerchant?.merchant_raw ?? params.analysis.merchant,
+          merchant_normalized:
+            existingMerchant?.merchant_normalized ??
+            (params.analysis as { merchant_normalized?: unknown }).merchant_normalized,
+          merchant_type:
+            existingMerchant?.merchant_type ??
+            (params.analysis as { merchant_type?: unknown }).merchant_type,
+        };
+      }
+
+      sets.push(`total = ?`);
+      values.push(total);
+
+      sets.push(`tax = ?`);
+      values.push(tax);
+
+      sets.push(`tax_is_known = ?`);
+      values.push(taxIsKnown);
+
+      sets.push(`currency = ?`);
+      values.push(currency);
+
+      sets.push(`analysis_json = ?`);
+      values.push(JSON.stringify(analysisPayload));
     }
 
-    sets.push(`total = ?`);
-    values.push(total);
+    if (params.user_edited !== undefined) {
+      sets.push(`user_edited = ?`);
+      values.push(params.user_edited === 1 ? 1 : 0);
+    }
 
-    sets.push(`tax = ?`);
-    values.push(tax);
+    if (params.final_total !== undefined) {
+      sets.push(`final_total = ?`);
+      values.push(
+        params.final_total !== null && Number.isFinite(params.final_total)
+          ? params.final_total
+          : null
+      );
+    }
 
-    sets.push(`tax_is_known = ?`);
-    values.push(taxIsKnown);
+    if (params.final_category !== undefined) {
+      sets.push(`final_category = ?`);
+      values.push(
+        params.final_category !== null && typeof params.final_category === 'string'
+          ? params.final_category.trim() || null
+          : null
+      );
+    }
 
-    sets.push(`currency = ?`);
-    values.push(currency);
+    if (params.note !== undefined) {
+      sets.push(`note = ?`);
+      values.push(
+        params.note !== null && typeof params.note === 'string'
+          ? params.note.trim() || null
+          : null
+      );
+    }
 
-    sets.push(`analysis_json = ?`);
-    values.push(JSON.stringify(analysisPayload));
-  }
+    if (params.user_items_json !== undefined) {
+      sets.push(`user_items_json = ?`);
+      values.push(
+        params.user_items_json !== null && typeof params.user_items_json === 'string'
+          ? params.user_items_json.trim() || null
+          : null
+      );
+    }
 
+    if (sets.length === 0) {
+      return;
+    }
 
-  // 支持用户手动编辑字段
-  if (params.user_edited !== undefined) {
-    sets.push(`user_edited = ?`);
-    values.push(params.user_edited === 1 ? 1 : 0);
-  }
+    const now = Date.now();
+    sets.push(`client_updated_at = ?`);
+    values.push(now);
 
-  if (params.final_total !== undefined) {
-    sets.push(`final_total = ?`);
-    values.push(
-      params.final_total !== null && Number.isFinite(params.final_total)
-        ? params.final_total
-        : null
-    );
-  }
+    await dbMutationTestHooks?.afterUpdateAuthorizedBeforeMutation?.();
 
-  if (params.final_category !== undefined) {
-    sets.push(`final_category = ?`);
-    values.push(
-      params.final_category !== null && typeof params.final_category === 'string'
-        ? params.final_category.trim() || null
-        : null
-    );
-  }
-
-  if (params.note !== undefined) {
-    sets.push(`note = ?`);
-    values.push(
-      params.note !== null && typeof params.note === 'string'
-        ? params.note.trim() || null
-        : null
-    );
-  }
-
-  if (params.user_items_json !== undefined) {
-    sets.push(`user_items_json = ?`);
-    values.push(
-      params.user_items_json !== null && typeof params.user_items_json === 'string'
-        ? params.user_items_json.trim() || null
-        : null
-    );
-  }
-
-  if (sets.length === 0) return;
-
-  const now = Date.now();
-  sets.push(`client_updated_at = ?`);
-  values.push(now);
-  values.push(params.id);
-
-  let ownedUserId: string | null = null;
-  await db.withTransactionAsync(async () => {
-    const existing = await db.getFirstAsync<{ user_id: string | null }>(
-      `SELECT user_id FROM receipts WHERE id = ? LIMIT 1`,
-      [params.id]
+    const existingOwner = await txn.getFirstAsync<{ user_id: string | null }>(
+      `SELECT user_id FROM receipts WHERE id = ? AND ${scope.receiptWhereSql} LIMIT 1`,
+      [params.id, ...scope.params]
     );
     ownedUserId =
-      existing?.user_id && String(existing.user_id).trim()
-        ? String(existing.user_id).trim()
+      existingOwner?.user_id && String(existingOwner.user_id).trim()
+        ? String(existingOwner.user_id).trim()
         : null;
 
-    await db.runAsync(
+    const updateResult = await txn.runAsync(
       `
       UPDATE receipts
       SET ${sets.join(', ')}
       WHERE id = ?
+        AND ${scope.receiptWhereSql}
       `,
-      values
+      [...values, params.id, ...scope.params]
     );
+    const updatedCount = updateResult.changes ?? 0;
+    if (updatedCount !== 1) {
+      if (updatedCount > 1) {
+        throw new Error('updateReceipt changed unexpected row count');
+      }
+      ownedUserId = null;
+      return;
+    }
+    mutationConfirmed = true;
 
     if (ownedUserId) {
-      await replaceSyncOutboxIntent(db, {
+      await replaceSyncOutboxIntent(txn, {
         receiptId: params.id,
         userId: ownedUserId,
         operation: 'upsert',
@@ -1507,13 +1619,26 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
         nowMs: now,
       });
     }
+
+    if (mayChangeReceiptItems) {
+      postUpdateReceiptForIndex = await readReceiptItemIndexSourceForScope(
+        txn,
+        params.id,
+        scope
+      );
+    }
   });
+
+  if (!mutationConfirmed) {
+    return;
+  }
 
   if (mayChangeReceiptItems) {
     await bestEffortRebuildReceiptItemIndexIfChanged(
       db,
       params.id,
-      previousItemsSignature
+      previousItemsSignature,
+      postUpdateReceiptForIndex
     );
   }
 

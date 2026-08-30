@@ -7,6 +7,23 @@ jest.mock('expo-sqlite', () => ({
 jest.mock('./db', () => ({
   initIfNeeded: jest.fn(async () => undefined),
 }));
+jest.mock('./anonAuth', () => ({
+  getAuthState: jest.fn(() => ({ status: 'unauthenticated', userId: null })),
+  subscribeAuthState: jest.fn(() => () => undefined),
+  ensureAnonAuth: jest.fn(async () => undefined),
+}));
+jest.mock('./installationId', () => ({
+  getOrCreateInstallationId: jest.fn(async () => 'install-test'),
+}));
+jest.mock('./receiptOwnershipScope', () => {
+  const actual = jest.requireActual('./receiptOwnershipScope');
+  return {
+    ...actual,
+    resolveCurrentLocalReceiptOwnerScope: jest.fn(async () => ({
+      status: 'owner_unavailable',
+    })),
+  };
+});
 
 import type { ReceiptListRow } from './db';
 import {
@@ -15,6 +32,25 @@ import {
   type ReceiptItemSearchDatabase,
   type ReceiptItemSearchResult,
 } from './receiptItemSearch';
+
+const USER_SCOPE = {
+  status: 'ready' as const,
+  ownerKey: 'user:search-test-user',
+  receiptWhereSql: 'receipts.user_id = ?',
+  itemWhereSql: 'receipts.user_id = ?',
+  params: ['search-test-user'],
+};
+
+async function searchOwned(
+  db: ReceiptItemSearchDatabase,
+  query: string,
+  options: Parameters<typeof searchHistoryPurchasesWithDb>[2] = {}
+) {
+  return searchHistoryPurchasesWithDb(db, query, {
+    ...options,
+    ownerScope: USER_SCOPE,
+  });
+}
 
 type SearchItemFixture = Omit<
   ReceiptItemSearchResult,
@@ -29,7 +65,11 @@ function receipt(
   id: string,
   transactionAt: number,
   merchant: string,
-  note: string | null = null
+  note: string | null = null,
+  ownership: { user_id?: string | null; installation_id?: string | null } = {
+    user_id: 'search-test-user',
+    installation_id: null,
+  }
 ): ReceiptListRow {
   return {
     id,
@@ -47,6 +87,8 @@ function receipt(
     final_category: null,
     note,
     user_items_json: null,
+    user_id: ownership.user_id ?? null,
+    installation_id: ownership.installation_id ?? null,
   };
 }
 
@@ -82,6 +124,23 @@ function namedBinds(
     : (params as Record<string, SQLite.SQLiteBindValue>);
 }
 
+function receiptMatchesOwnerScope(
+  candidate: ReceiptListRow,
+  source: string,
+  binds: Record<string, SQLite.SQLiteBindValue>
+): boolean {
+  if (source.includes('$ownerScopeUserId')) {
+    return candidate.user_id === binds.$ownerScopeUserId;
+  }
+  if (source.includes('$ownerScopeInstallationId')) {
+    return (
+      (candidate.user_id == null || candidate.user_id === '') &&
+      candidate.installation_id === binds.$ownerScopeInstallationId
+    );
+  }
+  return true;
+}
+
 class MemorySearchDb implements ReceiptItemSearchDatabase {
   readonly receipts = new Map<string, ReceiptListRow>();
   readonly items = new Map<string, SearchItemFixture>();
@@ -106,6 +165,10 @@ class MemorySearchDb implements ReceiptItemSearchDatabase {
       ];
       return [...this.items.values()]
         .filter((candidate) => this.receipts.has(candidate.receiptId))
+        .filter((candidate) => {
+          const matchingReceipt = this.receipts.get(candidate.receiptId)!;
+          return receiptMatchesOwnerScope(matchingReceipt, source, binds);
+        })
         .filter((candidate) =>
           searchableFields.some((field) =>
             normalizeReceiptItemSearchQuery(candidate[field]).includes(query)
@@ -141,6 +204,7 @@ class MemorySearchDb implements ReceiptItemSearchDatabase {
       const query = contains.slice(1, -1).replace(/\\([\\%_])/g, '$1');
       const limit = Number(binds.$receiptLimit ?? 100);
       return [...this.receipts.values()]
+        .filter((candidate) => receiptMatchesOwnerScope(candidate, source, binds))
         .filter((candidate) =>
           [
             candidate.merchant_raw,
@@ -204,7 +268,7 @@ describe('searchHistoryPurchasesWithDb', () => {
   it.each(['牛乳', '明治', '900ml', '900ＭＬ', 'milk'])(
     'matches indexed identity field: %s',
     async (query) => {
-      const results = await searchHistoryPurchasesWithDb(db, query);
+      const results = await searchOwned(db, query);
       expect(results.itemResults.map((result) => result.itemId)).toEqual([
         'new:0',
         'old:0',
@@ -221,7 +285,7 @@ describe('searchHistoryPurchasesWithDb', () => {
       })
     );
 
-    const results = await searchHistoryPurchasesWithDb(db, '牛乳');
+    const results = await searchOwned(db, '牛乳');
 
     expect(results.itemResults.map((result) => result.itemId)).toEqual([
       'new:0',
@@ -230,23 +294,73 @@ describe('searchHistoryPurchasesWithDb', () => {
     ]);
     expect(results.itemResults[1].purchaseQuantity).toBe(2);
     expect(
-      (await searchHistoryPurchasesWithDb(db, '1Ｌ')).itemResults.map(
+      (await searchOwned(db, '1Ｌ')).itemResults.map(
         (result) => result.itemId
       )
     ).toEqual(['new:1']);
   });
 
   it('returns sku_key additively for Product Detail target resolution', async () => {
-    const results = await searchHistoryPurchasesWithDb(db, '900ml');
+    const results = await searchOwned(db, '900ml');
     expect(results.itemResults[0].skuKey).toBe('meiji-milk-900');
     expect(db.queries[0]).toMatch(/receipt_items\.sku_key AS skuKey/i);
+    expect(db.queries[0]).toMatch(/receipts\.user_id = \$ownerScopeUserId/i);
   });
 
   it('uses receipt-only merchant fallback without returning unrelated items', async () => {
-    const results = await searchHistoryPurchasesWithDb(db, 'FamilyMart');
+    const results = await searchOwned(db, 'FamilyMart');
 
     expect(results.itemResults).toEqual([]);
     expect(results.receiptResults.map((result) => result.id)).toEqual(['new']);
+  });
+
+  it('returns only current-owner item search results', async () => {
+    db.receipts.set(
+      'foreign',
+      receipt('foreign', 3000, 'ForeignMart', null, {
+        user_id: 'foreign-user',
+        installation_id: null,
+      })
+    );
+    db.items.set(
+      'foreign:0',
+      item('foreign', 'foreign:0', '明治 おいしい牛乳 900ml', {
+        canonicalProductName: '明治 おいしい牛乳',
+        brand: '明治',
+        productFamilyKey: 'milk',
+        skuKey: 'meiji-milk-900',
+      })
+    );
+
+    const results = await searchOwned(db, '牛乳');
+    expect(results.itemResults.map((result) => result.receiptId)).toEqual([
+      'new',
+      'old',
+    ]);
+    expect(results.itemResults.some((result) => result.receiptId === 'foreign')).toBe(
+      false
+    );
+  });
+
+  it('returns only current-owner receipt search results', async () => {
+    db.receipts.set(
+      'foreign',
+      receipt('foreign', 3000, 'ForeignMart', 'secret-note', {
+        user_id: 'foreign-user',
+        installation_id: null,
+      })
+    );
+
+    const results = await searchOwned(db, 'secret-note');
+    expect(results.receiptResults).toEqual([]);
+    expect(results.itemResults).toEqual([]);
+  });
+
+  it('owner unavailable returns empty search results', async () => {
+    const results = await searchHistoryPurchasesWithDb(db, '牛乳', {
+      ownerScope: { status: 'owner_unavailable' },
+    });
+    expect(results).toEqual({ itemResults: [], receiptResults: [] });
   });
 
   it('requires INNER JOIN receipts and excludes orphan items', async () => {
@@ -255,7 +369,7 @@ describe('searchHistoryPurchasesWithDb', () => {
       item('missing', 'missing:0', '孤立商品ABC999')
     );
 
-    const results = await searchHistoryPurchasesWithDb(db, '孤立商品ABC999');
+    const results = await searchOwned(db, '孤立商品ABC999');
 
     expect(results.itemResults).toEqual([]);
     expect(db.queries[0]).toMatch(
@@ -274,10 +388,10 @@ describe('searchHistoryPurchasesWithDb', () => {
     );
 
     expect(
-      (await searchHistoryPurchasesWithDb(db, '450ml')).itemResults
+      (await searchOwned(db, '450ml')).itemResults
     ).toHaveLength(1);
     expect(
-      (await searchHistoryPurchasesWithDb(db, '900ml')).itemResults.map(
+      (await searchOwned(db, '900ml')).itemResults.map(
         (result) => result.itemId
       )
     ).toEqual(['old:0']);
@@ -292,20 +406,20 @@ describe('searchHistoryPurchasesWithDb', () => {
     );
 
     expect(
-      (await searchHistoryPurchasesWithDb(db, '500ml')).itemResults
+      (await searchOwned(db, '500ml')).itemResults
     ).toHaveLength(1);
     expect(
-      (await searchHistoryPurchasesWithDb(db, '水')).itemResults
+      (await searchOwned(db, '水')).itemResults
     ).toHaveLength(1);
   });
 
   it('returns empty results for blank or unknown queries without throwing', async () => {
-    await expect(searchHistoryPurchasesWithDb(db, '   ')).resolves.toEqual({
+    await expect(searchOwned(db, '   ')).resolves.toEqual({
       itemResults: [],
       receiptResults: [],
     });
     await expect(
-      searchHistoryPurchasesWithDb(db, '榴莲ABC999')
+      searchOwned(db, '榴莲ABC999')
     ).resolves.toEqual({
       itemResults: [],
       receiptResults: [],

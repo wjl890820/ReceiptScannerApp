@@ -3,6 +3,11 @@ import * as ExpoSQLite from 'expo-sqlite';
 
 import { initIfNeeded, type ReceiptListRow } from './db';
 import { normalizeReceiptItemSearchQuery } from './receiptItemSearchNormalize';
+import {
+  buildOwnerScopedReceiptNamedPredicates,
+  resolveCurrentLocalReceiptOwnerScope,
+  type LocalReceiptOwnerScope,
+} from './receiptOwnershipScope';
 
 export { normalizeReceiptItemSearchQuery } from './receiptItemSearchNormalize';
 
@@ -44,6 +49,8 @@ export type ReceiptItemSearchDatabase = {
 export type ReceiptItemSearchOptions = {
   itemLimit?: number;
   receiptLimit?: number;
+  /** Test seam: explicit owner scope instead of resolving current owner. */
+  ownerScope?: LocalReceiptOwnerScope;
 };
 
 const DB_NAME = 'receipts_v2.db';
@@ -76,8 +83,19 @@ export async function searchHistoryPurchasesWithDb(
   const query = normalizeReceiptItemSearchQuery(rawQuery);
   if (!query) return { itemResults: [], receiptResults: [] };
 
+  const scope =
+    options.ownerScope ?? (await resolveCurrentLocalReceiptOwnerScope());
+  if (scope.status !== 'ready') {
+    return { itemResults: [], receiptResults: [] };
+  }
+  const ownerNamed = buildOwnerScopedReceiptNamedPredicates(scope.ownerKey);
+  if (!ownerNamed) {
+    return { itemResults: [], receiptResults: [] };
+  }
+
   const escaped = escapeLikePattern(query);
   const binds = {
+    ...ownerNamed.binds,
     $exact: query,
     $prefix: `${escaped}%`,
     $contains: `%${escaped}%`,
@@ -112,7 +130,8 @@ export async function searchHistoryPurchasesWithDb(
        receipts.merchant_type AS merchantType
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE (
+     WHERE (${ownerNamed.itemWhereSql})
+       AND (
        LOWER(COALESCE(receipt_items.raw_name, '')) LIKE $contains ESCAPE '\\'
        OR LOWER(COALESCE(receipt_items.normalized_name, '')) LIKE $contains ESCAPE '\\'
        OR LOWER(COALESCE(receipt_items.normalized_full_name, '')) LIKE $contains ESCAPE '\\'
@@ -157,7 +176,8 @@ export async function searchHistoryPurchasesWithDb(
        note,
        user_items_json
      FROM receipts
-     WHERE (
+     WHERE (${ownerNamed.receiptWhereSql})
+       AND (
        LOWER(COALESCE(merchant_raw, '')) LIKE $contains ESCAPE '\\'
        OR LOWER(COALESCE(merchant_normalized, '')) LIKE $contains ESCAPE '\\'
        OR LOWER(COALESCE(note, '')) LIKE $contains ESCAPE '\\'
@@ -165,6 +185,7 @@ export async function searchHistoryPurchasesWithDb(
      ORDER BY COALESCE(transaction_at, created_at) DESC
      LIMIT $receiptLimit`,
     {
+      ...ownerNamed.binds,
       $contains: `%${escaped}%`,
       $receiptLimit: positiveLimit(options.receiptLimit, 100),
     }
