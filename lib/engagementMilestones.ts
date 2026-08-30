@@ -12,6 +12,10 @@ import type {
   ProductPriceKind,
 } from './productPriceHistory';
 import { getReceiptItems } from './receiptItems';
+import {
+  resolveCurrentLocalReceiptOwnerScope,
+  type LocalReceiptOwnerScopeReady,
+} from './receiptOwnershipScope';
 import { jstCalendarDayStartMs } from './dateParser';
 import type { ReceiptRow } from './db';
 
@@ -932,8 +936,35 @@ export function buildTenReceiptMilestone(
   };
 }
 
+function emptyOwnerMilestoneEvaluation(
+  options: {
+    beforeSupportedReceiptCount?: number | null;
+    generatedAt?: number;
+  } = {}
+): EngagementMilestoneEvaluation {
+  return {
+    status: getEngagementMilestoneStatus(
+      0,
+      options.beforeSupportedReceiptCount
+    ),
+    unlockedResult: null,
+  };
+}
+
+function emptyOwnerCurrentMilestoneEvaluation(): CurrentEngagementMilestoneEvaluation {
+  return {
+    status: getEngagementMilestoneStatus(0),
+    currentResult: null,
+  };
+}
+
+function emptyOwnerProductInsightContext(): MilestoneProductInsightContext {
+  return { rows: [], queryFailed: false };
+}
+
 async function readAllReceipts(
-  db: EngagementMilestoneDatabase
+  db: EngagementMilestoneDatabase,
+  ownerScope: LocalReceiptOwnerScopeReady
 ): Promise<EngagementReceipt[]> {
   return db.getAllAsync<EngagementReceipt>(
     `SELECT
@@ -951,8 +982,9 @@ async function readAllReceipts(
        final_total,
        user_items_json
      FROM receipts
+     WHERE ${ownerScope.receiptWhereSql}
      ORDER BY COALESCE(transaction_at, created_at) ASC, id ASC`,
-    []
+    ownerScope.params
   );
 }
 
@@ -981,7 +1013,8 @@ function filterProductRowsByExcludedReceiptIds<T extends { receiptId: string }>(
 }
 
 async function readProductRows(
-  db: EngagementMilestoneDatabase
+  db: EngagementMilestoneDatabase,
+  ownerScope: LocalReceiptOwnerScopeReady
 ): Promise<EngagementProductRow[]> {
   return db.getAllAsync<EngagementProductRow>(
     `SELECT
@@ -1031,20 +1064,22 @@ async function readProductRows(
        receipts.currency AS receiptCurrency
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
+     WHERE ${ownerScope.itemWhereSql}
      ORDER BY
        COALESCE(receipts.transaction_at, receipts.created_at) ASC,
        receipt_items.receipt_id ASC,
        receipt_items.source_index ASC`,
-    []
+    ownerScope.params
   );
 }
 
 async function readProductInsightContext(
   db: EngagementMilestoneDatabase,
+  ownerScope: LocalReceiptOwnerScopeReady,
   excludedDuplicateReceiptIds?: ReadonlySet<string>
 ): Promise<MilestoneProductInsightContext> {
   try {
-    const rows = await readProductRows(db);
+    const rows = await readProductRows(db, ownerScope);
     const filtered =
       excludedDuplicateReceiptIds && excludedDuplicateReceiptIds.size > 0
         ? filterProductRowsByExcludedReceiptIds(
@@ -1076,7 +1111,8 @@ async function evaluateReceiptSetWithDb(
     beforeSupportedReceiptCount?: number | null;
     generatedAt?: number;
     excludedDuplicateReceiptIds?: ReadonlySet<string>;
-  }
+  },
+  ownerScope: LocalReceiptOwnerScopeReady
 ): Promise<EngagementMilestoneEvaluation> {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const status = getEngagementMilestoneStatus(
@@ -1109,6 +1145,7 @@ async function evaluateReceiptSetWithDb(
 
   const productContext = await readProductInsightContext(
     db,
+    ownerScope,
     options.excludedDuplicateReceiptIds
   );
   return {
@@ -1135,13 +1172,22 @@ export async function evaluateEngagementMilestonesWithDb(
     generatedAt?: number;
   } = {}
 ): Promise<EngagementMilestoneEvaluation> {
-  const receipts = await readAllReceipts(db);
+  const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+  if (ownerScope.status !== 'ready') {
+    return emptyOwnerMilestoneEvaluation(options);
+  }
+  const receipts = await readAllReceipts(db, ownerScope);
   const { analyticsReceipts, excludedDuplicateReceiptIds } =
     await selectEngagementAnalyticsReceipts(receipts);
-  return evaluateReceiptSetWithDb(db, analyticsReceipts, {
-    ...options,
-    excludedDuplicateReceiptIds,
-  });
+  return evaluateReceiptSetWithDb(
+    db,
+    analyticsReceipts,
+    {
+      ...options,
+      excludedDuplicateReceiptIds,
+    },
+    ownerScope
+  );
 }
 
 export async function evaluateSavedReceiptMilestoneWithDb(
@@ -1149,7 +1195,14 @@ export async function evaluateSavedReceiptMilestoneWithDb(
   savedReceiptId: string,
   options: { generatedAt?: number } = {}
 ): Promise<EngagementMilestoneEvaluation> {
-  const receipts = await readAllReceipts(db);
+  const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+  if (ownerScope.status !== 'ready') {
+    return emptyOwnerMilestoneEvaluation({
+      generatedAt: options.generatedAt,
+      beforeSupportedReceiptCount: 0,
+    });
+  }
+  const receipts = await readAllReceipts(db, ownerScope);
   const { analyticsReceipts, excludedDuplicateReceiptIds } =
     await selectEngagementAnalyticsReceipts(receipts);
   const supportedCount = countSupportedReceipts(analyticsReceipts);
@@ -1158,19 +1211,28 @@ export async function evaluateSavedReceiptMilestoneWithDb(
   );
   const savedReceiptIsSupported =
     savedReceipt != null && isV1SupportedReceipt(savedReceipt);
-  return evaluateReceiptSetWithDb(db, analyticsReceipts, {
-    generatedAt: options.generatedAt,
-    beforeSupportedReceiptCount:
-      supportedCount - (savedReceiptIsSupported ? 1 : 0),
-    excludedDuplicateReceiptIds,
-  });
+  return evaluateReceiptSetWithDb(
+    db,
+    analyticsReceipts,
+    {
+      generatedAt: options.generatedAt,
+      beforeSupportedReceiptCount:
+        supportedCount - (savedReceiptIsSupported ? 1 : 0),
+      excludedDuplicateReceiptIds,
+    },
+    ownerScope
+  );
 }
 
 export async function evaluateCurrentEngagementMilestoneWithDb(
   db: EngagementMilestoneDatabase,
   options: { generatedAt?: number } = {}
 ): Promise<CurrentEngagementMilestoneEvaluation> {
-  const receipts = await readAllReceipts(db);
+  const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+  if (ownerScope.status !== 'ready') {
+    return emptyOwnerCurrentMilestoneEvaluation();
+  }
+  const receipts = await readAllReceipts(db, ownerScope);
   const { analyticsReceipts, excludedDuplicateReceiptIds } =
     await selectEngagementAnalyticsReceipts(receipts);
   const supportedReceipts = filterV1SupportedReceipts(analyticsReceipts);
@@ -1199,6 +1261,7 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
   }
   const productContext = await readProductInsightContext(
     db,
+    ownerScope,
     excludedDuplicateReceiptIds
   );
   return {
@@ -1255,11 +1318,15 @@ export async function evaluateSavedReceiptMilestone(
  * evaluateCurrentEngagementMilestone — no second duplicate policy.
  */
 export async function loadEngagementProductInsightContext(): Promise<MilestoneProductInsightContext> {
+  const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+  if (ownerScope.status !== 'ready') {
+    return emptyOwnerProductInsightContext();
+  }
   const db = await getEngagementMilestoneDb();
-  const receipts = await readAllReceipts(db);
+  const receipts = await readAllReceipts(db, ownerScope);
   const { excludedDuplicateReceiptIds } =
     await selectEngagementAnalyticsReceipts(receipts);
-  return readProductInsightContext(db, excludedDuplicateReceiptIds);
+  return readProductInsightContext(db, ownerScope, excludedDuplicateReceiptIds);
 }
 
 export async function evaluateCurrentEngagementMilestone(

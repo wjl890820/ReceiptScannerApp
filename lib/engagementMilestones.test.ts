@@ -10,6 +10,16 @@ jest.mock('./db', () => ({
   initIfNeeded: jest.fn(async () => undefined),
 }));
 
+const mockResolveCurrentLocalReceiptOwnerScope = jest.fn();
+jest.mock('./receiptOwnershipScope', () => {
+  const actual = jest.requireActual('./receiptOwnershipScope');
+  return {
+    ...actual,
+    resolveCurrentLocalReceiptOwnerScope: (...args: unknown[]) =>
+      mockResolveCurrentLocalReceiptOwnerScope(...args),
+  };
+});
+
 import {
   ENGAGEMENT_MILESTONES,
   buildFirstReceiptMilestone,
@@ -175,6 +185,16 @@ function productRow(
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue({
+    status: 'ready',
+    ownerKey: 'user:engagement-test-user',
+    receiptWhereSql: 'receipts.user_id = ?',
+    itemWhereSql: 'receipts.user_id = ?',
+    params: ['engagement-test-user'],
+  });
+});
 
 describe('authoritative milestone progress', () => {
   it('freezes the only authoritative thresholds', () => {
@@ -715,10 +735,14 @@ describe('database evaluation and graceful degradation', () => {
       beforeSupportedReceiptCount: 4,
     });
     expect(calls[0].source).toMatch(/FROM receipts/i);
+    expect(calls[0].source).toMatch(/WHERE receipts\.user_id = \?/i);
+    expect(calls[0].params).toEqual(['engagement-test-user']);
     expect(calls[0].source).not.toMatch(/receipt_items/i);
     expect(calls[1].source).toMatch(
       /FROM receipt_items\s+INNER JOIN receipts/i
     );
+    expect(calls[1].source).toMatch(/WHERE receipts\.user_id = \?/i);
+    expect(calls[1].params).toEqual(['engagement-test-user']);
     expect(calls[1].source).not.toMatch(/UPDATE|INSERT|DELETE/i);
   });
 
