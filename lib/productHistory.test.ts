@@ -8,6 +8,16 @@ jest.mock('./db', () => ({
   initIfNeeded: jest.fn(async () => undefined),
 }));
 
+const mockResolveCurrentLocalReceiptOwnerScope = jest.fn();
+jest.mock('./receiptOwnershipScope', () => {
+  const actual = jest.requireActual('./receiptOwnershipScope');
+  return {
+    ...actual,
+    resolveCurrentLocalReceiptOwnerScope: (...args: unknown[]) =>
+      mockResolveCurrentLocalReceiptOwnerScope(...args),
+  };
+});
+
 const mockResolveIdentityConsumerObservations = jest.fn();
 jest.mock('./productIdentityConsumer', () => ({
   resolveIdentityConsumerObservations: (...args: unknown[]) =>
@@ -31,6 +41,8 @@ type ReceiptFixture = {
   merchantRaw: string;
   merchantNormalized: string;
   currency: string;
+  userId?: string | null;
+  installationId?: string | null;
 };
 
 type ItemFixture = {
@@ -68,6 +80,28 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
     let paramIndex = 0;
     let items = this.items.filter((item) => this.receipts.has(item.receiptId));
 
+    if (/receipts\.user_id = \?/i.test(source) && !/IS NULL/i.test(source)) {
+      const userId = values[paramIndex++];
+      items = items.filter((item) => {
+        const receipt = this.receipts.get(item.receiptId)!;
+        return (receipt.userId ?? 'history-test-user') === userId;
+      });
+    } else if (
+      /receipts\.user_id IS NULL AND receipts\.installation_id = \?/i.test(
+        source
+      )
+    ) {
+      const installationId = values[paramIndex++];
+      items = items.filter((item) => {
+        const receipt = this.receipts.get(item.receiptId)!;
+        const userId = receipt.userId;
+        return (
+          (userId == null || userId === '') &&
+          receipt.installationId === installationId
+        );
+      });
+    }
+
     if (/receipt_items\.sku_key = \?/i.test(source)) {
       const key = values[paramIndex++];
       items = items.filter((item) => item.skuKey === key);
@@ -77,8 +111,6 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
     } else if (/receipt_items\.product_family_key = \?/i.test(source)) {
       const key = values[paramIndex++];
       items = items.filter((item) => item.family === key);
-    } else if (!/1\s*=\s*1/i.test(source)) {
-      return [];
     }
 
     const notInMatch = source.match(
@@ -88,8 +120,14 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
       ? (notInMatch[1].match(/\?/g) || []).length
       : 0;
     if (excludedCount > 0) {
+      const limitOffset = /LIMIT \?/i.test(source) ? 1 : 0;
       const excluded = new Set(
-        values.slice(paramIndex, paramIndex + excludedCount).map(String)
+        values
+          .slice(
+            values.length - excludedCount - limitOffset,
+            values.length - limitOffset
+          )
+          .map(String)
       );
       items = items.filter((item) => !excluded.has(item.receiptId));
     }
@@ -315,6 +353,8 @@ function addReceipt(
     merchantRaw: merchant,
     merchantNormalized: merchant,
     currency: 'JPY',
+    userId: 'history-test-user',
+    installationId: null,
   });
 }
 
@@ -449,6 +489,16 @@ async function load(
   expect(result).not.toBeNull();
   return result!;
 }
+
+beforeEach(() => {
+  mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue({
+    status: 'ready',
+    ownerKey: 'user:history-test-user',
+    receiptWhereSql: 'receipts.user_id = ?',
+    itemWhereSql: 'receipts.user_id = ?',
+    params: ['history-test-user'],
+  });
+});
 
 describe('Product History grouping', () => {
   it('SKU detail includes only the exact sku and separates count from quantity', async () => {

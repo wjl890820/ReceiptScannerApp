@@ -144,6 +144,33 @@ export async function resolveCurrentLocalReceiptOwnerScope(): Promise<LocalRecei
   };
 }
 
+/** Compose owner + target + duplicate-exclusion predicates for item JOIN queries (H3). */
+export function composeOwnerScopedItemHistoryWhere(
+  ownerScope: LocalReceiptOwnerScopeReady,
+  targetFilter: { sql: string; params: readonly string[] },
+  duplicateExclusion: { sql: string; params: string[] } = { sql: '', params: [] }
+): { whereSql: string; whereParams: string[] } {
+  return {
+    whereSql: `(${ownerScope.itemWhereSql}) AND (${targetFilter.sql})${duplicateExclusion.sql}`,
+    whereParams: [
+      ...ownerScope.params,
+      ...targetFilter.params,
+      ...duplicateExclusion.params,
+    ],
+  };
+}
+
+/** Owner-bounded broad fetch (e.g. merchant_product identity consumer input). */
+export function composeOwnerScopedItemBroadFetchWhere(
+  ownerScope: LocalReceiptOwnerScopeReady,
+  duplicateExclusion: { sql: string; params: string[] } = { sql: '', params: [] }
+): { whereSql: string; whereParams: string[] } {
+  return {
+    whereSql: `(${ownerScope.itemWhereSql})${duplicateExclusion.sql}`,
+    whereParams: [...ownerScope.params, ...duplicateExclusion.params],
+  };
+}
+
 export function composeReceiptListWhereClause(
   scope: LocalReceiptOwnerScopeReady,
   searchWhereClause: string,

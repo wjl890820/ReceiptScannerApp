@@ -12,6 +12,10 @@ import {
   buildOwnerScopedInventoryPredicates,
   buildPersonalProductInventoryRowKey,
 } from './personalProductEndpointInventory';
+import {
+  composeOwnerScopedItemHistoryWhere,
+  resolveCurrentLocalReceiptOwnerScope,
+} from './receiptOwnershipScope';
 import type { ResolvedPersonalProductTarget } from './personalProductTargetResolver';
 import type { ProductIdentityLevel } from './productIdentityContract';
 import { normalizeProductForIdentity } from './normalizeProductForIdentity';
@@ -1875,18 +1879,38 @@ export async function loadProductPriceHistoryWithDb(
   if (target.type === 'personal_product') {
     return loadPersonalProductPriceHistoryWithDb(db, target, options);
   }
+
+  const canonicalDuplicateSelectionApplied = options.excludedReceiptIds !== undefined;
+  const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+  if (ownerScope.status !== 'ready') {
+    if (target.type === 'merchant_product') {
+      return failClosedRequestedMerchantProductTargetResult(
+        target,
+        [],
+        new Map(),
+        canonicalDuplicateSelectionApplied
+      );
+    }
+    return buildProductPriceHistory(target, [], {
+      canonicalDuplicateSelectionApplied,
+    });
+  }
+
   const filter = filterForTarget(target);
+  const { whereSql, whereParams } = composeOwnerScopedItemHistoryWhere(
+    ownerScope,
+    { sql: filter.sql, params: filter.params.map(String) }
+  );
   const rows = await db.getAllAsync<ProductPriceHistoryRow>(
     `${PRICE_HISTORY_SELECT_SQL}
-     WHERE ${filter.sql}
+     WHERE ${whereSql}
      ORDER BY
        COALESCE(receipts.transaction_at, receipts.created_at) ASC,
        receipt_items.receipt_id ASC,
        receipt_items.source_index ASC`,
-    filter.params
+    whereParams
   );
   const excluded = options.excludedReceiptIds;
-  const canonicalDuplicateSelectionApplied = excluded !== undefined;
   const filtered =
     excluded && excluded.size > 0
       ? rows.filter((row) => !excluded.has(row.receiptId))

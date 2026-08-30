@@ -7,6 +7,12 @@ import {
   buildOwnerScopedInventoryPredicates,
   buildPersonalProductInventoryRowKey,
 } from './personalProductEndpointInventory';
+import {
+  composeOwnerScopedItemBroadFetchWhere,
+  composeOwnerScopedItemHistoryWhere,
+  resolveCurrentLocalReceiptOwnerScope,
+  type LocalReceiptOwnerScopeReady,
+} from './receiptOwnershipScope';
 import type { ResolvedPersonalProductTarget } from './personalProductTargetResolver';
 import type {
   AggregatableProductDetailTarget,
@@ -591,11 +597,14 @@ async function loadMerchantProductHistorySummaryWithDb(
     recentLimit?: number;
     locale?: Locale;
     excludedReceiptIds?: ReadonlySet<string>;
-  }
+  },
+  ownerScope: LocalReceiptOwnerScopeReady
 ): Promise<ProductHistorySummary | null> {
   const exclusion = excludedReceiptSql(options.excludedReceiptIds);
-  const whereSql = `1 = 1${exclusion.sql}`;
-  const whereParams = [...exclusion.params];
+  const { whereSql, whereParams } = composeOwnerScopedItemBroadFetchWhere(
+    ownerScope,
+    exclusion
+  );
   const recentLimit = Math.max(
     1,
     Math.min(
@@ -758,14 +767,22 @@ export async function loadProductHistoryWithDb(
     return loadPersonalProductHistorySummaryWithDb(db, target, options);
   }
 
+  const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+  if (ownerScope.status !== 'ready') {
+    return null;
+  }
+
   // MerchantProduct detail: never treat mp_* as product_family_key.
   if (target.type === 'merchant_product') {
-    return loadMerchantProductHistorySummaryWithDb(db, target, options);
+    return loadMerchantProductHistorySummaryWithDb(db, target, options, ownerScope);
   }
   const filter = filterForTarget(target);
   const exclusion = excludedReceiptSql(options.excludedReceiptIds);
-  const whereSql = `${filter.sql}${exclusion.sql}`;
-  const whereParams = [...filter.params, ...exclusion.params];
+  const { whereSql, whereParams } = composeOwnerScopedItemHistoryWhere(
+    ownerScope,
+    { sql: filter.sql, params: filter.params.map(String) },
+    exclusion
+  );
   const recentLimit = Math.max(
     1,
     Math.min(100, Math.floor(finiteNumber(options.recentLimit, DEFAULT_RECENT_PURCHASE_LIMIT)))

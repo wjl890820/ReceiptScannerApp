@@ -8,6 +8,16 @@ jest.mock('./db', () => ({
   initIfNeeded: jest.fn(async () => undefined),
 }));
 
+const mockResolveCurrentLocalReceiptOwnerScope = jest.fn();
+jest.mock('./receiptOwnershipScope', () => {
+  const actual = jest.requireActual('./receiptOwnershipScope');
+  return {
+    ...actual,
+    resolveCurrentLocalReceiptOwnerScope: (...args: unknown[]) =>
+      mockResolveCurrentLocalReceiptOwnerScope(...args),
+  };
+});
+
 import type { ReceiptAmountBasisAssessment } from './analysisFoundation/types';
 import { resolveReceiptItemIdentity } from './productIdentityResolver';
 import { createMemoryProductIdentityStore } from './productIdentityStore';
@@ -210,6 +220,16 @@ function merchantProductHistoryDb(
     },
   };
 }
+
+beforeEach(() => {
+  mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue({
+    status: 'ready',
+    ownerKey: 'user:test-user',
+    receiptWhereSql: 'receipts.user_id = ?',
+    itemWhereSql: 'receipts.user_id = ?',
+    params: ['test-user'],
+  });
+});
 
 describe('G3-2A merchant_product production path', () => {
   async function runMerchantProductPriceHistory(
@@ -960,6 +980,7 @@ describe('Price History query safety', () => {
       /FROM receipt_items\s+INNER JOIN receipts/i
     );
     expect(calls[0].source).toMatch(/receipt_items\.sku_key = \?/i);
+    expect(calls[0].source).toMatch(/receipts\.user_id = \?/i);
     expect(calls[0].source).toMatch(
       /receipt_items\.gross_line_amount AS grossLineAmount/i
     );
@@ -989,7 +1010,7 @@ describe('Price History query safety', () => {
       /receipts\.user_items_json AS receiptUserItemsJson/i
     );
     expect(calls[0].source).not.toMatch(/purchase_unit_price/i);
-    expect(calls[0].params).toEqual(['meiji-900']);
+    expect(calls[0].params).toEqual(['test-user', 'meiji-900']);
     expect(result.observations.length).toBe(2);
   });
 
@@ -1009,7 +1030,7 @@ describe('Price History query safety', () => {
 
       await loadProductPriceHistoryWithDb(db, { type, key });
       expect(calls[0].source).toMatch(expectedFilter);
-      expect(calls[0].params).toEqual([key]);
+      expect(calls[0].params).toEqual(['test-user', key]);
     }
   );
 

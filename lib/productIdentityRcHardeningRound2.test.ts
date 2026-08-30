@@ -22,6 +22,16 @@ jest.mock('./env', () => ({
 jest.mock('./deviceId', () => ({ getDeviceId: async () => 'test-device' }));
 jest.mock('./i18n', () => ({ getCurrentLocale: () => 'ja' }));
 
+const mockResolveCurrentLocalReceiptOwnerScope = jest.fn();
+jest.mock('./receiptOwnershipScope', () => {
+  const actual = jest.requireActual('./receiptOwnershipScope');
+  return {
+    ...actual,
+    resolveCurrentLocalReceiptOwnerScope: (...args: unknown[]) =>
+      mockResolveCurrentLocalReceiptOwnerScope(...args),
+  };
+});
+
 import type { ReceiptRow } from './db';
 import {
   auditKnownStructuralCostco9534Case,
@@ -60,6 +70,16 @@ import {
 } from './receiptItemIndex';
 import { buildProductAttributes } from './productIdentityContract';
 import { normalizeProductForIdentity } from './normalizeProductForIdentity';
+
+beforeEach(() => {
+  mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue({
+    status: 'ready',
+    ownerKey: 'user:test-user',
+    receiptWhereSql: 'receipts.user_id = ?',
+    itemWhereSql: 'receipts.user_id = ?',
+    params: ['test-user'],
+  });
+});
 
 describe('Round2 — identity price-history currency completeness', () => {
   it('JPY + JPY → eligible', () => {
