@@ -174,10 +174,12 @@ describe('progressive Home integration boundaries', () => {
     expect(card.totalPurchaseQuantity).toBe(47);
 
     const homeSource = fs.readFileSync(
-      path.resolve(__dirname, 'homeProgressiveExperience.ts'),
+      path.resolve(__dirname, 'homePersonalFrequentProducts.ts'),
       'utf8'
     );
-    expect(homeSource).toContain('totalPurchaseQuantity: g.totalPurchaseQuantity');
+    expect(homeSource).toContain(
+      'totalPurchaseQuantity: group.totalPurchaseQuantity'
+    );
     expect(homeSource).not.toMatch(
       /totalPurchaseQuantity:\s*0\s*,\s*\n\s*lastPurchasedAt: g\.latestPurchaseAt/
     );

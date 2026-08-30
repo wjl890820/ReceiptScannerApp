@@ -82,6 +82,12 @@ describe('buildHomeFrequentProductDetailHref', () => {
         key: 'milk',
       })
     ).toBe('/product/family?key=milk');
+    expect(
+      buildHomeFrequentProductDetailHref({
+        groupingType: 'personal_product',
+        key: 'mp_anchor_123',
+      })
+    ).toBe('/product/personal_product?key=mp_anchor_123');
   });
 
   it('does not invent Product Detail routes for unresolved identities', () => {

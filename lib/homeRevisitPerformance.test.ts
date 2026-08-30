@@ -70,7 +70,7 @@ describe('Home refresh production wiring', () => {
       'const allReceipts = await listReceipts();'
     );
     const enrichment = homeSource.indexOf(
-      'const [evaluation, productContext] = await Promise.all'
+      'loadEngagementProductInsightContext()'
     );
     const finalSnapshot = homeSource.indexOf(
       'setHomeExperience(finalCompleteExperience)'

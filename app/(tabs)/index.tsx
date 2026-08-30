@@ -39,6 +39,7 @@ import { logger } from '@/lib/logger';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import {
   listReceipts,
+  getReceiptsDatabase,
   type ReceiptRow,
 } from '@/lib/db';
 import {
@@ -50,6 +51,7 @@ import {
   buildHomeProgressiveExperience,
   type HomeProgressiveExperience,
 } from '@/lib/homeProgressiveExperience';
+import { loadPersonalProductEndpointInventoryWithDb } from '@/lib/personalProductEndpointInventory';
 import {
   beginHomeRefresh,
   completeHomeRefresh,
@@ -101,15 +103,31 @@ export default function HomeScreen() {
       const analyticsReceipts = analyticsSelection.analyticsReceipts;
       let finalCompleteExperience: HomeProgressiveExperience;
       try {
-        const [evaluation, productContext] = await Promise.all([
+        const [evaluation, productContext, personalInventory] = await Promise.all([
           evaluateCurrentEngagementMilestone(),
           loadEngagementProductInsightContext(),
+          (async () => {
+            try {
+              const db = await getReceiptsDatabase();
+              const inventoryResult =
+                await loadPersonalProductEndpointInventoryWithDb(db);
+              return inventoryResult.status === 'ready'
+                ? inventoryResult.inventory
+                : null;
+            } catch (personalInventoryError) {
+              logger.warn('Home', 'personal inventory enrichment skipped', {
+                error: personalInventoryError,
+              });
+              return null;
+            }
+          })(),
         ]);
         finalCompleteExperience = buildHomeProgressiveExperience(
           analyticsReceipts,
           evaluation,
           false,
-          productContext.rows
+          productContext.rows,
+          personalInventory
         );
       } catch (analyticsError) {
         if (hadCompleteSnapshot) throw analyticsError;

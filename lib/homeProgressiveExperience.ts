@@ -18,7 +18,12 @@ import {
   sumPurchaseQuantityForProfile,
   takeHomeLongTermFrequentProducts,
 } from './frequentProductProfile';
+import {
+  applyHomePersonalFrequentProductOverlay,
+  mapIdentityFrequentGroupToHomeProduct,
+} from './homePersonalFrequentProducts';
 import { filterV1SupportedReceipts } from './merchantType';
+import type { PersonalProductEndpointInventory } from './personalProductEndpointInventory';
 
 export type ProgressiveHomeStage =
   | 'empty'
@@ -74,7 +79,8 @@ export function filterHomeIdentityProductRows<
 
 function buildHomeLongTermFrequentProducts(
   analyticsReceipts: ReceiptRow[],
-  productRows: readonly EngagementProductRow[]
+  productRows: readonly EngagementProductRow[],
+  personalInventory: PersonalProductEndpointInventory | null = null
 ): MilestoneFrequentProduct[] {
   const supported = filterV1SupportedReceipts(analyticsReceipts);
   const supportedReceiptIds = new Set(supported.map((receipt) => receipt.id));
@@ -102,19 +108,17 @@ function buildHomeLongTermFrequentProducts(
         quantity: row.purchaseQuantity,
         displayName: row.displayName,
       }));
-      const { groups } = buildIdentityFrequentProductGroups(observations);
-      const capped = groups.slice(0, 5);
-      if (capped.length > 0) {
-        return capped.map((g) => ({
-          groupingType: 'merchant_product' as const,
-          key: g.key,
-          displayLabel: g.displayName,
-          displayLabelKey: null,
-          purchaseOccurrenceCount: g.distinctReceiptCount,
-          totalPurchaseQuantity: g.totalPurchaseQuantity,
-          lastPurchasedAt: g.latestPurchaseAt ?? 0,
-          priceSummary: null,
-        }));
+      const { groups, qualified } = buildIdentityFrequentProductGroups(observations);
+      const merged = personalInventory
+        ? applyHomePersonalFrequentProductOverlay({
+            baseGroups: groups,
+            qualified,
+            personalInventory,
+            supportedReceiptIds,
+          })
+        : groups.map(mapIdentityFrequentGroupToHomeProduct);
+      if (merged.length > 0) {
+        return merged.slice(0, 5);
       }
     }
   } catch {
@@ -140,12 +144,15 @@ function buildHomeLongTermFrequentProducts(
  * @param productRows Analytics-filtered engagement product rows (optional).
  *   When omitted / empty and stage is unlocked, frequent list is empty rather
  *   than falling back to milestone recent-window frequentProducts.
+ * @param personalInventory Owner-scoped G4-2A inventory for Home personal
+ *   frequent overlay (optional). When null, identity Home grouping is unchanged.
  */
 export function buildHomeProgressiveExperience(
   receipts: ReceiptRow[],
   evaluation: CurrentEngagementMilestoneEvaluation | null,
   analyticsUnavailable = false,
-  productRows: readonly EngagementProductRow[] = []
+  productRows: readonly EngagementProductRow[] = [],
+  personalInventory: PersonalProductEndpointInventory | null = null
 ): HomeProgressiveExperience {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const localCount = countSupportedReceipts(receipts);
@@ -168,7 +175,11 @@ export function buildHomeProgressiveExperience(
   // Stage gate unchanged (frequent | profile). Data source = long-term SSOT.
   const frequentUnlocked = stage === 'frequent' || stage === 'profile';
   const frequentProducts = frequentUnlocked
-    ? buildHomeLongTermFrequentProducts(receipts, productRows)
+    ? buildHomeLongTermFrequentProducts(
+        receipts,
+        productRows,
+        personalInventory
+      )
     : [];
   const profile =
     currentResult?.milestone === 10 ? currentResult : null;
