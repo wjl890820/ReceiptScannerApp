@@ -472,6 +472,17 @@ async function initIfNeeded() {
         }
       }
       try {
+        const { ensureLegacyReceiptInstallationBackfill } = await import(
+          './legacyReceiptInstallationBackfill'
+        );
+        await ensureLegacyReceiptInstallationBackfill(db);
+      } catch (e) {
+        console.warn(
+          '[DB] legacy receipt installation backfill failed (nonfatal):',
+          e
+        );
+      }
+      try {
         await db.execAsync(
           `CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id)`
         );

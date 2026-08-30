@@ -2,8 +2,7 @@
  * Best-effort local ownership adoption when auth becomes available.
  * Does not block app start; single-flight; no auth↔db recursion into auth bootstrap.
  *
- * Auto-adoption runs ONLY for anonymous users (is_anonymous), so a future
- * Apple restore onto a different account cannot silently merge unowned locals.
+ * Auto-adoption runs ONLY for anonymous users (is_anonymous).
  */
 import { getAuthState, subscribeAuthState, type AuthState } from './anonAuth';
 import { enqueueUpsertIntentsForReceiptIds } from './cloudBackupBootstrap';
@@ -11,21 +10,56 @@ import { isAnonAuthEnabled } from './env';
 import {
   adoptUnownedReceiptsForUserWithDefaults,
   shouldAutoAdoptUnownedReceipts,
+  type AdoptionAuthEligibility,
 } from './legacyReceiptAdoption';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
 
 type GetDbFn = () => Promise<import('expo-sqlite').SQLiteDatabase>;
+
+type AnonymousAuthSnapshot = {
+  userId: string;
+  isAnonymous: true;
+};
 
 let _started = false;
 let _unsubscribe: (() => void) | null = null;
 let _inflight: Promise<void> | null = null;
 let _getDb: GetDbFn | null = null;
 
+function isAnonymousAdoptionSnapshot(
+  state: AuthState
+): AnonymousAuthSnapshot | null {
+  if (state.status !== 'authenticated' || !state.userId) return null;
+  if (!shouldAutoAdoptUnownedReceipts({ isAnonymous: state.isAnonymous })) {
+    return null;
+  }
+  if (state.isAnonymous !== true) return null;
+  return { userId: state.userId, isAnonymous: true };
+}
+
+function authStillMatchesSnapshot(snapshot: AnonymousAuthSnapshot): boolean {
+  const current = getAuthState();
+  return (
+    current.status === 'authenticated' &&
+    current.userId === snapshot.userId &&
+    current.isAnonymous === true &&
+    shouldAutoAdoptUnownedReceipts({ isAnonymous: current.isAnonymous })
+  );
+}
+
+function buildAuthEligibility(
+  snapshot: AnonymousAuthSnapshot
+): AdoptionAuthEligibility {
+  return {
+    isValid: () => authStillMatchesSnapshot(snapshot),
+  };
+}
+
 async function runAdoptionBestEffort(state: AuthState): Promise<void> {
   if (!_getDb) return;
-  if (!state.userId) return;
-  if (!shouldAutoAdoptUnownedReceipts({ isAnonymous: state.isAnonymous })) {
-    if (__DEV__) {
+  const snapshot = isAnonymousAdoptionSnapshot(state);
+  if (!snapshot) {
+    if (__DEV__ && state.status === 'authenticated' && state.userId) {
       // eslint-disable-next-line no-console
       console.log('[OwnershipAdoption] skip auto-adopt (not anonymous)', {
         userIdPrefix: state.userId.slice(0, 8),
@@ -40,18 +74,32 @@ async function runAdoptionBestEffort(state: AuthState): Promise<void> {
     return;
   }
 
-  const userId = state.userId;
+  const adoptionSnapshot = snapshot;
   _inflight = (async () => {
     try {
-      const result = await adoptUnownedReceiptsForUserWithDefaults(userId, _getDb!);
+      if (!authStillMatchesSnapshot(adoptionSnapshot)) {
+        return;
+      }
+      const result = await adoptUnownedReceiptsForUserWithDefaults(
+        adoptionSnapshot.userId,
+        _getDb!,
+        { authEligibility: buildAuthEligibility(adoptionSnapshot) }
+      );
       if (__DEV__) {
         // eslint-disable-next-line no-console
         console.log('[OwnershipAdoption]', result);
       }
-      if (result.adopted_receipt_ids.length > 0) {
+      if (
+        result.adopted_receipt_ids.length > 0 &&
+        authStillMatchesSnapshot(adoptionSnapshot)
+      ) {
         try {
           const db = await _getDb!();
-          await enqueueUpsertIntentsForReceiptIds(db, userId, result.adopted_receipt_ids);
+          await enqueueUpsertIntentsForReceiptIds(
+            db,
+            adoptionSnapshot.userId,
+            result.adopted_receipt_ids
+          );
           void requestCloudBackupFlush();
         } catch (e) {
           console.warn('[OwnershipAdoption] backup handoff failed (nonfatal):', e);
@@ -97,4 +145,11 @@ export function __resetOwnershipAdoptionOrchestratorForTests(): void {
   _started = false;
   _inflight = null;
   _getDb = null;
+}
+
+/** Test-only: expose auth snapshot matcher for orchestrator tests. */
+export function __authStillMatchesAdoptionSnapshotForTests(
+  snapshot: AnonymousAuthSnapshot
+): boolean {
+  return authStillMatchesSnapshot(snapshot);
 }

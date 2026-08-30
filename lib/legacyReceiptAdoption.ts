@@ -1,12 +1,11 @@
 /**
- * P0 Phase 4 — one-time/idempotent local legacy receipt ownership adoption.
+ * P0 Phase 4 / Privacy-H5 — installation-scoped local legacy receipt adoption.
  *
- * ONLY: NULL/empty user_id → current auth.uid()
- * NEVER: user A → user B
+ * ONLY: NULL/empty user_id + current installation_id → current auth.uid()
+ * NEVER: user A → user B; other-install; double-null; guessed ownership
  *
  * Automatic adoption is intended ONLY for the anonymous ownership-establishment
- * lifecycle on this installation. Callers must gate with is_anonymous === true
- * so a later Apple restore to a different account cannot silently merge locals.
+ * lifecycle on this installation.
  */
 import type * as SQLite from 'expo-sqlite';
 
@@ -14,26 +13,51 @@ import { getOrCreateInstallationId } from './installationId';
 
 export type LegacyAdoptionResult = {
   adopted: number;
+  adopted_receipt_ids: string[];
   already_owned_by_current_user: number;
   owned_by_other_user: number;
+  eligible_current_install_unowned: number;
+  remaining_eligible_current_install_unowned: number;
+  ambiguous_double_null: number;
+  other_install_unowned: number;
+  /** Compat alias: all unowned rows not adoptable by current automatic policy. */
   remaining_unowned: number;
-  /** IDs that transitioned NULL/empty → current user (for backup handoff). */
-  adopted_receipt_ids: string[];
+};
+
+export type AdoptionAuthEligibility = {
+  isValid: () => boolean | Promise<boolean>;
 };
 
 export type LegacyAdoptionDeps = {
   getDb: () => Promise<SQLite.SQLiteDatabase>;
   getInstallationId: () => Promise<string>;
+  authEligibility?: AdoptionAuthEligibility;
 };
 
-function isUnownedUserId(userId: unknown): boolean {
+export type LegacyAdoptionTestHooks = {
+  afterCandidateSelection?: () => void | Promise<void>;
+};
+
+let legacyAdoptionTestHooks: LegacyAdoptionTestHooks | null = null;
+
+/** Test-only seam for auth-race coverage. */
+export function __setLegacyAdoptionTestHooksForTests(
+  hooks: LegacyAdoptionTestHooks | null
+): void {
+  legacyAdoptionTestHooks = hooks;
+}
+
+const UNOWNED_USER_SQL = `(user_id IS NULL OR TRIM(COALESCE(user_id, '')) = '')`;
+const UNOWNED_INSTALL_SQL = `(installation_id IS NULL OR TRIM(COALESCE(installation_id, '')) = '')`;
+const OWNED_USER_SQL = `(user_id IS NOT NULL AND TRIM(user_id) <> '')`;
+const NONEMPTY_INSTALL_SQL = `(installation_id IS NOT NULL AND TRIM(installation_id) <> '')`;
+
+export function isUnownedUserId(userId: unknown): boolean {
   return userId == null || (typeof userId === 'string' && userId.trim() === '');
 }
 
 /**
  * True only for Supabase anonymous users (User.is_anonymous).
- * Non-anonymous authenticated accounts (e.g. future Apple restore target)
- * must NOT auto-adopt unowned local receipts.
  */
 export function shouldAutoAdoptUnownedReceipts(user: {
   is_anonymous?: boolean | null;
@@ -44,9 +68,108 @@ export function shouldAutoAdoptUnownedReceipts(user: {
   return false;
 }
 
+async function assertAuthEligible(
+  authEligibility: AdoptionAuthEligibility | undefined
+): Promise<void> {
+  if (!authEligibility) return;
+  const valid = await authEligibility.isValid();
+  if (!valid) {
+    throw new Error('legacy adoption aborted: auth eligibility no longer valid');
+  }
+}
+
+async function countRows(
+  db: SQLite.SQLiteDatabase,
+  sql: string,
+  params: SQLite.SQLiteBindParams = []
+): Promise<number> {
+  const row = await db.getFirstAsync<{ c: number }>(sql, params);
+  return row?.c ?? 0;
+}
+
+async function classifyUnownedBuckets(
+  db: SQLite.SQLiteDatabase,
+  currentUserId: string,
+  installationId: string
+): Promise<{
+  eligible_current_install_unowned: number;
+  ambiguous_double_null: number;
+  other_install_unowned: number;
+  already_owned_by_current_user: number;
+  owned_by_other_user: number;
+}> {
+  const [
+    eligible_current_install_unowned,
+    ambiguous_double_null,
+    other_install_unowned,
+    already_owned_by_current_user,
+    owned_by_other_user,
+  ] = await Promise.all([
+    countRows(
+      db,
+      `SELECT COUNT(*) AS c FROM receipts
+       WHERE ${UNOWNED_USER_SQL}
+         AND installation_id = ?`,
+      [installationId]
+    ),
+    countRows(
+      db,
+      `SELECT COUNT(*) AS c FROM receipts
+       WHERE ${UNOWNED_USER_SQL}
+         AND ${UNOWNED_INSTALL_SQL}`
+    ),
+    countRows(
+      db,
+      `SELECT COUNT(*) AS c FROM receipts
+       WHERE ${UNOWNED_USER_SQL}
+         AND ${NONEMPTY_INSTALL_SQL}
+         AND installation_id <> ?`,
+      [installationId]
+    ),
+    countRows(
+      db,
+      `SELECT COUNT(*) AS c FROM receipts WHERE TRIM(user_id) = ?`,
+      [currentUserId]
+    ),
+    countRows(
+      db,
+      `SELECT COUNT(*) AS c FROM receipts
+       WHERE ${OWNED_USER_SQL}
+         AND TRIM(user_id) <> ?`,
+      [currentUserId]
+    ),
+  ]);
+
+  return {
+    eligible_current_install_unowned,
+    ambiguous_double_null,
+    other_install_unowned,
+    already_owned_by_current_user,
+    owned_by_other_user,
+  };
+}
+
+function emptyAdoptionResult(
+  buckets: Awaited<ReturnType<typeof classifyUnownedBuckets>>
+): LegacyAdoptionResult {
+  return {
+    adopted: 0,
+    adopted_receipt_ids: [],
+    already_owned_by_current_user: buckets.already_owned_by_current_user,
+    owned_by_other_user: buckets.owned_by_other_user,
+    eligible_current_install_unowned: buckets.eligible_current_install_unowned,
+    remaining_eligible_current_install_unowned:
+      buckets.eligible_current_install_unowned,
+    ambiguous_double_null: buckets.ambiguous_double_null,
+    other_install_unowned: buckets.other_install_unowned,
+    remaining_unowned:
+      buckets.ambiguous_double_null + buckets.other_install_unowned,
+  };
+}
+
 /**
- * Adopt unowned local receipts for the verified current user.
- * Idempotent via row state: WHERE user_id IS NULL OR user_id = ''.
+ * Adopt current-installation unowned receipts for the verified current user.
+ * Idempotent via row state + installation predicate in SQL.
  */
 export async function adoptUnownedReceiptsForUser(
   currentUserId: string,
@@ -56,69 +179,87 @@ export async function adoptUnownedReceiptsForUser(
   if (!uid) {
     return {
       adopted: 0,
+      adopted_receipt_ids: [],
       already_owned_by_current_user: 0,
       owned_by_other_user: 0,
+      eligible_current_install_unowned: 0,
+      remaining_eligible_current_install_unowned: 0,
+      ambiguous_double_null: 0,
+      other_install_unowned: 0,
       remaining_unowned: 0,
-      adopted_receipt_ids: [],
     };
   }
 
   const db = await deps.getDb();
-  const installationId = await deps.getInstallationId();
+  const installationId = (await deps.getInstallationId()).trim();
+  if (!installationId) {
+    const buckets = await classifyUnownedBuckets(db, uid, '');
+    return emptyAdoptionResult(buckets);
+  }
 
-  let result: LegacyAdoptionResult = {
-    adopted: 0,
+  let result: LegacyAdoptionResult = emptyAdoptionResult({
+    eligible_current_install_unowned: 0,
+    ambiguous_double_null: 0,
+    other_install_unowned: 0,
     already_owned_by_current_user: 0,
     owned_by_other_user: 0,
-    remaining_unowned: 0,
-    adopted_receipt_ids: [],
-  };
+  });
 
-  await db.withTransactionAsync(async () => {
-    const rows = await db.getAllAsync<{ id: string; user_id: string | null }>(
-      `SELECT id, user_id FROM receipts`
-    );
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await assertAuthEligible(deps.authEligibility);
 
-    let unownedBefore = 0;
-    let alreadyOwnedBefore = 0;
-    let ownedByOtherBefore = 0;
-    const unownedIds: string[] = [];
-
-    for (const row of rows) {
-      if (isUnownedUserId(row.user_id)) {
-        unownedBefore += 1;
-        unownedIds.push(row.id);
-      } else if (String(row.user_id).trim() === uid) {
-        alreadyOwnedBefore += 1;
-      } else {
-        ownedByOtherBefore += 1;
-      }
+    const beforeBuckets = await classifyUnownedBuckets(txn, uid, installationId);
+    if (beforeBuckets.eligible_current_install_unowned === 0) {
+      result = emptyAdoptionResult(beforeBuckets);
+      return;
     }
 
-    let adopted = 0;
-    if (unownedBefore > 0) {
-      const updateResult = await db.runAsync(
-        `
-        UPDATE receipts
-        SET user_id = ?, installation_id = ?
-        WHERE user_id IS NULL OR user_id = ''
-        `,
-        [uid, installationId]
+    const candidates = await txn.getAllAsync<{ id: string }>(
+      `SELECT id
+       FROM receipts
+       WHERE ${UNOWNED_USER_SQL}
+         AND installation_id = ?
+       ORDER BY id ASC`,
+      [installationId]
+    );
+    const candidateIds = candidates.map((row) => row.id);
+    if (candidateIds.length === 0) {
+      result = emptyAdoptionResult(beforeBuckets);
+      return;
+    }
+
+    await legacyAdoptionTestHooks?.afterCandidateSelection?.();
+    await assertAuthEligible(deps.authEligibility);
+
+    const updateResult = await txn.runAsync(
+      `UPDATE receipts
+       SET user_id = ?
+       WHERE ${UNOWNED_USER_SQL}
+         AND installation_id = ?`,
+      [uid, installationId]
+    );
+    const adopted = updateResult.changes ?? 0;
+    if (adopted !== candidateIds.length) {
+      throw new Error(
+        `legacy adoption ownership update mismatch: expected ${candidateIds.length}, got ${adopted}`
       );
-      adopted =
-        typeof updateResult?.changes === 'number' ? updateResult.changes : unownedBefore;
     }
 
-    const afterUnowned = await db.getFirstAsync<{ c: number }>(
-      `SELECT COUNT(*) as c FROM receipts WHERE user_id IS NULL OR user_id = ''`
-    );
+    await assertAuthEligible(deps.authEligibility);
 
+    const afterBuckets = await classifyUnownedBuckets(txn, uid, installationId);
     result = {
       adopted,
-      already_owned_by_current_user: alreadyOwnedBefore,
-      owned_by_other_user: ownedByOtherBefore,
-      remaining_unowned: afterUnowned?.c ?? 0,
-      adopted_receipt_ids: adopted > 0 ? unownedIds : [],
+      adopted_receipt_ids: adopted > 0 ? candidateIds : [],
+      already_owned_by_current_user: afterBuckets.already_owned_by_current_user,
+      owned_by_other_user: afterBuckets.owned_by_other_user,
+      eligible_current_install_unowned: afterBuckets.eligible_current_install_unowned,
+      remaining_eligible_current_install_unowned:
+        afterBuckets.eligible_current_install_unowned,
+      ambiguous_double_null: afterBuckets.ambiguous_double_null,
+      other_install_unowned: afterBuckets.other_install_unowned,
+      remaining_unowned:
+        afterBuckets.ambiguous_double_null + afterBuckets.other_install_unowned,
     };
   });
 
@@ -127,10 +268,12 @@ export async function adoptUnownedReceiptsForUser(
 
 export async function adoptUnownedReceiptsForUserWithDefaults(
   currentUserId: string,
-  getDb: () => Promise<SQLite.SQLiteDatabase>
+  getDb: () => Promise<SQLite.SQLiteDatabase>,
+  options: { authEligibility?: AdoptionAuthEligibility } = {}
 ): Promise<LegacyAdoptionResult> {
   return adoptUnownedReceiptsForUser(currentUserId, {
     getDb,
     getInstallationId: getOrCreateInstallationId,
+    authEligibility: options.authEligibility,
   });
 }

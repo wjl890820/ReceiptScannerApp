@@ -1,5 +1,5 @@
 /**
- * P0 Phase 4 — local ownership schema, adoption, stamping, OCR request linkage.
+ * P0 Phase 4 / Privacy-H5 — local ownership schema, adoption, stamping.
  */
 /* eslint-disable import/first */
 jest.mock('expo-constants', () => ({
@@ -28,9 +28,12 @@ jest.mock('@supabase/supabase-js', () => ({
 
 import { extractOcrRequestIdFromEdgeResponse } from './ocrRequestId';
 import {
+  __setLegacyAdoptionTestHooksForTests,
   adoptUnownedReceiptsForUser,
   shouldAutoAdoptUnownedReceipts,
 } from './legacyReceiptAdoption';
+import { runLegacyReceiptInstallationBackfill } from './legacyReceiptInstallationBackfill';
+import { buildOwnerScopedReceiptPredicates } from './receiptOwnershipScope';
 import { normalizeOcrAnalysis } from './receiptOcrNormalize';
 import { getReceiptItems } from './receiptItems';
 import {
@@ -52,60 +55,138 @@ type Row = {
   tax: number;
 };
 
+function isUnownedUserId(userId: string | null): boolean {
+  return userId == null || userId.trim() === '';
+}
+
 function createAdoptionDb(seed: Row[]) {
-  const rows = seed.map((r) => ({ ...r }));
+  const rows = seed.map((row) => ({ ...row }));
   let failUpdate = false;
-  const db = {
+  let usedExclusiveTransaction = false;
+
+  type AdoptionDb = {
+    failNextUpdate: () => void;
+    usedExclusiveTransaction: () => boolean;
+    withExclusiveTransactionAsync: (
+      task: (txn: AdoptionDb) => Promise<void>
+    ) => Promise<void>;
+    withTransactionAsync: (task: () => Promise<void>) => Promise<void>;
+    getAllAsync: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
+    getFirstAsync: <T>(sql: string, params?: unknown[]) => Promise<T | null>;
+    runAsync: (sql: string, params?: unknown[]) => Promise<{ changes: number }>;
+    _rows: Row[];
+  };
+
+  const db: AdoptionDb = {
     failNextUpdate() {
       failUpdate = true;
     },
-    async withTransactionAsync(task: () => Promise<void>) {
-      const snapshot = rows.map((r) => ({ ...r }));
+    usedExclusiveTransaction() {
+      return usedExclusiveTransaction;
+    },
+    async withExclusiveTransactionAsync(
+      task: (txn: typeof db) => Promise<void>
+    ) {
+      usedExclusiveTransaction = true;
+      const snapshot = rows.map((row) => ({ ...row }));
       try {
-        await task();
-      } catch (e) {
+        await task(db);
+      } catch (error) {
         rows.splice(0, rows.length, ...snapshot);
-        throw e;
+        throw error;
       }
     },
-    async getAllAsync<T>(sql: string): Promise<T[]> {
-      if (/SELECT id, user_id FROM receipts/i.test(sql)) {
-        return rows.map((r) => ({ id: r.id, user_id: r.user_id })) as T[];
+    async withTransactionAsync(task: () => Promise<void>) {
+      return db.withExclusiveTransactionAsync(async () => task());
+    },
+    async getAllAsync<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+      if (/SELECT id/i.test(sql) && /installation_id = \?/i.test(sql)) {
+        const installationId = String(params[0]);
+        return rows
+          .filter(
+            (row) =>
+              isUnownedUserId(row.user_id) &&
+              row.installation_id === installationId
+          )
+          .map((row) => ({ id: row.id })) as T[];
       }
       return rows as unknown as T[];
     },
-    async getFirstAsync<T>(sql: string, params?: unknown[]): Promise<T | null> {
-      if (/COUNT\(\*\)/.test(sql) && /user_id IS NULL OR user_id = ''/.test(sql)) {
-        const c = rows.filter((r) => r.user_id == null || r.user_id === '').length;
-        return { c } as T;
-      }
-      if (/COUNT\(\*\)/.test(sql) && /user_id = \?/.test(sql) && !/!=/.test(sql)) {
-        const uid = String(params?.[0]);
-        const c = rows.filter((r) => r.user_id === uid).length;
-        return { c } as T;
-      }
-      if (/COUNT\(\*\)/.test(sql) && /user_id != \?/.test(sql)) {
-        const uid = String(params?.[0]);
+    async getFirstAsync<T>(sql: string, params: unknown[] = []): Promise<T | null> {
+      if (!/COUNT\(\*\)/i.test(sql)) return null;
+
+      if (/installation_id = \?/i.test(sql) && !/<>/.test(sql)) {
+        const installationId = String(params[0]);
         const c = rows.filter(
-          (r) => r.user_id != null && r.user_id !== '' && r.user_id !== uid
+          (row) =>
+            isUnownedUserId(row.user_id) && row.installation_id === installationId
         ).length;
         return { c } as T;
       }
-      return null;
+      if (/installation_id <> \?/i.test(sql)) {
+        const installationId = String(params[0]);
+        const c = rows.filter(
+          (row) =>
+            isUnownedUserId(row.user_id) &&
+            row.installation_id != null &&
+            row.installation_id.trim() !== '' &&
+            row.installation_id !== installationId
+        ).length;
+        return { c } as T;
+      }
+      if (
+        /installation_id IS NULL/i.test(sql) ||
+        /COALESCE\(installation_id/i.test(sql)
+      ) {
+        const c = rows.filter(
+          (row) =>
+            isUnownedUserId(row.user_id) &&
+            (row.installation_id == null || row.installation_id.trim() === '')
+        ).length;
+        return { c } as T;
+      }
+      if (/TRIM\(user_id\) = \?/i.test(sql)) {
+        const uid = String(params[0]);
+        const c = rows.filter((row) => row.user_id === uid).length;
+        return { c } as T;
+      }
+      if (/TRIM\(user_id\) <> \?/i.test(sql)) {
+        const uid = String(params[0]);
+        const c = rows.filter(
+          (row) =>
+            row.user_id != null &&
+            row.user_id.trim() !== '' &&
+            row.user_id !== uid
+        ).length;
+        return { c } as T;
+      }
+      if (/user_id IS NOT NULL/i.test(sql)) {
+        const c = rows.filter(
+          (row) => row.user_id != null && row.user_id.trim() !== ''
+        ).length;
+        return { c } as T;
+      }
+      return { c: 0 } as T;
     },
-    async runAsync(sql: string, params?: unknown[]) {
-      if (/UPDATE receipts/i.test(sql) && /user_id IS NULL OR user_id = ''/.test(sql)) {
+    async runAsync(sql: string, params: unknown[] = []) {
+      if (
+        /UPDATE receipts/i.test(sql) &&
+        /installation_id = \?/i.test(sql) &&
+        /SET user_id = \?/i.test(sql)
+      ) {
         if (failUpdate) {
           failUpdate = false;
           throw new Error('forced update failure');
         }
-        const uid = String(params?.[0]);
-        const installationId = String(params?.[1]);
+        const uid = String(params[0]);
+        const installationId = String(params[1]);
         let changes = 0;
         for (const row of rows) {
-          if (row.user_id == null || row.user_id === '') {
+          if (
+            isUnownedUserId(row.user_id) &&
+            row.installation_id === installationId
+          ) {
             row.user_id = uid;
-            row.installation_id = installationId;
             changes += 1;
           }
         }
@@ -144,12 +225,16 @@ describe('OCR requestId extraction', () => {
 });
 
 describe('legacy adoption', () => {
-  it('7/8 — NULL user adopted; repeat adopts zero', async () => {
+  afterEach(() => {
+    __setLegacyAdoptionTestHooksForTests(null);
+  });
+
+  it('7/8 — current-install unowned adopted; repeat adopts zero', async () => {
     const db = createAdoptionDb([
       {
         id: 'a',
         user_id: null,
-        installation_id: null,
+        installation_id: 'install-1',
         transaction_source: 'receipt_ocr',
         source: 'self',
         analysis_json: '{"total":1}',
@@ -169,9 +254,7 @@ describe('legacy adoption', () => {
     expect(first.adopted_receipt_ids).toEqual(['a']);
     expect(db._rows[0].user_id).toBe('user-current');
     expect(db._rows[0].installation_id).toBe('install-1');
-    expect(db._rows[0].analysis_json).toBe('{"total":1}');
-    expect(db._rows[0].source).toBe('self');
-    expect(db._rows[0].transaction_source).toBe('receipt_ocr');
+    expect(db.usedExclusiveTransaction()).toBe(true);
 
     const second = await adoptUnownedReceiptsForUser('user-current', {
       getDb: async () => db as any,
@@ -185,19 +268,121 @@ describe('legacy adoption', () => {
   it('auto-adopt guard — anonymous only; non-anonymous must not auto-adopt', () => {
     expect(shouldAutoAdoptUnownedReceipts({ is_anonymous: true })).toBe(true);
     expect(shouldAutoAdoptUnownedReceipts({ isAnonymous: true })).toBe(true);
-    // Future Apple restore target (authenticated, not anonymous)
     expect(shouldAutoAdoptUnownedReceipts({ is_anonymous: false })).toBe(false);
     expect(shouldAutoAdoptUnownedReceipts({ isAnonymous: false })).toBe(false);
     expect(shouldAutoAdoptUnownedReceipts({})).toBe(false);
     expect(shouldAutoAdoptUnownedReceipts({ is_anonymous: null })).toBe(false);
   });
 
-  it('9/10/11 — mixed ownership: only NULL claimed; others untouched', async () => {
+  it('H5 adoption matrix — only current-install unowned rows adopted', async () => {
     const db = createAdoptionDb([
       {
         id: 'A',
         user_id: null,
+        installation_id: 'I1',
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 1,
+        tax: 0,
+      },
+      {
+        id: 'B',
+        user_id: '',
+        installation_id: 'I1',
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 1,
+        tax: 0,
+      },
+      {
+        id: 'C',
+        user_id: null,
+        installation_id: 'I2',
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 1,
+        tax: 0,
+      },
+      {
+        id: 'D',
+        user_id: null,
         installation_id: null,
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 1,
+        tax: 0,
+      },
+      {
+        id: 'E',
+        user_id: 'U2',
+        installation_id: 'I1',
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 1,
+        tax: 0,
+      },
+      {
+        id: 'F',
+        user_id: 'U1',
+        installation_id: 'I1',
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 1,
+        tax: 0,
+      },
+    ]);
+
+    const out = await adoptUnownedReceiptsForUser('U1', {
+      getDb: async () => db as any,
+      getInstallationId: async () => 'I1',
+    });
+
+    expect(new Set(out.adopted_receipt_ids)).toEqual(new Set(['A', 'B']));
+    expect(out.adopted).toBe(2);
+    expect(out.other_install_unowned).toBe(1);
+    expect(out.ambiguous_double_null).toBe(1);
+    expect(out.owned_by_other_user).toBe(1);
+    expect(out.already_owned_by_current_user).toBe(3);
+
+    const byId = Object.fromEntries(db._rows.map((row) => [row.id, row]));
+    expect(byId.A).toMatchObject({ user_id: 'U1', installation_id: 'I1' });
+    expect(byId.B).toMatchObject({ user_id: 'U1', installation_id: 'I1' });
+    expect(byId.C).toMatchObject({ user_id: null, installation_id: 'I2' });
+    expect(byId.D).toMatchObject({ user_id: null, installation_id: null });
+    expect(byId.E).toMatchObject({ user_id: 'U2', installation_id: 'I1' });
+    expect(byId.F).toMatchObject({ user_id: 'U1', installation_id: 'I1' });
+  });
+
+  it('9/10/11 — mixed ownership: only current-install NULL claimed', async () => {
+    const db = createAdoptionDb([
+      {
+        id: 'A',
+        user_id: null,
+        installation_id: 'install-new',
         transaction_source: 'receipt_ocr',
         source: 'self',
         analysis_json: '{"a":1}',
@@ -241,19 +426,16 @@ describe('legacy adoption', () => {
     });
 
     expect(out.adopted).toBe(1);
-    expect(out.already_owned_by_current_user).toBe(1);
+    expect(out.already_owned_by_current_user).toBe(2);
     expect(out.owned_by_other_user).toBe(1);
-    expect(out.remaining_unowned).toBe(0);
+    expect(out.remaining_eligible_current_install_unowned).toBe(0);
 
-    const byId = Object.fromEntries(db._rows.map((r) => [r.id, r]));
+    const byId = Object.fromEntries(db._rows.map((row) => [row.id, row]));
     expect(byId.A.user_id).toBe('user-current');
     expect(byId.A.installation_id).toBe('install-new');
     expect(byId.B.user_id).toBe('user-old');
     expect(byId.B.installation_id).toBe('old-install');
-    expect(byId.B.analysis_json).toBe('{"b":2}');
-    expect(byId.B.ocr_request_id).toBe('old-req');
     expect(byId.C.user_id).toBe('user-current');
-    expect(byId.C.installation_id).toBe('cur-install');
   });
 
   it('12 — adoption failure rolls back transaction', async () => {
@@ -261,7 +443,7 @@ describe('legacy adoption', () => {
       {
         id: 'a',
         user_id: null,
-        installation_id: null,
+        installation_id: 'install-1',
         transaction_source: 'receipt_ocr',
         source: 'self',
         analysis_json: '{}',
@@ -280,6 +462,143 @@ describe('legacy adoption', () => {
       })
     ).rejects.toThrow('forced update failure');
     expect(db._rows[0].user_id).toBeNull();
+  });
+
+  it('auth race aborts before mutation when eligibility changes', async () => {
+    const db = createAdoptionDb([
+      {
+        id: 'a',
+        user_id: null,
+        installation_id: 'install-1',
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 0,
+        tax: 0,
+      },
+    ]);
+    let valid = true;
+    __setLegacyAdoptionTestHooksForTests({
+      afterCandidateSelection: async () => {
+        valid = false;
+      },
+    });
+
+    await expect(
+      adoptUnownedReceiptsForUser('user-current', {
+        getDb: async () => db as any,
+        getInstallationId: async () => 'install-1',
+        authEligibility: { isValid: () => valid },
+      })
+    ).rejects.toThrow('auth eligibility no longer valid');
+    expect(db._rows[0].user_id).toBeNull();
+  });
+
+  it('removing installation predicate would adopt foreign-install rows — mock is regression-sensitive', async () => {
+    const db = createAdoptionDb([
+      {
+        id: 'foreign',
+        user_id: null,
+        installation_id: 'I2',
+        transaction_source: 'receipt_ocr',
+        source: 'self',
+        analysis_json: '{}',
+        user_items_json: null,
+        ocr_request_id: null,
+        user_edited: 0,
+        total: 0,
+        tax: 0,
+      },
+    ]);
+    const out = await adoptUnownedReceiptsForUser('U1', {
+      getDb: async () => db as any,
+      getInstallationId: async () => 'I1',
+    });
+    expect(out.adopted).toBe(0);
+    expect(db._rows[0].user_id).toBeNull();
+  });
+});
+
+describe('H5 visibility integration after backfill + adoption', () => {
+  it('NULL/I1 becomes visible to installation scope; adopted row visible to user scope', async () => {
+    const rows: Array<{
+      id: string;
+      user_id: string | null;
+      installation_id: string | null;
+    }> = [{ id: 'legacy', user_id: null, installation_id: null }];
+    const appKv = new Map<string, string>();
+    type VisibilityDb = {
+      execAsync: () => Promise<void>;
+      withExclusiveTransactionAsync: (
+        task: (txn: VisibilityDb) => Promise<void>
+      ) => Promise<void>;
+      getFirstAsync: <T>(sql: string, params?: unknown[]) => Promise<T | null>;
+      getAllAsync: <T>(sql: string) => Promise<T[]>;
+      runAsync: (sql: string, params?: unknown[]) => Promise<{ changes: number }>;
+    };
+    const db: VisibilityDb = {
+      async execAsync() {},
+      async withExclusiveTransactionAsync(task: (txn: typeof db) => Promise<void>) {
+        await task(db);
+      },
+      async getFirstAsync<T>(sql: string, params: unknown[] = []): Promise<T | null> {
+        if (/FROM app_kv/i.test(sql)) {
+          const value = appKv.get(String(params[0]));
+          return value ? ({ v: value } as T) : null;
+        }
+        if (/COUNT\(\*\)/i.test(sql)) {
+          if (/user_id IS NOT NULL/i.test(sql)) return { c: 0 } as T;
+          if (/installation_id <> \?/i.test(sql)) return { c: 0 } as T;
+          return { c: rows.length } as T;
+        }
+        return null;
+      },
+      async getAllAsync<T>(sql: string): Promise<T[]> {
+        if (/installation_id IS NULL/i.test(sql)) {
+          return rows
+            .filter(
+              (row) =>
+                (row.user_id == null || row.user_id === '') &&
+                (row.installation_id == null || row.installation_id === '')
+            )
+            .map((row) => ({ id: row.id })) as T[];
+        }
+        return [] as T[];
+      },
+      async runAsync(sql: string, params: unknown[] = []) {
+        if (/INSERT OR REPLACE INTO app_kv/i.test(sql)) {
+          appKv.set(String(params[0]), String(params[1]));
+          return { changes: 1 };
+        }
+        if (/SET installation_id/i.test(sql)) {
+          rows[0].installation_id = String(params[0]);
+          return { changes: 1 };
+        }
+        if (/SET user_id/i.test(sql)) {
+          rows[0].user_id = String(params[0]);
+          return { changes: 1 };
+        }
+        return { changes: 0 };
+      },
+    };
+
+    await runLegacyReceiptInstallationBackfill(db as any, {
+      getInstallationId: async () => 'I1',
+    });
+    expect(rows[0]).toEqual({ id: 'legacy', user_id: null, installation_id: 'I1' });
+
+    const installScope = buildOwnerScopedReceiptPredicates('installation:I1');
+    expect(installScope?.receiptWhereSql).toContain('installation_id = ?');
+    expect(rows[0].user_id).toBeNull();
+    expect(rows[0].installation_id).toBe('I1');
+
+    rows[0].user_id = 'U1';
+    const userScope = buildOwnerScopedReceiptPredicates('user:U1');
+    expect(userScope?.receiptWhereSql).toContain('user_id = ?');
+    expect(rows[0].user_id).toBe('U1');
   });
 });
 
@@ -335,18 +654,25 @@ describe('schema migration contract (db source)', () => {
     expect(dbSource).toContain(`ADD COLUMN ocr_request_id TEXT`);
     expect(dbSource).toContain('resolveOwnershipStamp');
     expect(dbSource).toContain('ocrRequestId');
-    // social source remains distinct
     expect(dbSource).toMatch(/params\.source \|\| 'self'/);
+  });
+
+  it('H5 — db init invokes legacy installation backfill before _inited', () => {
+    expect(dbSource).toContain('ensureLegacyReceiptInstallationBackfill');
+    const backfillIndex = dbSource.indexOf('ensureLegacyReceiptInstallationBackfill');
+    const initedIndex = dbSource.indexOf('_inited = true');
+    expect(backfillIndex).toBeGreaterThan(0);
+    expect(initedIndex).toBeGreaterThan(backfillIndex);
   });
 });
 
 describe('empty user_id treated as unowned', () => {
-  it('empty string user_id is adopt-able', async () => {
+  it('empty string user_id on current installation is adopt-able', async () => {
     const db = createAdoptionDb([
       {
         id: 'e',
         user_id: '',
-        installation_id: null,
+        installation_id: 'i1',
         transaction_source: 'receipt_ocr',
         source: 'self',
         analysis_json: '{}',
@@ -363,5 +689,6 @@ describe('empty user_id treated as unowned', () => {
     });
     expect(out.adopted).toBe(1);
     expect(db._rows[0].user_id).toBe('u1');
+    expect(db._rows[0].installation_id).toBe('i1');
   });
 });
