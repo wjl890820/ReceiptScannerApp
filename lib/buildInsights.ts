@@ -1,49 +1,27 @@
 /**
  * Analysis v2: structured insights (story, changes, tips, confidence).
  * Pure functions; no i18n. Output uses i18n keys + params for UI to render.
+ *
+ * Period + eligibility truth is sourced from lib/analysisEligibility.ts so
+ * Overview (calculateStats) and Insights share one supported JPY universe.
  */
 
 import type { ReceiptRow } from './db';
-import { filterAnalysisReceiptsByTransactionWindow } from './analysisPeriod';
-import { filterAnalysisJpyReceipts } from './analysisCurrency';
-import { getReceiptItems } from './receiptItems';
+import {
+  analysisDaysCovered,
+  countSupportedItemsInEligibleReceipts,
+  isAnalysisStorySufficient,
+  selectAnalysisPeriodReceiptSets,
+} from './analysisEligibility';
 import { calculateStats, type WeeklyMonthlyStats } from './statsCalculator';
 
-const MS_DAY = 24 * 60 * 60 * 1000;
 const MIN_RECEIPTS = 3;
-const MIN_ITEMS = 10;
-const MIN_TOTAL_JPY = 2000;
-const PERIOD_30_DAYS = 30 * MS_DAY;
-const PERIOD_7_DAYS = 7 * MS_DAY;
-
-function ts(r: ReceiptRow): number {
-  return r.transaction_at ?? r.created_at;
-}
-
-function filterAllHistoryByRange(receipts: ReceiptRow[], startMs: number, endMs: number): ReceiptRow[] {
-  return receipts.filter((r) => {
-    const t = ts(r);
-    return t >= startMs && t < endMs;
-  });
-}
-
-function countItems(receipts: ReceiptRow[]): number {
-  let n = 0;
-  for (const r of receipts) {
-    n += getReceiptItems(r).length;
-  }
-  return n;
-}
-
-function daysCovered(receipts: ReceiptRow[]): number {
-  if (receipts.length === 0) return 0;
-  const times = receipts.map(ts);
-  const min = Math.min(...times);
-  const max = Math.max(...times);
-  return Math.max(0, Math.ceil((max - min) / MS_DAY));
-}
 
 export type TimeRange = 'week' | 'month' | 'all';
+
+export type BuildInsightsOptions = {
+  nowMs?: number;
+};
 
 export type StoryOutput =
   | { type: 'full'; conclusionKey: string; conclusionParams: Record<string, string | number>; explanationKey: string }
@@ -74,86 +52,67 @@ export type BuildInsightsOutput = {
   currentStats: WeeklyMonthlyStats;
   /** Previous period stats (for UI) */
   previousStats: WeeklyMonthlyStats | null;
-  /** Current period JPY Analysis receipts count */
+  /** Current period supported receipt count (release universe). */
   currentReceiptsCount: number;
-  /** Current period items count */
+  /** Current period supported item row count. */
   currentItemsCount: number;
-  /** Days covered in current period */
+  /** Days covered in current period (transaction_at only). */
   currentDaysCovered: number;
   /** Period length in days used by the selected comparison contract. */
   periodDays: number;
 };
 
 /**
- * Build Analysis v2 insights from receipts and time range.
- * Reuses calculateStats; computes current vs previous period.
+ * Build Analysis v2 insights from duplicate-safe analytics receipts and time range.
+ * Reuses calculateStats on shared period receipt sets from analysisEligibility.
  */
 export function buildInsights(
-  receipts: ReceiptRow[],
-  timeRange: TimeRange
+  analyticsReceipts: ReceiptRow[],
+  timeRange: TimeRange,
+  options?: BuildInsightsOptions
 ): BuildInsightsOutput {
-  const monetaryReceipts = filterAnalysisJpyReceipts(receipts);
-  const now = Date.now();
-  let periodDays = timeRange === 'week' ? 7 : 30;
-  let currentStart = now - periodDays * MS_DAY;
-  let currentEnd = now;
-  let previousStart = currentStart - periodDays * MS_DAY;
-  let previousEnd = currentStart;
-
-  let currentReceipts = filterAnalysisReceiptsByTransactionWindow(
-    monetaryReceipts,
-    currentStart,
-    currentEnd,
-    { includeEnd: true }
-  );
-  let previousReceipts = filterAnalysisReceiptsByTransactionWindow(
-    monetaryReceipts,
-    previousStart,
-    previousEnd
+  const nowMs = options?.nowMs ?? Date.now();
+  const periodSets = selectAnalysisPeriodReceiptSets(
+    analyticsReceipts,
+    timeRange,
+    nowMs
   );
 
-  if (timeRange === 'all') {
-    // Keep insight universe aligned with Analysis "all" overview (no silent 30d shrink).
-    // Period-over-period changes use a matched trailing window of equal length when possible.
-    currentReceipts = [...monetaryReceipts].sort((a, b) => ts(a) - ts(b));
-    previousReceipts = [];
-    if (currentReceipts.length >= 2) {
-      const spanMs = Math.max(0, ts(currentReceipts[currentReceipts.length - 1]) - ts(currentReceipts[0]));
-      periodDays = Math.max(1, Math.ceil(spanMs / MS_DAY) || 1);
-      // Matched prior window immediately before first receipt — only if we have prior data.
-      previousEnd = ts(currentReceipts[0]);
-      previousStart = previousEnd - spanMs;
-      previousReceipts = filterAllHistoryByRange(
-        monetaryReceipts,
-        previousStart,
-        previousEnd
-      );
-      // If no matched prior data, suppress period comparison (avoid partial vs full mismatch).
-      if (previousReceipts.length === 0) {
-        previousReceipts = [];
-      }
-    } else {
-      periodDays = 0;
-    }
-    currentStart = currentReceipts.length ? ts(currentReceipts[0]) : now;
-    currentEnd = now;
-  }
+  const currentStats = calculateStats(
+    periodSets.currentPeriodReceipts,
+    'all',
+    nowMs
+  );
+  const previousStats =
+    periodSets.previousPeriodComparable &&
+    periodSets.previousPeriodReceipts.length > 0
+      ? calculateStats(periodSets.previousPeriodReceipts, 'all', nowMs)
+      : null;
 
-  const currentStats = calculateStats(currentReceipts, 'all');
-  const previousStats = previousReceipts.length > 0 ? calculateStats(previousReceipts, 'all') : null;
-  const currentItemsCount = countItems(currentReceipts);
-  const currentDaysCovered = daysCovered(currentReceipts);
+  const currentItemsCount = countSupportedItemsInEligibleReceipts(
+    periodSets.currentPeriodReceipts
+  );
+  const currentDaysCovered = analysisDaysCovered(periodSets.currentPeriodReceipts);
+  const supportedReceiptCount = currentStats.supportedReceiptCount;
 
-  const sufficient =
-    currentReceipts.length >= MIN_RECEIPTS &&
-    currentItemsCount >= MIN_ITEMS &&
-    currentStats.totalSpend >= MIN_TOTAL_JPY;
+  const sufficient = isAnalysisStorySufficient({
+    supportedReceiptCount,
+    supportedItemCount: currentItemsCount,
+    supportedSpend: currentStats.supportedSpend,
+  });
 
-  const story: StoryOutput = sufficient ? buildStory(currentStats) : { type: 'fallback', fallbackKey: 'analysisV2.story.fallback' };
-  const changes = buildChanges(currentStats, previousStats, periodDays);
+  const story: StoryOutput = sufficient
+    ? buildStory(currentStats)
+    : { type: 'fallback', fallbackKey: 'analysisV2.story.fallback' };
+  const changes = buildChanges(
+    currentStats,
+    previousStats,
+    periodSets.periodDays,
+    periodSets.previousPeriodComparable
+  );
   const tips = buildTips(currentStats);
   const { confidence, confidenceKey } = buildConfidence(
-    currentReceipts.length,
+    supportedReceiptCount,
     currentItemsCount,
     currentDaysCovered
   );
@@ -172,10 +131,10 @@ export function buildInsights(
     proTeaser,
     currentStats,
     previousStats,
-    currentReceiptsCount: currentReceipts.length,
+    currentReceiptsCount: supportedReceiptCount,
     currentItemsCount,
     currentDaysCovered,
-    periodDays,
+    periodDays: periodSets.periodDays,
   };
 }
 
@@ -213,11 +172,11 @@ function pickExplanationKey(category: string): string {
 function buildChanges(
   current: WeeklyMonthlyStats,
   previous: WeeklyMonthlyStats | null,
-  periodDays: number
+  periodDays: number,
+  previousPeriodComparable: boolean
 ): ChangeOutput[] {
   const out: ChangeOutput[] = [];
-  if (!previous) return out;
-  // Both windows need enough V1 receipts before claiming a trend.
+  if (!previous || !previousPeriodComparable) return out;
   if (
     current.supportedReceiptCount < MIN_RECEIPTS ||
     previous.supportedReceiptCount < MIN_RECEIPTS
@@ -291,14 +250,12 @@ function buildTips(stats: WeeklyMonthlyStats): TipOutput[] {
     stats.categoryCompositionTotal > 0
       ? stats.categoryCompositionTotal
       : stats.topCategories.reduce((sum, row) => sum + row.amount, 0);
-  // Require meaningful composition + enough V1 receipts (same gate as story).
-  if (!(compositionTotal > 0) || stats.supportedReceiptCount < 3) return tips;
+  if (!(compositionTotal > 0) || stats.supportedReceiptCount < MIN_RECEIPTS) return tips;
 
   const byCat = new Map<string, number>();
   for (const c of stats.topCategories) byCat.set(c.category, c.amount);
   const pct = (cat: string) => (100 * (byCat.get(cat) ?? 0)) / compositionTotal;
 
-  // V1 active keys only — legacy quick_meals / snacks_sweets never match.
   const readyPct = pct('ready_to_eat');
   const snacksDrinksPct = pct('snacks_drinks');
 
@@ -316,11 +273,14 @@ function buildTips(stats: WeeklyMonthlyStats): TipOutput[] {
 }
 
 function buildConfidence(
-  receiptsCount: number,
+  supportedReceiptsCount: number,
   itemsCount: number,
   daysCovered: number
 ): { confidence: ConfidenceLevel; confidenceKey: string } {
-  const score = receiptsCount + Math.min(itemsCount / 10, 10) + Math.min(daysCovered / 7, 4);
+  const score =
+    supportedReceiptsCount +
+    Math.min(itemsCount / 10, 10) +
+    Math.min(daysCovered / 7, 4);
   if (score < 8) return { confidence: 'low', confidenceKey: 'analysisV2.confidence.low' };
   if (score < 15) return { confidence: 'med', confidenceKey: 'analysisV2.confidence.med' };
   return { confidence: 'high', confidenceKey: 'analysisV2.confidence.high' };

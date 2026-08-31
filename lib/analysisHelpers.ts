@@ -42,13 +42,14 @@ export function createEmptyStats(): WeeklyMonthlyStats {
  */
 export function buildStatsSafe(
   receipts: ReceiptRow[] | unknown,
-  range: TimeRange
+  range: TimeRange,
+  nowMs: number = Date.now()
 ): WeeklyMonthlyStats {
   try {
     if (!Array.isArray(receipts)) {
       return createEmptyStats();
     }
-    return calculateStats(receipts, range);
+    return calculateStats(receipts, range, nowMs);
   } catch (e) {
     logger.error('Analysis', 'stats computation failed', e);
     return createEmptyStats();

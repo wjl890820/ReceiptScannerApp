@@ -19,13 +19,16 @@ import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
-import { listReceiptsForAnalysis, type ReceiptRow } from '@/lib/db';
-import { buildInsights } from '@/lib/buildInsights';
+import { listReceiptsForAnalysis } from '@/lib/db';
 import {
   buildAnalysisReleaseViewModel,
-  countSupportedItemsInRange,
 } from '@/lib/analysisPresentation';
-import { buildStatsSafe } from '@/lib/analysisHelpers';
+import {
+  buildAnalysisAllTimeStats,
+  buildAnalysisTruthSnapshot,
+  type AnalysisLoadedTruth,
+} from '@/lib/analysisTruthCycle';
+import { createEmptyStats } from '@/lib/analysisHelpers';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
 import { type TimeRange } from '@/lib/statsCalculator';
@@ -44,7 +47,7 @@ import {
 export default function AnalysisScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
+  const [truthCycle, setTruthCycle] = useState<AnalysisLoadedTruth | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
@@ -54,7 +57,12 @@ export default function AnalysisScreen() {
       setLoading(true);
       setLoadError(false);
       const allReceipts = await listReceiptsForAnalysis();
-      setReceipts(selectAnalyticsReceipts(allReceipts).analyticsReceipts);
+      const analyticsReceipts =
+        selectAnalyticsReceipts(allReceipts).analyticsReceipts;
+      setTruthCycle({
+        receipts: analyticsReceipts,
+        nowMs: Date.now(),
+      });
     } catch (e) {
       console.error('加载收据失败:', e);
       setLoadError(true);
@@ -69,36 +77,34 @@ export default function AnalysisScreen() {
     }, [loadReceipts])
   );
 
-  const periodStats = useMemo(
-    () => buildStatsSafe(receipts, timeRange),
-    [receipts, timeRange]
-  );
-  const allStats = useMemo(() => buildStatsSafe(receipts, 'all'), [receipts]);
-  const itemCount = useMemo(
-    () => countSupportedItemsInRange(receipts, timeRange),
-    [receipts, timeRange]
-  );
-  const insights = useMemo(() => {
-    try {
-      if (!Array.isArray(receipts)) return null;
-      return buildInsights(receipts, timeRange);
-    } catch (e) {
-      console.error('[Analysis] buildInsights failed:', e);
-      return null;
-    }
-  }, [receipts, timeRange]);
+  const truthSnapshot = useMemo(() => {
+    if (!truthCycle) return null;
+    return buildAnalysisTruthSnapshot({
+      receipts: truthCycle.receipts,
+      range: timeRange,
+      nowMs: truthCycle.nowMs,
+    });
+  }, [truthCycle, timeRange]);
+
+  const allStats = useMemo(() => {
+    if (!truthCycle) return null;
+    return buildAnalysisAllTimeStats({
+      receipts: truthCycle.receipts,
+      nowMs: truthCycle.nowMs,
+    });
+  }, [truthCycle]);
 
   const viewModel = useMemo(
     () =>
       buildAnalysisReleaseViewModel({
-        periodStats,
-        allSupportedCount: allStats.supportedReceiptCount,
-        itemCount,
-        insights,
+        periodStats: truthSnapshot?.periodStats ?? createEmptyStats(),
+        allSupportedCount: allStats?.supportedReceiptCount ?? 0,
+        itemCount: truthSnapshot?.itemCount ?? 0,
+        insights: truthSnapshot?.insights ?? null,
         proComingSoon: true,
         priceRadarMigrated: false,
       }),
-    [periodStats, allStats.supportedReceiptCount, itemCount, insights]
+    [truthSnapshot, allStats?.supportedReceiptCount]
   );
 
   const renderInsightBody = () => {

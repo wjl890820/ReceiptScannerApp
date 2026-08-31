@@ -6,10 +6,11 @@
 
 import type { ReceiptRow } from './db';
 import { filterAnalysisReceiptsByTimeRange } from './analysisPeriod';
-import { isAnalysisJpyReceipt } from './analysisCurrency';
-import { isV1SupportedReceipt } from './merchantType';
+import {
+  countSupportedItemsInEligibleReceipts,
+  selectAnalysisPeriodReceiptSets,
+} from './analysisEligibility';
 import { V1_SPENDING_PRODUCT_CATEGORIES } from './productCategory';
-import { getReceiptItems } from './receiptItems';
 import type { WeeklyMonthlyStats, TimeRange } from './statsCalculator';
 import type { BuildInsightsOutput, StoryOutput } from './buildInsights';
 import {
@@ -101,25 +102,22 @@ export function resolveAnalysisReleaseStage(options: {
 export function filterReceiptsByTimeRange(
   receipts: ReceiptRow[],
   range: TimeRange,
-  now = Date.now()
+  nowMs: number = Date.now()
 ): ReceiptRow[] {
-  return filterAnalysisReceiptsByTimeRange(receipts, range, now);
+  return filterAnalysisReceiptsByTimeRange(receipts, range, nowMs);
 }
 
 export function countSupportedItemsInRange(
   receipts: ReceiptRow[],
   range: TimeRange,
-  now = Date.now()
+  nowMs: number = Date.now()
 ): number {
-  const supported = filterReceiptsByTimeRange(receipts, range, now).filter(
-    (receipt) =>
-      isV1SupportedReceipt(receipt) && isAnalysisJpyReceipt(receipt)
+  const periodSets = selectAnalysisPeriodReceiptSets(
+    receipts,
+    range,
+    nowMs
   );
-  let count = 0;
-  for (const receipt of supported) {
-    count += getReceiptItems(receipt).length;
-  }
-  return count;
+  return countSupportedItemsInEligibleReceipts(periodSets.currentPeriodReceipts);
 }
 
 export function buildAnalysisOverview(

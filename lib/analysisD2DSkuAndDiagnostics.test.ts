@@ -279,7 +279,7 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
     );
     expect(source).toContain('selectAnalyticsReceipts');
     expect(source).toContain('.analyticsReceipts');
-    expect(source).toContain('buildInsights');
+    expect(source).toContain('buildAnalysisTruthSnapshot');
   });
 
   it('J — merchant/trend/insight purchase paths consume Analysis selected receipts', () => {
@@ -287,8 +287,13 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
       path.resolve(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
-    expect(source).toMatch(/setReceipts\(\s*selectAnalyticsReceipts/);
-    expect(source).toContain('buildInsights(receipts');
+    expect(source).toMatch(
+      /selectAnalyticsReceipts\(allReceipts\)\.analyticsReceipts/
+    );
+    expect(source).toMatch(/receipts:\s*analyticsReceipts/);
+    expect(source).toMatch(
+      /buildAnalysisTruthSnapshot\(\{\s*receipts:\s*truthCycle\.receipts/
+    );
   });
 
   it('K — Product Detail/history excludes duplicate scan observations', () => {

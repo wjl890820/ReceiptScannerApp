@@ -338,8 +338,12 @@ describe('Golden Analysis Dataset — period purchase-date truth', () => {
     expect(insights.previousStats?.supportedSpend).toBe(
       EXPECTED.previousMonthSpend
     );
-    expect(insights.currentStats.totalSpend).toBe(3249);
-    expect(insights.previousStats?.totalSpend).toBe(6000);
+    // Insights period stats use the supported-only release universe; totalSpend
+    // matches supportedSpend (unsupported JPY never enters buildInsights sets).
+    expect(insights.currentStats.totalSpend).toBe(EXPECTED.monthSpend);
+    expect(insights.previousStats?.totalSpend).toBe(
+      EXPECTED.previousMonthSpend
+    );
     expect(surface).toEqual({
       status: 'available',
       direction: 'up',

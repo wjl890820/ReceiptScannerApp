@@ -62,6 +62,7 @@ import {
   type MilestoneFrequentProduct,
 } from './engagementMilestones';
 import { buildInsights } from './buildInsights';
+import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import {
   readUserCorrections,
   resolveLegacyUserOverrideProvenance,
@@ -886,12 +887,17 @@ function buildPriceCoverage(
   };
 }
 
+function analyticsReceiptsForInsights(receipts: ReceiptRow[]): ReceiptRow[] {
+  return selectAnalyticsReceipts(receipts).analyticsReceipts;
+}
+
 function buildTrendEligibility(
   receipts: ReceiptRow[]
 ): AnalysisDTrendEligibility[] {
+  const analyticsReceipts = analyticsReceiptsForInsights(receipts);
   return WINDOWS.map((window) => {
     const timeRange = windowToTimeRange(window);
-    const insights = buildInsights(receipts, timeRange);
+    const insights = buildInsights(analyticsReceipts, timeRange);
     const current = insights.currentReceiptsCount;
     const previous = insights.previousStats
       ? insights.previousStats.supportedReceiptCount
@@ -928,9 +934,10 @@ function buildInsightEmissions(
   productRows: EngagementProductRow[],
   nowMs: number
 ): AnalysisDInsightEmission[] {
+  const analyticsReceipts = analyticsReceiptsForInsights(receipts);
   const out: AnalysisDInsightEmission[] = [];
   for (const window of WINDOWS) {
-    const insights = buildInsights(receipts, windowToTimeRange(window));
+    const insights = buildInsights(analyticsReceipts, windowToTimeRange(window));
     if (insights.story.type === 'full') {
       out.push({
         surface: 'analysis',

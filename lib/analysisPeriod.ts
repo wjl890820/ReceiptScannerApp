@@ -50,3 +50,33 @@ export function filterAnalysisReceiptsByTimeRange<
     { includeEnd: true }
   );
 }
+
+/** Rolling window bounds shared by Overview stats and Insight period selection. */
+export type AnalysisRollingWindowBounds = {
+  periodDays: 7 | 30;
+  currentStartMs: number;
+  currentEndMs: number;
+  previousStartMs: number;
+  previousEndMs: number;
+};
+
+/**
+ * Canonical week/month window contract:
+ *   current: [now - Nd, now] inclusive upper bound
+ *   previous: [now - 2Nd, now - Nd) half-open upper bound
+ */
+export function resolveAnalysisRollingWindowBounds(
+  range: 'week' | 'month',
+  nowMs: number = Date.now()
+): AnalysisRollingWindowBounds {
+  const periodDays = range === 'week' ? 7 : 30;
+  const ms = periodDays * MS_PER_DAY;
+  const currentStartMs = nowMs - ms;
+  return {
+    periodDays,
+    currentStartMs,
+    currentEndMs: nowMs,
+    previousStartMs: nowMs - 2 * ms,
+    previousEndMs: currentStartMs,
+  };
+}

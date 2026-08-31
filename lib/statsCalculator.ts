@@ -14,10 +14,15 @@ import { filterAnalysisJpyReceipts } from './analysisCurrency';
 export type TimeRange = 'week' | 'month' | 'all';
 
 export type WeeklyMonthlyStats = {
-  totalSpend: number; // All Analysis-eligible JPY receipt totals
+  /** All JPY receipt totals in the filtered time window (includes non-supported). */
+  totalSpend: number;
   /** Legacy：仅 supermarket 小票合计（不含 convenience） */
   grocerySpend: number;
-  /** V1 Analysis：JPY supermarket + convenience 小票合计 */
+  /**
+   * V1 Analysis：JPY supermarket + convenience receipt.total sum.
+   * Authoritative receipt-level paid spend for Overview + spend-change surfaces.
+   * NOT interchangeable with categoryCompositionTotal.
+   */
   supportedSpend: number;
   supportedReceiptCount: number;
   /** All eligible categorized rows (same universe as categoryCompositionTotal). */
@@ -60,18 +65,20 @@ function isGroceryReceipt(receipt: ReceiptRow): boolean {
 }
 
 /**
- * Calculate statistics for specified time range
- * Category analytics only include grocery receipts/items
+ * Calculate statistics for specified time range.
+ * Category analytics only include grocery receipts/items.
+ *
+ * @param nowMs Optional fixed clock for tests; production defaults to Date.now().
  */
 export function calculateStats(
   receipts: ReceiptRow[],
-  range: TimeRange = 'all'
+  range: TimeRange = 'all',
+  nowMs: number = Date.now()
 ): WeeklyMonthlyStats {
-  const now = Date.now();
   const filteredReceipts = filterAnalysisReceiptsByTimeRange(
     receipts,
     range,
-    now
+    nowMs
   );
   const monetaryReceipts = filterAnalysisJpyReceipts(filteredReceipts);
 
