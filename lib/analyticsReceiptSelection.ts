@@ -40,6 +40,54 @@ export type AnalyticsReceiptSelection = {
   keepSeparateReceiptIds: ReadonlySet<string>;
 };
 
+export type HighConfidenceDuplicateReceiptGroupMembership = {
+  representativeReceiptId: string;
+  receiptIds: readonly string[];
+  confidence: AnalysisDDuplicateGroup['confidence'];
+};
+
+/**
+ * Index every member of existing canonical duplicate groups, including the
+ * representative. This is interpretation infrastructure only: it never
+ * changes grouping, representative selection, or analytics exclusions.
+ */
+export function indexHighConfidenceDuplicateGroupsByReceiptId(
+  groups: readonly AnalysisDDuplicateGroup[]
+): ReadonlyMap<string, HighConfidenceDuplicateReceiptGroupMembership> {
+  const byReceiptId = new Map<
+    string,
+    HighConfidenceDuplicateReceiptGroupMembership
+  >();
+
+  for (const group of groups) {
+    const receiptIds = [...new Set(group.receiptIds)].sort((a, b) =>
+      a.localeCompare(b)
+    );
+    if (
+      !group.representativeReceiptId ||
+      receiptIds.length < 2 ||
+      !receiptIds.includes(group.representativeReceiptId)
+    ) {
+      throw new Error('invalid_high_confidence_duplicate_group');
+    }
+    const membership: HighConfidenceDuplicateReceiptGroupMembership = {
+      representativeReceiptId: group.representativeReceiptId,
+      receiptIds,
+      confidence: group.confidence,
+    };
+    const signature = JSON.stringify(membership);
+    for (const receiptId of receiptIds) {
+      const existing = byReceiptId.get(receiptId);
+      if (existing && JSON.stringify(existing) !== signature) {
+        throw new Error('conflicting_high_confidence_duplicate_membership');
+      }
+      byReceiptId.set(receiptId, membership);
+    }
+  }
+
+  return byReceiptId;
+}
+
 /**
  * Select receipts for purchase-occurrence analytics.
  * High-confidence duplicate extras are excluded; PROBABLE is not.

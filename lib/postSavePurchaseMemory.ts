@@ -8,6 +8,7 @@
 import {
   buildPersonalIdentityPromptCandidateV1,
   findPersonalIdentityPromptCandidatesForInventory,
+  savedReceiptMustNotCreateNewPurchaseInterpretation,
   type PersonalIdentityPromptCandidateV1,
 } from './personalProductIdentityCandidateService';
 import {
@@ -363,7 +364,10 @@ export function buildPostSavePurchaseMemoryFromInventory(
   inventory: PersonalProductEndpointInventory,
   deps: Pick<LoadPostSavePurchaseMemoryDeps, 'resolveTarget'> = {}
 ): PostSavePurchaseMemoryBuildResult {
-  if (inventory.excludedDuplicateReceiptIds.has(savedReceiptId)) {
+  if (
+    inventory.excludedDuplicateReceiptIds.has(savedReceiptId) ||
+    savedReceiptMustNotCreateNewPurchaseInterpretation(inventory, savedReceiptId)
+  ) {
     return { status: 'none' };
   }
 

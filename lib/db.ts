@@ -894,25 +894,17 @@ export async function saveReceipt(
   const id = nanoid();
   const now = Date.now();
 
-  // Merchant observation is SoT: always derive normalized from current merchant text.
-  // On reviewedSave, recompute merchant_type so Scan Review edits cannot keep a stale type.
-  const { resolvePersistedMerchantObservation } = await import('./merchantObservationPersist');
-  const persistedMerchant = resolvePersistedMerchantObservation(
-    {
-      merchant: params.analysis.merchant,
-      merchant_normalized: (params.analysis as { merchant_normalized?: unknown })
-        .merchant_normalized,
-      merchant_type: (params.analysis as { merchant_type?: unknown }).merchant_type,
-      items: Array.isArray(params.analysis.items) ? params.analysis.items : null,
-      ocr_raw_text:
-        (params.analysis as { ocr_raw_text?: string | null }).ocr_raw_text ?? null,
-      rawText: (params.analysis as { rawText?: string | null }).rawText ?? null,
-    },
-    { recomputeType: Boolean(params.reviewedSave) }
-  );
-  const merchantRawTrimmed = persistedMerchant.merchantRaw;
-  const merchantNormalized = persistedMerchant.merchantNormalized;
-  const merchantType = persistedMerchant.merchantType;
+  // Share the material receipt projection with the transient Scan Review
+  // collision gate so its comparison uses the same persisted truth.
+  const { projectReceiptSaveMaterialEvidence } = await import('./receiptSaveProjection');
+  const materialProjection = projectReceiptSaveMaterialEvidence({
+    analysis: params.analysis as import('./receiptAnalyzer').ReceiptAnalysis &
+      Record<string, unknown>,
+    reviewedSave: Boolean(params.reviewedSave),
+  });
+  const merchantRawTrimmed = materialProjection.merchantRaw;
+  const merchantNormalized = materialProjection.merchantNormalized;
+  const merchantType = materialProjection.merchantType;
 
   // New stable fields
   const source = params.source || 'self';
@@ -920,26 +912,12 @@ export async function saveReceipt(
   const storeNormalized = merchantNormalized;
   const scannedAt = now;
 
-  const total = Number.isFinite(params.analysis.total) ? params.analysis.total : 0;
-  const { persistReceiptTaxFields } = await import('./receiptOcrNormalize');
-  const persistedTax = persistReceiptTaxFields(
-    params.analysis as import('./receiptAnalyzer').ReceiptAnalysis & Record<string, unknown>
-  );
-  const tax = persistedTax.tax;
-  const taxIsKnown = persistedTax.taxIsKnown;
-  const currency =
-    typeof params.analysis.currency === 'string' && params.analysis.currency.trim()
-      ? params.analysis.currency
-      : 'JPY';
+  const total = materialProjection.total;
+  const tax = materialProjection.tax;
+  const taxIsKnown = materialProjection.taxIsKnown;
+  const currency = materialProjection.currency;
 
-  const analysisJson = JSON.stringify({
-    ...params.analysis,
-    merchant: merchantRawTrimmed ?? undefined,
-    merchant_normalized: merchantNormalized,
-    merchant_type: merchantType,
-    tax,
-    tax_is_known: taxIsKnown === 1,
-  });
+  const analysisJson = JSON.stringify(materialProjection.persistedAnalysis);
   const recognitionSnapshotJson =
     params.recognitionSnapshot !== undefined && params.recognitionSnapshot !== null
       ? JSON.stringify(params.recognitionSnapshot)
@@ -948,33 +926,7 @@ export async function saveReceipt(
   // Extract transaction_at from analysis.transactionDate (或 transactionAt / purchasedAt / datetime)
   // Always use dedicated receipt date parser (Hermes new Date(string) is unreliable for slash/JP forms).
   // Never fall back to Date.now()/scan time — parse failure stays null (purchase date unknown).
-  let transactionAt: number | null = null;
-  const txDateStr =
-    params.analysis.transactionDate ||
-    (params.analysis as any).transactionAt ||
-    (params.analysis as any).purchasedAt ||
-    (params.analysis as any).datetime;
-  if (txDateStr && typeof txDateStr === 'string' && txDateStr.trim()) {
-    try {
-      const { parseReceiptDateTime } = await import('./dateParser');
-      const merchantHint =
-        params.analysis.merchant ||
-        (params.analysis as any).merchant_normalized ||
-        (params.analysis as any).merchantNormalized;
-      transactionAt = parseReceiptDateTime(txDateStr.trim(), {
-        fallbackToNow: false,
-        merchant: typeof merchantHint === 'string' ? merchantHint : null,
-      });
-      if (transactionAt == null && __DEV__) {
-        console.warn('[DB] Unrecognized transactionDate (stored null):', txDateStr);
-      }
-    } catch (e) {
-      if (__DEV__) {
-        console.warn('[DB] Failed to parse transactionDate:', txDateStr, e);
-      }
-      transactionAt = null;
-    }
-  }
+  const transactionAt = materialProjection.transactionAt;
 
   // 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
   const ownership = await resolveOwnershipStamp();
@@ -1123,7 +1075,8 @@ async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
       final_total,
       final_category,
       note,
-      user_items_json
+      user_items_json,
+      transaction_source
     FROM receipts
     WHERE ${scope.receiptWhereSql}
     ORDER BY COALESCE(transaction_at, created_at) DESC

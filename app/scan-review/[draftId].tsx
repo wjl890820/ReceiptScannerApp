@@ -10,15 +10,18 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { MerunoPressable } from '@/components/primitives/MerunoPressable';
+import { MerunoText } from '@/components/primitives/MerunoText';
+import { ReceiptDuplicateGateCard } from '@/components/review/ReceiptDuplicateGateCard';
 import { ReceiptItemCard } from '@/components/review/ReceiptItemCard';
 import { ReceiptReviewDetails } from '@/components/review/ReceiptReviewDetails';
 import { ReceiptReviewSaveBar } from '@/components/review/ReceiptReviewSaveBar';
 import { ReceiptSummaryCard } from '@/components/review/ReceiptSummaryCard';
+import { SectionTitle } from '@/components/SectionTitle';
 import { listReceipts, saveReceipt } from '@/lib/db';
 import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
 import { stampUserClassificationProvenance } from '@/lib/productTaxonomy';
@@ -59,9 +62,27 @@ import {
 import { buildPostSaveSummaryHref } from '@/lib/postSaveSummaryNavigation';
 import { resolveInitialReviewDateStr, reviewDateNeedsConfirm } from '@/lib/scanReviewDateIsolation';
 import {
+  buildTransientScanReviewReceipt,
+  dismissScanReviewDuplicateEvidence,
+  evaluateScanReviewDuplicateGate,
+  loadScanReviewDuplicateGateContext,
+  revalidateScanReviewDuplicateDestination,
+  shouldApplyScanReviewDuplicateGateUpdate,
+  shouldShowScanReviewDuplicateGateMatch,
+  type ScanReviewDuplicateGateContext,
+  type ScanReviewDuplicateGateMatch,
+} from '@/lib/scanReviewDuplicateGate';
+import {
   shouldShowLegacyPostSaveEasterEggAlert,
   shouldShowReviewDevDetails,
 } from '@/lib/scanReviewPresentation';
+import {
+  UI_COLORS,
+  UI_LAYOUT,
+  UI_OPACITY,
+  UI_RADIUS,
+  UI_SPACING,
+} from '@/lib/uiTokens';
 
 function toNum(v: string, fallback = 0): number {
   const n = Number(String(v).replace(/,/g, '').trim());
@@ -115,12 +136,31 @@ export default function ScanReviewScreen() {
   const [categoryModalIndex, setCategoryModalIndex] = useState(-1);
   const [showDevTrace, setShowDevTrace] = useState(false);
   const [stickyHeight, setStickyHeight] = useState(0);
+  const [duplicateGateContext, setDuplicateGateContext] =
+    useState<ScanReviewDuplicateGateContext | null>(null);
+  const [duplicateGateMatch, setDuplicateGateMatch] =
+    useState<ScanReviewDuplicateGateMatch | null>(null);
+  const [dismissedDuplicateEvidenceKey, setDismissedDuplicateEvidenceKey] =
+    useState<string | null>(null);
+  const [duplicateGateProcessing, setDuplicateGateProcessing] = useState(false);
   const persistPayloadRef = useRef<{ id: string; state: ScanReviewEditorStateV1 } | null>(null);
   const saveInFlightRef = useRef(false);
   // 离开保护：程序导航（保存成功/放弃/缺失返回）前置 true 以放行，避免被未保存确认拦截。
   const allowLeaveRef = useRef(false);
   // 离开确认 Alert 是否正在显示，避免同一次返回弹出多个确认框。
   const leavePromptVisibleRef = useRef(false);
+  const duplicateGateGenerationRef = useRef(0);
+  const duplicateGateMountedRef = useRef(true);
+  const currentDraftIdRef = useRef(String(draftId || ''));
+  currentDraftIdRef.current = String(draftId || '');
+
+  useEffect(() => {
+    duplicateGateMountedRef.current = true;
+    return () => {
+      duplicateGateMountedRef.current = false;
+      duplicateGateGenerationRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     let c = false;
@@ -180,6 +220,11 @@ export default function ScanReviewScreen() {
     setOcrText('');
     setImageUri('');
     setTraceId('');
+    duplicateGateGenerationRef.current += 1;
+    setDuplicateGateContext(null);
+    setDuplicateGateMatch(null);
+    setDismissedDuplicateEvidenceKey(null);
+    setDuplicateGateProcessing(false);
 
     (async () => {
       if (!id) {
@@ -489,8 +534,163 @@ export default function ScanReviewScreen() {
     });
   }, [lineItems, merchant, snapshot]);
 
+  const duplicateGateAnalysis = useMemo(() => {
+    if (!snapshot) return null;
+    const taxTrimmed = taxStr.trim();
+    const parsedTax = taxTrimmed ? toNum(taxTrimmed, NaN) : NaN;
+    const taxIsKnown = taxTrimmed.length > 0 && Number.isFinite(parsedTax);
+    return mergeReviewSnapshotPreservingEvidence(
+      snapshot as Record<string, unknown>,
+      {
+        merchant: merchant.trim() || undefined,
+        transactionDate: dateStr.trim() || undefined,
+        total: toNum(totalStr, 0),
+        tax: taxIsKnown ? parsedTax : null,
+        tax_is_known: taxIsKnown,
+        currency: currency.trim() || 'JPY',
+        items: finalItemsForSave,
+      }
+    ) as any;
+  }, [snapshot, merchant, dateStr, totalStr, taxStr, currency, finalItemsForSave]);
+
+  // Load the exhaustive current-owner context once per reviewable draft. Later
+  // material edits only re-evaluate the transient receipt against this context.
+  useEffect(() => {
+    const capturedDraftId = String(draftId || '');
+    if (loading || missing || !snapshot || !capturedDraftId) return;
+    const capturedGeneration = ++duplicateGateGenerationRef.current;
+    void loadScanReviewDuplicateGateContext().then((context) => {
+      if (
+        !shouldApplyScanReviewDuplicateGateUpdate({
+          mounted: duplicateGateMountedRef.current,
+          capturedGeneration,
+          currentGeneration: duplicateGateGenerationRef.current,
+          capturedDraftId,
+          currentDraftId: currentDraftIdRef.current,
+        })
+      ) {
+        return;
+      }
+      setDuplicateGateContext(context);
+    });
+  }, [draftId, loading, missing, snapshot]);
+
+  // Material review evidence is debounced. Every new evaluation invalidates
+  // older timers/results, and the route-scoped guard blocks stale draft writes.
+  useEffect(() => {
+    const capturedDraftId = String(draftId || '');
+    if (
+      loading ||
+      missing ||
+      !duplicateGateContext ||
+      !duplicateGateAnalysis ||
+      !capturedDraftId
+    ) {
+      setDuplicateGateMatch(null);
+      return;
+    }
+    const capturedGeneration = ++duplicateGateGenerationRef.current;
+    setDuplicateGateMatch(null);
+    const timer = setTimeout(() => {
+      let match: ScanReviewDuplicateGateMatch | null = null;
+      try {
+        const transient = buildTransientScanReviewReceipt({
+          transientReceiptId: `scan-review:${capturedDraftId}`,
+          imageUri,
+          analysis: duplicateGateAnalysis,
+        });
+        match = transient
+          ? evaluateScanReviewDuplicateGate(transient, duplicateGateContext)
+          : null;
+      } catch (error) {
+        logger.warn('ScanReview', 'Duplicate gate evaluation failed', { error });
+      }
+      if (
+        !shouldApplyScanReviewDuplicateGateUpdate({
+          mounted: duplicateGateMountedRef.current,
+          capturedGeneration,
+          currentGeneration: duplicateGateGenerationRef.current,
+          capturedDraftId,
+          currentDraftId: currentDraftIdRef.current,
+        })
+      ) {
+        return;
+      }
+      setDuplicateGateMatch(
+        shouldShowScanReviewDuplicateGateMatch(
+          match,
+          dismissedDuplicateEvidenceKey
+        )
+          ? match
+          : null
+      );
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [
+    draftId,
+    loading,
+    missing,
+    imageUri,
+    duplicateGateContext,
+    duplicateGateAnalysis,
+    dismissedDuplicateEvidenceKey,
+  ]);
+
+  const onContinueDuplicateReview = useCallback(() => {
+    if (!duplicateGateMatch || duplicateGateProcessing) return;
+    setDismissedDuplicateEvidenceKey(
+      dismissScanReviewDuplicateEvidence(duplicateGateMatch)
+    );
+    setDuplicateGateMatch(null);
+  }, [duplicateGateMatch, duplicateGateProcessing]);
+
+  const onViewSavedDuplicateReceipt = useCallback(() => {
+    if (!duplicateGateMatch || duplicateGateProcessing) return;
+    const capturedDraftId = String(draftId || '');
+    const destinationId = duplicateGateMatch.existingReceiptId;
+    setDuplicateGateProcessing(true);
+    void (async () => {
+      await flushPendingEditorState();
+      const stillOwned = await revalidateScanReviewDuplicateDestination(
+        destinationId
+      );
+      if (
+        !duplicateGateMountedRef.current ||
+        currentDraftIdRef.current !== capturedDraftId
+      ) {
+        return;
+      }
+      if (!stillOwned) {
+        setDuplicateGateMatch(null);
+        return;
+      }
+      router.push(`/history/${encodeURIComponent(destinationId)}` as any);
+    })()
+      .catch((error) => {
+        logger.warn('ScanReview', 'View saved duplicate failed', { error });
+      })
+      .finally(() => {
+        if (
+          duplicateGateMountedRef.current &&
+          currentDraftIdRef.current === capturedDraftId
+        ) {
+          setDuplicateGateProcessing(false);
+        }
+      });
+  }, [
+    draftId,
+    duplicateGateMatch,
+    duplicateGateProcessing,
+    flushPendingEditorState,
+    router,
+  ]);
+
   const snapItemsArr = Array.isArray(snapshot?.items) ? snapshot.items : [];
   const showDevDetails = shouldShowReviewDevDetails(showDevTrace, __DEV__);
+  const showDuplicateGate = shouldShowScanReviewDuplicateGateMatch(
+    duplicateGateMatch,
+    dismissedDuplicateEvidenceKey
+  );
   const FALLBACK_STICKY_HEIGHT = 88;
   const bottomPadding = (stickyHeight || FALLBACK_STICKY_HEIGHT) + 20;
 
@@ -742,19 +942,30 @@ export default function ScanReviewScreen() {
   if (loading) {
     return (
       <View style={[styles.center, { paddingTop: insets.top + 40 }]}>
-        <ActivityIndicator color="#1677ff" />
-        <Text style={{ marginTop: 12, color: '#68707a' }}>{t('scanReview.loading')}</Text>
+        <ActivityIndicator color={UI_COLORS.accent} />
+        <MerunoText role="meta" tone="secondary" style={styles.loadingText}>
+          {t('scanReview.loading')}
+        </MerunoText>
       </View>
     );
   }
 
   if (missing || !snapshot) {
     return (
-      <View style={[styles.center, { paddingTop: insets.top + 40, paddingHorizontal: 24 }]}>
-        <Text style={{ textAlign: 'center', color: '#3f4751' }}>{t('scanReview.missingMessage')}</Text>
-        <Pressable style={[styles.primaryBtn, { marginTop: 20 }]} onPress={() => router.back()}>
-          <Text style={styles.primaryBtnText}>{t('scanReview.back')}</Text>
-        </Pressable>
+      <View style={[styles.center, { paddingTop: insets.top + 40, paddingHorizontal: UI_SPACING.xxl }]}>
+        <MerunoText role="bodySmall" tone="secondary" style={styles.missingText}>
+          {t('scanReview.missingMessage')}
+        </MerunoText>
+        <MerunoPressable
+          style={styles.primaryBtn}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel={t('scanReview.back')}
+        >
+          <MerunoText role="button" tone="inverse">
+            {t('scanReview.back')}
+          </MerunoText>
+        </MerunoPressable>
       </View>
     );
   }
@@ -765,7 +976,7 @@ export default function ScanReviewScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
     >
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.topBar, { paddingTop: insets.top + UI_LAYOUT.safeAreaTopGapCompact }]}>
         <Pressable
           onPress={() => router.back()}
           hitSlop={12}
@@ -773,25 +984,33 @@ export default function ScanReviewScreen() {
           accessibilityRole="button"
           accessibilityLabel={t('scanReview.back')}
         >
-          <Text style={styles.topBarBtn}>{t('scanReview.back')}</Text>
+          <MerunoText role="bodySmall" tone="accent" style={styles.topBarBtn}>
+            {t('scanReview.back')}
+          </MerunoText>
         </Pressable>
         <View style={styles.topBarCenter}>
-          <Text style={styles.topBarTitle}>{t('scanReview.title')}</Text>
-          <Text style={styles.topBarHint} numberOfLines={2}>
+          <MerunoText role="bodySmall" tone="primary" style={styles.topBarTitle}>
+            {t('scanReview.title')}
+          </MerunoText>
+          <MerunoText role="caption" tone="muted" style={styles.topBarHint} numberOfLines={1}>
             {t('scanReview.flowHint')}
-          </Text>
+          </MerunoText>
         </View>
         <Pressable
           onPress={onDiscard}
           hitSlop={12}
           disabled={saving}
-          style={[styles.topBarSide, { alignItems: 'flex-end' }]}
+          style={[styles.topBarSide, styles.topBarSideEnd]}
           accessibilityRole="button"
           accessibilityLabel={t('scanReview.discard')}
         >
-          <Text style={[styles.topBarBtn, styles.discardBtn, saving && { opacity: 0.4 }]}>
+          <MerunoText
+            role="bodySmall"
+            tone="destructive"
+            style={[styles.discardBtn, saving && styles.discardDisabled]}
+          >
             {t('scanReview.discard')}
-          </Text>
+          </MerunoText>
         </Pressable>
       </View>
 
@@ -801,7 +1020,9 @@ export default function ScanReviewScreen() {
         keyboardDismissMode="on-drag"
       >
         {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.preview} resizeMode="contain" />
+          <View style={styles.previewFrame}>
+            <Image source={{ uri: imageUri }} style={styles.preview} resizeMode="contain" />
+          </View>
         ) : null}
 
         <ReceiptSummaryCard
@@ -822,15 +1043,27 @@ export default function ScanReviewScreen() {
           onNoteChange={setNote}
         />
 
+        {showDuplicateGate ? (
+          <ReceiptDuplicateGateCard
+            match={duplicateGateMatch!}
+            processing={duplicateGateProcessing}
+            onViewSavedReceipt={onViewSavedDuplicateReceipt}
+            onContinueReview={onContinueDuplicateReview}
+          />
+        ) : null}
+
         <View style={styles.itemsHeader}>
-          <Text style={styles.itemsTitle}>{t('scanReview.itemsTitle')}</Text>
-          <Text style={styles.itemsCount}>
-            {t('scanReview.itemsCount', { count: lineItems.length })}
-          </Text>
+          <SectionTitle
+            title={t('scanReview.itemsTitle')}
+            subtitle={t('scanReview.itemsCount', { count: lineItems.length })}
+            style={styles.itemsSectionTitle}
+          />
         </View>
 
         {lineItems.length === 0 ? (
-          <Text style={styles.muted}>{t('scanReview.emptyLineItems')}</Text>
+          <MerunoText role="meta" tone="muted" style={styles.muted}>
+            {t('scanReview.emptyLineItems')}
+          </MerunoText>
         ) : null}
 
         <View style={styles.itemList}>
@@ -860,20 +1093,23 @@ export default function ScanReviewScreen() {
                   updateLine(idx, { lineTotal: toNum(v, 0) })
                 }
                 onDelete={() => removeLineItem(idx)}
+                showDivider={idx < lineItems.length - 1}
               />
             );
           })}
         </View>
 
-        <Pressable
-          style={[styles.addItemBtn, saving && { opacity: 0.5 }]}
+        <MerunoPressable
+          style={[styles.addItemBtn, saving && styles.addItemDisabled]}
           onPress={addLineItem}
           disabled={saving}
           accessibilityRole="button"
           accessibilityLabel={t('scanReview.addItem')}
         >
-          <Text style={styles.addItemBtnText}>＋ {t('scanReview.addItem')}</Text>
-        </Pressable>
+          <MerunoText role="bodySmall" tone="accent" style={styles.addItemBtnText}>
+            ＋ {t('scanReview.addItem')}
+          </MerunoText>
+        </MerunoPressable>
 
         <ReceiptReviewDetails
           errorTags={errorTags}
@@ -884,12 +1120,14 @@ export default function ScanReviewScreen() {
         />
       </ScrollView>
 
-      <ReceiptReviewSaveBar
-        saving={saving}
-        bottomInset={insets.bottom}
-        onSave={onSave}
-        onLayoutHeight={setStickyHeight}
-      />
+      {!showDuplicateGate ? (
+        <ReceiptReviewSaveBar
+          saving={saving}
+          bottomInset={insets.bottom}
+          onSave={onSave}
+          onLayoutHeight={setStickyHeight}
+        />
+      ) : null}
 
       <Modal visible={categoryModalIndex >= 0} animationType="slide" presentationStyle="pageSheet">
         <View style={styles.modalHead}>
@@ -898,50 +1136,52 @@ export default function ScanReviewScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('history.detail.edit.cancel')}
           >
-            <Text style={styles.modalHeadBtn}>{t('history.detail.edit.cancel')}</Text>
+            <MerunoText role="bodySmall" tone="accent" style={styles.modalHeadBtn}>
+              {t('history.detail.edit.cancel')}
+            </MerunoText>
           </Pressable>
-          <Text style={styles.modalHeadTitle}>{t('scanReview.categoryModalTitle')}</Text>
-          <View style={{ width: 48 }} />
+          <MerunoText role="bodySmall" tone="primary" style={styles.modalHeadTitle}>
+            {t('scanReview.categoryModalTitle')}
+          </MerunoText>
+          <View style={styles.modalHeadSpacer} />
         </View>
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {categoryOptions.map((cat) => (
-              <Pressable
-                key={cat}
-                onPress={() => {
-                  if (categoryModalIndex >= 0) {
-                    updateLine(categoryModalIndex, {
-                      category: cat,
-                      categoryUserOverride: true,
-                      ...stampUserClassificationProvenance(),
-                    });
-                  }
-                  setCategoryModalIndex(-1);
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={getCategoryLabel(cat)}
-              >
-                <View
-                  style={[
+        <ScrollView contentContainerStyle={styles.modalBody}>
+          <View style={styles.catOptionWrap}>
+            {categoryOptions.map((cat) => {
+              const selected =
+                categoryModalIndex >= 0 &&
+                lineItems[categoryModalIndex]?.category === cat;
+              return (
+                <Pressable
+                  key={cat}
+                  onPress={() => {
+                    if (categoryModalIndex >= 0) {
+                      updateLine(categoryModalIndex, {
+                        category: cat,
+                        categoryUserOverride: true,
+                        ...stampUserClassificationProvenance(),
+                      });
+                    }
+                    setCategoryModalIndex(-1);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={getCategoryLabel(cat)}
+                  style={({ pressed }) => [
                     styles.catOption,
-                    categoryModalIndex >= 0 &&
-                      lineItems[categoryModalIndex]?.category === cat &&
-                      styles.catOptionOn,
+                    selected && styles.catOptionOn,
+                    pressed && !selected && styles.catOptionPressed,
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.catOptionText,
-                      categoryModalIndex >= 0 &&
-                        lineItems[categoryModalIndex]?.category === cat &&
-                        styles.catOptionTextOn,
-                    ]}
+                  <MerunoText
+                    role="chip"
+                    tone={selected ? 'inverse' : 'primary'}
+                    style={styles.catOptionText}
                   >
                     {getCategoryLabel(cat)}
-                  </Text>
-                </View>
-              </Pressable>
-            ))}
+                  </MerunoText>
+                </Pressable>
+              );
+            })}
           </View>
         </ScrollView>
       </Modal>
@@ -952,110 +1192,135 @@ export default function ScanReviewScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f7f8fa',
+    backgroundColor: UI_COLORS.background,
   },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f7f8fa',
+    backgroundColor: UI_COLORS.background,
+  },
+  loadingText: {
+    marginTop: UI_SPACING.md,
+  },
+  missingText: {
+    textAlign: 'center',
   },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingHorizontal: UI_SPACING.md,
+    paddingBottom: UI_SPACING.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e7e9ec',
-    backgroundColor: '#fff',
+    borderBottomColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.surface,
   },
   topBarSide: { minWidth: 56, justifyContent: 'center' },
-  topBarCenter: { flex: 1, alignItems: 'center', paddingHorizontal: 4 },
-  topBarTitle: { fontSize: 17, fontWeight: '800', textAlign: 'center', color: '#15181c' },
+  topBarSideEnd: { alignItems: 'flex-end' },
+  topBarCenter: { flex: 1, alignItems: 'center', paddingHorizontal: UI_SPACING.xs },
+  topBarTitle: { fontWeight: '800', textAlign: 'center' },
   topBarHint: {
-    fontSize: 12,
-    color: '#68707a',
     textAlign: 'center',
-    marginTop: 3,
-    lineHeight: 16,
+    marginTop: 2,
   },
-  topBarBtn: { fontSize: 16, fontWeight: '700', color: '#1677ff' },
-  discardBtn: { color: '#d94848' },
-  container: { paddingHorizontal: 16, paddingTop: 14 },
+  topBarBtn: { fontWeight: '700' },
+  discardBtn: { fontWeight: '600' },
+  discardDisabled: { opacity: UI_OPACITY.disabled },
+  container: {
+    paddingHorizontal: UI_LAYOUT.pageHorizontalPadding,
+    paddingTop: 14,
+  },
+  previewFrame: {
+    width: '100%',
+    height: 148,
+    backgroundColor: UI_COLORS.surfaceMuted,
+    borderRadius: UI_RADIUS.panel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    marginBottom: 14,
+    overflow: 'hidden',
+  },
   preview: {
     width: '100%',
     height: 148,
-    backgroundColor: '#eef1f4',
-    borderRadius: 9,
-    marginBottom: 14,
   },
   itemsHeader: {
-    marginTop: 22,
-    marginBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
+    marginTop: UI_SPACING.sm,
   },
-  itemsTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#171a1f',
-  },
-  itemsCount: {
-    fontSize: 13,
-    color: '#8a929c',
-    fontWeight: '600',
+  itemsSectionTitle: {
+    marginTop: UI_LAYOUT.sectionGap,
+    marginBottom: UI_SPACING.md,
   },
   itemList: {
-    borderRadius: 9,
+    borderRadius: UI_RADIUS.panel,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#dce1e7',
-    backgroundColor: '#fff',
+    borderColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.surface,
     overflow: 'hidden',
   },
-  muted: { fontSize: 14, color: '#8a929c', marginBottom: 8 },
+  muted: { marginBottom: UI_SPACING.sm },
   addItemBtn: {
-    marginTop: 12,
-    marginBottom: 8,
+    marginTop: UI_SPACING.md,
+    marginBottom: UI_SPACING.sm,
     paddingVertical: 13,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: '#cfe1fb',
+    minHeight: UI_LAYOUT.controlMinHeight,
+    borderRadius: UI_RADIUS.control,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
     alignItems: 'center',
-    backgroundColor: '#fff',
+    justifyContent: 'center',
+    backgroundColor: UI_COLORS.surface,
   },
-  addItemBtnText: { fontSize: 15, fontWeight: '800', color: '#1677ff' },
+  addItemBtnText: { fontWeight: '700' },
+  addItemDisabled: {
+    opacity: UI_OPACITY.disabled,
+  },
   primaryBtn: {
-    backgroundColor: '#1677ff',
+    marginTop: UI_SPACING.xl,
+    backgroundColor: UI_COLORS.accent,
     paddingVertical: 14,
-    borderRadius: 9,
+    borderRadius: UI_RADIUS.control,
     alignItems: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: UI_SPACING.xxl,
   },
-  primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   modalHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 16,
-    paddingHorizontal: 12,
-    paddingBottom: 12,
+    paddingTop: UI_SPACING.lg,
+    paddingHorizontal: UI_SPACING.md,
+    paddingBottom: UI_SPACING.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e6e6e6',
-    backgroundColor: '#fff',
+    borderBottomColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.surface,
   },
-  modalHeadBtn: { fontSize: 16, fontWeight: '800', color: '#1677ff' },
-  modalHeadTitle: { fontSize: 16, fontWeight: '900', color: '#15181c' },
+  modalHeadBtn: { fontWeight: '700' },
+  modalHeadTitle: { fontWeight: '800' },
+  modalHeadSpacer: { width: 48 },
+  modalBody: {
+    padding: UI_SPACING.lg,
+    paddingBottom: 40,
+  },
+  catOptionWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: UI_SPACING.sm,
+  },
   catOption: {
     paddingVertical: 10,
     paddingHorizontal: 14,
-    borderRadius: 999,
+    borderRadius: UI_RADIUS.pill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d7dde5',
-    backgroundColor: '#f5f7fa',
+    borderColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
-  catOptionOn: { borderColor: '#1677ff', backgroundColor: '#1677ff' },
-  catOptionText: { fontSize: 14, fontWeight: '700', color: '#3f4751' },
-  catOptionTextOn: { color: '#fff' },
+  catOptionOn: {
+    borderColor: UI_COLORS.accent,
+    backgroundColor: UI_COLORS.accent,
+  },
+  catOptionPressed: {
+    backgroundColor: UI_COLORS.accentSoft,
+  },
+  catOptionText: { fontWeight: '700' },
 });

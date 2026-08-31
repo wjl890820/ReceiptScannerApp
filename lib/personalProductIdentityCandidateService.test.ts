@@ -26,6 +26,11 @@ import {
 import { buildProductAttributes } from './productIdentityContract';
 import { createMemoryPersonalProductIdentityDatabase } from './personalProductIdentityRepository';
 import type { ReceiptRow } from './db';
+import {
+  cloneCollisionReceipt,
+  makeYorkCollisionReceiptA,
+  makeYorkCollisionReceiptC,
+} from './receiptExactTransactionCollision.testFixtures';
 
 const OWNER = 'user:candidate-owner';
 const SAVED = 'saved-r';
@@ -169,6 +174,7 @@ function inventoryFromItems(
     itemKeysByMerchantProductId,
     receiptsById,
     excludedDuplicateReceiptIds: new Set(),
+    highConfidenceDuplicateGroupByReceiptId: new Map(),
     decisionRows,
   };
 }
@@ -874,6 +880,79 @@ describe('G4-2A canonical purchase-event gates', () => {
     });
     expect(classified.classification).toBe('prompt_candidate');
     expect(classified.prospectivePurchaseEventCount).toBe(3);
+  });
+
+  it('suppresses the entire candidate operation for a classifier-missed exact York rescan', () => {
+    const savedYork = cloneCollisionReceipt(makeYorkCollisionReceiptC(), {
+      id: SAVED,
+      user_id: OWNER.slice('user:'.length),
+    });
+    const historicalYork = cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
+      id: 'hist-r',
+      user_id: OWNER.slice('user:'.length),
+    });
+    const inventory = inventoryFromItems(
+      [baseCurrent, baseHistorical],
+      [],
+      [
+        savedYork,
+        historicalYork,
+      ]
+    );
+    expect(
+      findPersonalIdentityPromptCandidatesForInventory(inventory, SAVED)
+    ).toEqual([]);
+  });
+
+  it.each(['representative', 'excluded'] as const)(
+    'suppresses a saved high-confidence group %s before candidate ranking',
+    (memberKind) => {
+      const inventory = inventoryFromItems([
+        baseCurrent,
+        baseHistorical,
+      ]);
+      const representativeReceiptId =
+        memberKind === 'representative' ? SAVED : 'hist-r';
+      const membership = {
+        representativeReceiptId,
+        receiptIds: [SAVED, 'hist-r'],
+        confidence: 'STRUCTURAL_EXACT_DUPLICATE' as const,
+      };
+      inventory.highConfidenceDuplicateGroupByReceiptId = new Map([
+        [SAVED, membership],
+        ['hist-r', membership],
+      ]);
+      if (memberKind === 'excluded') {
+        inventory.excludedDuplicateReceiptIds = new Set([SAVED]);
+      }
+      expect(
+        findPersonalIdentityPromptCandidatesForInventory(inventory, SAVED)
+      ).toEqual([]);
+    }
+  );
+
+  it('rejects a direct candidate pair whose receipts share a proven physical group', () => {
+    const inventory = inventoryFromItems([
+      baseCurrent,
+      baseHistorical,
+    ]);
+    const membership = {
+      representativeReceiptId: SAVED,
+      receiptIds: [SAVED, 'hist-r'],
+      confidence: 'CONTENT_EXACT_DUPLICATE' as const,
+    };
+    inventory.highConfidenceDuplicateGroupByReceiptId = new Map([
+      [SAVED, membership],
+      ['hist-r', membership],
+    ]);
+    expect(
+      classifyPersonalIdentityCandidatePair({
+        inventory,
+        currentItem: baseCurrent,
+        historicalItem: baseHistorical,
+        savedReceiptId: SAVED,
+      }).classification
+    ).toBe('no_match');
   });
 });
 

@@ -157,6 +157,7 @@ function inventoryFromItems(
       items.map((row) => [row.receiptId, receiptRow(row.receiptId)])
     ),
     excludedDuplicateReceiptIds: new Set(),
+    highConfidenceDuplicateGroupByReceiptId: new Map(),
     decisionRows,
   };
 }

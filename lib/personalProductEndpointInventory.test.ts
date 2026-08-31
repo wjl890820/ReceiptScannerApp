@@ -14,9 +14,11 @@ jest.mock('./installationId', () => ({
 jest.mock('./analyticsReceiptSelection', () => ({
   selectAnalyticsReceipts: (receipts: unknown[]) => ({
     excludedDuplicateReceiptIds: new Set<string>(),
+    highConfidenceDuplicateGroups: [],
     analyticsReceipts: receipts,
     storedReceipts: receipts,
   }),
+  indexHighConfidenceDuplicateGroupsByReceiptId: () => new Map(),
 }));
 
 import {
@@ -187,6 +189,13 @@ describe('G4-2A personalProductEndpointInventory', () => {
     expect(result.status).toBe('ready');
     expect(calls.some((call) => /FROM receipt_items/i.test(call.source))).toBe(true);
     expect(calls.some((call) => /receipts\.user_id = \?/i.test(call.source))).toBe(true);
+    expect(
+      calls.some(
+        (call) =>
+          /FROM receipts/i.test(call.source) &&
+          /receipts\.transaction_source AS transaction_source/i.test(call.source)
+      )
+    ).toBe(true);
     expect(calls.every((call) => !/listReceipts/i.test(call.source))).toBe(true);
     expect(calls[0]?.params).toEqual(['inventory-owner']);
   });

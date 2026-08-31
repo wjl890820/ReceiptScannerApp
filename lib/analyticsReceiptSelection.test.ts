@@ -8,6 +8,7 @@ jest.mock('./db', () => ({
 import type { ReceiptRow } from './db';
 import {
   filterProductRowsByExcludedReceiptIds,
+  indexHighConfidenceDuplicateGroupsByReceiptId,
   selectAnalyticsReceipts,
 } from './analyticsReceiptSelection';
 import { generateAnalysisDDiagnosticsBundle } from './analysisDDiagnosticsGenerate';
@@ -61,6 +62,33 @@ describe('analyticsReceiptSelection', () => {
     expect(result.contentExactDuplicateExtras).toBe(1);
     expect(result.analyticsPurchaseCandidateCount).toBe(1);
     expect(result.probableDuplicateExtras).toBe(0);
+    const membership = indexHighConfidenceDuplicateGroupsByReceiptId(
+      result.highConfidenceDuplicateGroups
+    );
+    expect(membership.get('keep')).toEqual(
+      expect.objectContaining({
+        representativeReceiptId: 'keep',
+        receiptIds: ['drop', 'keep'],
+      })
+    );
+    expect(membership.get('drop')).toBe(membership.get('keep'));
+  });
+
+  test('fails closed when one receipt is assigned to conflicting groups', () => {
+    const base = selectAnalyticsReceipts([
+      makeReceipt({ id: 'a', createdAt: nowMs }),
+      makeReceipt({ id: 'b', createdAt: nowMs + 1 }),
+    ]).highConfidenceDuplicateGroups[0]!;
+    expect(() =>
+      indexHighConfidenceDuplicateGroupsByReceiptId([
+        base,
+        {
+          ...base,
+          representativeReceiptId: 'a',
+          receiptIds: ['a', 'c'],
+        },
+      ])
+    ).toThrow('conflicting_high_confidence_duplicate_membership');
   });
 
   test('keepSeparateReceiptIds preserves structural extras', () => {

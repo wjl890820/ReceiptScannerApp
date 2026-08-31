@@ -238,7 +238,14 @@
     "deleteItemConfirm": "Delete",
     "saveFooterHint": "Saves to history. If you scanned multiple receipts, the next one opens after you tap OK.",
     "amountMismatchWarning": "Amounts may not match: the item subtotal doesn't add up to the receipt total. Please review before saving.",
-    "dateNeedsConfirm": "Could not confirm the purchase date. Please check before saving. Scan time will not be used as the purchase date."
+    "dateNeedsConfirm": "Could not confirm the purchase date. Please check before saving. Scan time will not be used as the purchase date.",
+    "duplicateGate": {
+      "title": "This receipt may already be saved",
+      "body": "Meruno found a saved receipt with the same purchase details.",
+      "viewSaved": "View saved receipt",
+      "continueReview": "Continue review",
+      "itemCount": "{count} items"
+    }
   },
   "reviewRetro": {
     "settingsTitle": "Review retrospective",

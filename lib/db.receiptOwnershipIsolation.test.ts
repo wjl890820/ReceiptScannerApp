@@ -73,6 +73,15 @@ import {
 } from './db';
 import { deleteReceiptItemIndex } from './receiptItemIndex';
 import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
+import {
+  buildTransientScanReviewReceipt,
+  evaluateScanReviewDuplicateGate,
+  loadScanReviewDuplicateGateContext,
+} from './scanReviewDuplicateGate';
+import {
+  makeYorkCollisionReceiptA,
+  makeYorkCollisionReceiptC,
+} from './receiptExactTransactionCollision.testFixtures';
 
 type MutableReceiptRow = ReceiptRow & Record<string, unknown>;
 
@@ -244,7 +253,16 @@ class OwnerAwareReceiptDb {
       if (limit != null && Number.isFinite(limit)) {
         rows = rows.slice(0, limit);
       }
-      return rows as T[];
+      const selectsTransactionSource = /\btransaction_source\b/i.test(
+        source.slice(0, source.search(/\bFROM\s+receipts\b/i))
+      );
+      return rows.map((row) => {
+        const projected = { ...row };
+        if (!selectsTransactionSource) {
+          delete projected.transaction_source;
+        }
+        return projected;
+      }) as T[];
     }
     if (/SELECT id, user_id FROM receipts WHERE id IN/i.test(source)) {
       const ownerParam = values[values.length - 1];
@@ -406,6 +424,55 @@ describe('db receipt ownership isolation (Privacy-H2)', () => {
 
     const rows = await listReceiptsForAnalysis();
     expect(rows.map((row) => row.id)).toEqual(['a']);
+  });
+
+  it('preserves persisted transaction_source through the production Analysis accessor', async () => {
+    mockDatabase.seed({
+      id: 'source-receipt',
+      user_id: 'user-a',
+      transaction_source: 'receipt_ocr',
+    });
+
+    const rows = await listReceiptsForAnalysis();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.transaction_source).toBe('receipt_ocr');
+  });
+
+  it('lets the Scan Review gate collide with a production-loaded York receipt', async () => {
+    mockDatabase.seed({
+      ...makeYorkCollisionReceiptA(),
+      user_id: 'user-a',
+      installation_id: null,
+      transaction_source: 'receipt_ocr',
+    });
+
+    const loadedRows = await listReceiptsForAnalysis();
+    expect(loadedRows).toHaveLength(1);
+    expect(loadedRows[0]?.transaction_source).toBe('receipt_ocr');
+
+    const context = await loadScanReviewDuplicateGateContext();
+    expect(context?.storedReceipts).toHaveLength(1);
+    expect(context?.storedReceipts[0]).toEqual(loadedRows[0]);
+    expect(context?.storedReceipts[0]?.transaction_source).toBe('receipt_ocr');
+
+    const yorkC = makeYorkCollisionReceiptC();
+    const transient = buildTransientScanReviewReceipt({
+      transientReceiptId: 'scan-review:device-regression',
+      imageUri: 'file://review.jpg',
+      analysis: {
+        ...JSON.parse(yorkC.analysis_json),
+        merchant: yorkC.merchant_raw,
+        transactionDate: '2026-06-30 12:55',
+        total: 4102,
+        tax: 303,
+        tax_is_known: true,
+        currency: 'JPY',
+      },
+    });
+    expect(transient).not.toBeNull();
+
+    const match = evaluateScanReviewDuplicateGate(transient!, context!);
+    expect(match?.existingReceiptId).toBe(makeYorkCollisionReceiptA().id);
   });
 
   it('getReceipt returns owned row and null for foreign row', async () => {

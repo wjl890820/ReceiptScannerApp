@@ -1,8 +1,12 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
+import { MerunoSurface } from '@/components/primitives/MerunoSurface';
+import { MerunoText } from '@/components/primitives/MerunoText';
 import { t } from '@/lib/i18n';
 import { RECEIPT_REVIEW_ERROR_TAGS } from '@/lib/reviewErrorTags';
+import { UI_COLORS, UI_OPACITY, UI_RADIUS, UI_SPACING } from '@/lib/uiTokens';
 
 type ReceiptReviewDetailsProps = {
   errorTags: Set<string>;
@@ -32,21 +36,28 @@ export function ReceiptReviewDetails({
         style={({ pressed }) => [styles.sectionHeader, pressed && styles.pressed]}
       >
         <View style={styles.sectionHeaderText}>
-          <Text style={styles.sectionTitle}>
+          <MerunoText role="bodySmall" tone="primary" style={styles.sectionTitle}>
             {t('scanReview.feedbackToggle')}
-          </Text>
-          <Text style={styles.sectionSubtitle}>
+          </MerunoText>
+          <MerunoText role="caption" tone="muted" style={styles.sectionSubtitle}>
             {selectedCount > 0
               ? t('scanReview.feedbackSelected', { count: selectedCount })
               : t('scanReview.feedbackHint')}
-          </Text>
+          </MerunoText>
         </View>
-        <Text style={styles.chevron}>{feedbackOpen ? '▾' : '›'}</Text>
+        <MaterialIcons
+          name={feedbackOpen ? 'expand-more' : 'chevron-right'}
+          size={20}
+          color={UI_COLORS.textMuted}
+          importantForAccessibility="no"
+        />
       </Pressable>
 
       {feedbackOpen ? (
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>{t('scanReview.errorTagsTitle')}</Text>
+        <MerunoSurface style={styles.card}>
+          <MerunoText role="caption" tone="secondary" style={styles.cardLabel}>
+            {t('scanReview.errorTagsTitle')}
+          </MerunoText>
           <View style={styles.tagWrap}>
             {RECEIPT_REVIEW_ERROR_TAGS.map((tag) => {
               const on = errorTags.has(tag);
@@ -56,16 +67,24 @@ export function ReceiptReviewDetails({
                   onPress={() => onToggleErrorTag(tag)}
                   accessibilityRole="button"
                   accessibilityState={{ selected: on }}
-                  style={[styles.tagChip, on && styles.tagChipOn]}
+                  style={({ pressed }) => [
+                    styles.tagChip,
+                    on && styles.tagChipOn,
+                    pressed && !on && styles.tagChipPressed,
+                  ]}
                 >
-                  <Text style={[styles.tagChipText, on && styles.tagChipTextOn]}>
+                  <MerunoText
+                    role="chip"
+                    tone={on ? 'inverse' : 'primary'}
+                    style={styles.tagChipText}
+                  >
                     {t(`scanReview.errorTags.${tag}`)}
-                  </Text>
+                  </MerunoText>
                 </Pressable>
               );
             })}
           </View>
-        </View>
+        </MerunoSurface>
       ) : null}
 
       {showDevDetails ? (
@@ -80,28 +99,41 @@ export function ReceiptReviewDetails({
               pressed && styles.pressed,
             ]}
           >
-            <Text style={styles.sectionTitle}>
+            <MerunoText role="bodySmall" tone="primary" style={styles.sectionTitle}>
               {t('scanReview.detailsToggle')}
-            </Text>
-            <Text style={styles.chevron}>{devOpen ? '▾' : '›'}</Text>
+            </MerunoText>
+            <MaterialIcons
+              name={devOpen ? 'expand-more' : 'chevron-right'}
+              size={20}
+              color={UI_COLORS.textMuted}
+              importantForAccessibility="no"
+            />
           </Pressable>
           {devOpen ? (
-            <View style={styles.card}>
-              <Text style={styles.cardLabel}>{t('scanReview.traceId')}</Text>
-              <Text selectable style={styles.mono}>
+            <MerunoSurface style={styles.card}>
+              <MerunoText role="caption" tone="secondary" style={styles.cardLabel}>
+                {t('scanReview.traceId')}
+              </MerunoText>
+              <MerunoText selectable role="caption" tone="primary">
                 {traceId || '—'}
-              </Text>
-              <Text style={[styles.cardLabel, { marginTop: 14 }]}>
+              </MerunoText>
+              <MerunoText
+                role="caption"
+                tone="secondary"
+                style={[styles.cardLabel, styles.ocrLabel]}
+              >
                 {t('scanReview.ocrRawTitle')}
-              </Text>
+              </MerunoText>
               {ocrText ? (
-                <Text selectable style={styles.ocrBlock}>
+                <MerunoText selectable role="caption" tone="primary" style={styles.ocrBlock}>
                   {ocrText}
-                </Text>
+                </MerunoText>
               ) : (
-                <Text style={styles.muted}>{t('scanReview.ocrRawEmpty')}</Text>
+                <MerunoText role="meta" tone="muted">
+                  {t('scanReview.ocrRawEmpty')}
+                </MerunoText>
               )}
-            </View>
+            </MerunoSurface>
           ) : null}
         </>
       ) : null}
@@ -111,10 +143,10 @@ export function ReceiptReviewDetails({
 
 const styles = StyleSheet.create({
   wrap: {
-    marginTop: 8,
+    marginTop: UI_SPACING.sm,
   },
   sectionHeader: {
-    minHeight: 52,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -122,81 +154,57 @@ const styles = StyleSheet.create({
   },
   sectionHeaderText: {
     flex: 1,
-    paddingRight: 12,
+    paddingRight: UI_SPACING.md,
   },
   devHeader: {
-    marginTop: 4,
+    marginTop: UI_SPACING.xs,
   },
   sectionTitle: {
-    color: '#171a1f',
-    fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   sectionSubtitle: {
     marginTop: 3,
-    color: '#8a929c',
-    fontSize: 12,
-  },
-  chevron: {
-    color: '#9aa2ad',
-    fontSize: 22,
-    lineHeight: 24,
   },
   card: {
-    borderRadius: 9,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
-    backgroundColor: '#fff',
-    padding: 14,
+    padding: UI_SPACING.md,
   },
   cardLabel: {
-    color: '#747d88',
-    fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
     marginBottom: 10,
   },
   tagWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: UI_SPACING.sm,
   },
   tagChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
+    paddingVertical: UI_SPACING.sm,
+    paddingHorizontal: UI_SPACING.md,
+    borderRadius: UI_RADIUS.pill,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d7dde5',
-    backgroundColor: '#f7f8fa',
+    borderColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
   tagChipOn: {
-    borderColor: '#1677ff',
-    backgroundColor: '#1677ff',
+    borderColor: UI_COLORS.accent,
+    backgroundColor: UI_COLORS.accent,
+  },
+  tagChipPressed: {
+    backgroundColor: UI_COLORS.accentSoft,
   },
   tagChipText: {
-    fontSize: 13,
     fontWeight: '700',
-    color: '#3f4751',
   },
-  tagChipTextOn: {
-    color: '#fff',
-  },
-  mono: {
-    fontSize: 12,
-    color: '#333',
+  ocrLabel: {
+    marginTop: UI_SPACING.md,
   },
   ocrBlock: {
-    fontSize: 11,
-    color: '#333',
-    backgroundColor: '#f5f7fa',
+    backgroundColor: UI_COLORS.surfaceMuted,
     padding: 10,
-    borderRadius: 10,
+    borderRadius: UI_RADIUS.control,
     lineHeight: 16,
   },
-  muted: {
-    fontSize: 13,
-    color: '#8a929c',
-  },
   pressed: {
-    opacity: 0.7,
+    opacity: UI_OPACITY.pressed,
   },
 });

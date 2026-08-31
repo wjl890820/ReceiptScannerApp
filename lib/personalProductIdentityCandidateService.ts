@@ -27,6 +27,10 @@ import {
 } from './productIdentityStructuralConflict';
 import { combinedNameSimilarity } from './productIdentitySimilarity';
 import { emptyProductAttributes } from './productIdentityContract';
+import {
+  evaluateExactTransactionReceiptCollision,
+  type ExactTransactionReceiptCollision,
+} from './receiptExactTransactionCollision';
 import type { LocalOwnershipStamp } from './receiptOwnershipContext';
 
 export const PERSONAL_IDENTITY_CANDIDATE_VERSION =
@@ -123,6 +127,61 @@ function brandAgreementLabel(
     return 'matching';
   }
   return 'unknown';
+}
+
+export function receiptBelongsToHighConfidenceDuplicateGroup(
+  inventory: PersonalProductEndpointInventory,
+  receiptId: string
+): boolean {
+  return inventory.highConfidenceDuplicateGroupByReceiptId?.has(receiptId) ?? false;
+}
+
+export function receiptsShareHighConfidenceDuplicateGroup(
+  inventory: PersonalProductEndpointInventory,
+  leftReceiptId: string,
+  rightReceiptId: string
+): boolean {
+  const left = inventory.highConfidenceDuplicateGroupByReceiptId?.get(leftReceiptId);
+  const right = inventory.highConfidenceDuplicateGroupByReceiptId?.get(rightReceiptId);
+  return Boolean(
+    left &&
+      right &&
+      left.representativeReceiptId === right.representativeReceiptId &&
+      left.receiptIds.includes(rightReceiptId) &&
+      right.receiptIds.includes(leftReceiptId)
+  );
+}
+
+export function findExactTransactionCollisionForSavedReceipt(
+  inventory: PersonalProductEndpointInventory,
+  savedReceiptId: string
+): ExactTransactionReceiptCollision | null {
+  const savedReceipt = inventory.receiptsById.get(savedReceiptId);
+  if (!savedReceipt) return null;
+  const historicalReceipts = [...inventory.receiptsById.values()]
+    .filter((receipt) => receipt.id !== savedReceiptId)
+    .sort(
+      (left, right) =>
+        left.created_at - right.created_at || left.id.localeCompare(right.id)
+    );
+  for (const historicalReceipt of historicalReceipts) {
+    const result = evaluateExactTransactionReceiptCollision(
+      savedReceipt,
+      historicalReceipt
+    );
+    if (result.collided) return result;
+  }
+  return null;
+}
+
+export function savedReceiptMustNotCreateNewPurchaseInterpretation(
+  inventory: PersonalProductEndpointInventory,
+  savedReceiptId: string
+): boolean {
+  return (
+    receiptBelongsToHighConfidenceDuplicateGroup(inventory, savedReceiptId) ||
+    findExactTransactionCollisionForSavedReceipt(inventory, savedReceiptId) != null
+  );
 }
 
 export function collectCanonicalReceiptIdsForMerchantProduct(
@@ -262,6 +321,22 @@ export function classifyPersonalIdentityCandidatePair(
   valueReason: 'cross_merchant_history' | 'repeat_purchase_history';
 } {
   const { inventory, currentItem, historicalItem, savedReceiptId } = input;
+
+  if (
+    receiptsShareHighConfidenceDuplicateGroup(
+      inventory,
+      currentItem.receiptId,
+      historicalItem.receiptId
+    )
+  ) {
+    return {
+      classification: 'no_match',
+      similarity: 0,
+      prospectivePurchaseEventCount: 0,
+      prospectiveMerchantCount: 0,
+      valueReason: 'repeat_purchase_history',
+    };
+  }
 
   if (currentItem.receiptId !== savedReceiptId) {
     return {
@@ -615,6 +690,11 @@ export function findPersonalIdentityPromptCandidatesForInventory(
   inventory: PersonalProductEndpointInventory,
   savedReceiptId: string
 ): RankablePersonalIdentityPromptCandidate[] {
+  if (
+    savedReceiptMustNotCreateNewPurchaseInterpretation(inventory, savedReceiptId)
+  ) {
+    return [];
+  }
   const currentItems = [...inventory.itemsByRowKey.values()].filter(
     (item) =>
       item.receiptId === savedReceiptId &&

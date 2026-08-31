@@ -1,7 +1,8 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import React from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
+import { MerunoText } from '@/components/primitives/MerunoText';
 import { getCategoryLabel, getCategoryPresentation } from '@/lib/categoryPalette';
 import { t } from '@/lib/i18n';
 import type { ProductCategory } from '@/lib/productCategory';
@@ -9,6 +10,13 @@ import {
   normalizeRecognizedName,
   shouldShowRecognizedNameHint,
 } from '@/lib/scanReviewPresentation';
+import {
+  TEXT_ROLES,
+  UI_COLORS,
+  UI_OPACITY,
+  UI_RADIUS,
+  UI_SPACING,
+} from '@/lib/uiTokens';
 
 type ReceiptItemCardProps = {
   name: string;
@@ -22,6 +30,7 @@ type ReceiptItemCardProps = {
   onQuantityChange: (value: string) => void;
   onLineTotalChange: (value: string) => void;
   onDelete: () => void;
+  showDivider?: boolean;
 };
 
 export function ReceiptItemCard({
@@ -36,20 +45,22 @@ export function ReceiptItemCard({
   onQuantityChange,
   onLineTotalChange,
   onDelete,
+  showDivider = true,
 }: ReceiptItemCardProps) {
   const original = normalizeRecognizedName(recognizedName);
   const showOriginal = shouldShowRecognizedNameHint(name, recognizedName);
   const categoryPresentation = getCategoryPresentation(category);
 
   return (
-    <View style={styles.card}>
+    <View style={[styles.row, showDivider && styles.rowDivider]}>
       <View style={styles.head}>
         <TextInput
           value={name}
           onChangeText={onNameChange}
-          style={[styles.nameInput, { flex: 1 }]}
+          style={styles.nameInput}
           editable={editable}
           placeholder={t('scanReview.itemNamePlaceholder')}
+          placeholderTextColor={UI_COLORS.textMuted}
           accessibilityLabel={t('scanReview.itemName')}
         />
         <Pressable
@@ -64,14 +75,18 @@ export function ReceiptItemCard({
             pressed && styles.pressed,
           ]}
         >
-          <MaterialIcons name="delete-outline" size={20} color="#d94848" />
+          <MaterialIcons
+            name="delete-outline"
+            size={18}
+            color={UI_COLORS.destructive}
+          />
         </Pressable>
       </View>
 
       {showOriginal && original ? (
-        <Text style={styles.originalHint} numberOfLines={1}>
+        <MerunoText role="caption" tone="muted" style={styles.originalHint} numberOfLines={1}>
           {t('scanReview.recognizedNameHint', { name: original })}
-        </Text>
+        </MerunoText>
       ) : null}
 
       <Pressable
@@ -83,40 +98,45 @@ export function ReceiptItemCard({
           styles.categoryPill,
           { borderColor: categoryPresentation.color },
           !editable && styles.disabled,
-          pressed && styles.pressed,
+          pressed && styles.rowPressed,
         ]}
       >
         <MaterialIcons
           name={categoryPresentation.icon}
-          size={15}
+          size={14}
           color={categoryPresentation.color}
         />
-        <Text
+        <MerunoText
+          role="meta"
           style={[styles.categoryPillText, { color: categoryPresentation.color }]}
         >
           {getCategoryLabel(category)}
-        </Text>
+        </MerunoText>
       </Pressable>
 
       <View style={styles.metricsRow}>
         <View style={styles.metric}>
-          <Text style={styles.metricLabel}>{t('scanReview.qty')}</Text>
+          <MerunoText role="caption" tone="muted" style={styles.metricLabel}>
+            {t('scanReview.qty')}
+          </MerunoText>
           <TextInput
             value={String(quantity)}
             onChangeText={onQuantityChange}
             keyboardType="number-pad"
-            style={styles.metricInput}
+            style={styles.qtyInput}
             editable={editable}
             accessibilityLabel={t('scanReview.qty')}
           />
         </View>
         <View style={[styles.metric, styles.metricWide]}>
-          <Text style={styles.metricLabel}>{t('scanReview.lineTotal')}</Text>
+          <MerunoText role="caption" tone="muted" style={styles.metricLabel}>
+            {t('scanReview.lineTotal')}
+          </MerunoText>
           <TextInput
             value={String(lineTotal)}
             onChangeText={onLineTotalChange}
             keyboardType="decimal-pad"
-            style={styles.metricInput}
+            style={styles.lineTotalInput}
             editable={editable}
             accessibilityLabel={t('scanReview.lineTotal')}
           />
@@ -127,37 +147,37 @@ export function ReceiptItemCard({
 }
 
 const styles = StyleSheet.create({
-  card: {
+  row: {
+    backgroundColor: UI_COLORS.surface,
+    paddingHorizontal: UI_SPACING.lg,
+    paddingVertical: UI_SPACING.md,
+  },
+  rowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e8ebef',
-    backgroundColor: '#fff',
-    padding: 14,
+    borderBottomColor: UI_COLORS.borderSubtle,
   },
   head: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
+    gap: UI_SPACING.sm,
   },
   nameInput: {
-    color: '#15181c',
-    fontSize: 16,
-    fontWeight: '800',
-    lineHeight: 22,
+    ...TEXT_ROLES.bodySmall,
+    flex: 1,
+    fontWeight: '700',
+    color: UI_COLORS.textPrimary,
     paddingVertical: 0,
     minHeight: 24,
   },
   deleteBtn: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: UI_RADIUS.control,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff5f5',
   },
   originalHint: {
-    marginTop: 6,
-    color: '#8a929c',
-    fontSize: 12,
+    marginTop: UI_SPACING.xs,
   },
   categoryPill: {
     marginTop: 10,
@@ -165,48 +185,57 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: UI_SPACING.md,
     paddingVertical: 7,
-    borderRadius: 999,
+    minHeight: 32,
+    borderRadius: UI_RADIUS.pill,
     borderWidth: StyleSheet.hairlineWidth,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: UI_COLORS.surface,
   },
   categoryPillText: {
-    fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   metricsRow: {
     flexDirection: 'row',
-    marginTop: 12,
-    gap: 8,
+    marginTop: UI_SPACING.md,
+    gap: UI_SPACING.sm,
   },
   metric: {
-    width: 88,
-    borderRadius: 8,
-    backgroundColor: '#f5f7fa',
+    minWidth: 72,
+    borderRadius: UI_RADIUS.input,
+    backgroundColor: UI_COLORS.surfaceMuted,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   metricWide: {
     flex: 1,
-    width: undefined,
+    minWidth: 0,
   },
   metricLabel: {
-    color: '#747d88',
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 4,
+    fontWeight: '600',
+    marginBottom: 2,
   },
-  metricInput: {
-    color: '#15181c',
-    fontSize: 16,
-    fontWeight: '800',
+  qtyInput: {
+    ...TEXT_ROLES.bodySmall,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+    color: UI_COLORS.textPrimary,
     paddingVertical: 0,
+    minHeight: 22,
+  },
+  lineTotalInput: {
+    ...TEXT_ROLES.amount,
+    color: UI_COLORS.textPrimary,
+    paddingVertical: 0,
+    minHeight: 22,
   },
   disabled: {
-    opacity: 0.45,
+    opacity: UI_OPACITY.disabled,
   },
   pressed: {
-    opacity: 0.7,
+    opacity: UI_OPACITY.pressed,
+  },
+  rowPressed: {
+    backgroundColor: UI_COLORS.surfaceMuted,
   },
 });

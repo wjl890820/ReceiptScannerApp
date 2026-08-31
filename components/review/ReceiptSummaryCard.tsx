@@ -1,8 +1,16 @@
 import React from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, TextInput, View } from 'react-native';
 
-import { t } from '@/lib/i18n';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
+import { MerunoSurface } from '@/components/primitives/MerunoSurface';
+import { MerunoText } from '@/components/primitives/MerunoText';
+import { t } from '@/lib/i18n';
+import {
+  TEXT_ROLES,
+  UI_COLORS,
+  UI_RADIUS,
+  UI_SPACING,
+} from '@/lib/uiTokens';
 
 type ReceiptSummaryCardProps = {
   merchant: string;
@@ -22,6 +30,16 @@ type ReceiptSummaryCardProps = {
   onNoteChange: (value: string) => void;
 };
 
+function ConfirmSignal({ message }: { message: string }) {
+  return (
+    <View style={styles.signal}>
+      <MerunoText role="meta" tone="primary" style={styles.signalText}>
+        {message}
+      </MerunoText>
+    </View>
+  );
+}
+
 export function ReceiptSummaryCard({
   merchant,
   dateStr,
@@ -40,20 +58,12 @@ export function ReceiptSummaryCard({
   onNoteChange,
 }: ReceiptSummaryCardProps) {
   return (
-    <View style={styles.card}>
+    <MerunoSurface style={styles.card}>
       {amountMismatch ? (
-        <View style={styles.warningBanner}>
-          <Text style={styles.warningBannerText}>
-            {t('scanReview.amountMismatchWarning')}
-          </Text>
-        </View>
+        <ConfirmSignal message={t('scanReview.amountMismatchWarning')} />
       ) : null}
       {dateNeedsConfirm ? (
-        <View style={styles.warningBanner}>
-          <Text style={styles.warningBannerText}>
-            {t('scanReview.dateNeedsConfirm')}
-          </Text>
-        </View>
+        <ConfirmSignal message={t('scanReview.dateNeedsConfirm')} />
       ) : null}
 
       <View style={styles.merchantRow}>
@@ -65,6 +75,7 @@ export function ReceiptSummaryCard({
             style={styles.merchantInput}
             editable={editable}
             placeholder={t('scanReview.merchantPlaceholder')}
+            placeholderTextColor={UI_COLORS.textMuted}
             accessibilityLabel={t('scanReview.merchant')}
           />
           <TextInput
@@ -73,40 +84,48 @@ export function ReceiptSummaryCard({
             style={styles.dateInput}
             editable={editable}
             placeholder={t('scanReview.datePlaceholder')}
+            placeholderTextColor={UI_COLORS.textMuted}
             accessibilityLabel={t('scanReview.date')}
           />
         </View>
       </View>
 
-      <View style={styles.metricsRow}>
-        <View style={styles.metric}>
-          <Text style={styles.metricLabel}>{t('scanReview.total')}</Text>
-          <TextInput
-            value={totalStr}
-            onChangeText={onTotalChange}
-            keyboardType="decimal-pad"
-            style={styles.metricInput}
-            editable={editable}
-            accessibilityLabel={t('scanReview.total')}
-          />
-        </View>
-        <View style={[styles.metric, styles.metricBorder]}>
-          <Text style={styles.metricLabel}>{t('scanReview.tax')}</Text>
+      <View style={styles.totalBlock}>
+        <MerunoText role="caption" tone="secondary" style={styles.fieldLabel}>
+          {t('scanReview.total')}
+        </MerunoText>
+        <TextInput
+          value={totalStr}
+          onChangeText={onTotalChange}
+          keyboardType="decimal-pad"
+          style={styles.totalInput}
+          editable={editable}
+          accessibilityLabel={t('scanReview.total')}
+        />
+      </View>
+
+      <View style={styles.supportRow}>
+        <View style={styles.supportField}>
+          <MerunoText role="caption" tone="muted" style={styles.fieldLabel}>
+            {t('scanReview.tax')}
+          </MerunoText>
           <TextInput
             value={taxStr}
             onChangeText={onTaxChange}
             keyboardType="decimal-pad"
-            style={styles.metricInput}
+            style={styles.supportInput}
             editable={editable}
             accessibilityLabel={t('scanReview.tax')}
           />
         </View>
-        <View style={[styles.metric, styles.metricBorder]}>
-          <Text style={styles.metricLabel}>{t('scanReview.currency')}</Text>
+        <View style={[styles.supportField, styles.supportFieldBorder]}>
+          <MerunoText role="caption" tone="muted" style={styles.fieldLabel}>
+            {t('scanReview.currency')}
+          </MerunoText>
           <TextInput
             value={currency}
             onChangeText={onCurrencyChange}
-            style={styles.metricInput}
+            style={styles.supportInput}
             editable={editable}
             autoCapitalize="characters"
             accessibilityLabel={t('scanReview.currency')}
@@ -114,7 +133,9 @@ export function ReceiptSummaryCard({
         </View>
       </View>
 
-      <Text style={styles.noteLabel}>{t('scanReview.note')}</Text>
+      <MerunoText role="caption" tone="muted" style={styles.noteLabel}>
+        {t('scanReview.note')}
+      </MerunoText>
       <TextInput
         value={note}
         onChangeText={onNoteChange}
@@ -122,99 +143,102 @@ export function ReceiptSummaryCard({
         multiline
         editable={editable}
         placeholder={t('scanReview.notePlaceholder')}
+        placeholderTextColor={UI_COLORS.textMuted}
         accessibilityLabel={t('scanReview.note')}
       />
-    </View>
+    </MerunoSurface>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 9,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e1e4e8',
-    backgroundColor: '#fff',
-    padding: 16,
+    padding: UI_SPACING.lg,
   },
-  warningBanner: {
-    backgroundColor: '#FFF8EC',
-    borderColor: '#F0C36D',
+  signal: {
+    backgroundColor: UI_COLORS.surfaceMuted,
+    borderColor: UI_COLORS.signal,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+    borderRadius: UI_RADIUS.control,
     paddingVertical: 10,
-    paddingHorizontal: 12,
-    marginBottom: 12,
+    paddingHorizontal: UI_SPACING.md,
+    marginBottom: UI_SPACING.md,
   },
-  warningBannerText: {
-    color: '#8A5A00',
-    fontSize: 13,
+  signalText: {
     lineHeight: 18,
-  },
-  merchantInput: {
-    color: '#15181c',
-    fontSize: 20,
-    fontWeight: '800',
-    paddingVertical: 2,
   },
   merchantRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: UI_SPACING.md,
   },
   merchantInputs: {
     flex: 1,
     minWidth: 0,
   },
-  dateInput: {
-    marginTop: 6,
-    color: '#68707a',
-    fontSize: 14,
+  merchantInput: {
+    ...TEXT_ROLES.heroTitle,
+    fontWeight: '800',
+    color: UI_COLORS.textPrimary,
     paddingVertical: 2,
   },
-  metricsRow: {
-    flexDirection: 'row',
-    marginTop: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e8ebef',
+  dateInput: {
+    ...TEXT_ROLES.meta,
+    marginTop: 6,
+    color: UI_COLORS.textSecondary,
+    paddingVertical: 2,
   },
-  metric: {
+  totalBlock: {
+    marginTop: UI_SPACING.lg,
+    paddingTop: UI_SPACING.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: UI_COLORS.borderSubtle,
+  },
+  fieldLabel: {
+    fontWeight: '600',
+    marginBottom: UI_SPACING.xs,
+  },
+  totalInput: {
+    ...TEXT_ROLES.metric,
+    color: UI_COLORS.textPrimary,
+    paddingVertical: 0,
+    minHeight: 32,
+  },
+  supportRow: {
+    flexDirection: 'row',
+    marginTop: UI_SPACING.md,
+  },
+  supportField: {
     flex: 1,
     minWidth: 0,
-    paddingHorizontal: 10,
-    paddingVertical: 12,
+    paddingRight: UI_SPACING.md,
   },
-  metricBorder: {
+  supportFieldBorder: {
+    paddingRight: 0,
+    paddingLeft: UI_SPACING.md,
     borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: '#e8ebef',
+    borderLeftColor: UI_COLORS.borderSubtle,
   },
-  metricLabel: {
-    color: '#747d88',
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  metricInput: {
-    color: '#15181c',
-    fontSize: 16,
-    fontWeight: '800',
+  supportInput: {
+    ...TEXT_ROLES.bodySmall,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+    color: UI_COLORS.textPrimary,
     paddingVertical: 0,
+    minHeight: 22,
   },
   noteLabel: {
-    marginTop: 14,
-    marginBottom: 6,
-    color: '#747d88',
-    fontSize: 12,
-    fontWeight: '700',
+    marginTop: UI_SPACING.md,
+    marginBottom: UI_SPACING.xs,
+    fontWeight: '600',
   },
   noteInput: {
-    minHeight: 56,
-    borderRadius: 8,
-    backgroundColor: '#f5f7fa',
-    paddingHorizontal: 12,
+    ...TEXT_ROLES.meta,
+    minHeight: 52,
+    borderRadius: UI_RADIUS.input,
+    backgroundColor: UI_COLORS.surfaceMuted,
+    paddingHorizontal: UI_SPACING.md,
     paddingVertical: 10,
-    color: '#15181c',
-    fontSize: 14,
+    color: UI_COLORS.textPrimary,
     textAlignVertical: 'top',
   },
 });

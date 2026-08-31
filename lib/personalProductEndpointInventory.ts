@@ -6,6 +6,7 @@
 
 import type * as SQLite from 'expo-sqlite';
 
+import type { HighConfidenceDuplicateReceiptGroupMembership } from './analyticsReceiptSelection';
 import type { ReceiptRow } from './db';
 import {
   buildPersonalMerchantProductEndpointV1,
@@ -106,6 +107,10 @@ export type PersonalProductEndpointInventory = {
   itemKeysByMerchantProductId: ReadonlyMap<string, readonly string[]>;
   receiptsById: ReadonlyMap<string, ReceiptRow>;
   excludedDuplicateReceiptIds: ReadonlySet<string>;
+  highConfidenceDuplicateGroupByReceiptId: ReadonlyMap<
+    string,
+    HighConfidenceDuplicateReceiptGroupMembership
+  >;
   decisionRows: readonly StoredPersonalProductIdentityDecision[];
 };
 
@@ -185,6 +190,7 @@ const OWNER_RECEIPT_SELECT_SQL = `
     receipts.user_items_json AS user_items_json,
     receipts.user_id AS user_id,
     receipts.installation_id AS installation_id,
+    receipts.transaction_source AS transaction_source,
     receipts.image_uri AS image_uri,
     receipts.user_edited AS user_edited,
     receipts.note AS note
@@ -233,6 +239,10 @@ export type BuildPersonalProductEndpointInventoryInput = {
   decisionRows: readonly StoredPersonalProductIdentityDecision[];
   store?: ProductIdentityStore;
   excludedDuplicateReceiptIds?: ReadonlySet<string>;
+  highConfidenceDuplicateGroupByReceiptId?: ReadonlyMap<
+    string,
+    HighConfidenceDuplicateReceiptGroupMembership
+  >;
 };
 
 export function buildPersonalProductEndpointInventory(
@@ -316,6 +326,8 @@ export function buildPersonalProductEndpointInventory(
   const receiptsById = new Map(input.receipts.map((receipt) => [receipt.id, receipt]));
   const excludedDuplicateReceiptIds =
     input.excludedDuplicateReceiptIds ?? new Set<string>();
+  const highConfidenceDuplicateGroupByReceiptId =
+    input.highConfidenceDuplicateGroupByReceiptId ?? new Map();
 
   const requiredGraphIds = collectOwnerGraphMerchantProductIds(input.decisionRows);
   const snapshot = new Map<string, PersonalMerchantProductEndpointV1 | null>();
@@ -355,6 +367,7 @@ export function buildPersonalProductEndpointInventory(
       itemKeysByMerchantProductId: itemKeysByMp,
       receiptsById,
       excludedDuplicateReceiptIds,
+      highConfidenceDuplicateGroupByReceiptId,
       decisionRows: input.decisionRows,
     },
   };
@@ -442,10 +455,21 @@ export async function loadPersonalProductEndpointInventoryWithDb(
   }
 
   let excludedDuplicateReceiptIds: ReadonlySet<string> = new Set<string>();
+  let highConfidenceDuplicateGroupByReceiptId: ReadonlyMap<
+    string,
+    HighConfidenceDuplicateReceiptGroupMembership
+  > = new Map();
   try {
-    const { selectAnalyticsReceipts } = await import('./analyticsReceiptSelection');
-    excludedDuplicateReceiptIds = selectAnalyticsReceipts([...receipts])
-      .excludedDuplicateReceiptIds;
+    const {
+      indexHighConfidenceDuplicateGroupsByReceiptId,
+      selectAnalyticsReceipts,
+    } = await import('./analyticsReceiptSelection');
+    const selection = selectAnalyticsReceipts([...receipts]);
+    excludedDuplicateReceiptIds = selection.excludedDuplicateReceiptIds;
+    highConfidenceDuplicateGroupByReceiptId =
+      indexHighConfidenceDuplicateGroupsByReceiptId(
+        selection.highConfidenceDuplicateGroups
+      );
   } catch {
     return {
       status: 'current_endpoint_context_incomplete',
@@ -463,6 +487,7 @@ export async function loadPersonalProductEndpointInventoryWithDb(
       decisionRows,
       store: deps.createStore?.(),
       excludedDuplicateReceiptIds,
+      highConfidenceDuplicateGroupByReceiptId,
     });
   } catch {
     return {

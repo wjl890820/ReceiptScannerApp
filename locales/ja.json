@@ -238,7 +238,14 @@
     "deleteItemConfirm": "削除",
     "saveFooterHint": "履歴に保存します。複数枚スキャンした場合は、確定後に次のレシートへ進みます。",
     "amountMismatchWarning": "金額が一致しない可能性があります：商品の合計とレシート総額が合いません。確認してから保存してください。",
-    "dateNeedsConfirm": "購入日時を確認できませんでした。保存前に確認してください。未確認の場合、スキャン時刻を購入日時には使いません。"
+    "dateNeedsConfirm": "購入日時を確認できませんでした。保存前に確認してください。未確認の場合、スキャン時刻を購入日時には使いません。",
+    "duplicateGate": {
+      "title": "このレシートはすでに保存されているようです",
+      "body": "同じ購入内容の保存済みレシートが見つかりました。",
+      "viewSaved": "保存済みレシートを見る",
+      "continueReview": "確認を続ける",
+      "itemCount": "商品 {count} 点"
+    }
   },
   "reviewRetro": {
     "settingsTitle": "レビュー集計",

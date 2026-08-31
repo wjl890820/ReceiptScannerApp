@@ -28,6 +28,11 @@ import {
   loadPostSavePurchaseMemoryWithDb,
   rankBuiltMemoryEntries,
 } from './postSavePurchaseMemory';
+import {
+  cloneCollisionReceipt,
+  makeYorkCollisionReceiptA,
+  makeYorkCollisionReceiptC,
+} from './receiptExactTransactionCollision.testFixtures';
 
 const OWNER = 'user:memory-owner';
 
@@ -230,6 +235,79 @@ describe('G5-1 postSavePurchaseMemory', () => {
       status: 'none',
     });
   });
+
+  it('suppresses Purchase Memory for a classifier-missed exact York rescan', () => {
+    const inventory = buildInventory(
+      [
+        itemRow({
+          receiptId: 'r-old',
+          itemId: 'r-old:0',
+          skuKey: 'persisted-york-item',
+          occurredAt: 1_699_000_000_000,
+          merchantRaw: 'ヨークベニマル',
+          merchantNormalized: 'ヨークベニマル',
+        }),
+        itemRow({
+          receiptId: 'r-current',
+          itemId: 'r-current:0',
+          skuKey: 'persisted-york-item',
+          occurredAt: 1_700_000_000_000,
+          merchantRaw: 'ヨークベニマル古川南店',
+          merchantNormalized: 'ヨークベニマル古川南',
+        }),
+      ],
+      [
+        cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
+          id: 'r-old',
+          user_id: OWNER.slice('user:'.length),
+        }),
+        cloneCollisionReceipt(makeYorkCollisionReceiptC(), {
+          id: 'r-current',
+          user_id: OWNER.slice('user:'.length),
+        }),
+      ]
+    );
+    expect(
+      buildPostSavePurchaseMemoryFromInventory('r-current', inventory)
+    ).toEqual({ status: 'none' });
+  });
+
+  it.each(['representative', 'excluded'] as const)(
+    'suppresses Purchase Memory for a high-confidence group %s',
+    (memberKind) => {
+      const inventory = buildInventory(
+        [
+          itemRow({
+            receiptId: 'r-old',
+            itemId: 'r-old:0',
+            occurredAt: 1_699_000_000_000,
+          }),
+          itemRow({
+            receiptId: 'r-current',
+            itemId: 'r-current:0',
+            occurredAt: 1_700_000_000_000,
+          }),
+        ],
+        [receipt('r-old'), receipt('r-current')]
+      );
+      const membership = {
+        representativeReceiptId:
+          memberKind === 'representative' ? 'r-current' : 'r-old',
+        receiptIds: ['r-current', 'r-old'],
+        confidence: 'CONTENT_EXACT_DUPLICATE' as const,
+      };
+      inventory.highConfidenceDuplicateGroupByReceiptId = new Map([
+        ['r-current', membership],
+        ['r-old', membership],
+      ]);
+      if (memberKind === 'excluded') {
+        inventory.excludedDuplicateReceiptIds = new Set(['r-current']);
+      }
+      expect(
+        buildPostSavePurchaseMemoryFromInventory('r-current', inventory)
+      ).toEqual({ status: 'none' });
+    }
+  );
 
   it('ignores duplicate-excluded historical receipt events', () => {
     const inventory = buildInventory(

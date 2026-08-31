@@ -1,7 +1,15 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
+import { MerunoText } from '@/components/primitives/MerunoText';
 import { t } from '@/lib/i18n';
+import {
+  UI_COLORS,
+  UI_OPACITY,
+  UI_RADIUS,
+  UI_SHADOW,
+  UI_SPACING,
+} from '@/lib/uiTokens';
 
 type ReceiptReviewSaveBarProps = {
   saving: boolean;
@@ -18,7 +26,7 @@ export function ReceiptReviewSaveBar({
 }: ReceiptReviewSaveBarProps) {
   return (
     <View
-      style={[styles.bar, { paddingBottom: Math.max(bottomInset, 12) }]}
+      style={[styles.bar, { paddingBottom: Math.max(bottomInset, UI_SPACING.md) }]}
       onLayout={(e) => onLayoutHeight?.(e.nativeEvent.layout.height)}
     >
       <Pressable
@@ -29,13 +37,15 @@ export function ReceiptReviewSaveBar({
         style={({ pressed }) => [
           styles.button,
           saving && styles.disabled,
-          pressed && styles.pressed,
+          pressed && !saving && styles.buttonPressed,
         ]}
       >
-        {saving ? <ActivityIndicator size="small" color="#fff" /> : null}
-        <Text style={styles.buttonText}>
+        {saving ? (
+          <ActivityIndicator size="small" color={UI_COLORS.surface} />
+        ) : null}
+        <MerunoText role="button" tone="inverse">
           {saving ? t('scanReview.saving') : t('scanReview.save')}
-        </Text>
+        </MerunoText>
       </Pressable>
     </View>
   );
@@ -48,29 +58,27 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     paddingTop: 10,
-    paddingHorizontal: 16,
-    backgroundColor: '#fff',
+    paddingHorizontal: UI_SPACING.lg,
+    backgroundColor: UI_COLORS.surface,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e7e9ec',
+    borderTopColor: UI_COLORS.border,
+    ...UI_SHADOW.sticky,
   },
   button: {
     minHeight: 52,
-    borderRadius: 9,
-    backgroundColor: '#1677ff',
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.accent,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.accentDark,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    gap: 8,
+    gap: UI_SPACING.sm,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '800',
+  buttonPressed: {
+    backgroundColor: UI_COLORS.accentDark,
   },
   disabled: {
-    opacity: 0.58,
-  },
-  pressed: {
-    opacity: 0.82,
+    opacity: UI_OPACITY.disabled,
   },
 });

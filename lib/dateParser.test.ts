@@ -240,6 +240,10 @@ describe('receipt datetime parsing', () => {
       'utf8'
     );
     const dbSource = fs.readFileSync(path.resolve(__dirname, 'db.ts'), 'utf8');
+    const projectionSource = fs.readFileSync(
+      path.resolve(__dirname, 'receiptSaveProjection.ts'),
+      'utf8'
+    );
 
     expect(parserSource).not.toMatch(
       /new Date\(\s*(trimmed|workStr|dateTimeStr|input)\s*\)/
@@ -248,8 +252,9 @@ describe('receipt datetime parsing', () => {
     expect(parserSource).toMatch(/new Date\(iso\)/);
     expect(parserSource).toMatch(/new Date\(value\)/);
 
-    expect(dbSource).toContain('parseReceiptDateTime(txDateStr.trim()');
-    expect(dbSource).toContain('fallbackToNow: false');
+    expect(dbSource).toContain('projectReceiptSaveMaterialEvidence');
+    expect(projectionSource).toContain('parseReceiptDateTime(transactionDateText');
+    expect(projectionSource).toContain('fallbackToNow: false');
     expect(dbSource).not.toMatch(/new Date\(\s*txDateStr/);
     expect(dbSource).not.toMatch(/new Date\(\s*txDate/);
   });
