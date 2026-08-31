@@ -134,6 +134,7 @@ export default function ScanReviewScreen() {
   const [snapshot, setSnapshot] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [categoryModalIndex, setCategoryModalIndex] = useState(-1);
+  const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [showDevTrace, setShowDevTrace] = useState(false);
   const [stickyHeight, setStickyHeight] = useState(0);
   const [duplicateGateContext, setDuplicateGateContext] =
@@ -220,6 +221,7 @@ export default function ScanReviewScreen() {
     setOcrText('');
     setImageUri('');
     setTraceId('');
+    setExpandedItemId(null);
     duplicateGateGenerationRef.current += 1;
     setDuplicateGateContext(null);
     setDuplicateGateMatch(null);
@@ -418,10 +420,19 @@ export default function ScanReviewScreen() {
 
   const addLineItem = () => {
     if (saving) return;
+    const newId = makeLineId();
     setLineItems((rows) => [
       ...rows,
-      { id: makeLineId(), sourceIndex: null, name: '', category: 'uncategorized' as ProductCategory, quantity: 1, lineTotal: 0 },
+      {
+        id: newId,
+        sourceIndex: null,
+        name: '',
+        category: 'uncategorized' as ProductCategory,
+        quantity: 1,
+        lineTotal: 0,
+      },
     ]);
+    setExpandedItemId(newId);
   };
 
   const removeLineItem = (index: number) => {
@@ -432,7 +443,13 @@ export default function ScanReviewScreen() {
         text: t('scanReview.deleteItemConfirm'),
         style: 'destructive',
         onPress: () => {
-          setLineItems((rows) => rows.filter((_, i) => i !== index));
+          setLineItems((rows) => {
+            const removedId = rows[index]?.id;
+            if (removedId) {
+              setExpandedItemId((current) => (current === removedId ? null : current));
+            }
+            return rows.filter((_, i) => i !== index);
+          });
         },
       },
     ]);
@@ -1080,7 +1097,11 @@ export default function ScanReviewScreen() {
                 quantity={line.quantity}
                 lineTotal={line.lineTotal}
                 recognizedName={recognizedName}
+                currency={currency}
                 editable={!saving}
+                expanded={expandedItemId === line.id}
+                onExpand={() => setExpandedItemId(line.id)}
+                onCollapse={() => setExpandedItemId(null)}
                 onNameChange={(v) => updateLine(idx, { name: v })}
                 onCategoryPress={() => setCategoryModalIndex(idx)}
                 onQuantityChange={(v) => {

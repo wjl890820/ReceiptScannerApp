@@ -3,6 +3,22 @@
  * Pure UI visibility logic — no draft/save side effects.
  */
 
+import { formatJPY } from '@/lib/formatJPY';
+
+/**
+ * Collapsed review-row amount display. Non-finite values must not coerce to zero.
+ */
+export function formatCollapsedLineTotal(lineTotal: number, currency?: string): string {
+  if (!Number.isFinite(lineTotal)) {
+    return '—';
+  }
+  const normalizedCurrency = typeof currency === 'string' ? currency.trim().toUpperCase() : '';
+  if (!normalizedCurrency || normalizedCurrency === 'JPY') {
+    return formatJPY(lineTotal);
+  }
+  return `${normalizedCurrency} ${lineTotal.toLocaleString()}`;
+}
+
 /**
  * Explicit receipt.total is authoritative for Review/History display.
  * tax is informational and must never be auto-added on top.

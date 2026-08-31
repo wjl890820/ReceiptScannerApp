@@ -7,6 +7,7 @@ import { getCategoryLabel, getCategoryPresentation } from '@/lib/categoryPalette
 import { t } from '@/lib/i18n';
 import type { ProductCategory } from '@/lib/productCategory';
 import {
+  formatCollapsedLineTotal,
   normalizeRecognizedName,
   shouldShowRecognizedNameHint,
 } from '@/lib/scanReviewPresentation';
@@ -18,13 +19,19 @@ import {
   UI_SPACING,
 } from '@/lib/uiTokens';
 
+const CONTROL_MIN_HEIGHT = 44;
+
 type ReceiptItemCardProps = {
   name: string;
   category: ProductCategory;
   quantity: number;
   lineTotal: number;
   recognizedName: unknown;
+  currency?: string;
   editable: boolean;
+  expanded: boolean;
+  onExpand: () => void;
+  onCollapse: () => void;
   onNameChange: (value: string) => void;
   onCategoryPress: () => void;
   onQuantityChange: (value: string) => void;
@@ -39,7 +46,11 @@ export function ReceiptItemCard({
   quantity,
   lineTotal,
   recognizedName,
+  currency,
   editable,
+  expanded,
+  onExpand,
+  onCollapse,
   onNameChange,
   onCategoryPress,
   onQuantityChange,
@@ -50,9 +61,70 @@ export function ReceiptItemCard({
   const original = normalizeRecognizedName(recognizedName);
   const showOriginal = shouldShowRecognizedNameHint(name, recognizedName);
   const categoryPresentation = getCategoryPresentation(category);
+  const categoryLabel = getCategoryLabel(category);
+  const collapsedAmount = formatCollapsedLineTotal(lineTotal, currency);
+  const displayName = name.trim() || t('scanReview.itemNamePlaceholder');
+
+  if (!expanded) {
+    return (
+      <Pressable
+        onPress={() => {
+          if (editable) onExpand();
+        }}
+        disabled={!editable}
+        accessibilityRole="button"
+        accessibilityLabel={t('scanReview.expandItemA11y', { name: displayName })}
+        accessibilityState={{ expanded: false }}
+        style={({ pressed }) => [
+          styles.row,
+          showDivider && styles.rowDivider,
+          pressed && editable && styles.rowPressed,
+          !editable && styles.disabled,
+        ]}
+      >
+        <View style={styles.collapsedTop}>
+          <MerunoText
+            role="bodySmall"
+            tone="primary"
+            numberOfLines={1}
+            style={styles.collapsedName}
+          >
+            {displayName}
+          </MerunoText>
+          <MerunoText role="amount" tone="primary" style={styles.collapsedAmount}>
+            {collapsedAmount}
+          </MerunoText>
+        </View>
+
+        <View style={styles.collapsedBottom}>
+          <View style={styles.collapsedMeta}>
+            <MaterialIcons
+              name={categoryPresentation.icon}
+              size={13}
+              color={categoryPresentation.color}
+            />
+            <MerunoText
+              role="meta"
+              numberOfLines={1}
+              style={[styles.collapsedCategory, { color: categoryPresentation.color }]}
+            >
+              {categoryLabel}
+            </MerunoText>
+            <MerunoText role="meta" tone="muted" style={styles.collapsedMetaSep}>
+              ·
+            </MerunoText>
+            <MerunoText role="meta" tone="muted" numberOfLines={1} style={styles.collapsedQty}>
+              {t('scanReview.qtyMeta', { count: quantity })}
+            </MerunoText>
+          </View>
+          <MaterialIcons name="chevron-right" size={18} color={UI_COLORS.textMuted} />
+        </View>
+      </Pressable>
+    );
+  }
 
   return (
-    <View style={[styles.row, showDivider && styles.rowDivider]}>
+    <View style={[styles.row, styles.expandedRow, showDivider && styles.rowDivider]}>
       <View style={styles.head}>
         <TextInput
           value={name}
@@ -64,22 +136,19 @@ export function ReceiptItemCard({
           accessibilityLabel={t('scanReview.itemName')}
         />
         <Pressable
-          onPress={onDelete}
+          onPress={onCollapse}
           disabled={!editable}
-          hitSlop={10}
+          hitSlop={8}
           accessibilityRole="button"
-          accessibilityLabel={t('scanReview.deleteItem')}
+          accessibilityLabel={t('scanReview.collapseItemA11y')}
+          accessibilityState={{ expanded: true }}
           style={({ pressed }) => [
-            styles.deleteBtn,
+            styles.collapseBtn,
             !editable && styles.disabled,
             pressed && styles.pressed,
           ]}
         >
-          <MaterialIcons
-            name="delete-outline"
-            size={18}
-            color={UI_COLORS.destructive}
-          />
+          <MaterialIcons name="keyboard-arrow-up" size={22} color={UI_COLORS.textMuted} />
         </Pressable>
       </View>
 
@@ -89,34 +158,40 @@ export function ReceiptItemCard({
         </MerunoText>
       ) : null}
 
-      <Pressable
-        onPress={onCategoryPress}
-        disabled={!editable}
-        accessibilityRole="button"
-        accessibilityLabel={`${t('scanReview.category')}: ${getCategoryLabel(category)}`}
-        style={({ pressed }) => [
-          styles.categoryPill,
-          { borderColor: categoryPresentation.color },
-          !editable && styles.disabled,
-          pressed && styles.rowPressed,
-        ]}
-      >
-        <MaterialIcons
-          name={categoryPresentation.icon}
-          size={14}
-          color={categoryPresentation.color}
-        />
-        <MerunoText
-          role="meta"
-          style={[styles.categoryPillText, { color: categoryPresentation.color }]}
+      <View style={styles.controlRow}>
+        <Pressable
+          onPress={onCategoryPress}
+          disabled={!editable}
+          accessibilityRole="button"
+          accessibilityLabel={`${t('scanReview.category')}: ${categoryLabel}`}
+          style={({ pressed }) => [
+            styles.categoryControl,
+            { borderColor: categoryPresentation.color },
+            !editable && styles.disabled,
+            pressed && styles.rowPressed,
+          ]}
         >
-          {getCategoryLabel(category)}
-        </MerunoText>
-      </Pressable>
+          <MaterialIcons
+            name={categoryPresentation.icon}
+            size={13}
+            color={categoryPresentation.color}
+          />
+          <MerunoText
+            role="meta"
+            numberOfLines={1}
+            style={[styles.categoryLabel, { color: categoryPresentation.color }]}
+          >
+            {categoryLabel}
+          </MerunoText>
+        </Pressable>
 
-      <View style={styles.metricsRow}>
-        <View style={styles.metric}>
-          <MerunoText role="caption" tone="muted" style={styles.metricLabel}>
+        <View style={styles.quantityControl}>
+          <MerunoText
+            role="caption"
+            tone="muted"
+            pointerEvents="none"
+            style={styles.controlLabel}
+          >
             {t('scanReview.qty')}
           </MerunoText>
           <TextInput
@@ -128,8 +203,14 @@ export function ReceiptItemCard({
             accessibilityLabel={t('scanReview.qty')}
           />
         </View>
-        <View style={[styles.metric, styles.metricWide]}>
-          <MerunoText role="caption" tone="muted" style={styles.metricLabel}>
+
+        <View style={styles.subtotalControl}>
+          <MerunoText
+            role="caption"
+            tone="muted"
+            pointerEvents="none"
+            style={styles.controlLabel}
+          >
             {t('scanReview.lineTotal')}
           </MerunoText>
           <TextInput
@@ -142,6 +223,28 @@ export function ReceiptItemCard({
           />
         </View>
       </View>
+
+      <Pressable
+        onPress={onDelete}
+        disabled={!editable}
+        accessibilityRole="button"
+        accessibilityLabel={t('scanReview.deleteItem')}
+        style={({ pressed }) => [
+          styles.deleteAction,
+          !editable && styles.disabled,
+          pressed && styles.deleteActionPressed,
+        ]}
+      >
+        <MaterialIcons
+          name="delete-outline"
+          size={18}
+          color={UI_COLORS.destructive}
+          style={styles.deleteActionIcon}
+        />
+        <MerunoText role="bodySmall" tone="destructive" style={styles.deleteActionText}>
+          {t('scanReview.deleteItemAction')}
+        </MerunoText>
+      </Pressable>
     </View>
   );
 }
@@ -150,15 +253,59 @@ const styles = StyleSheet.create({
   row: {
     backgroundColor: UI_COLORS.surface,
     paddingHorizontal: UI_SPACING.lg,
-    paddingVertical: UI_SPACING.md,
+    paddingVertical: UI_SPACING.sm,
+  },
+  expandedRow: {
+    paddingVertical: UI_SPACING.sm,
   },
   rowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: UI_COLORS.borderSubtle,
   },
-  head: {
+  collapsedTop: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    gap: UI_SPACING.sm,
+    minHeight: 24,
+  },
+  collapsedName: {
+    flex: 1,
+    minWidth: 0,
+    fontWeight: '700',
+  },
+  collapsedAmount: {
+    flexShrink: 0,
+    textAlign: 'right',
+  },
+  collapsedBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: UI_SPACING.sm,
+    marginTop: 6,
+    minHeight: 20,
+  },
+  collapsedMeta: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: UI_SPACING.xs,
+  },
+  collapsedCategory: {
+    flexShrink: 1,
+    fontWeight: '600',
+  },
+  collapsedMetaSep: {
+    fontWeight: '600',
+  },
+  collapsedQty: {
+    flexShrink: 0,
+    fontWeight: '600',
+  },
+  head: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: UI_SPACING.sm,
   },
   nameInput: {
@@ -166,68 +313,102 @@ const styles = StyleSheet.create({
     flex: 1,
     fontWeight: '700',
     color: UI_COLORS.textPrimary,
-    paddingVertical: 0,
-    minHeight: 24,
+    paddingVertical: UI_SPACING.xs,
+    minHeight: CONTROL_MIN_HEIGHT,
   },
-  deleteBtn: {
-    width: 32,
-    height: 32,
+  collapseBtn: {
+    width: CONTROL_MIN_HEIGHT,
+    height: CONTROL_MIN_HEIGHT,
     borderRadius: UI_RADIUS.control,
     alignItems: 'center',
     justifyContent: 'center',
   },
   originalHint: {
     marginTop: UI_SPACING.xs,
+    marginBottom: UI_SPACING.xs,
   },
-  categoryPill: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
+  controlRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: UI_SPACING.sm,
+    marginTop: UI_SPACING.sm,
+  },
+  categoryControl: {
+    flexShrink: 1,
+    maxWidth: 128,
+    minHeight: CONTROL_MIN_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: UI_SPACING.md,
-    paddingVertical: 7,
-    minHeight: 32,
-    borderRadius: UI_RADIUS.pill,
+    gap: UI_SPACING.xs,
+    paddingHorizontal: UI_SPACING.sm,
+    borderRadius: UI_RADIUS.control,
     borderWidth: StyleSheet.hairlineWidth,
     backgroundColor: UI_COLORS.surface,
   },
-  categoryPillText: {
-    fontWeight: '700',
+  categoryLabel: {
+    flexShrink: 1,
+    fontWeight: '600',
   },
-  metricsRow: {
-    flexDirection: 'row',
-    marginTop: UI_SPACING.md,
-    gap: UI_SPACING.sm,
-  },
-  metric: {
-    minWidth: 72,
+  quantityControl: {
+    width: 76,
+    height: CONTROL_MIN_HEIGHT,
     borderRadius: UI_RADIUS.input,
     backgroundColor: UI_COLORS.surfaceMuted,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: UI_SPACING.sm,
   },
-  metricWide: {
+  subtotalControl: {
     flex: 1,
     minWidth: 0,
+    height: CONTROL_MIN_HEIGHT,
+    borderRadius: UI_RADIUS.input,
+    backgroundColor: UI_COLORS.surfaceMuted,
+    paddingHorizontal: UI_SPACING.sm,
   },
-  metricLabel: {
+  controlLabel: {
+    position: 'absolute',
+    top: 3,
+    left: UI_SPACING.sm,
+    right: UI_SPACING.sm,
     fontWeight: '600',
-    marginBottom: 2,
   },
   qtyInput: {
     ...TEXT_ROLES.bodySmall,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
     color: UI_COLORS.textPrimary,
+    width: '100%',
+    height: CONTROL_MIN_HEIGHT,
+    minHeight: CONTROL_MIN_HEIGHT,
+    paddingTop: 13,
     paddingVertical: 0,
-    minHeight: 22,
   },
   lineTotalInput: {
     ...TEXT_ROLES.amount,
     color: UI_COLORS.textPrimary,
+    width: '100%',
+    height: CONTROL_MIN_HEIGHT,
+    minHeight: CONTROL_MIN_HEIGHT,
+    paddingTop: 12,
     paddingVertical: 0,
-    minHeight: 22,
+  },
+  deleteAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: UI_SPACING.xs,
+    minHeight: CONTROL_MIN_HEIGHT,
+    marginTop: UI_SPACING.sm,
+    borderRadius: UI_RADIUS.control,
+  },
+  deleteActionPressed: {
+    opacity: UI_OPACITY.pressed,
+    backgroundColor: UI_COLORS.surfaceMuted,
+  },
+  deleteActionIcon: {
+    marginTop: 1,
+  },
+  deleteActionText: {
+    fontWeight: '600',
   },
   disabled: {
     opacity: UI_OPACITY.disabled,
