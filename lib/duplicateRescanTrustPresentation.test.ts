@@ -42,8 +42,9 @@ describe('duplicate rescan trust presentation integration', () => {
 
   it('keeps the advisory card thin, localized, and non-destructive', () => {
     expect(card).toContain('scanReview.duplicateGate.title');
-    expect(card).toContain('scanReview.duplicateGate.viewSaved');
+    expect(card).toContain('scanReview.duplicateGate.useSaved');
     expect(card).toContain('scanReview.duplicateGate.continueReview');
+    expect(card).not.toContain('viewSaved');
     expect(card).not.toContain('这张小票');
     expect(card).not.toContain('このレシート');
     expect(card).not.toContain('This receipt may');
@@ -59,13 +60,72 @@ describe('duplicate rescan trust presentation integration', () => {
     expect(screen).toContain('duplicateGateGenerationRef.current');
   });
 
-  it('Continue Review is session-only while View Saved revalidates and preserves the draft', () => {
-    expect(screen).toContain('dismissScanReviewDuplicateEvidence');
-    expect(screen).toContain('setDismissedDuplicateEvidenceKey');
-    expect(screen).toContain('revalidateScanReviewDuplicateDestination');
-    expect(screen).toContain('await flushPendingEditorState()');
-    expect(screen).toContain('router.push(`/history/${encodeURIComponent(destinationId)}`');
-    expect(screen).not.toContain('KEEP_SEPARATE');
+  it('enters terminal navigation recovery after completed_navigation_failed', () => {
+    const useSavedBlock = screen.slice(
+      screen.indexOf('const onUseSavedDuplicateReceipt'),
+      screen.indexOf('const onRetrySavedReceiptNavigation')
+    );
+    expect(useSavedBlock).toContain('reduceTerminalDuplicateDestinationId');
+    expect(useSavedBlock).toContain("result.status === 'completed_navigation_failed'");
+    expect(useSavedBlock).toContain('setTerminalDuplicateDestinationId');
+    expect(useSavedBlock).toContain('terminalDuplicateDestinationId');
+  });
+
+  it('retries navigation only through onRetrySavedReceiptNavigation', () => {
+    const retryBlock = screen.slice(
+      screen.indexOf('const onRetrySavedReceiptNavigation'),
+      screen.indexOf('const snapItemsArr')
+    );
+    expect(retryBlock).toContain('router.replace');
+    expect(retryBlock).not.toContain('executeDuplicateGateTerminalFlow');
+    expect(retryBlock).not.toContain('terminateDuplicateScanReviewDraft');
+    expect(retryBlock).not.toContain('removeScanReviewDraft');
+    expect(retryBlock).not.toContain('peekNextDraftId');
+    expect(retryBlock).not.toContain('persistPayloadRef');
+  });
+
+  it('blocks a second terminal coordinator run after terminal completion', () => {
+    const useSavedBlock = screen.slice(
+      screen.indexOf('const onUseSavedDuplicateReceipt'),
+      screen.indexOf('const onRetrySavedReceiptNavigation')
+    );
+    expect(useSavedBlock).toContain('terminalDuplicateDestinationId');
+    expect(useSavedBlock).toMatch(/if \([\s\S]*terminalDuplicateDestinationId[\s\S]*\) \{\s*return;/);
+  });
+
+  it('shows terminal recovery UI and hides unresolved gate actions after completion', () => {
+    expect(screen).toContain('ReceiptDuplicateGateRecoveryCard');
+    expect(screen).toContain('showUnresolvedDuplicateGate');
+    expect(screen).toContain('showDuplicateTerminalRecovery');
+    expect(screen).toContain('hideDuplicateGateSaveBar');
+    expect(screen).toContain('shouldHideDuplicateGateSaveBar');
+    expect(screen).toContain('setTerminalDuplicateDestinationId(null)');
+  });
+
+  it('routes the primary action through the production terminal coordinator', () => {
+    const useSavedBlock = screen.slice(
+      screen.indexOf('const onUseSavedDuplicateReceipt'),
+      screen.indexOf('const snapItemsArr')
+    );
+    expect(screen).toContain('onUseSavedDuplicateReceipt');
+    expect(useSavedBlock).toContain('executeDuplicateGateTerminalFlow');
+    expect(useSavedBlock).not.toMatch(/if \(!termination\.ok\)/);
+    expect(useSavedBlock).not.toContain('router.push');
+    expect(useSavedBlock).not.toContain('flushPendingEditorState');
+    expect(useSavedBlock).not.toContain('saveReceipt');
+    expect(useSavedBlock).not.toContain('KEEP_SEPARATE');
+  });
+
+  it('surfaces termination failure from the coordinator without duplicating orchestration', () => {
+    const useSavedBlock = screen.slice(
+      screen.indexOf('const onUseSavedDuplicateReceipt'),
+      screen.indexOf('const snapItemsArr')
+    );
+    expect(useSavedBlock).toContain("result.status === 'termination_failed'");
+    expect(useSavedBlock).toContain("t('scanReview.duplicateGate.useSavedFailedMessage')");
+    expect(useSavedBlock).toMatch(
+      /result\.status === 'termination_failed'[\s\S]*Alert\.alert/
+    );
   });
 
   it('contains no temporary TestFlight diagnostic override', () => {
@@ -79,13 +139,25 @@ describe('duplicate rescan trust presentation integration', () => {
     expect(screen).toContain('const showDuplicateGate = shouldShowScanReviewDuplicateGateMatch(');
     expect(screen).toContain('duplicateGateMatch');
     expect(screen).toContain('dismissedDuplicateEvidenceKey');
-    expect(screen).toContain('{showDuplicateGate ? (');
+    expect(screen).toContain('showUnresolvedDuplicateGate');
     expect(screen).toContain('<ReceiptDuplicateGateCard');
-    expect(screen).toContain('{!showDuplicateGate ? (');
+    expect(screen).toContain('hideDuplicateGateSaveBar');
+    expect(screen).toContain('{!hideDuplicateGateSaveBar ? (');
     expect(screen).toContain('<ReceiptReviewSaveBar');
     expect(screen).not.toMatch(
       /<ReceiptReviewSaveBar[\s\S]*showDuplicateGate \?/
     );
+  });
+
+  it('keeps Continue Review off the terminal coordinator path', () => {
+    const continueBlock = screen.slice(
+      screen.indexOf('const onContinueDuplicateReview'),
+      screen.indexOf('const onUseSavedDuplicateReceipt')
+    );
+    expect(continueBlock).toContain('dismissScanReviewDuplicateEvidence');
+    expect(continueBlock).not.toContain('executeDuplicateGateTerminalFlow');
+    expect(continueBlock).not.toContain('terminateDuplicateScanReviewDraft');
+    expect(continueBlock).not.toContain('removeScanReviewDraft');
   });
 
   it('keeps Continue Review dismissal and re-evaluation paths unchanged', () => {
@@ -95,16 +167,42 @@ describe('duplicate rescan trust presentation integration', () => {
     expect(screen).toContain('shouldShowScanReviewDuplicateGateMatch(');
     expect(screen).toContain('duplicateGateAnalysis');
     expect(screen).toContain('dismissedDuplicateEvidenceKey');
+    expect(screen).toContain('onContinueDuplicateReview');
   });
 
   it('keeps duplicate-gate localization keys in zh, ja, and en', () => {
-    const keys = ['title', 'body', 'viewSaved', 'continueReview', 'itemCount'];
-    for (const locale of ['zh', 'ja', 'en']) {
+    const keys = [
+      'title',
+      'body',
+      'useSaved',
+      'useSavedFailedTitle',
+      'useSavedFailedMessage',
+      'recoveryTitle',
+      'recoveryBody',
+      'openRecordAgain',
+      'continueReview',
+      'itemCount',
+    ];
+    const expectedCopy = {
+      en: 'Use saved record',
+      ja: '保存済みの記録を使用',
+      zh: '使用已保存记录',
+    } as const;
+    const expectedRecoveryTitle = {
+      en: 'Saved record selected',
+      ja: '保存済みの記録を使用しました',
+      zh: '已使用保存的记录',
+    } as const;
+    for (const locale of ['zh', 'ja', 'en'] as const) {
       const parsed = JSON.parse(source(`locales/${locale}.json`));
       expect(Object.keys(parsed.scanReview.duplicateGate).sort()).toEqual(
         [...keys].sort()
       );
       expect(parsed.scanReview.duplicateGate.itemCount).toContain('{count}');
+      expect(parsed.scanReview.duplicateGate.useSaved).toBe(expectedCopy[locale]);
+      expect(parsed.scanReview.duplicateGate.recoveryTitle).toBe(
+        expectedRecoveryTitle[locale]
+      );
     }
   });
 });

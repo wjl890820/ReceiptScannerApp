@@ -123,8 +123,8 @@ describe('DS-4.1 V2 review row presentation', () => {
   it('preserves divider behavior and duplicate gate / save bar contracts', () => {
     expect(item).toContain('showDivider = true');
     expect(item).toContain('showDivider && styles.rowDivider');
-    expect(screen).toContain('showDuplicateGate');
-    expect(screen).toContain('{!showDuplicateGate ? (');
+    expect(screen).toContain('hideDuplicateGateSaveBar');
+    expect(screen).toContain('{!hideDuplicateGateSaveBar ? (');
     expect(screen).toContain('<ReceiptReviewSaveBar');
     expect(screen).toContain('onDelete={() => removeLineItem(idx)}');
     expect(screen).toContain('updateLine(idx, { lineTotal: toNum(v, 0) })');

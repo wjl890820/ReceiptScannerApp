@@ -246,7 +246,12 @@
     "duplicateGate": {
       "title": "このレシートはすでに保存されているようです",
       "body": "同じ購入内容の保存済みレシートが見つかりました。",
-      "viewSaved": "保存済みレシートを見る",
+      "useSaved": "保存済みの記録を使用",
+      "useSavedFailedTitle": "完了できませんでした",
+      "useSavedFailedMessage": "処理を完了できませんでした。もう一度お試しください。",
+      "recoveryTitle": "保存済みの記録を使用しました",
+      "recoveryBody": "記録を開けませんでした。もう一度お試しください。",
+      "openRecordAgain": "記録をもう一度開く",
       "continueReview": "確認を続ける",
       "itemCount": "商品 {count} 点"
     }

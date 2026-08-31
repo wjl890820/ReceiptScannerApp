@@ -246,7 +246,12 @@
     "duplicateGate": {
       "title": "这张小票似乎已经保存过",
       "body": "Meruno 找到了一张购买信息相同的已保存小票。",
-      "viewSaved": "查看已保存记录",
+      "useSaved": "使用已保存记录",
+      "useSavedFailedTitle": "未能完成",
+      "useSavedFailedMessage": "未能完成这次操作，请重试。",
+      "recoveryTitle": "已使用保存的记录",
+      "recoveryBody": "无法打开该记录，请重试。",
+      "openRecordAgain": "重新打开记录",
       "continueReview": "继续审核",
       "itemCount": "{count} 项商品"
     }

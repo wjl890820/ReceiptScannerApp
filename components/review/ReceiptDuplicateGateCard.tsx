@@ -12,12 +12,12 @@ import { UI_COLORS, UI_LAYOUT, UI_RADIUS, UI_SPACING } from '@/lib/uiTokens';
 export function ReceiptDuplicateGateCard({
   match,
   processing,
-  onViewSavedReceipt,
+  onUseSavedReceipt,
   onContinueReview,
 }: {
   match: ScanReviewDuplicateGateMatch;
   processing: boolean;
-  onViewSavedReceipt: () => void;
+  onUseSavedReceipt: () => void;
   onContinueReview: () => void;
 }) {
   return (
@@ -51,13 +51,13 @@ export function ReceiptDuplicateGateCard({
       <View style={styles.actions}>
         <MerunoPressable
           style={styles.primary}
-          onPress={onViewSavedReceipt}
+          onPress={onUseSavedReceipt}
           disabled={processing}
           accessibilityRole="button"
-          accessibilityLabel={t('scanReview.duplicateGate.viewSaved')}
+          accessibilityLabel={t('scanReview.duplicateGate.useSaved')}
         >
           <MerunoText role="button" tone="inverse">
-            {t('scanReview.duplicateGate.viewSaved')}
+            {t('scanReview.duplicateGate.useSaved')}
           </MerunoText>
         </MerunoPressable>
         <MerunoPressable

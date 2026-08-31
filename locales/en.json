@@ -246,7 +246,12 @@
     "duplicateGate": {
       "title": "This receipt may already be saved",
       "body": "Meruno found a saved receipt with the same purchase details.",
-      "viewSaved": "View saved receipt",
+      "useSaved": "Use saved record",
+      "useSavedFailedTitle": "Couldn't complete",
+      "useSavedFailedMessage": "Couldn't complete this action. Please try again.",
+      "recoveryTitle": "Saved record selected",
+      "recoveryBody": "Couldn't open the record. Please try again.",
+      "openRecordAgain": "Open record again",
       "continueReview": "Continue review",
       "itemCount": "{count} items"
     }

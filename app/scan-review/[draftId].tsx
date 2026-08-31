@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MerunoPressable } from '@/components/primitives/MerunoPressable';
 import { MerunoText } from '@/components/primitives/MerunoText';
 import { ReceiptDuplicateGateCard } from '@/components/review/ReceiptDuplicateGateCard';
+import { ReceiptDuplicateGateRecoveryCard } from '@/components/review/ReceiptDuplicateGateRecoveryCard';
 import { ReceiptItemCard } from '@/components/review/ReceiptItemCard';
 import { ReceiptReviewDetails } from '@/components/review/ReceiptReviewDetails';
 import { ReceiptReviewSaveBar } from '@/components/review/ReceiptReviewSaveBar';
@@ -72,6 +73,14 @@ import {
   type ScanReviewDuplicateGateContext,
   type ScanReviewDuplicateGateMatch,
 } from '@/lib/scanReviewDuplicateGate';
+import {
+  executeDuplicateGateTerminalFlow,
+  reduceTerminalDuplicateDestinationId,
+  shouldHideDuplicateGateSaveBar,
+  shouldShowDuplicateTerminalRecovery,
+  shouldShowUnresolvedDuplicateGate,
+  terminateDuplicateScanReviewDraft,
+} from '@/lib/scanReviewDuplicateGateTerminal';
 import {
   shouldShowLegacyPostSaveEasterEggAlert,
   shouldShowReviewDevDetails,
@@ -144,6 +153,8 @@ export default function ScanReviewScreen() {
   const [dismissedDuplicateEvidenceKey, setDismissedDuplicateEvidenceKey] =
     useState<string | null>(null);
   const [duplicateGateProcessing, setDuplicateGateProcessing] = useState(false);
+  const [terminalDuplicateDestinationId, setTerminalDuplicateDestinationId] =
+    useState<string | null>(null);
   const persistPayloadRef = useRef<{ id: string; state: ScanReviewEditorStateV1 } | null>(null);
   const saveInFlightRef = useRef(false);
   // 离开保护：程序导航（保存成功/放弃/缺失返回）前置 true 以放行，避免被未保存确认拦截。
@@ -227,6 +238,7 @@ export default function ScanReviewScreen() {
     setDuplicateGateMatch(null);
     setDismissedDuplicateEvidenceKey(null);
     setDuplicateGateProcessing(false);
+    setTerminalDuplicateDestinationId(null);
 
     (async () => {
       if (!id) {
@@ -661,30 +673,88 @@ export default function ScanReviewScreen() {
     setDuplicateGateMatch(null);
   }, [duplicateGateMatch, duplicateGateProcessing]);
 
-  const onViewSavedDuplicateReceipt = useCallback(() => {
-    if (!duplicateGateMatch || duplicateGateProcessing) return;
+  const onUseSavedDuplicateReceipt = useCallback(() => {
+    if (
+      !duplicateGateMatch ||
+      duplicateGateProcessing ||
+      terminalDuplicateDestinationId
+    ) {
+      return;
+    }
     const capturedDraftId = String(draftId || '');
     const destinationId = duplicateGateMatch.existingReceiptId;
     setDuplicateGateProcessing(true);
     void (async () => {
-      await flushPendingEditorState();
-      const stillOwned = await revalidateScanReviewDuplicateDestination(
-        destinationId
+      const result = await executeDuplicateGateTerminalFlow(
+        {
+          currentDraftId: capturedDraftId,
+          existingReceiptId: destinationId,
+        },
+        {
+          revalidateDestination: revalidateScanReviewDuplicateDestination,
+          terminateDraft: (currentId) =>
+            terminateDuplicateScanReviewDraft(currentId, {
+              removeDraft: removeScanReviewDraft,
+              advanceQueue: peekNextDraftId,
+            }),
+          clearPendingPersistence: () => {
+            persistPayloadRef.current = null;
+          },
+          allowLeave: () => {
+            allowLeaveRef.current = true;
+          },
+          replaceWithHistory: (receiptId) => {
+            router.replace(`/history/${encodeURIComponent(receiptId)}` as any);
+          },
+          isStillCurrent: () =>
+            duplicateGateMountedRef.current &&
+            currentDraftIdRef.current === capturedDraftId,
+        }
       );
+
       if (
         !duplicateGateMountedRef.current ||
         currentDraftIdRef.current !== capturedDraftId
       ) {
         return;
       }
-      if (!stillOwned) {
+
+      if (result.status === 'ownership_failed') {
         setDuplicateGateMatch(null);
         return;
       }
-      router.push(`/history/${encodeURIComponent(destinationId)}` as any);
+      if (result.status === 'termination_failed') {
+        Alert.alert(
+          t('scanReview.duplicateGate.useSavedFailedTitle'),
+          t('scanReview.duplicateGate.useSavedFailedMessage')
+        );
+        return;
+      }
+      if (result.status === 'completed_navigation_failed') {
+        logger.warn('ScanReview', 'Use saved duplicate navigation failed', {
+          error: result.error,
+          destinationId,
+        });
+        setTerminalDuplicateDestinationId((current) =>
+          reduceTerminalDuplicateDestinationId(current, {
+            result,
+            existingReceiptId: destinationId,
+          })
+        );
+        return;
+      }
     })()
       .catch((error) => {
-        logger.warn('ScanReview', 'View saved duplicate failed', { error });
+        logger.warn('ScanReview', 'Use saved duplicate record failed', { error });
+        if (
+          duplicateGateMountedRef.current &&
+          currentDraftIdRef.current === capturedDraftId
+        ) {
+          Alert.alert(
+            t('scanReview.duplicateGate.useSavedFailedTitle'),
+            t('scanReview.duplicateGate.useSavedFailedMessage')
+          );
+        }
       })
       .finally(() => {
         if (
@@ -694,13 +764,23 @@ export default function ScanReviewScreen() {
           setDuplicateGateProcessing(false);
         }
       });
-  }, [
-    draftId,
-    duplicateGateMatch,
-    duplicateGateProcessing,
-    flushPendingEditorState,
-    router,
-  ]);
+  }, [draftId, duplicateGateMatch, duplicateGateProcessing, router, terminalDuplicateDestinationId]);
+
+  const onRetrySavedReceiptNavigation = useCallback(() => {
+    if (!terminalDuplicateDestinationId || duplicateGateProcessing) return;
+    const destinationId = terminalDuplicateDestinationId;
+    setDuplicateGateProcessing(true);
+    try {
+      router.replace(`/history/${encodeURIComponent(destinationId)}` as any);
+    } catch (error) {
+      logger.warn('ScanReview', 'Retry saved duplicate navigation failed', {
+        error,
+        destinationId,
+      });
+    } finally {
+      setDuplicateGateProcessing(false);
+    }
+  }, [duplicateGateProcessing, router, terminalDuplicateDestinationId]);
 
   const snapItemsArr = Array.isArray(snapshot?.items) ? snapshot.items : [];
   const showDevDetails = shouldShowReviewDevDetails(showDevTrace, __DEV__);
@@ -708,6 +788,17 @@ export default function ScanReviewScreen() {
     duplicateGateMatch,
     dismissedDuplicateEvidenceKey
   );
+  const showUnresolvedDuplicateGate = shouldShowUnresolvedDuplicateGate({
+    showDuplicateGate,
+    terminalDuplicateDestinationId,
+  });
+  const showDuplicateTerminalRecovery = shouldShowDuplicateTerminalRecovery({
+    terminalDuplicateDestinationId,
+  });
+  const hideDuplicateGateSaveBar = shouldHideDuplicateGateSaveBar({
+    showDuplicateGate,
+    terminalDuplicateDestinationId,
+  });
   const FALLBACK_STICKY_HEIGHT = 88;
   const bottomPadding = (stickyHeight || FALLBACK_STICKY_HEIGHT) + 20;
 
@@ -1013,22 +1104,26 @@ export default function ScanReviewScreen() {
             {t('scanReview.flowHint')}
           </MerunoText>
         </View>
-        <Pressable
-          onPress={onDiscard}
-          hitSlop={12}
-          disabled={saving}
-          style={[styles.topBarSide, styles.topBarSideEnd]}
-          accessibilityRole="button"
-          accessibilityLabel={t('scanReview.discard')}
-        >
-          <MerunoText
-            role="bodySmall"
-            tone="destructive"
-            style={[styles.discardBtn, saving && styles.discardDisabled]}
+        {showDuplicateTerminalRecovery ? (
+          <View style={styles.topBarSide} />
+        ) : (
+          <Pressable
+            onPress={onDiscard}
+            hitSlop={12}
+            disabled={saving}
+            style={[styles.topBarSide, styles.topBarSideEnd]}
+            accessibilityRole="button"
+            accessibilityLabel={t('scanReview.discard')}
           >
-            {t('scanReview.discard')}
-          </MerunoText>
-        </Pressable>
+            <MerunoText
+              role="bodySmall"
+              tone="destructive"
+              style={[styles.discardBtn, saving && styles.discardDisabled]}
+            >
+              {t('scanReview.discard')}
+            </MerunoText>
+          </Pressable>
+        )}
       </View>
 
       <ScrollView
@@ -1060,12 +1155,19 @@ export default function ScanReviewScreen() {
           onNoteChange={setNote}
         />
 
-        {showDuplicateGate ? (
+        {showUnresolvedDuplicateGate ? (
           <ReceiptDuplicateGateCard
             match={duplicateGateMatch!}
             processing={duplicateGateProcessing}
-            onViewSavedReceipt={onViewSavedDuplicateReceipt}
+            onUseSavedReceipt={onUseSavedDuplicateReceipt}
             onContinueReview={onContinueDuplicateReview}
+          />
+        ) : null}
+
+        {showDuplicateTerminalRecovery ? (
+          <ReceiptDuplicateGateRecoveryCard
+            processing={duplicateGateProcessing}
+            onOpenRecordAgain={onRetrySavedReceiptNavigation}
           />
         ) : null}
 
@@ -1141,7 +1243,7 @@ export default function ScanReviewScreen() {
         />
       </ScrollView>
 
-      {!showDuplicateGate ? (
+      {!hideDuplicateGateSaveBar ? (
         <ReceiptReviewSaveBar
           saving={saving}
           bottomInset={insets.bottom}

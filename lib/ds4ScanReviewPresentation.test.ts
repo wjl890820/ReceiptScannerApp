@@ -39,7 +39,8 @@ describe('DS-4 Scan Review presentation contracts', () => {
     expect(screen).toContain('lineItems.map');
     expect(screen).toContain('ReceiptReviewSaveBar');
     expect(screen).toContain('showDuplicateGate');
-    expect(screen).toContain('{!showDuplicateGate ? (');
+    expect(screen).toContain('hideDuplicateGateSaveBar');
+    expect(screen).toContain('{!hideDuplicateGateSaveBar ? (');
     expect(saveBar).toContain("position: 'absolute'");
     expect(saveBar).toContain('scanReview.save');
     expect(saveBar).not.toContain('scanReview.addItem');
