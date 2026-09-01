@@ -15,6 +15,12 @@
  *     exactly explain overage (>0), and when both taxes are known & differ,
  *     abs(taxA-taxB)===overage. Trailing-prefix only (no arbitrary deletion).
  *     No header-only dedupe. No product-name / fuzzy / AI matching.
+ *   RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE — additive high-confidence
+ *     path after strict STRUCTURAL_EXACT fails: same merchant + exact clock
+ *     transaction_at + exact total + compatible tax + same item count +
+ *     identical canonical raw line-amount multiset (multiplicity preserved) +
+ *     only quantity drift on matching line amounts. No name/fuzzy matching.
+ *     Quantity is NOT ignored in the primary structural fingerprint.
  *   SEMANTIC_RESCAN_EXACT_DUPLICATE — additive high-confidence path for
  *     same physical transaction with OCR quantity/spec interpretation
  *     disagreement: same merchantAnalyticsKey + exact clock transaction_at +
@@ -70,12 +76,13 @@ import { parseProductSpecification } from './productSpecification';
 import { pickBestRepresentativeReceiptId } from './receiptRepresentativeQuality';
 
 export const ANALYSIS_D_DUPLICATE_AUDIT_VERSION =
-  'meruno-analysis-d-duplicate-audit-v7' as const;
+  'meruno-analysis-d-duplicate-audit-v8' as const;
 
 export type AnalysisDDuplicateConfidence =
   | 'CONTENT_EXACT_DUPLICATE'
   | 'STRUCTURAL_EXACT_DUPLICATE'
   | 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+  | 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
   | 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
   | 'PROBABLE_DUPLICATE'
   | 'NOT_ENOUGH_EVIDENCE';
@@ -177,6 +184,7 @@ export type AnalysisDDuplicateRelationEvidence = {
     | 'CONTENT_EXACT_DUPLICATE'
     | 'STRUCTURAL_EXACT_DUPLICATE'
     | 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+    | 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
     | 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
   >;
   evidence: string[];
@@ -640,6 +648,127 @@ export function canonicalStructuralQtyAmountVector(
   });
 }
 
+/** Canonical sorted raw line-amount multiset (multiplicity preserved; no quantity). */
+export function canonicalStructuralLineAmountMultiset(
+  rows: readonly AnalysisDQtyAmountRow[]
+): string[] {
+  return [...rows]
+    .map((row) => roundMoney(row.lineAmount))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function structuralLineAmountMultisetEquals(
+  left: readonly AnalysisDQtyAmountRow[],
+  right: readonly AnalysisDQtyAmountRow[]
+): boolean {
+  const a = canonicalStructuralLineAmountMultiset(left);
+  const b = canonicalStructuralLineAmountMultiset(right);
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function passesStructuralDuplicatePairGuards(
+  left: AnalysisDDuplicateReceiptSummary,
+  right: AnalysisDDuplicateReceiptSummary
+): boolean {
+  if (!left.structuralDuplicateEligible || !right.structuralDuplicateEligible) {
+    return false;
+  }
+  if (!left.currency || left.currency !== right.currency) return false;
+  if (!left.hasExactTransactionTime || !right.hasExactTransactionTime) {
+    return false;
+  }
+  if (!left.merchantKey || left.merchantKey !== right.merchantKey) return false;
+  if (left.transactionAt == null || left.transactionAt !== right.transactionAt) {
+    return false;
+  }
+  if (
+    !isValidStructuralDuplicateTotal(left.total) ||
+    !isValidStructuralDuplicateTotal(right.total)
+  ) {
+    return false;
+  }
+  if (!moneyEquals(left.total, right.total)) return false;
+  if (
+    left.canonicalStructuralBasket.length === 0 ||
+    right.canonicalStructuralBasket.length === 0
+  ) {
+    return false;
+  }
+  if (!areStructuralTaxSlotsCompatible(left, right)) return false;
+  return true;
+}
+
+function countStructuralLineAmountOccurrences(
+  basket: readonly AnalysisDQtyAmountRow[],
+  lineAmount: number
+): number {
+  const target = roundMoney(lineAmount);
+  let count = 0;
+  for (const row of basket) {
+    if (roundMoney(row.lineAmount) === target) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Quantity-noise structural reconciliation (strict structural must fail first).
+ * Requires identical canonical raw line-amount multiset; only quantity may drift
+ * on positionally aligned canonical rows with matching line amounts.
+ */
+export function evaluateReconciledStructuralQuantityNoisePair(
+  a: AnalysisDDuplicateReceiptSummary,
+  b: AnalysisDDuplicateReceiptSummary
+): { quantityConflictLineAmounts: number[] } | null {
+  if (!passesStructuralDuplicatePairGuards(a, b)) return null;
+  if (a.itemCount !== b.itemCount) return null;
+  if (qtyAmountVectorEquals(a.canonicalStructuralBasket, b.canonicalStructuralBasket)) {
+    return null;
+  }
+  if (
+    !structuralLineAmountMultisetEquals(
+      a.canonicalStructuralBasket,
+      b.canonicalStructuralBasket
+    )
+  ) {
+    return null;
+  }
+
+  const leftBasket = a.canonicalStructuralBasket;
+  const rightBasket = b.canonicalStructuralBasket;
+  if (leftBasket.length !== rightBasket.length) return null;
+
+  const quantityConflictLineAmounts: number[] = [];
+  let hasQuantityDiff = false;
+  let hasIdenticalQuantityRow = false;
+  for (let i = 0; i < leftBasket.length; i += 1) {
+    const leftRow = leftBasket[i]!;
+    const rightRow = rightBasket[i]!;
+    if (!moneyEquals(leftRow.lineAmount, rightRow.lineAmount)) return null;
+    if (leftRow.quantity === rightRow.quantity) {
+      hasIdenticalQuantityRow = true;
+    } else {
+      hasQuantityDiff = true;
+      quantityConflictLineAmounts.push(leftRow.lineAmount);
+    }
+  }
+  if (!hasQuantityDiff || !hasIdenticalQuantityRow) return null;
+  if (quantityConflictLineAmounts.length !== 1) return null;
+
+  const conflictAmount = quantityConflictLineAmounts[0]!;
+  if (
+    countStructuralLineAmountOccurrences(leftBasket, conflictAmount) !== 1 ||
+    countStructuralLineAmountOccurrences(rightBasket, conflictAmount) !== 1
+  ) {
+    return null;
+  }
+
+  return { quantityConflictLineAmounts };
+}
+
 function areStructuralTaxSlotsCompatible(
   left: AnalysisDDuplicateReceiptSummary,
   right: AnalysisDDuplicateReceiptSummary
@@ -1015,6 +1144,7 @@ const PATH_RANK: Record<
   STRUCTURAL_EXACT_DUPLICATE: 1,
   RECONCILED_STRUCTURAL_EXACT_DUPLICATE: 2,
   SEMANTIC_RESCAN_EXACT_DUPLICATE: 3,
+  RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE: 4,
 };
 
 function sortRelationEvidence(
@@ -1180,29 +1310,54 @@ function buildPairRelation(
   }
 
   const semantic = evaluateSemanticRescanExactPair(L, R);
-  if (!semantic) return null;
+  if (semantic) {
+    return {
+      leftReceiptId: leftId,
+      rightReceiptId: rightId,
+      path: 'SEMANTIC_RESCAN_EXACT_DUPLICATE',
+      evidence: [
+        'semantic_rescan_exact_duplicate',
+        'same_merchant_analytics_key',
+        'exact_transaction_at',
+        'exact_total',
+        'same_item_count',
+        'exact_ordered_line_amount_vector',
+        'conservative_item_name_compatibility',
+        `tax_compatibility=${semantic.taxCompatibility}`,
+      ],
+      semanticRescanEvidence: {
+        quantityConflicts: semantic.quantityConflicts,
+        nameCompatibilityNotes: semantic.nameCompatibilityNotes,
+        taxCompatibility: semantic.taxCompatibility,
+        representativeReceiptId: '',
+      },
+    };
+  }
 
-  return {
-    leftReceiptId: leftId,
-    rightReceiptId: rightId,
-    path: 'SEMANTIC_RESCAN_EXACT_DUPLICATE',
-    evidence: [
-      'semantic_rescan_exact_duplicate',
-      'same_merchant_analytics_key',
-      'exact_transaction_at',
-      'exact_total',
-      'same_item_count',
-      'exact_ordered_line_amount_vector',
-      'conservative_item_name_compatibility',
-      `tax_compatibility=${semantic.taxCompatibility}`,
-    ],
-    semanticRescanEvidence: {
-      quantityConflicts: semantic.quantityConflicts,
-      nameCompatibilityNotes: semantic.nameCompatibilityNotes,
-      taxCompatibility: semantic.taxCompatibility,
-      representativeReceiptId: '',
-    },
-  };
+  const quantityNoise = evaluateReconciledStructuralQuantityNoisePair(L, R);
+  if (quantityNoise) {
+    return {
+      leftReceiptId: leftId,
+      rightReceiptId: rightId,
+      path: 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE',
+      evidence: [
+        'reconciled_structural_quantity_noise_duplicate',
+        'same_merchant_analytics_key',
+        'exact_transaction_at',
+        'exact_total',
+        'compatible_tax_slot',
+        'same_item_count',
+        'exact_canonical_line_amount_multiset',
+        'quantity_drift_only_on_matching_line_amounts',
+        'anchored_by_identical_quantity_row',
+        ...quantityNoise.quantityConflictLineAmounts.map(
+          (amount) => `quantity_conflict_line_amount=${roundMoney(amount)}`
+        ),
+      ],
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -1270,6 +1425,9 @@ export function buildHighConfidenceDuplicateGroups(
     const hasReconciled = relations.some(
       (r) => r.path === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
     );
+    const hasQuantityNoise = relations.some(
+      (r) => r.path === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
+    );
     const hasSemantic = relations.some(
       (r) => r.path === 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
     );
@@ -1277,6 +1435,8 @@ export function buildHighConfidenceDuplicateGroups(
     let confidence: AnalysisDDuplicateConfidence;
     if (hasReconciled) {
       confidence = 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE';
+    } else if (hasQuantityNoise) {
+      confidence = 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE';
     } else if (hasSemantic) {
       confidence = 'SEMANTIC_RESCAN_EXACT_DUPLICATE';
     } else {
@@ -1431,6 +1591,39 @@ export function buildHighConfidenceDuplicateGroups(
             `observation_quantity_conflict;left_receipt_id=${c.leftReceiptId};right_receipt_id=${c.rightReceiptId};item_index=${c.itemIndex};left_quantity=${c.leftQuantity};right_quantity=${c.rightQuantity};line_amount=${roundMoney(c.lineAmount)}`
         ) ?? []),
       ];
+    } else if (confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE') {
+      const lineAmtKey = canonicalStructuralLineAmountMultiset(
+        members[0]!.canonicalStructuralBasket
+      ).join('\u001e');
+      fingerprint = [
+        'reconciled-qty-noise-v1',
+        members[0]!.merchantKey,
+        String(members[0]!.transactionAt),
+        roundMoney(members[0]!.total),
+        `n:${members[0]!.itemCount}`,
+        `lineAmt:${lineAmtKey}`,
+      ].join('|');
+      matchingEvidence = [
+        'reconciled_structural_quantity_noise_duplicate',
+        'same_merchant_analytics_key',
+        'exact_transaction_at',
+        'exact_total',
+        'compatible_tax_slot',
+        'same_item_count',
+        'exact_canonical_line_amount_multiset',
+        'quantity_drift_only_on_matching_line_amounts',
+        'anchored_by_identical_quantity_row',
+      ];
+      differenceEvidence = [
+        ...relations
+          .filter(
+            (r) => r.path === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
+          )
+          .flatMap((r) =>
+            r.evidence.filter((e) => e.startsWith('quantity_conflict_line_amount='))
+          ),
+        `representative_receipt_id=${representativeReceiptId}`,
+      ].sort();
     } else if (
       confidence === 'SEMANTIC_RESCAN_EXACT_DUPLICATE' &&
       semanticRescanEvidence
@@ -1887,7 +2080,10 @@ export function buildAnalysisDDuplicateScanAudit(
     const extras = Math.max(0, g.receiptIds.length - 1);
     if (g.confidence === 'CONTENT_EXACT_DUPLICATE') {
       contentExactDuplicateExtras += extras;
-    } else if (g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE') {
+    } else if (
+      g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' ||
+      g.confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
+    ) {
       reconciledStructuralExactDuplicateExtras += extras;
     } else if (g.confidence === 'SEMANTIC_RESCAN_EXACT_DUPLICATE') {
       semanticRescanExactDuplicateExtras += extras;

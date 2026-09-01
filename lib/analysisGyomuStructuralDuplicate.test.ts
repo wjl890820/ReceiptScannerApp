@@ -8,9 +8,8 @@ jest.mock('./db', () => ({
 import type { ReceiptRow } from './db';
 import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import {
-  areStructuralExactDuplicateSummaries,
   buildHighConfidenceDuplicateGroups,
-  buildStructuralReceiptFingerprint,
+  evaluateReconciledStructuralQuantityNoisePair,
   summarizeReceiptForDuplicateAudit,
 } from './analysisDDuplicateAudit';
 import { buildAnalysisTruthSnapshot } from './analysisTruthCycle';
@@ -20,41 +19,52 @@ import { aggregateV1MerchantSpend } from './merchantAnalytics';
 const GYOMU_TX_AT = 1786351380000;
 const NOW_MS = Date.parse('2026-09-01T12:00:00+09:00');
 
-const GYOMU_ITEM_LINES = [
-  { lineTotal: 289, quantity: 1 },
-  { lineTotal: 312, quantity: 1 },
-  { lineTotal: 356, quantity: 1 },
-  { lineTotal: 387, quantity: 1 },
-  { lineTotal: 422, quantity: 1 },
-  { lineTotal: 428, quantity: 1 },
-  { lineTotal: 450, quantity: 1 },
-  { lineTotal: 498, quantity: 1 },
-] as const;
+const GYOMU_LINE_AMOUNTS = [372, 378, 108, 313, 100, 103, 88, 1756] as const;
 
-const GYOMU_RECEIPT_IDS = [
+const GYOMU_SEVEN_RECEIPT_IDS = [
   'ACsMESsCvPCD9Vsgpmn4V',
+  'erhG0uXoyTm6vRFNCrBFe',
   'KzeeGp7HDiUxMu0D0CyzE',
   'lmg2SfKrcRGFCM1JVpOMS',
   'rbVx_AFdAfnwFywe11mR_',
   'sLOTqc_9eqHnMhJLlzQpx',
+  'auq8r7qU-EN_l38Y2xDea',
 ] as const;
 
-const GYOMU_ITEM_NAME_VARIANTS = [
-  ['牛乳', '卵10個', '白菜', '豚肉', '米2kg', '醤油', '豆腐', '納豆'],
-  ['明治牛乳', 'たまご10P', 'はくさい', 'ぶたにく', 'こめ2kg', 'しょうゆ', 'とうふ', 'なっとう'],
-  ['牛乳1L', '卵 10個入', '白菜1玉', '豚こま', '米 2kg', '醤油1本', '木綿豆腐', '納豆3P'],
-  ['ミルク', 'たまご10個', '白菜', '豚肉バラ', 'お米2kg', '醤油', '豆腐2丁', '納豆パック'],
-  ['牛乳', '卵10個', '白菜', '豚肉', '米2kg', '醤油', '豆腐', '納豆'],
+const GYOMU_BASE_NAMES = [
+  '商品A',
+  '商品B',
+  '商品C',
+  '商品D',
+  '商品E',
+  '商品F',
+  '商品G',
 ] as const;
 
-function gyomuItems(order: readonly number[], nameVariantIndex: number) {
-  const names = GYOMU_ITEM_NAME_VARIANTS[nameVariantIndex]!;
-  return order.map((lineIndex, position) => ({
-    name: names[position]!,
-    category: 'food_ingredients',
-    lineTotal: GYOMU_ITEM_LINES[lineIndex]!.lineTotal,
-    quantity: GYOMU_ITEM_LINES[lineIndex]!.quantity,
-  }));
+function gyomuRealItems(
+  order: readonly number[],
+  variant: 'standard' | 'outlier'
+) {
+  return order.map((lineIndex) => {
+    const lineTotal = GYOMU_LINE_AMOUNTS[lineIndex]!;
+    if (lineIndex === 7) {
+      return {
+        name:
+          variant === 'outlier'
+            ? '正宗生煎包'
+            : '正宗生煎包 (4個 x @439)',
+        category: 'food_ingredients',
+        lineTotal: 1756,
+        quantity: variant === 'outlier' ? 1 : 4,
+      };
+    }
+    return {
+      name: GYOMU_BASE_NAMES[lineIndex]!,
+      category: 'food_ingredients',
+      lineTotal,
+      quantity: 1,
+    };
+  });
 }
 
 function makeReceipt(args: {
@@ -93,24 +103,30 @@ function makeReceipt(args: {
   } as ReceiptRow;
 }
 
-function buildGyomuFiveScanFixture(): ReceiptRow[] {
+function buildGyomuSevenScanFixture(): ReceiptRow[] {
   const itemOrders = [
     [0, 1, 2, 3, 4, 5, 6, 7],
     [7, 6, 5, 4, 3, 2, 1, 0],
     [2, 4, 6, 0, 1, 3, 5, 7],
     [1, 3, 5, 7, 0, 2, 4, 6],
     [4, 0, 6, 2, 7, 1, 5, 3],
+    [3, 7, 1, 5, 2, 6, 0, 4],
+    [5, 2, 0, 7, 4, 1, 6, 3],
   ];
-  return GYOMU_RECEIPT_IDS.map((id, index) =>
+  return GYOMU_SEVEN_RECEIPT_IDS.map((id, index) =>
     makeReceipt({
       id,
-      merchantNormalized: index % 2 === 0 ? '業務スーパー古川店' : '業務スーパー古川',
+      merchantNormalized:
+        index % 2 === 0 ? '業務スーパー古川店' : '業務スーパー古川',
       transactionAt: GYOMU_TX_AT,
       createdAt: NOW_MS - index * 60_000,
       total: 3393,
       tax: 251,
-      taxIsKnown: index % 3 === 0 ? 0 : 1,
-      items: gyomuItems(itemOrders[index]!, index),
+      taxIsKnown: 1,
+      items: gyomuRealItems(
+        itemOrders[index]!,
+        id === 'auq8r7qU-EN_l38Y2xDea' ? 'outlier' : 'standard'
+      ),
     })
   );
 }
@@ -148,27 +164,46 @@ function buildYorkBenimaruFixture(): ReceiptRow[] {
 }
 
 describe('Gyomu structural duplicate regression', () => {
-  const gyomuScans = buildGyomuFiveScanFixture();
+  const gyomuScans = buildGyomuSevenScanFixture();
   const yorkScans = buildYorkBenimaruFixture();
   const storedReceipts = [...gyomuScans, ...yorkScans];
 
-  it('groups five Gyomu structural rescans into one high-confidence duplicate group', () => {
+  it('groups seven Gyomu rescans into one quantity-noise reconciled duplicate group', () => {
     const summaries = gyomuScans.map(summarizeReceiptForDuplicateAudit);
     const groups = buildHighConfidenceDuplicateGroups(summaries, gyomuScans);
     expect(groups).toHaveLength(1);
-    expect(groups[0]!.confidence).toBe('STRUCTURAL_EXACT_DUPLICATE');
+    expect(groups[0]!.confidence).toBe(
+      'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
+    );
     expect([...groups[0]!.receiptIds].sort()).toEqual(
-      [...GYOMU_RECEIPT_IDS].sort()
+      [...GYOMU_SEVEN_RECEIPT_IDS].sort()
     );
     expect(groups[0]!.receiptIds).toContain(groups[0]!.representativeReceiptId);
   });
 
-  it('selectAnalyticsReceipts keeps one Gyomu canonical receipt from five stored scans', () => {
+  it('reconciles auq8 outlier to the six-member group via quantity noise only', () => {
+    const outlier = gyomuScans.find(
+      (receipt) => receipt.id === 'auq8r7qU-EN_l38Y2xDea'
+    )!;
+    const member = gyomuScans.find(
+      (receipt) => receipt.id === 'ACsMESsCvPCD9Vsgpmn4V'
+    )!;
+    const outlierSummary = summarizeReceiptForDuplicateAudit(outlier);
+    const memberSummary = summarizeReceiptForDuplicateAudit(member);
+    expect(
+      evaluateReconciledStructuralQuantityNoisePair(outlierSummary, memberSummary)
+    ).toEqual({
+      quantityConflictLineAmounts: [1756],
+    });
+  });
+
+  it('selectAnalyticsReceipts keeps one Gyomu canonical receipt from seven stored scans', () => {
     const selection = selectAnalyticsReceipts(storedReceipts);
-    expect(selection.storedReceipts).toHaveLength(7);
+    expect(selection.storedReceipts).toHaveLength(9);
     expect(selection.analyticsPurchaseCandidateCount).toBe(3);
-    expect(selection.highConfidenceDuplicateExtras).toBe(4);
-    expect(selection.excludedDuplicateReceiptIds.size).toBe(4);
+    expect(selection.highConfidenceDuplicateExtras).toBe(6);
+    expect(selection.excludedDuplicateReceiptIds.size).toBe(6);
+    expect(selection.reconciledStructuralExactDuplicateExtras).toBe(6);
 
     const analyticsGyomu = selection.analyticsReceipts.filter((receipt) =>
       receipt.merchant_normalized?.includes('業務スーパー')
@@ -232,17 +267,11 @@ describe('Gyomu structural duplicate regression', () => {
       total: 3393,
       tax: 251,
       taxIsKnown: 1,
-      items: gyomuItems([0, 1, 2, 3, 4, 5, 6, 7], 0),
+      items: gyomuRealItems([0, 1, 2, 3, 4, 5, 6, 7], 'standard'),
     });
     const selection = selectAnalyticsReceipts([...gyomuScans, separateLater]);
     expect(selection.analyticsPurchaseCandidateCount).toBe(2);
-    expect(selection.excludedDuplicateReceiptIds.size).toBe(4);
-  });
-
-  it('matches structural summaries across item-order and tax-known variance', () => {
-    const left = summarizeReceiptForDuplicateAudit(gyomuScans[0]!);
-    const right = summarizeReceiptForDuplicateAudit(gyomuScans[1]!);
-    expect(areStructuralExactDuplicateSummaries(left, right)).toBe(true);
+    expect(selection.excludedDuplicateReceiptIds.size).toBe(6);
   });
 
   it('collapses exact content duplicates and mixed structural groups through one selector', () => {
@@ -273,7 +302,7 @@ describe('Gyomu structural duplicate regression', () => {
     const selection = selectAnalyticsReceipts([...gyomuScans, exactA, exactB]);
     expect(selection.analyticsPurchaseCandidateCount).toBe(2);
     expect(selection.contentExactDuplicateExtras).toBe(1);
-    expect(selection.structuralExactDuplicateExtras).toBe(4);
+    expect(selection.reconciledStructuralExactDuplicateExtras).toBe(6);
   });
 });
 

@@ -110,7 +110,10 @@ export function selectAnalyticsReceipts(
     const extras = Math.max(0, g.receiptIds.length - 1);
     if (g.confidence === 'CONTENT_EXACT_DUPLICATE') {
       contentExactDuplicateExtras += extras;
-    } else if (g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE') {
+    } else if (
+      g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' ||
+      g.confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
+    ) {
       reconciledStructuralExactDuplicateExtras += extras;
     } else {
       structuralExactDuplicateExtras += extras;
