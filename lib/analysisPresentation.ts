@@ -23,6 +23,7 @@ import {
   type AnalysisMerchantRow,
   type AnalysisSpendChangeSurface,
 } from './analysisValueSurfaces';
+import type { AnalysisPriceChangesSurface } from './analysisPriceSurfaces';
 
 export type AnalysisReleaseStage = 'empty' | 'period_empty' | 'low' | 'ready';
 
@@ -72,6 +73,8 @@ export type AnalysisReleaseViewModel = {
   categoryChange: AnalysisCategoryChangeSurface;
   /** Leading-merchant prominence change. */
   merchantChange: AnalysisMerchantChangeSurface;
+  /** Trusted product price changes from Safe Price History (or unavailable). */
+  priceChanges: AnalysisPriceChangesSurface;
   showLowDataHint: boolean;
   showSwitchToAll: boolean;
   showProSection: boolean;
@@ -309,6 +312,7 @@ export function buildAnalysisReleaseViewModel(input: {
   allSupportedCount: number;
   itemCount: number;
   insights: BuildInsightsOutput | null;
+  priceChanges?: AnalysisPriceChangesSurface;
   /** Release freeze: coming-soon Pro stays hidden. */
   proComingSoon?: boolean;
   /** Release freeze: legacy Price Radar stays hidden until Safe History migration. */
@@ -336,6 +340,10 @@ export function buildAnalysisReleaseViewModel(input: {
   const merchantChange = changesEnabled
     ? buildAnalysisMerchantChangeSurface(input.insights)
     : { status: 'unavailable' as const };
+  const priceChanges =
+    stage === 'ready'
+      ? input.priceChanges ?? { status: 'unavailable' as const }
+      : { status: 'unavailable' as const };
 
   return {
     stage,
@@ -353,6 +361,7 @@ export function buildAnalysisReleaseViewModel(input: {
     spendChange,
     categoryChange,
     merchantChange,
+    priceChanges,
     showLowDataHint: stage === 'low',
     showSwitchToAll: stage === 'period_empty',
     showProSection: shouldShowAnalysisProSection({

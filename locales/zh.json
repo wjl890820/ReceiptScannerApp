@@ -757,7 +757,11 @@
       "categoryChangeUp": "占比从 {fromPercent}% 升至 {toPercent}%（+{points} 个百分点）",
       "categoryChangeDown": "占比从 {fromPercent}% 降至 {toPercent}%（−{points} 个百分点）",
       "merchantChangeShareIncreased": "{merchant} 的支出占比从 {fromPercent}% 升至 {toPercent}%",
-      "merchantChangeCurrentShare": "占本期支出的 {share}%"
+      "merchantChangeCurrentShare": "占本期支出的 {share}%",
+      "priceChangesTitle": "购买价格变化",
+      "priceChangesContext": "基于最近两次可比购买记录",
+      "priceChangeUp": "最近一次购买价比上次高 {amount}",
+      "priceChangeDown": "最近一次购买价比上次低 {amount}"
     }
   },
   "easterEgg": {

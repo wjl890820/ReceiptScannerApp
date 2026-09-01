@@ -757,7 +757,11 @@
       "categoryChangeUp": "Share rose from {fromPercent}% to {toPercent}% (+{points} pts)",
       "categoryChangeDown": "Share fell from {fromPercent}% to {toPercent}% (−{points} pts)",
       "merchantChangeShareIncreased": "{merchant}'s share of spending rose from {fromPercent}% to {toPercent}%",
-      "merchantChangeCurrentShare": "Accounts for {share}% of spending this period"
+      "merchantChangeCurrentShare": "Accounts for {share}% of spending this period",
+      "priceChangesTitle": "Purchase price changes",
+      "priceChangesContext": "Based on the two most recent comparable purchases",
+      "priceChangeUp": "Latest purchase was {amount} higher than the previous one",
+      "priceChangeDown": "Latest purchase was {amount} lower than the previous one"
     }
   },
   "easterEgg": {

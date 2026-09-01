@@ -23,6 +23,8 @@ import { listReceiptsForAnalysis } from '@/lib/db';
 import {
   buildAnalysisReleaseViewModel,
 } from '@/lib/analysisPresentation';
+import { loadAnalysisTrustedPriceChangesSurface } from '@/lib/analysisPriceLoader';
+import type { AnalysisPriceChangesSurface } from '@/lib/analysisPriceSurfaces';
 import {
   buildAnalysisAllTimeStats,
   buildAnalysisTruthSnapshot,
@@ -48,16 +50,20 @@ export default function AnalysisScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [truthCycle, setTruthCycle] = useState<AnalysisLoadedTruth | null>(null);
+  const [priceChanges, setPriceChanges] = useState<AnalysisPriceChangesSurface>({
+    status: 'unavailable',
+  });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
 
   const loadReceipts = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
+    let analyticsReceipts: AnalysisLoadedTruth['receipts'] | null = null;
     try {
-      setLoading(true);
-      setLoadError(false);
       const allReceipts = await listReceiptsForAnalysis();
-      const analyticsReceipts =
+      analyticsReceipts =
         selectAnalyticsReceipts(allReceipts).analyticsReceipts;
       setTruthCycle({
         receipts: analyticsReceipts,
@@ -66,8 +72,15 @@ export default function AnalysisScreen() {
     } catch (e) {
       console.error('加载收据失败:', e);
       setLoadError(true);
+      setPriceChanges({ status: 'unavailable' });
     } finally {
       setLoading(false);
+    }
+
+    if (analyticsReceipts) {
+      const priceChangesSurface =
+        await loadAnalysisTrustedPriceChangesSurface(analyticsReceipts);
+      setPriceChanges(priceChangesSurface);
     }
   }, []);
 
@@ -101,10 +114,11 @@ export default function AnalysisScreen() {
         allSupportedCount: allStats?.supportedReceiptCount ?? 0,
         itemCount: truthSnapshot?.itemCount ?? 0,
         insights: truthSnapshot?.insights ?? null,
+        priceChanges,
         proComingSoon: true,
         priceRadarMigrated: false,
       }),
-    [truthSnapshot, allStats?.supportedReceiptCount]
+    [truthSnapshot, allStats?.supportedReceiptCount, priceChanges]
   );
 
   const renderInsightBody = () => {
@@ -387,6 +401,39 @@ export default function AnalysisScreen() {
               </Text>
             )}
           </View>
+
+          {viewModel.priceChanges.status === 'available' ? (
+            <>
+              <SectionTitle title={t('analysis.release.priceChangesTitle')} />
+              <View style={styles.changesPanel}>
+                <Text style={styles.changesCompared}>
+                  {t('analysis.release.priceChangesContext')}
+                </Text>
+                {viewModel.priceChanges.items.map((row) => (
+                  <View
+                    key={`${row.targetType}-${row.targetKey}`}
+                    style={styles.changeFactBlock}
+                  >
+                    <Text style={styles.changeFactLabel}>{row.displayName}</Text>
+                    <Text style={styles.changeFactSecondary}>
+                      {row.direction === 'up'
+                        ? t('analysis.release.priceChangeUp', {
+                            amount: formatJPY(row.deltaAmount),
+                          })
+                        : t('analysis.release.priceChangeDown', {
+                            amount: formatJPY(row.deltaAmount),
+                          })}
+                    </Text>
+                    {row.promoBodyKey ? (
+                      <Text style={styles.changeCompared}>
+                        {t(row.promoBodyKey)}
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : null}
 
           {viewModel.insight ? (
             <>

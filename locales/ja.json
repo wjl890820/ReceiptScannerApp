@@ -757,7 +757,11 @@
       "categoryChangeUp": "割合が {fromPercent}% から {toPercent}% に上昇（+{points}ポイント）",
       "categoryChangeDown": "割合が {fromPercent}% から {toPercent}% に低下（−{points}ポイント）",
       "merchantChangeShareIncreased": "{merchant} の支出割合は {fromPercent}% から {toPercent}% に上昇しました",
-      "merchantChangeCurrentShare": "今期の支出の {share}% を占めています"
+      "merchantChangeCurrentShare": "今期の支出の {share}% を占めています",
+      "priceChangesTitle": "購入価格の変化",
+      "priceChangesContext": "直近2回の比較可能な購入記録に基づきます",
+      "priceChangeUp": "直近の購入価格は前回より{amount}高い",
+      "priceChangeDown": "直近の購入価格は前回より{amount}安い"
     }
   },
   "easterEgg": {
