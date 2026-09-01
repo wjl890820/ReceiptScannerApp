@@ -115,6 +115,12 @@ export type AnalysisDDuplicateReceiptSummary = {
   orderedNameCanonicals: string[];
   /** Sum of orderedQtyAmountVector line amounts. */
   merchandiseSum: number;
+  /** Normalized currency for structural duplicate guards (explicit only). */
+  currency: string | null;
+  /** Fail-closed eligibility for order-insensitive structural duplicate matching. */
+  structuralDuplicateEligible: boolean;
+  /** Canonical raw-validated qty/amount basket for structural duplicate matching. */
+  canonicalStructuralBasket: AnalysisDQtyAmountRow[];
 };
 
 export type AnalysisDReconciledStructuralEvidence = {
@@ -361,6 +367,94 @@ function readItemQuantity(item: Record<string, unknown>): number {
   return 1;
 }
 
+function readRawItemQuantity(item: Record<string, unknown>): number | null {
+  const q = item.quantity;
+  if (typeof q !== 'number' || !Number.isFinite(q) || q <= 0) return null;
+  return q;
+}
+
+function readRawItemLineAmount(item: Record<string, unknown>): number | null {
+  const lineTotal = item.lineTotal;
+  if (typeof lineTotal === 'number' && Number.isFinite(lineTotal) && lineTotal > 0) {
+    return lineTotal;
+  }
+  const line_total = item.line_total;
+  if (
+    typeof line_total === 'number' &&
+    Number.isFinite(line_total) &&
+    line_total > 0
+  ) {
+    return line_total;
+  }
+  return null;
+}
+
+/** Explicit normalized currency for structural duplicate matching (no blank-as-JPY). */
+export function normalizeStructuralDuplicateCurrency(
+  value: unknown
+): string | null {
+  if (value == null) return null;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed === '¥' || trimmed === '￥') return 'JPY';
+  return trimmed.toUpperCase();
+}
+
+export function isExplicitStructuralDuplicateJpyReceipt(
+  receipt: Pick<ReceiptRow, 'currency'>
+): boolean {
+  return normalizeStructuralDuplicateCurrency(receipt.currency) === 'JPY';
+}
+
+function isValidStructuralDuplicateTotal(total: unknown): boolean {
+  const value = Number(total);
+  return Number.isFinite(value) && value > 0;
+}
+
+/** Raw basket elements without quantity/amount coercion defaults. */
+export function extractRawStructuralBasketElements(
+  receipt: ReceiptRow
+): AnalysisDQtyAmountRow[] | null {
+  const items = getReceiptItems(receipt);
+  if (items.length === 0) return null;
+  const rows: AnalysisDQtyAmountRow[] = [];
+  for (const raw of items) {
+    const item = asItemRecord(raw);
+    const quantity = readRawItemQuantity(item);
+    const lineAmount = readRawItemLineAmount(item);
+    if (quantity == null || lineAmount == null) return null;
+    rows.push({ quantity, lineAmount });
+  }
+  return rows;
+}
+
+export function assessStructuralDuplicateReceiptEligibility(receipt: ReceiptRow): {
+  eligible: boolean;
+  currency: string | null;
+  canonicalStructuralBasket: AnalysisDQtyAmountRow[];
+} {
+  const currency = normalizeStructuralDuplicateCurrency(receipt.currency);
+  if (currency !== 'JPY') {
+    return { eligible: false, currency, canonicalStructuralBasket: [] };
+  }
+  if (!hasExactTransactionTime(receipt)) {
+    return { eligible: false, currency, canonicalStructuralBasket: [] };
+  }
+  if (!isValidStructuralDuplicateTotal(receipt.total)) {
+    return { eligible: false, currency, canonicalStructuralBasket: [] };
+  }
+  const rawBasket = extractRawStructuralBasketElements(receipt);
+  if (rawBasket == null || rawBasket.length === 0) {
+    return { eligible: false, currency, canonicalStructuralBasket: [] };
+  }
+  const canonicalStructuralBasket = canonicalStructuralQtyAmountVector(rawBasket);
+  if (canonicalStructuralBasket.length === 0) {
+    return { eligible: false, currency, canonicalStructuralBasket: [] };
+  }
+  return { eligible: true, currency, canonicalStructuralBasket };
+}
+
 function roundMoney(n: number): string {
   if (!Number.isFinite(n)) return '0.00';
   return (Math.round(n * 100) / 100).toFixed(2);
@@ -369,7 +463,9 @@ function roundMoney(n: number): string {
 function taxSlot(receipt: ReceiptRow): { known: boolean; value: number | null } {
   const known = receipt.tax_is_known === 1;
   if (!known) return { known: false, value: null };
-  const tax = Number(receipt.tax);
+  const raw = receipt.tax;
+  if (raw == null) return { known: true, value: null };
+  const tax = typeof raw === 'number' ? raw : Number(raw);
   return { known: true, value: Number.isFinite(tax) ? tax : null };
 }
 
@@ -431,11 +527,12 @@ export function buildExactReceiptFingerprint(
 export function buildStructuralReceiptFingerprint(
   receipt: ReceiptRow
 ): string | null {
-  if (!hasExactTransactionTime(receipt)) return null;
+  const eligibility = assessStructuralDuplicateReceiptEligibility(receipt);
+  if (!eligibility.eligible) return null;
   const merchant = merchantAnalyticsKey(receipt);
   const tax = taxSlot(receipt);
-  const items = extractDuplicateItemEvidence(receipt);
-  const itemPart = items
+  const canonicalRows = eligibility.canonicalStructuralBasket;
+  const itemPart = canonicalRows
     .map((it) => `${it.quantity}\u001f${roundMoney(it.lineAmount)}`)
     .join('\u001e');
   return [
@@ -444,7 +541,7 @@ export function buildStructuralReceiptFingerprint(
     String(receipt.transaction_at),
     roundMoney(Number(receipt.total) || 0),
     tax.known ? `tax:${roundMoney(tax.value ?? 0)}` : 'tax:unknown',
-    `n:${items.length}`,
+    `n:${canonicalRows.length}`,
     `amt:${itemPart}`,
   ].join('|');
 }
@@ -454,6 +551,7 @@ export function summarizeReceiptForDuplicateAudit(
 ): AnalysisDDuplicateReceiptSummary {
   const items = extractDuplicateItemEvidence(receipt);
   const tax = taxSlot(receipt);
+  const structuralEligibility = assessStructuralDuplicateReceiptEligibility(receipt);
   const contentFingerprint = buildContentReceiptFingerprint(receipt);
   const orderedQtyAmountVector = items.map((it) => ({
     quantity: it.quantity,
@@ -486,6 +584,9 @@ export function summarizeReceiptForDuplicateAudit(
     orderedQtyAmountVector,
     orderedNameCanonicals: items.map((it) => it.nameCanonical),
     merchandiseSum,
+    currency: structuralEligibility.currency,
+    structuralDuplicateEligible: structuralEligibility.eligible,
+    canonicalStructuralBasket: structuralEligibility.canonicalStructuralBasket,
   };
 }
 
@@ -523,6 +624,87 @@ function qtyAmountVectorEquals(
     if (!qtyAmountRowEquals(a[i]!, b[i]!)) return false;
   }
   return true;
+}
+
+/** Canonical order-insensitive qty/amount vector for structural duplicate evidence. */
+export function canonicalStructuralQtyAmountVector(
+  rows: readonly AnalysisDQtyAmountRow[]
+): AnalysisDQtyAmountRow[] {
+  return [...rows].sort((left, right) => {
+    const leftAmount = roundMoney(left.lineAmount);
+    const rightAmount = roundMoney(right.lineAmount);
+    if (leftAmount !== rightAmount) {
+      return leftAmount.localeCompare(rightAmount);
+    }
+    return left.quantity - right.quantity;
+  });
+}
+
+function areStructuralTaxSlotsCompatible(
+  left: AnalysisDDuplicateReceiptSummary,
+  right: AnalysisDDuplicateReceiptSummary
+): boolean {
+  const leftKnownValid =
+    left.taxKnown && left.tax != null && Number.isFinite(left.tax);
+  const rightKnownValid =
+    right.taxKnown && right.tax != null && Number.isFinite(right.tax);
+
+  if (left.taxKnown && !leftKnownValid) return false;
+  if (right.taxKnown && !rightKnownValid) return false;
+
+  if (leftKnownValid && rightKnownValid) {
+    return moneyEquals(left.tax!, right.tax!);
+  }
+  if (leftKnownValid && !right.taxKnown) return true;
+  if (!left.taxKnown && rightKnownValid) return true;
+  if (!left.taxKnown && !right.taxKnown) return true;
+
+  return false;
+}
+
+export function hasValidKnownStructuralDuplicateTax(
+  summary: AnalysisDDuplicateReceiptSummary
+): boolean {
+  return (
+    summary.taxKnown && summary.tax != null && Number.isFinite(summary.tax)
+  );
+}
+
+/**
+ * Structural exact duplicate gate beyond raw fingerprint equality.
+ * Handles OCR item-order variance and one-sided unknown tax on rescans.
+ */
+export function areStructuralExactDuplicateSummaries(
+  left: AnalysisDDuplicateReceiptSummary,
+  right: AnalysisDDuplicateReceiptSummary
+): boolean {
+  if (!left.structuralDuplicateEligible || !right.structuralDuplicateEligible) {
+    return false;
+  }
+  if (!left.currency || left.currency !== right.currency) return false;
+  if (!left.hasExactTransactionTime || !right.hasExactTransactionTime) return false;
+  if (!left.merchantKey || left.merchantKey !== right.merchantKey) return false;
+  if (left.transactionAt == null || left.transactionAt !== right.transactionAt) {
+    return false;
+  }
+  if (
+    !isValidStructuralDuplicateTotal(left.total) ||
+    !isValidStructuralDuplicateTotal(right.total)
+  ) {
+    return false;
+  }
+  if (!moneyEquals(left.total, right.total)) return false;
+  if (
+    left.canonicalStructuralBasket.length === 0 ||
+    right.canonicalStructuralBasket.length === 0
+  ) {
+    return false;
+  }
+  if (!areStructuralTaxSlotsCompatible(left, right)) return false;
+  return qtyAmountVectorEquals(
+    left.canonicalStructuralBasket,
+    right.canonicalStructuralBasket
+  );
 }
 
 function sumQtyAmountVector(rows: readonly AnalysisDQtyAmountRow[]): number {
@@ -933,22 +1115,31 @@ function buildPairRelation(
     };
   }
 
-  if (
-    L.structuralFingerprint &&
-    L.structuralFingerprint === R.structuralFingerprint
-  ) {
+  if (areStructuralExactDuplicateSummaries(L, R)) {
+    const identicalFingerprint =
+      Boolean(L.structuralFingerprint) &&
+      L.structuralFingerprint === R.structuralFingerprint;
     return {
       leftReceiptId: leftId,
       rightReceiptId: rightId,
       path: 'STRUCTURAL_EXACT_DUPLICATE',
-      evidence: [
-        'identical_structural_fingerprint',
-        'merchant',
-        'transaction_at',
-        'total',
-        'tax_slot',
-        'ordered_qty_amount_structure',
-      ],
+      evidence: identicalFingerprint
+        ? [
+            'identical_structural_fingerprint',
+            'merchant',
+            'transaction_at',
+            'total',
+            'tax_slot',
+            'ordered_qty_amount_structure',
+          ]
+        : [
+            'canonical_structural_qty_amount_match',
+            'merchant',
+            'transaction_at',
+            'total',
+            'compatible_tax_slot',
+            'ordered_qty_amount_structure',
+          ],
     };
   }
 
