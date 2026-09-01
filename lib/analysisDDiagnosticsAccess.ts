@@ -412,6 +412,41 @@ export async function shareAnalysisDJsonFile(
 }
 
 
+/** Filename for Gyomu ¥3,393 cohort forensic export (local share only). */
+export function buildAnalysisDGyomuCohortForensicsFilename(
+  nowMs: number = Date.now()
+): string {
+  const d = new Date(nowMs);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `analysis-d-gyomu-3393-cohort-forensics-${stamp}.json`;
+}
+
+export type WriteAnalysisDGyomuCohortForensicsExportFileDeps = {
+  json: string;
+  cacheDirectory: string | null | undefined;
+  writeAsStringAsync: (fileUri: string, contents: string) => Promise<void>;
+  nowMs?: number;
+};
+
+/**
+ * Write a Gyomu cohort forensic JSON payload to the cache directory for manual share.
+ * Does not upload or mutate domain data.
+ */
+export async function writeAnalysisDGyomuCohortForensicsExportFile(
+  deps: WriteAnalysisDGyomuCohortForensicsExportFileDeps
+): Promise<{ fileUri: string; filename: string; json: string }> {
+  if (!deps.cacheDirectory) {
+    throw new Error(
+      'Cache directory unavailable; cannot export Gyomu cohort forensics JSON file.'
+    );
+  }
+  const filename = buildAnalysisDGyomuCohortForensicsFilename(deps.nowMs);
+  const fileUri = `${deps.cacheDirectory}${filename}`;
+  await deps.writeAsStringAsync(fileUri, deps.json);
+  return { fileUri, filename, json: deps.json };
+}
+
 /** Filename for known Costco re-scan forensic export (local share only). */
 export function buildAnalysisDRescanForensicsFilename(
   nowMs: number = Date.now()

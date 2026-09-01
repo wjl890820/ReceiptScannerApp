@@ -28,11 +28,13 @@ import {
   buildAnalysisDSharePayload,
   shareAnalysisDJsonFile,
   writeAnalysisDJsonExportFile,
+  writeAnalysisDGyomuCohortForensicsExportFile,
   writeAnalysisDRescanForensicsExportFile,
   type AnalysisDDiagnosticsViewModel,
 } from '@/lib/analysisDDiagnosticsAccess';
 import {
   generateAnalysisDDiagnosticsBundle,
+  generateAnalysisDGyomuCohortForensicsExport,
   generateAnalysisDRescanForensicsExport,
 } from '@/lib/analysisDDiagnosticsGenerate';
 import { isAnalysisDDiagnosticsEnabled } from '@/lib/env';
@@ -178,6 +180,39 @@ export default function AnalysisDDiagnosticsScreen() {
     ]);
   }, [report, duplicateScanAudit, storedScanBaseline, selectionMeta]);
 
+  const onExportGyomuCohortForensics = useCallback(async () => {
+    Alert.alert('Private data', ANALYSIS_D_EXPORT_PRIVACY_WARNING, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Share forensics JSON',
+        onPress: async () => {
+          try {
+            setLoading(true);
+            const { json } = await generateAnalysisDGyomuCohortForensicsExport();
+            const written = await writeAnalysisDGyomuCohortForensicsExportFile({
+              json,
+              cacheDirectory: FileSystem.cacheDirectory,
+              writeAsStringAsync: FileSystem.writeAsStringAsync,
+            });
+            await shareAnalysisDJsonFile({
+              fileUri: written.fileUri,
+              filename: written.filename,
+              isAvailableAsync: Sharing.isAvailableAsync,
+              shareAsync: Sharing.shareAsync,
+            });
+          } catch (e: unknown) {
+            Alert.alert(
+              'Gyomu cohort forensics export failed',
+              e instanceof Error ? e.message : String(e)
+            );
+          } finally {
+            setLoading(false);
+          }
+        },
+      },
+    ]);
+  }, []);
+
   const onExportRescanForensics = useCallback(async () => {
     Alert.alert('Private data', ANALYSIS_D_EXPORT_PRIVACY_WARNING, [
       { text: 'Cancel', style: 'cancel' },
@@ -269,12 +304,23 @@ export default function AnalysisDDiagnosticsScreen() {
         <Pressable
           style={[styles.buttonSecondary, loading && styles.buttonDisabled]}
           disabled={loading}
-          onPress={() => void onExportRescanForensics()}
+          onPress={() => void onExportGyomuCohortForensics()}
           accessibilityRole="button"
-          accessibilityLabel="Export known rescan forensics"
+          accessibilityLabel="Export Gyomu 3393 cohort forensics"
         >
           <Text style={styles.buttonSecondaryText}>
-            Export known rescan forensics
+            Export Gyomu ¥3,393 cohort forensics
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.buttonSecondary, loading && styles.buttonDisabled]}
+          disabled={loading}
+          onPress={() => void onExportRescanForensics()}
+          accessibilityRole="button"
+          accessibilityLabel="Export known Costco rescan forensics"
+        >
+          <Text style={styles.buttonSecondaryText}>
+            Export Costco ¥9,534 rescan forensics
           </Text>
         </Pressable>
 <Pressable

@@ -15,6 +15,11 @@ import {
 import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import { listReceipts, type ReceiptRow } from './db';
 import {
+  buildAnalysisDGyomuCohortForensicsExport,
+  serializeAnalysisDGyomuCohortForensicsExport,
+  type AnalysisDGyomuCohortForensicsExport,
+} from './analysisDGyomuCohortForensics';
+import {
   buildAnalysisDRescanForensicsExport,
   serializeAnalysisDRescanForensicsExport,
   type AnalysisDRescanForensicsExport,
@@ -101,6 +106,21 @@ export async function generateAnalysisDReportFromLocalReceipts(
 ): Promise<AnalysisDReport> {
   const bundle = await generateAnalysisDDiagnosticsBundle(deps);
   return bundle.productionAnalytics;
+}
+
+/**
+ * Load local receipts and build the Gyomu ¥3,393 full-cohort forensic export.
+ * Read-only; inject listReceiptsFn in tests.
+ */
+export async function generateAnalysisDGyomuCohortForensicsExport(
+  deps: AnalysisDGenerateDeps = {}
+): Promise<{ payload: AnalysisDGyomuCohortForensicsExport; json: string }> {
+  const { receipts, nowMs } = await loadLocalReceipts(deps);
+  const payload = buildAnalysisDGyomuCohortForensicsExport({ receipts, nowMs });
+  return {
+    payload,
+    json: serializeAnalysisDGyomuCohortForensicsExport(payload),
+  };
 }
 
 /**
