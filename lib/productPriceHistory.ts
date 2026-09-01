@@ -1445,6 +1445,41 @@ export function buildObservations(
     .observations;
 }
 
+export function buildMerchantProductPriceHistoryFromRows(
+  merchantProductId: string,
+  rows: readonly ProductPriceHistoryRow[],
+  options: BuildProductPriceHistoryOptions = {}
+): ProductPriceHistoryResult {
+  const rowList = [...rows];
+  const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rowList);
+  const canonicalDuplicateSelectionApplied =
+    options.canonicalDuplicateSelectionApplied === true;
+  const identityByRowKey = buildRowIdentityMetadataByKey(rowList);
+  const target = { type: 'merchant_product' as const, key: merchantProductId };
+  const { tryBuildIdentityPriceHistoryForRows } =
+    require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
+  const identityView = tryBuildIdentityPriceHistoryForRows(
+    rowList,
+    merchantProductId
+  );
+  if (!identityView || identityView.merchantProductId !== merchantProductId) {
+    return failClosedRequestedMerchantProductTargetResult(
+      target,
+      rowList,
+      cache,
+      canonicalDuplicateSelectionApplied
+    );
+  }
+  return applyIdentityG3Gates(
+    target,
+    rowList,
+    identityView,
+    cache,
+    identityByRowKey,
+    canonicalDuplicateSelectionApplied
+  );
+}
+
 export function buildProductPriceHistory(
   target: ProductDetailTarget,
   rows: ProductPriceHistoryRow[],
@@ -1455,6 +1490,10 @@ export function buildProductPriceHistory(
     options.canonicalDuplicateSelectionApplied === true;
   const identityByRowKey = buildRowIdentityMetadataByKey(rows);
   const totalOccurrenceCount = rows.length;
+
+  if (target.type === 'merchant_product') {
+    return buildMerchantProductPriceHistoryFromRows(target.key, rows, options);
+  }
 
   if (target.type === 'occurrence') {
     const observations = buildObservations(rows, cache);

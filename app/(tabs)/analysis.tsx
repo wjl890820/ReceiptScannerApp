@@ -305,102 +305,106 @@ export default function AnalysisScreen() {
             </>
           ) : null}
 
-          <SectionTitle title={t('analysis.release.changesTitle')} />
-          <View style={styles.changesPanel}>
-            {viewModel.spendChange.status === 'available' ||
-            viewModel.categoryChange.status === 'available' ||
-            viewModel.merchantChange.status === 'available' ? (
-              <>
-                {viewModel.spendChange.status === 'available' ? (
-                  <Text style={styles.changesCompared}>
-                    {t('analysis.release.changesCompared', {
-                      days: viewModel.spendChange.periodDays,
-                    })}
+          {timeRange !== 'all' ? (
+            <>
+              <SectionTitle title={t('analysis.release.changesTitle')} />
+              <View style={styles.changesPanel}>
+                {viewModel.spendChange.status === 'available' ||
+                viewModel.categoryChange.status === 'available' ||
+                viewModel.merchantChange.status === 'available' ? (
+                  <>
+                    {viewModel.spendChange.status === 'available' ? (
+                      <Text style={styles.changesCompared}>
+                        {t('analysis.release.changesCompared', {
+                          days: viewModel.spendChange.periodDays,
+                        })}
+                      </Text>
+                    ) : null}
+                    {viewModel.spendChange.status === 'available' ? (
+                      <Text style={styles.changeFactPrimary}>
+                        {viewModel.spendChange.direction === 'up'
+                          ? t('analysis.release.spendChangeLineUp', {
+                              amount: formatJPY(
+                                viewModel.spendChange.absoluteDelta
+                              ),
+                              percent:
+                                viewModel.spendChange.percentDelta == null
+                                  ? ''
+                                  : t('analysis.release.spendChangePercent', {
+                                      percent: Math.abs(
+                                        viewModel.spendChange.percentDelta
+                                      ),
+                                    }),
+                            })
+                          : viewModel.spendChange.direction === 'down'
+                            ? t('analysis.release.spendChangeLineDown', {
+                                amount: formatJPY(
+                                  viewModel.spendChange.absoluteDelta
+                                ),
+                                percent:
+                                  viewModel.spendChange.percentDelta == null
+                                    ? ''
+                                    : t('analysis.release.spendChangePercent', {
+                                        percent: Math.abs(
+                                          viewModel.spendChange.percentDelta
+                                        ),
+                                      }),
+                              })
+                            : t('analysis.release.spendChangeLineFlat')}
+                      </Text>
+                    ) : null}
+                    {viewModel.categoryChange.status === 'available' ? (
+                      <View style={styles.changeFactBlock}>
+                        <Text style={styles.changeFactLabel}>
+                          {getCategoryLabel(viewModel.categoryChange.category)}
+                        </Text>
+                        <Text style={styles.changeFactSecondary}>
+                          {viewModel.categoryChange.direction === 'up'
+                            ? t('analysis.release.categoryChangeUp', {
+                                fromPercent:
+                                  viewModel.categoryChange.fromPercent,
+                                toPercent: viewModel.categoryChange.toPercent,
+                                points:
+                                  viewModel.categoryChange.percentagePointChange,
+                              })
+                            : t('analysis.release.categoryChangeDown', {
+                                fromPercent:
+                                  viewModel.categoryChange.fromPercent,
+                                toPercent: viewModel.categoryChange.toPercent,
+                                points:
+                                  viewModel.categoryChange.percentagePointChange,
+                              })}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {viewModel.merchantChange.status === 'available' ? (
+                      <View style={styles.changeFactBlock}>
+                        <Text style={styles.changeFactLabel}>
+                          {viewModel.merchantChange.displayName}
+                        </Text>
+                        <Text style={styles.changeFactSecondary}>
+                          {viewModel.merchantChange.kind === 'share_increased'
+                            ? t('analysis.release.merchantChangeShareIncreased', {
+                                merchant: viewModel.merchantChange.displayName,
+                                fromPercent:
+                                  viewModel.merchantChange.previousShare,
+                                toPercent: viewModel.merchantChange.currentShare,
+                              })
+                            : t('analysis.release.merchantChangeCurrentShare', {
+                                share: viewModel.merchantChange.currentShare,
+                              })}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </>
+                ) : (
+                  <Text style={styles.changeUnavailable}>
+                    {t('analysis.release.changesUnavailable')}
                   </Text>
-                ) : null}
-                {viewModel.spendChange.status === 'available' ? (
-                  <Text style={styles.changeFactPrimary}>
-                    {viewModel.spendChange.direction === 'up'
-                      ? t('analysis.release.spendChangeLineUp', {
-                          amount: formatJPY(
-                            viewModel.spendChange.absoluteDelta
-                          ),
-                          percent:
-                            viewModel.spendChange.percentDelta == null
-                              ? ''
-                              : t('analysis.release.spendChangePercent', {
-                                  percent: Math.abs(
-                                    viewModel.spendChange.percentDelta
-                                  ),
-                                }),
-                        })
-                      : viewModel.spendChange.direction === 'down'
-                        ? t('analysis.release.spendChangeLineDown', {
-                            amount: formatJPY(
-                              viewModel.spendChange.absoluteDelta
-                            ),
-                            percent:
-                              viewModel.spendChange.percentDelta == null
-                                ? ''
-                                : t('analysis.release.spendChangePercent', {
-                                    percent: Math.abs(
-                                      viewModel.spendChange.percentDelta
-                                    ),
-                                  }),
-                          })
-                        : t('analysis.release.spendChangeLineFlat')}
-                  </Text>
-                ) : null}
-                {viewModel.categoryChange.status === 'available' ? (
-                  <View style={styles.changeFactBlock}>
-                    <Text style={styles.changeFactLabel}>
-                      {getCategoryLabel(viewModel.categoryChange.category)}
-                    </Text>
-                    <Text style={styles.changeFactSecondary}>
-                      {viewModel.categoryChange.direction === 'up'
-                        ? t('analysis.release.categoryChangeUp', {
-                            fromPercent:
-                              viewModel.categoryChange.fromPercent,
-                            toPercent: viewModel.categoryChange.toPercent,
-                            points:
-                              viewModel.categoryChange.percentagePointChange,
-                          })
-                        : t('analysis.release.categoryChangeDown', {
-                            fromPercent:
-                              viewModel.categoryChange.fromPercent,
-                            toPercent: viewModel.categoryChange.toPercent,
-                            points:
-                              viewModel.categoryChange.percentagePointChange,
-                          })}
-                    </Text>
-                  </View>
-                ) : null}
-                {viewModel.merchantChange.status === 'available' ? (
-                  <View style={styles.changeFactBlock}>
-                    <Text style={styles.changeFactLabel}>
-                      {viewModel.merchantChange.displayName}
-                    </Text>
-                    <Text style={styles.changeFactSecondary}>
-                      {viewModel.merchantChange.kind === 'share_increased'
-                        ? t('analysis.release.merchantChangeShareIncreased', {
-                            merchant: viewModel.merchantChange.displayName,
-                            fromPercent:
-                              viewModel.merchantChange.previousShare,
-                            toPercent: viewModel.merchantChange.currentShare,
-                          })
-                        : t('analysis.release.merchantChangeCurrentShare', {
-                            share: viewModel.merchantChange.currentShare,
-                          })}
-                    </Text>
-                  </View>
-                ) : null}
-              </>
-            ) : (
-              <Text style={styles.changeUnavailable}>
-                {t('analysis.release.changesUnavailable')}
-              </Text>
-            )}
-          </View>
+                )}
+              </View>
+            </>
+          ) : null}
 
           {viewModel.priceChanges.status === 'available' ? (
             <>
