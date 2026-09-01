@@ -14,8 +14,12 @@ import { V1_SPENDING_PRODUCT_CATEGORIES } from './productCategory';
 import type { WeeklyMonthlyStats, TimeRange } from './statsCalculator';
 import type { BuildInsightsOutput, StoryOutput } from './buildInsights';
 import {
+  buildAnalysisCategoryChangeSurface,
   buildAnalysisMerchantSurface,
+  buildAnalysisMerchantChangeSurface,
   buildAnalysisSpendChangeSurface,
+  type AnalysisCategoryChangeSurface,
+  type AnalysisMerchantChangeSurface,
   type AnalysisMerchantRow,
   type AnalysisSpendChangeSurface,
 } from './analysisValueSurfaces';
@@ -64,6 +68,10 @@ export type AnalysisReleaseViewModel = {
   merchants: AnalysisMerchantRow[];
   /** Matched-period spend change from buildInsights.changes (or unavailable). */
   spendChange: AnalysisSpendChangeSurface;
+  /** Top-category composition share change (percentage points). */
+  categoryChange: AnalysisCategoryChangeSurface;
+  /** Leading-merchant prominence change. */
+  merchantChange: AnalysisMerchantChangeSurface;
   showLowDataHint: boolean;
   showSwitchToAll: boolean;
   showProSection: boolean;
@@ -318,10 +326,16 @@ export function buildAnalysisReleaseViewModel(input: {
     stage === 'low' || stage === 'ready'
       ? buildAnalysisMerchantSurface(input.periodStats, 3)
       : [];
-  const spendChange =
-    stage === 'low' || stage === 'ready'
-      ? buildAnalysisSpendChangeSurface(input.insights)
-      : { status: 'unavailable' as const };
+  const changesEnabled = stage === 'ready';
+  const spendChange = changesEnabled
+    ? buildAnalysisSpendChangeSurface(input.insights)
+    : { status: 'unavailable' as const };
+  const categoryChange = changesEnabled
+    ? buildAnalysisCategoryChangeSurface(input.insights)
+    : { status: 'unavailable' as const };
+  const merchantChange = changesEnabled
+    ? buildAnalysisMerchantChangeSurface(input.insights)
+    : { status: 'unavailable' as const };
 
   return {
     stage,
@@ -337,6 +351,8 @@ export function buildAnalysisReleaseViewModel(input: {
     insight: buildAnalysisInsightPresentation(stage, input.periodStats, story),
     merchants,
     spendChange,
+    categoryChange,
+    merchantChange,
     showLowDataHint: stage === 'low',
     showSwitchToAll: stage === 'period_empty',
     showProSection: shouldShowAnalysisProSection({

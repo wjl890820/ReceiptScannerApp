@@ -747,7 +747,17 @@
       "spendChangeDown": "{amount}減少{percent}",
       "spendChangeFlat": "前の期間とほぼ同じ",
       "spendChangePercent": "（{percent}%）",
-      "spendChangeUnavailable": "比較できるデータがまだ足りません。"
+      "spendChangeUnavailable": "比較できるデータがまだ足りません。",
+      "changesTitle": "今回の変化",
+      "changesCompared": "前の{days}日間と比較",
+      "changesUnavailable": "現時点では、信頼できる比較対象の記録がありません。",
+      "spendChangeLineUp": "支出が{amount}増加{percent}",
+      "spendChangeLineDown": "支出が{amount}減少{percent}",
+      "spendChangeLineFlat": "支出は前の期間とほぼ同じ",
+      "categoryChangeUp": "割合が {fromPercent}% から {toPercent}% に上昇（+{points}ポイント）",
+      "categoryChangeDown": "割合が {fromPercent}% から {toPercent}% に低下（−{points}ポイント）",
+      "merchantChangeShareIncreased": "{merchant} の支出割合は {fromPercent}% から {toPercent}% に上昇しました",
+      "merchantChangeCurrentShare": "今期の支出の {share}% を占めています"
     }
   },
   "easterEgg": {

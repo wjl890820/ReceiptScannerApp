@@ -209,13 +209,16 @@ function buildChanges(
       const diff = pctNow - pctPrev;
       if (Math.abs(diff) >= 1) {
         const key = diff >= 0 ? 'analysisV2.changes.categoryShareUp' : 'analysisV2.changes.categoryShareDown';
+        const displayFrom = Math.round(pctPrev);
+        const displayTo = Math.round(pctNow);
+        const displayPointChange = Math.abs(displayTo - displayFrom);
         out.push({
           changeKey: key,
           changeParams: {
             cat: topNow.category,
-            change: Math.abs(Math.round(diff)),
-            from: Math.round(pctPrev),
-            to: Math.round(pctNow),
+            change: displayPointChange,
+            from: displayFrom,
+            to: displayTo,
           },
         });
       }
@@ -231,12 +234,21 @@ function buildChanges(
     if (sameMerchant && shareNow >= 20 && shareNow - sharePrev >= 5) {
       out.push({
         changeKey: 'analysisV2.changes.merchantMore',
-        changeParams: { merchant: topMNow.merchant },
+        changeParams: {
+          merchant: topMNow.merchant,
+          kind: 'share_increased',
+          currentShare: Math.round(shareNow),
+          previousShare: Math.round(sharePrev),
+        },
       });
     } else if (!sameMerchant && shareNow >= 15) {
       out.push({
         changeKey: 'analysisV2.changes.merchantMore',
-        changeParams: { merchant: topMNow.merchant },
+        changeParams: {
+          merchant: topMNow.merchant,
+          kind: 'current_period_prominent',
+          currentShare: Math.round(shareNow),
+        },
       });
     }
   }

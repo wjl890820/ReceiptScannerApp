@@ -747,7 +747,17 @@
       "spendChangeDown": "减少了 {amount}{percent}",
       "spendChangeFlat": "与上一周期大致相同",
       "spendChangePercent": "（{percent}%）",
-      "spendChangeUnavailable": "数据不足，暂无法与上一周期比较。"
+      "spendChangeUnavailable": "数据不足，暂无法与上一周期比较。",
+      "changesTitle": "本期变化",
+      "changesCompared": "较前 {days} 天",
+      "changesUnavailable": "当前还没有可靠的可比较记录。",
+      "spendChangeLineUp": "支出增加 {amount}{percent}",
+      "spendChangeLineDown": "支出减少 {amount}{percent}",
+      "spendChangeLineFlat": "支出与上一周期大致相同",
+      "categoryChangeUp": "占比从 {fromPercent}% 升至 {toPercent}%（+{points} 个百分点）",
+      "categoryChangeDown": "占比从 {fromPercent}% 降至 {toPercent}%（−{points} 个百分点）",
+      "merchantChangeShareIncreased": "{merchant} 的支出占比从 {fromPercent}% 升至 {toPercent}%",
+      "merchantChangeCurrentShare": "占本期支出的 {share}%"
     }
   },
   "easterEgg": {

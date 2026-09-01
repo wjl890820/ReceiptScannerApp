@@ -747,7 +747,17 @@
       "spendChangeDown": "Decreased by {amount}{percent}",
       "spendChangeFlat": "About the same as the previous period",
       "spendChangePercent": " ({percent}%)",
-      "spendChangeUnavailable": "Not enough data to compare with the previous period."
+      "spendChangeUnavailable": "Not enough data to compare with the previous period.",
+      "changesTitle": "What changed",
+      "changesCompared": "Compared with the previous {days} days",
+      "changesUnavailable": "A reliable comparison isn't available yet.",
+      "spendChangeLineUp": "Spending increased by {amount}{percent}",
+      "spendChangeLineDown": "Spending decreased by {amount}{percent}",
+      "spendChangeLineFlat": "Spending is about the same as the previous period",
+      "categoryChangeUp": "Share rose from {fromPercent}% to {toPercent}% (+{points} pts)",
+      "categoryChangeDown": "Share fell from {fromPercent}% to {toPercent}% (−{points} pts)",
+      "merchantChangeShareIncreased": "{merchant}'s share of spending rose from {fromPercent}% to {toPercent}%",
+      "merchantChangeCurrentShare": "Accounts for {share}% of spending this period"
     }
   },
   "easterEgg": {
