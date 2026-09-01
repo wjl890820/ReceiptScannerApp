@@ -23,14 +23,7 @@ import { listReceiptsForAnalysis } from '@/lib/db';
 import {
   buildAnalysisReleaseViewModel,
 } from '@/lib/analysisPresentation';
-import { loadAnalysisTrustedPriceChangesSurface } from '@/lib/analysisPriceLoader';
-import {
-  bindPriceChangesToCycle,
-  createInitialPriceChangesBinding,
-  nextAnalysisLoadCycleId,
-  resolveBoundPriceChangesSurface,
-  type AnalysisPriceChangesBinding,
-} from '@/lib/analysisPriceLoadCycle';
+import type { AnalysisPriceChangesSurface } from '@/lib/analysisPriceSurfaces';
 import {
   buildAnalysisAllTimeStats,
   buildAnalysisTruthSnapshot,
@@ -47,6 +40,13 @@ import {
   UI_TYPOGRAPHY,
 } from '@/lib/uiTokens';
 
+/** Build 80 release gate: AP-3 disabled at Analysis entry (fail-closed). */
+export const ANALYSIS_PRICE_CHANGES_ENABLED = false;
+
+const ANALYSIS_PRICE_CHANGES_UNAVAILABLE: AnalysisPriceChangesSurface = {
+  status: 'unavailable',
+};
+
 /**
  * Legacy Price Radar / Category Index helpers remain available in
  * lib/analysisHelpers.ts + lib/priceRadar.ts for future migration.
@@ -59,18 +59,15 @@ export default function AnalysisScreen() {
   const [truthCycle, setTruthCycle] = useState<
     (AnalysisLoadedTruth & { cycleId: number }) | null
   >(null);
-  const [priceChangesBinding, setPriceChangesBinding] =
-    useState<AnalysisPriceChangesBinding>(createInitialPriceChangesBinding());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
 
   const loadReceipts = useCallback(async () => {
-    const cycleId = nextAnalysisLoadCycleId(loadCycleRef.current);
+    const cycleId = loadCycleRef.current + 1;
     loadCycleRef.current = cycleId;
     setLoading(true);
     setLoadError(false);
-    setPriceChangesBinding(bindPriceChangesToCycle(cycleId));
     let analyticsReceipts: AnalysisLoadedTruth['receipts'] | null = null;
     try {
       const allReceipts = await listReceiptsForAnalysis();
@@ -86,23 +83,11 @@ export default function AnalysisScreen() {
       console.error('加载收据失败:', e);
       if (loadCycleRef.current !== cycleId) return;
       setLoadError(true);
-      setPriceChangesBinding(bindPriceChangesToCycle(cycleId));
     } finally {
       if (loadCycleRef.current === cycleId) {
         setLoading(false);
       }
     }
-
-    if (!analyticsReceipts || loadCycleRef.current !== cycleId) {
-      return;
-    }
-
-    const priceChangesSurface =
-      await loadAnalysisTrustedPriceChangesSurface(analyticsReceipts);
-    if (loadCycleRef.current !== cycleId) {
-      return;
-    }
-    setPriceChangesBinding(bindPriceChangesToCycle(cycleId, priceChangesSurface));
   }, []);
 
   useFocusEffect(
@@ -128,15 +113,6 @@ export default function AnalysisScreen() {
     });
   }, [truthCycle]);
 
-  const boundPriceChanges = useMemo(
-    () =>
-      resolveBoundPriceChangesSurface(
-        truthCycle?.cycleId,
-        priceChangesBinding
-      ),
-    [truthCycle?.cycleId, priceChangesBinding]
-  );
-
   const viewModel = useMemo(
     () =>
       buildAnalysisReleaseViewModel({
@@ -144,11 +120,11 @@ export default function AnalysisScreen() {
         allSupportedCount: allStats?.supportedReceiptCount ?? 0,
         itemCount: truthSnapshot?.itemCount ?? 0,
         insights: truthSnapshot?.insights ?? null,
-        priceChanges: boundPriceChanges,
+        priceChanges: ANALYSIS_PRICE_CHANGES_UNAVAILABLE,
         proComingSoon: true,
         priceRadarMigrated: false,
       }),
-    [truthSnapshot, allStats?.supportedReceiptCount, boundPriceChanges]
+    [truthSnapshot, allStats?.supportedReceiptCount]
   );
 
   const renderInsightBody = () => {

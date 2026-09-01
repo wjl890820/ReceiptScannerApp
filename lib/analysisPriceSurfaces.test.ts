@@ -904,12 +904,13 @@ describe('analysis price surfaces module boundaries', () => {
     }
   });
 
-  it('analysis screen wires safe loader with optional soft-fail boundary', () => {
+  it('analysis screen keeps AP-3 disabled for Build 80 release gate', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
-    expect(source).toContain('loadAnalysisTrustedPriceChangesSurface');
+    expect(source).toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    expect(source).not.toContain('loadAnalysisTrustedPriceChangesSurface');
     expect(source).not.toContain('buildPriceRadarData');
     expect(source).not.toContain('buildCategoryIndexData');
     expect(source).toContain('priceRadarMigrated: false');
@@ -921,7 +922,6 @@ describe('analysis price surfaces module boundaries', () => {
     expect(source).toContain("timeRange !== 'all'");
     expect(source).toContain('showPeriodChangesSection');
     expect(source).toContain('loadCycleRef');
-    expect(source).toContain('resolveBoundPriceChangesSurface');
   });
 });
 
