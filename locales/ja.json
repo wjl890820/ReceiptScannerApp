@@ -351,6 +351,7 @@
       "totalError": "合計は0より大きい値を入力してください",
       "savedTitle": "保存しました",
       "saveFailedTitle": "保存に失敗しました",
+      "savePartitionUnsafe": "この変更を安全に保存できませんでした。元の記録は保持されています。もう一度お試しください。",
       "retry": "もう一度お試しください",
       "deleteConfirmTitle": "削除してよろしいですか？",
       "deleteConfirmMessage": "削除すると元に戻せません。削除しますか？",

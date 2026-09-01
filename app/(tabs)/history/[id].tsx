@@ -27,14 +27,16 @@ import {
   getReceipt,
   getReceiptsDatabase,
   listReceipts,
-  updateReceipt,
+  updateLogicalPurchaseItemEdit,
   type ReceiptRow,
 } from '@/lib/db';
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import {
   expandHistoryPurchaseDeleteIds,
   HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
+  resolveHistoryPurchaseEditMemberIds,
 } from '@/lib/historyPurchaseTruth';
+import { LogicalPurchaseEditPartitionError } from '@/lib/logicalPurchaseEditPartition';
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
@@ -500,9 +502,10 @@ export default function ReceiptDetailScreen() {
         }
       }
 
-      await updateReceipt({
-        id: receipt.id,
-        user_edited: 1,
+      const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+      const memberIds = resolveHistoryPurchaseEditMemberIds(receipt.id, stored);
+      await updateLogicalPurchaseItemEdit({
+        memberReceiptIds: memberIds,
         user_items_json: JSON.stringify(updatedItems),
       });
 
@@ -511,7 +514,14 @@ export default function ReceiptDetailScreen() {
       Alert.alert(t('history.detail.savedTitle'));
     } catch (e: any) {
       console.error(e);
-      Alert.alert(t('history.detail.saveFailedTitle'), t('history.detail.retry'));
+      if (e instanceof LogicalPurchaseEditPartitionError) {
+        Alert.alert(
+          t('history.detail.saveFailedTitle'),
+          t('history.detail.savePartitionUnsafe')
+        );
+      } else {
+        Alert.alert(t('history.detail.saveFailedTitle'), t('history.detail.retry'));
+      }
     } finally {
       setSavingItem(false);
     }

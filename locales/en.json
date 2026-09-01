@@ -351,6 +351,7 @@
       "totalError": "Subtotal must be greater than 0",
       "savedTitle": "Saved",
       "saveFailedTitle": "Save failed",
+      "savePartitionUnsafe": "This edit could not be saved safely. The original record has been preserved. Please try again.",
       "retry": "Please try again",
       "deleteConfirmTitle": "Confirm delete",
       "deleteConfirmMessage": "Once deleted, this cannot be undone. Delete?",

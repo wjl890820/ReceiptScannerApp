@@ -351,6 +351,7 @@
       "totalError": "小计必须大于 0",
       "savedTitle": "已保存",
       "saveFailedTitle": "保存失败",
+      "savePartitionUnsafe": "无法安全保存此修改。原始记录已保留，请稍后重试。",
       "retry": "请重试",
       "deleteConfirmTitle": "确认删除",
       "deleteConfirmMessage": "删除后无法恢复，确定要删除吗？",

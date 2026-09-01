@@ -93,6 +93,35 @@ export function expandHistoryPurchaseDeleteIds(
   return [...out];
 }
 
+/**
+ * Resolve logical-purchase member IDs for item edit expansion.
+ * Works for visible representative or hidden duplicate member entry points.
+ */
+export function expandHistoryPurchaseEditIds(
+  targetReceiptId: string,
+  groups: readonly AnalysisDDuplicateGroup[]
+): string[] {
+  const group = findHighConfidenceDuplicateGroupForReceipt(targetReceiptId, groups);
+  if (group) {
+    return [...group.receiptIds];
+  }
+  return [targetReceiptId];
+}
+
+/**
+ * Fresh purchase-truth expansion for edit: recompute HC groups from stored rows.
+ */
+export function resolveHistoryPurchaseEditMemberIds(
+  targetReceiptId: string,
+  storedReceipts: readonly ReceiptRow[]
+): string[] {
+  const selection = selectAnalyticsReceipts([...storedReceipts]);
+  return expandHistoryPurchaseEditIds(
+    targetReceiptId,
+    selection.highConfidenceDuplicateGroups
+  );
+}
+
 export type HistorySearchProjectionInput = {
   itemResults: ReadonlyArray<{ receiptId: string } & Record<string, unknown>>;
   receiptResults: readonly ReceiptListRow[];

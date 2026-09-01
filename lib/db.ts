@@ -33,6 +33,7 @@ import {
   replaceSyncOutboxIntent,
 } from './syncOutbox';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
+import { assertLogicalPurchaseEditPartition } from './logicalPurchaseEditPartition';
 
 type DbMutationTestHooks = {
   afterUpdateAuthorizedBeforeMutation?: () => void | Promise<void>;
@@ -148,6 +149,18 @@ export type UpdateReceiptParams = {
   note?: string | null;
   user_items_json?: string | null;
 };
+
+export type LogicalPurchaseItemEditParams = {
+  memberReceiptIds: readonly string[];
+  user_items_json: string;
+};
+
+export class LogicalPurchaseItemEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LogicalPurchaseItemEditError';
+  }
+}
 
 let _db: SQLite.SQLiteDatabase | null = null;
 let _inited = false;
@@ -1627,4 +1640,160 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
   if (ownedUserId) {
     void requestCloudBackupFlush();
   }
+}
+
+async function readOwnerScopedReceiptRowsForPurchaseTruth(
+  db: SQLite.SQLiteDatabase,
+  scope: LocalReceiptOwnerScopeReady
+): Promise<ReceiptRow[]> {
+  const rows = await db.getAllAsync<ReceiptRow>(
+    `
+    SELECT
+      id, created_at,
+      transaction_at,
+      image_uri,
+      merchant_raw, merchant_normalized,
+      merchant_type,
+      total, tax, COALESCE(tax_is_known, 0) as tax_is_known, currency,
+      analysis_json,
+      COALESCE(user_edited, 0) as user_edited,
+      final_total,
+      final_category,
+      note,
+      user_items_json
+    FROM receipts
+    WHERE ${scope.receiptWhereSql}
+    `,
+    scope.params
+  );
+  return rows ?? [];
+}
+
+/**
+ * Atomically apply a logical-purchase item edit to all member stored receipts.
+ * Only updates user_edited + user_items_json; preserves analysis_json per scan.
+ */
+export async function updateLogicalPurchaseItemEdit(
+  params: LogicalPurchaseItemEditParams
+): Promise<{ updatedReceiptIds: string[] }> {
+  const uniqueIds = [...new Set(params.memberReceiptIds)];
+  if (uniqueIds.length === 0) {
+    throw new LogicalPurchaseItemEditError(
+      'logical purchase edit requires at least one receipt id'
+    );
+  }
+  if (typeof params.user_items_json !== 'string') {
+    throw new LogicalPurchaseItemEditError('user_items_json is required');
+  }
+
+  await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    throw new LogicalPurchaseItemEditError('owner scope unavailable');
+  }
+
+  const db = await getDb();
+  const now = Date.now();
+  const userItemsJson = params.user_items_json.trim() || null;
+  const previousSignatures = new Map<string, string | undefined>();
+  const postUpdateReceipts = new Map<string, ReceiptItemIndexReceipt | null>();
+  let updatedReceiptIds: string[] = [];
+  let shouldFlush = false;
+
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    const storedSnapshot = await readOwnerScopedReceiptRowsForPurchaseTruth(
+      txn,
+      scope
+    );
+    assertLogicalPurchaseEditPartition({
+      storedReceipts: storedSnapshot,
+      memberReceiptIds: uniqueIds,
+      user_items_json: params.user_items_json,
+    });
+
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const owners = await txn.getAllAsync<{ id: string; user_id: string | null }>(
+      `SELECT id, user_id FROM receipts WHERE id IN (${placeholders}) AND ${scope.receiptWhereSql}`,
+      [...uniqueIds, ...scope.params]
+    );
+    const foundIds = new Set((owners ?? []).map((row) => row.id));
+    if (foundIds.size !== uniqueIds.length) {
+      const missing = uniqueIds.filter((id) => !foundIds.has(id));
+      throw new LogicalPurchaseItemEditError(
+        `logical purchase edit ownership mismatch: missing or unowned ids: ${missing.join(', ')}`
+      );
+    }
+
+    for (const id of uniqueIds) {
+      try {
+        const previousReceipt = await readReceiptItemIndexSourceForScope(
+          txn,
+          id,
+          scope
+        );
+        if (previousReceipt) {
+          previousSignatures.set(id, receiptItemsSignature(previousReceipt));
+        }
+      } catch {
+        // Receipt UPDATE remains authoritative; rebuild conservatively afterward.
+      }
+    }
+
+    for (const row of owners ?? []) {
+      const updateResult = await txn.runAsync(
+        `
+        UPDATE receipts
+        SET user_edited = 1,
+            user_items_json = ?,
+            client_updated_at = ?
+        WHERE id = ?
+          AND ${scope.receiptWhereSql}
+        `,
+        [userItemsJson, now, row.id, ...scope.params]
+      );
+      const updatedCount = updateResult.changes ?? 0;
+      if (updatedCount !== 1) {
+        throw new LogicalPurchaseItemEditError(
+          `logical purchase edit update mismatch for ${row.id}: expected 1, got ${updatedCount}`
+        );
+      }
+
+      const ownedUserId =
+        row.user_id && String(row.user_id).trim()
+          ? String(row.user_id).trim()
+          : null;
+      if (ownedUserId) {
+        await replaceSyncOutboxIntent(txn, {
+          receiptId: row.id,
+          userId: ownedUserId,
+          operation: 'upsert',
+          intentId: generateSyncIntentId(),
+          nowMs: now,
+        });
+        shouldFlush = true;
+      }
+
+      postUpdateReceipts.set(
+        row.id,
+        await readReceiptItemIndexSourceForScope(txn, row.id, scope)
+      );
+    }
+
+    updatedReceiptIds = uniqueIds;
+  });
+
+  for (const id of updatedReceiptIds) {
+    await bestEffortRebuildReceiptItemIndexIfChanged(
+      db,
+      id,
+      previousSignatures.get(id),
+      postUpdateReceipts.get(id)
+    );
+  }
+
+  if (shouldFlush) {
+    void requestCloudBackupFlush();
+  }
+
+  return { updatedReceiptIds };
 }
