@@ -1,14 +1,18 @@
 import type { ReceiptRow } from './db';
 import {
   ANALYSIS_RELEASE_FORBIDDEN_PHRASES,
+  buildAnalysisCategoryConservation,
+  buildAnalysisInsightPresentation,
   buildAnalysisOverview,
   buildAnalysisReleaseViewModel,
   countSupportedItemsInRange,
   resolveAnalysisReleaseStage,
+  shouldPresentAnalysisReleaseInsight,
   shouldShowAnalysisProSection,
   shouldShowLegacyPriceRadar,
 } from './analysisPresentation';
 import { createEmptyStats } from './analysisHelpers';
+import { buildAnalysisSpendChangeSurface } from './analysisValueSurfaces';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -175,6 +179,102 @@ describe('analysis release view model', () => {
     expect(
       shouldShowLegacyPriceRadar({ migratedToSafePriceHistory: false })
     ).toBe(false);
+  });
+
+  it('hides redundant top-category insight in ready stage', () => {
+    const stats = {
+      ...createEmptyStats(),
+      supportedSpend: 5000,
+      supportedReceiptCount: 5,
+      categoryCompositionTotal: 5000,
+      topCategories: [{ category: 'food_ingredients', amount: 3000 }],
+    };
+    expect(
+      shouldPresentAnalysisReleaseInsight('ready', {
+        type: 'full',
+        conclusionKey: 'analysisV2.story.conclusion',
+        conclusionParams: { cat: 'food_ingredients', pct: 60, amt: 3000 },
+        explanationKey: 'analysisV2.story.explainDefault',
+      }, stats)
+    ).toBe(false);
+    expect(
+      buildAnalysisInsightPresentation('ready', stats, {
+        type: 'full',
+        conclusionKey: 'analysisV2.story.conclusion',
+        conclusionParams: { cat: 'food_ingredients', pct: 60, amt: 3000 },
+        explanationKey: 'analysisV2.story.explainDefault',
+      })
+    ).toBeNull();
+  });
+
+  it('shows period-change section only in ready stage', () => {
+    const ready = buildAnalysisReleaseViewModel({
+      periodStats: {
+        ...createEmptyStats(),
+        supportedSpend: 5000,
+        supportedReceiptCount: 5,
+      },
+      allSupportedCount: 5,
+      itemCount: 10,
+      insights: null,
+    });
+    expect(ready.stage).toBe('ready');
+    expect(ready.showPeriodChangesSection).toBe(true);
+
+    const low = buildAnalysisReleaseViewModel({
+      periodStats: {
+        ...createEmptyStats(),
+        supportedSpend: 1000,
+        supportedReceiptCount: 2,
+      },
+      allSupportedCount: 5,
+      itemCount: 4,
+      insights: null,
+    });
+    expect(low.stage).toBe('low');
+    expect(low.showPeriodChangesSection).toBe(false);
+  });
+
+  it('uses supported-universe overview label contract in release locales', () => {
+    for (const [file, expected] of [
+      ['zh.json', '超市·便利店支出'],
+      ['ja.json', 'スーパー・コンビニ支出'],
+      ['en.json', 'Supermarket & convenience spend'],
+    ] as const) {
+      const json = JSON.parse(
+        fs.readFileSync(path.resolve(__dirname, `../locales/${file}`), 'utf8')
+      );
+      expect(json.analysis.release.totalSpend).toBe(expected);
+    }
+  });
+
+  it('conserves category composition totals', () => {
+    const stats = {
+      ...createEmptyStats(),
+      categoryCompositionTotal: 1000,
+      categoryBreakdown: [
+        { category: 'food_ingredients', amount: 600 },
+        { category: 'snacks_drinks', amount: 400 },
+      ],
+      topCategories: [
+        { category: 'food_ingredients', amount: 600 },
+        { category: 'snacks_drinks', amount: 400 },
+      ],
+    };
+    expect(buildAnalysisCategoryConservation(stats)).toMatchObject({
+      conserved: true,
+      gap: 0,
+    });
+  });
+
+  it('exposes spend change only when insights provide comparable periods', () => {
+    expect(
+      buildAnalysisSpendChangeSurface({
+        changes: [],
+        periodDays: 7,
+        previousStats: null,
+      } as any).status
+    ).toBe('unavailable');
   });
 });
 

@@ -77,6 +77,8 @@ export type AnalysisReleaseViewModel = {
   priceChanges: AnalysisPriceChangesSurface;
   showLowDataHint: boolean;
   showSwitchToAll: boolean;
+  /** Matched-period change section (week/month only, ready stage). */
+  showPeriodChangesSection: boolean;
   showProSection: boolean;
   showLegacyPriceRadar: boolean;
   showLegacyCategoryIndex: boolean;
@@ -253,12 +255,26 @@ export function buildAnalysisCategoryConservation(
   };
 }
 
+export function shouldPresentAnalysisReleaseInsight(
+  stage: AnalysisReleaseStage,
+  _story: StoryOutput | null,
+  stats: WeeklyMonthlyStats
+): boolean {
+  if (stage === 'empty' || stage === 'period_empty' || stage === 'low') {
+    return false;
+  }
+  // V1 release: category composition already shows top share and amount.
+  // Do not restate the same fact as a separate "insight" card.
+  void stats;
+  return false;
+}
+
 export function buildAnalysisInsightPresentation(
   stage: AnalysisReleaseStage,
   stats: WeeklyMonthlyStats,
   story: StoryOutput | null
 ): AnalysisInsightPresentation | null {
-  if (stage === 'empty' || stage === 'period_empty' || stage === 'low') {
+  if (!shouldPresentAnalysisReleaseInsight(stage, story, stats)) {
     return null;
   }
 
@@ -364,6 +380,7 @@ export function buildAnalysisReleaseViewModel(input: {
     priceChanges,
     showLowDataHint: stage === 'low',
     showSwitchToAll: stage === 'period_empty',
+    showPeriodChangesSection: stage === 'ready',
     showProSection: shouldShowAnalysisProSection({
       comingSoon: input.proComingSoon ?? true,
     }),

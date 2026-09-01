@@ -197,7 +197,7 @@ describe('Phase B P0-B — category denominator unification', () => {
     const snacksShare = shares.find((s) => s.category === 'snacks_drinks')!;
     const expectedPct = categoryCompositionPercent(2243, 2577)!;
     expect(Math.round(snacksShare.share * 100)).toBe(expectedPct);
-    expect(insight?.bodyParams?.pct).toBe(expectedPct);
+    expect(insight).toBeNull();
     // Must NOT use receipt total 2846 as denominator
     expect(expectedPct).not.toBe(Math.round((100 * 2243) / 2846));
   });
@@ -214,9 +214,7 @@ describe('Phase B P0-B — category denominator unification', () => {
       ],
     };
     const insight = buildAnalysisInsightPresentation('ready', stats, null);
-    expect(insight?.bodyParams?.pct).toBe(
-      categoryCompositionPercent(2242, 2576)
-    );
+    expect(insight).toBeNull();
   });
 
   it('3 — full breakdown surfaces ranks 4+ while keeping compositionTotal denominator', () => {
@@ -249,7 +247,7 @@ describe('Phase B P0-B — category denominator unification', () => {
     expect(Math.round(top.share * 100)).toBe(40); // 400/1000, not 400/900
     expect(Math.round(shares[3].share * 100)).toBe(10); // 100/1000 — no invisible leakage
     const insight = buildAnalysisInsightPresentation('ready', stats, null);
-    expect(insight?.bodyParams?.pct).toBe(40);
+    expect(insight).toBeNull();
   });
 
   it('4 — zero denominator yields no share insight / zero shares', () => {

@@ -2,7 +2,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
@@ -24,7 +24,13 @@ import {
   buildAnalysisReleaseViewModel,
 } from '@/lib/analysisPresentation';
 import { loadAnalysisTrustedPriceChangesSurface } from '@/lib/analysisPriceLoader';
-import type { AnalysisPriceChangesSurface } from '@/lib/analysisPriceSurfaces';
+import {
+  bindPriceChangesToCycle,
+  createInitialPriceChangesBinding,
+  nextAnalysisLoadCycleId,
+  resolveBoundPriceChangesSurface,
+  type AnalysisPriceChangesBinding,
+} from '@/lib/analysisPriceLoadCycle';
 import {
   buildAnalysisAllTimeStats,
   buildAnalysisTruthSnapshot,
@@ -49,39 +55,54 @@ import {
 export default function AnalysisScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [truthCycle, setTruthCycle] = useState<AnalysisLoadedTruth | null>(null);
-  const [priceChanges, setPriceChanges] = useState<AnalysisPriceChangesSurface>({
-    status: 'unavailable',
-  });
+  const loadCycleRef = useRef(0);
+  const [truthCycle, setTruthCycle] = useState<
+    (AnalysisLoadedTruth & { cycleId: number }) | null
+  >(null);
+  const [priceChangesBinding, setPriceChangesBinding] =
+    useState<AnalysisPriceChangesBinding>(createInitialPriceChangesBinding());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
 
   const loadReceipts = useCallback(async () => {
+    const cycleId = nextAnalysisLoadCycleId(loadCycleRef.current);
+    loadCycleRef.current = cycleId;
     setLoading(true);
     setLoadError(false);
+    setPriceChangesBinding(bindPriceChangesToCycle(cycleId));
     let analyticsReceipts: AnalysisLoadedTruth['receipts'] | null = null;
     try {
       const allReceipts = await listReceiptsForAnalysis();
       analyticsReceipts =
         selectAnalyticsReceipts(allReceipts).analyticsReceipts;
+      if (loadCycleRef.current !== cycleId) return;
       setTruthCycle({
+        cycleId,
         receipts: analyticsReceipts,
         nowMs: Date.now(),
       });
     } catch (e) {
       console.error('加载收据失败:', e);
+      if (loadCycleRef.current !== cycleId) return;
       setLoadError(true);
-      setPriceChanges({ status: 'unavailable' });
+      setPriceChangesBinding(bindPriceChangesToCycle(cycleId));
     } finally {
-      setLoading(false);
+      if (loadCycleRef.current === cycleId) {
+        setLoading(false);
+      }
     }
 
-    if (analyticsReceipts) {
-      const priceChangesSurface =
-        await loadAnalysisTrustedPriceChangesSurface(analyticsReceipts);
-      setPriceChanges(priceChangesSurface);
+    if (!analyticsReceipts || loadCycleRef.current !== cycleId) {
+      return;
     }
+
+    const priceChangesSurface =
+      await loadAnalysisTrustedPriceChangesSurface(analyticsReceipts);
+    if (loadCycleRef.current !== cycleId) {
+      return;
+    }
+    setPriceChangesBinding(bindPriceChangesToCycle(cycleId, priceChangesSurface));
   }, []);
 
   useFocusEffect(
@@ -107,6 +128,15 @@ export default function AnalysisScreen() {
     });
   }, [truthCycle]);
 
+  const boundPriceChanges = useMemo(
+    () =>
+      resolveBoundPriceChangesSurface(
+        truthCycle?.cycleId,
+        priceChangesBinding
+      ),
+    [truthCycle?.cycleId, priceChangesBinding]
+  );
+
   const viewModel = useMemo(
     () =>
       buildAnalysisReleaseViewModel({
@@ -114,11 +144,11 @@ export default function AnalysisScreen() {
         allSupportedCount: allStats?.supportedReceiptCount ?? 0,
         itemCount: truthSnapshot?.itemCount ?? 0,
         insights: truthSnapshot?.insights ?? null,
-        priceChanges,
+        priceChanges: boundPriceChanges,
         proComingSoon: true,
         priceRadarMigrated: false,
       }),
-    [truthSnapshot, allStats?.supportedReceiptCount, priceChanges]
+    [truthSnapshot, allStats?.supportedReceiptCount, boundPriceChanges]
   );
 
   const renderInsightBody = () => {
@@ -305,7 +335,7 @@ export default function AnalysisScreen() {
             </>
           ) : null}
 
-          {timeRange !== 'all' ? (
+          {timeRange !== 'all' && viewModel.showPeriodChangesSection ? (
             <>
               <SectionTitle title={t('analysis.release.changesTitle')} />
               <View style={styles.changesPanel}>

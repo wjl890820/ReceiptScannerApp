@@ -916,10 +916,12 @@ describe('analysis price surfaces module boundaries', () => {
     expect(source).not.toMatch(
       /Promise\.all\([\s\S]*loadAnalysisTrustedPriceChangesSurface/
     );
-    expect(source).toContain("setPriceChanges({ status: 'unavailable' })");
     expect(source).toContain('priceChangesContext');
     expect(source).toContain('promoBodyKey');
     expect(source).toContain("timeRange !== 'all'");
+    expect(source).toContain('showPeriodChangesSection');
+    expect(source).toContain('loadCycleRef');
+    expect(source).toContain('resolveBoundPriceChangesSurface');
   });
 });
 

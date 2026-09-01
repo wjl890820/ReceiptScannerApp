@@ -186,7 +186,7 @@ describe('release UI audit — milestones / version / analysis copy', () => {
     expect(helperSource).not.toMatch(/['"]15['"]/);
   });
 
-  it('Analysis release insights use analysis.release keys (not analysisV2.story)', () => {
+  it('Analysis release hides redundant top-category insight card in V1', () => {
     const stats = {
       ...createEmptyStats(),
       supportedSpend: 1000,
@@ -199,8 +199,7 @@ describe('release UI audit — milestones / version / analysis copy', () => {
       conclusionParams: { cat: 'food_ingredients', pct: 60, amt: 600 },
       explanationKey: 'analysisV2.story.explainDefault',
     });
-    expect(insight?.bodyKey).toBe('analysis.release.topCategoryInsight');
-    expect(insight?.bodyKey).not.toContain('analysisV2');
+    expect(insight).toBeNull();
   });
 });
 
