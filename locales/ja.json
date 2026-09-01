@@ -616,6 +616,8 @@
       "protectedTitle": "購入履歴は保護されています",
       "protectedBody": "構造化済みの購入データは Apple アカウントに紐づき、新しい端末で復元できます（画像は含みません）。",
       "emptyBody": "この端末に購入記録はありません。",
+      "loadingBody": "アカウントとデータの状態を確認しています…",
+      "authUnavailableBody": "アカウント保護の状態を一時的に確認できません。端末内のデータが削除されることはありません。",
       "restoreAction": "既存の記録を復元",
       "busy": "処理中…",
       "alertProtectOk": "現在のアカウントを Apple で保護しました。",

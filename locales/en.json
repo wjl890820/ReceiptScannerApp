@@ -616,6 +616,8 @@
       "protectedTitle": "Purchase history protected",
       "protectedBody": "Structured purchase data is linked to your Apple account and can be restored on a new device (images excluded).",
       "emptyBody": "No local purchase records on this device.",
+      "loadingBody": "Checking account and data status…",
+      "authUnavailableBody": "Account protection status is temporarily unavailable. Your on-device data is not deleted because of this.",
       "restoreAction": "Restore existing records",
       "busy": "Working…",
       "alertProtectOk": "This account is now protected with Apple.",

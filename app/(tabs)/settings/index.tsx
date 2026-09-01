@@ -5,7 +5,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { useRouter, type Href } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Linking,
@@ -21,6 +22,7 @@ import { MerunoDisclosureIndicator } from '@/components/MerunoDisclosureIndicato
 import { MerunoGroupedRow } from '@/components/MerunoGroupedList';
 import { PRIVACY_POLICY_URL } from '@/constants/privacy';
 import { getAccountProtectionStatus } from '@/lib/accountProtectionStatus';
+import { createAccountStatusRefresher } from '@/lib/settingsAccountRefresh';
 import { protectCurrentAccountWithApple } from '@/lib/appleAccountProtect';
 import { restoreExistingAppleAccount } from '@/lib/appleAccountRestore';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
@@ -182,27 +184,46 @@ export default function SettingsScreen() {
   );
   const aboutVersionLine = formatAboutVersionLine(currentVersion, currentBuild);
 
-  const refreshAccountStatus = useMemo(() => {
-    return async () => {
-      if (!showAppleAccount) {
-        setAccountUi(null);
-        return;
-      }
-      try {
-        const s = await getAccountProtectionStatus();
-        setAccountUi({
-          uiState: s.uiState,
-          pendingOutboxCount: s.pendingOutboxCount,
-        });
-      } catch {
-        setAccountUi(null);
-      }
-    };
-  }, [showAppleAccount]);
+  const accountStatusRefresherRef = useRef(
+    createAccountStatusRefresher({
+      isEnabled: () => false,
+      loadStatus: async () => ({
+        uiState: 'auth_unavailable',
+        pendingOutboxCount: 0,
+      }),
+      onStatus: () => {},
+    })
+  );
+
+  const refreshAccountStatus = useCallback(async () => {
+    await accountStatusRefresherRef.current.refresh();
+  }, []);
 
   useEffect(() => {
-    void refreshAccountStatus();
-  }, [refreshAccountStatus]);
+    accountStatusRefresherRef.current = createAccountStatusRefresher({
+      isEnabled: () => showAppleAccount,
+      loadStatus: async () => {
+        const s = await getAccountProtectionStatus();
+        return {
+          uiState: s.uiState,
+          pendingOutboxCount: s.pendingOutboxCount,
+        };
+      },
+      onStatus: (snapshot) => {
+        setAccountUi(snapshot);
+      },
+      onError: () => ({
+        uiState: 'auth_unavailable',
+        pendingOutboxCount: 0,
+      }),
+    });
+  }, [showAppleAccount]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshAccountStatus();
+    }, [refreshAccountStatus])
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -803,9 +824,24 @@ export default function SettingsScreen() {
                 {t('settings.account.protectedBody')}
               </Text>
             ) : null}
-            {accountUi?.uiState === 'empty_install' ||
-            accountUi?.uiState === 'auth_unavailable' ||
-            accountUi == null ? (
+            {accountUi == null ? (
+              <Text style={styles.accountBody}>{t('settings.account.loadingBody')}</Text>
+            ) : null}
+            {accountUi?.uiState === 'auth_unavailable' ? (
+              <>
+                <Text style={styles.accountBody}>
+                  {t('settings.account.authUnavailableBody')}
+                </Text>
+                <SettingsRow
+                  title={t('settings.account.restoreAction')}
+                  icon="cloud-download"
+                  onPress={onPressRestoreExisting}
+                  accessibilityLabel={t('settings.account.restoreAction')}
+                  showDisclosure={false}
+                />
+              </>
+            ) : null}
+            {accountUi?.uiState === 'empty_install' ? (
               <>
                 <Text style={styles.accountBody}>{t('settings.account.emptyBody')}</Text>
                 <SettingsRow

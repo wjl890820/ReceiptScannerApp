@@ -45,7 +45,7 @@ describe('Build 58 Phase 2 interaction migration', () => {
 
     expect(settings).toContain('<MerunoGroupedRow');
     expect(settings).toContain("kind={showDisclosure ? 'settings' : 'none'}");
-    expect(settings.match(/showDisclosure=\{false\}/g)).toHaveLength(3);
+    expect(settings.match(/showDisclosure=\{false\}/g)).toHaveLength(4);
     expect(settings).not.toContain('<Text style={styles.chevron}>');
     expect(disclosure).toContain('size={14}');
   });

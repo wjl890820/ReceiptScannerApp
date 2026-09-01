@@ -616,6 +616,8 @@
       "protectedTitle": "消费记录已保护",
       "protectedBody": "结构化消费数据已绑定 Apple 账户，可在新设备上恢复（不含原始图片）。",
       "emptyBody": "本机暂无消费记录。",
+      "loadingBody": "正在确认账户与数据状态…",
+      "authUnavailableBody": "暂时无法确认账户保护状态。本机数据不会因此被删除。",
       "restoreAction": "恢复已有记录",
       "busy": "处理中…",
       "alertProtectOk": "已使用 Apple 保护当前账户。",

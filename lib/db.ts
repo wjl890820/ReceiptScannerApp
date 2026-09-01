@@ -20,6 +20,7 @@ import {
   type ReceiptItemIndexBackfillBatchResult,
 } from './receiptItemIndexBackfill';
 import { logger } from './logger';
+import { countScopedLocalReceiptsForOwnerScope } from './scopedLocalReceiptCount';
 import { resolveOwnershipStamp, TRANSACTION_SOURCE_RECEIPT_OCR } from './receiptOwnershipContext';
 import {
   composeReceiptListWhereClause,
@@ -1050,7 +1051,7 @@ export async function saveReceipt(
 }
 
 /**
- * 列表：按时间升序（从过去到现在）
+ * 列表：按时间降序（新→旧）
  * 排序依据：优先 transaction_at（小票发生时间），没有则 fallback created_at
  * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
@@ -1092,6 +1093,23 @@ async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
 
 export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
   return listReceiptRows(limit);
+}
+
+export { countScopedLocalReceiptsForOwnerScope } from './scopedLocalReceiptCount';
+
+/**
+ * Count stored receipt rows visible to the current local owner scope.
+ * Same visibility predicate as listReceiptRows(); not analytics-deduplicated.
+ * Returns null when owner scope cannot be resolved.
+ */
+export async function countScopedLocalReceiptsForCurrentOwner(): Promise<number | null> {
+  await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    return null;
+  }
+  const db = await getDb();
+  return countScopedLocalReceiptsForOwnerScope(scope, db);
 }
 
 /** Full local receipt history for Analysis before purchase-truth projection. */

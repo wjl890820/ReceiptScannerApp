@@ -451,6 +451,14 @@ describe('Protect flow', () => {
 });
 
 describe('Protection status 7/8', () => {
+  const readyScope = {
+    status: 'ready' as const,
+    ownerKey: 'user:u',
+    receiptWhereSql: 'receipts.user_id = ?',
+    itemWhereSql: 'receipts.user_id = ?',
+    params: ['u'],
+  };
+
   it('pending outbox → linked-but-pending; empty → protected', async () => {
     const pending = await getAccountProtectionStatus({
       getAuth: () => ({
@@ -468,6 +476,8 @@ describe('Protection status 7/8', () => {
             return { c: 5 };
           },
         }) as any,
+      resolveOwnerScope: async () => readyScope,
+      countScopedLocalReceiptsForScope: async () => 5,
     });
     expect(pending.uiState).toBe('apple_linked_backup_pending');
 
@@ -484,6 +494,8 @@ describe('Protection status 7/8', () => {
         ({
           getFirstAsync: async () => ({ c: 0 }),
         }) as any,
+      resolveOwnerScope: async () => readyScope,
+      countScopedLocalReceiptsForScope: async () => 3,
     });
     expect(protectedState.uiState).toBe('apple_linked_protected');
   });
