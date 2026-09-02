@@ -46,7 +46,8 @@ describe('Build 58 Phase 1 interaction language', () => {
 
     expect(history).toContain('buildHistoryPurchaseTruthView');
     expect(history).toContain('projectHistorySearchToPurchaseTruth');
-    expect(history).toContain('expandHistoryPurchaseDeleteIds');
+    expect(history).toContain('resolveHistoryPurchaseDeleteIds');
+    expect(history).toContain('listAllReceiptsForCurrentOwnerPurchaseTruth');
     expect(history).toContain('router.push(`/history/${item.id}`)');
   });
 });

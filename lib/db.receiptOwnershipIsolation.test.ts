@@ -65,6 +65,8 @@ jest.mock('./receiptItemIndex', () => {
 import {
   __setDbMutationTestHooksForTests,
   deleteReceipts,
+  DeleteReceiptsOwnerScopeError,
+  DeleteReceiptsOwnershipError,
   getReceipt,
   listReceipts,
   listReceiptsForAnalysis,
@@ -494,6 +496,20 @@ describe('db receipt ownership isolation (Privacy-H2)', () => {
     await expect(getReceipt('a')).resolves.toBeNull();
   });
 
+  it('owner unavailable fails closed for deleteReceipts without false success', async () => {
+    mockDatabase.seed({ id: 'a', user_id: 'user-a' });
+    mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue({
+      status: 'owner_unavailable',
+    });
+
+    await expect(deleteReceipts(['a'])).rejects.toBeInstanceOf(
+      DeleteReceiptsOwnerScopeError
+    );
+    expect(mockDatabase.rows.has('a')).toBe(true);
+    expect(mockDatabase.syncOutbox).toEqual([]);
+    expect(mockDeleteIndex).not.toHaveBeenCalled();
+  });
+
   it('installation owner sees only NULL user_id + matching installation_id', async () => {
     setInstallationScope('install-i1');
     mockDatabase.seed({
@@ -521,17 +537,18 @@ describe('db receipt ownership isolation (Privacy-H2)', () => {
     expect(rows.map((row) => row.id)).toEqual(['owned']);
   });
 
-  it('mixed delete removes owned only and skips foreign tombstone/index cleanup', async () => {
+  it('mixed delete fails closed when requested set includes foreign owned row', async () => {
     mockDatabase.seed({ id: 'a', user_id: 'user-a' });
     mockDatabase.seed({ id: 'b', user_id: 'user-b' });
 
-    await deleteReceipts(['a', 'b']);
+    await expect(deleteReceipts(['a', 'b'])).rejects.toBeInstanceOf(
+      DeleteReceiptsOwnershipError
+    );
 
-    expect(mockDatabase.rows.has('a')).toBe(false);
+    expect(mockDatabase.rows.has('a')).toBe(true);
     expect(mockDatabase.rows.has('b')).toBe(true);
-    expect(mockDeleteIndex).toHaveBeenCalledTimes(1);
-    expect(mockDeleteIndex).toHaveBeenCalledWith(expect.anything(), 'a');
-    expect(mockDatabase.syncOutbox.map((row) => row.receiptId)).toEqual(['a']);
+    expect(mockDeleteIndex).not.toHaveBeenCalled();
+    expect(mockDatabase.syncOutbox).toEqual([]);
   });
 
   it('foreign update is a no-op', async () => {

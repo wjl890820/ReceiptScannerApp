@@ -14,7 +14,11 @@ import {
   buildHistoryPurchaseTruthView,
   expandHistoryPurchaseDeleteIds,
   expandHistoryPurchaseEditIds,
+  HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
+  HistoryPurchaseDeleteResolutionError,
   projectHistorySearchToPurchaseTruth,
+  resolveHistoryPurchaseDeleteIds,
+  resolveHistoryPurchaseDetailReceiptId,
   resolveHistoryPurchaseEditMemberIds,
   resolvePurchaseRepresentativeReceiptId,
 } from './historyPurchaseTruth';
@@ -641,16 +645,144 @@ describe('logical purchase edit partition gate', () => {
   });
 });
 
+describe('history purchase delete truth', () => {
+  const gyomuScans = buildGyomuSevenScanFixture();
+
+  it('A. fresh batch delete uses current production groups, not stale cached authority', () => {
+    const stored = fourIdenticalAeonScans();
+    const view = buildHistoryPurchaseTruthView(stored);
+    const visibleId = view.visibleRows[0]!.id;
+    const staleGroups = view.selection.highConfidenceDuplicateGroups.map((group) => ({
+      ...group,
+      receiptIds: group.receiptIds.slice(0, 2),
+    }));
+    const staleDeleteIds = expandHistoryPurchaseDeleteIds([visibleId], staleGroups);
+    expect(staleDeleteIds).toHaveLength(2);
+
+    const freshDeleteIds = resolveHistoryPurchaseDeleteIds([visibleId], stored);
+    expect(freshDeleteIds.sort()).toEqual(stored.map((row) => row.id).sort());
+  });
+
+  it('B. batch delete fails closed when one selected purchase is missing', () => {
+    const stored = fourIdenticalAeonScans();
+    const visibleId = buildHistoryPurchaseTruthView(stored).visibleRows[0]!.id;
+    expect(() =>
+      resolveHistoryPurchaseDeleteIds([visibleId, 'missing-receipt'], stored)
+    ).toThrow(HistoryPurchaseDeleteResolutionError);
+  });
+
+  it('C. hidden-member detail resolves to representative; singleton and missing behave correctly', () => {
+    const view = buildHistoryPurchaseTruthView(gyomuScans);
+    const rep = view.visibleRows[0]!.id;
+    const hiddenId = [...view.selection.excludedDuplicateReceiptIds][0]!;
+
+    expect(resolveHistoryPurchaseDetailReceiptId(rep, gyomuScans)).toBe(rep);
+    expect(resolveHistoryPurchaseDetailReceiptId(hiddenId, gyomuScans)).toBe(rep);
+
+    const singleton = makeReceipt({
+      id: 'solo-detail',
+      at: Date.parse('2026-08-01T12:00:00+09:00'),
+      createdAt: GYOMU_NOW_MS,
+      merchantType: 'supermarket',
+      merchantNormalized: '単独店',
+      transactionAt: Date.parse('2026-08-01T12:00:00+09:00'),
+      total: 500,
+      items: [{ name: '牛乳', category: 'food_ingredients', lineTotal: 500, quantity: 1 }],
+    });
+    expect(resolveHistoryPurchaseDetailReceiptId('solo-detail', [singleton])).toBe(
+      'solo-detail'
+    );
+    expect(resolveHistoryPurchaseDetailReceiptId('missing-id', gyomuScans)).toBeNull();
+  });
+
+  it('D. >2000 display slice cannot authoritatively resolve beyond HISTORY_PURCHASE_TRUTH_LOAD_LIMIT', () => {
+    const baseAt = Date.parse('2027-01-01T12:00:00+09:00');
+    const fillers = Array.from({ length: HISTORY_PURCHASE_TRUTH_LOAD_LIMIT }, (_, index) =>
+      makeReceipt({
+        id: `filler-${index}`,
+        at: baseAt + index * 60_000,
+        createdAt: baseAt + index * 60_000,
+        merchantType: 'supermarket',
+        merchantNormalized: `Filler ${index}`,
+        transactionAt: baseAt + index * 60_000,
+        total: 100,
+        items: [{ name: 'Item', category: 'other', lineTotal: 100, quantity: 1 }],
+      })
+    );
+    const aeonGroup = fourIdenticalAeonScans().map((row) => ({
+      ...row,
+      transaction_at: Date.parse('2020-01-01T12:00:00+09:00'),
+      created_at: Date.parse('2020-01-01T12:00:00+09:00') + Number(row.id.slice(-1)),
+    }));
+    const exhaustive = [...fillers, ...aeonGroup];
+    const displaySlice = exhaustive
+      .slice()
+      .sort(
+        (left, right) =>
+          (right.transaction_at ?? right.created_at) -
+          (left.transaction_at ?? left.created_at)
+      )
+      .slice(0, HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+    const visibleId = buildHistoryPurchaseTruthView(exhaustive).visibleRows.find((row) =>
+      row.id.startsWith('aeon-scan-')
+    )!.id;
+
+    expect(displaySlice).toHaveLength(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+    expect(() => resolveHistoryPurchaseDeleteIds([visibleId], displaySlice)).toThrow(
+      HistoryPurchaseDeleteResolutionError
+    );
+    expect(resolveHistoryPurchaseDeleteIds([visibleId], exhaustive).sort()).toEqual(
+      aeonGroup.map((row) => row.id).sort()
+    );
+  });
+
+  it('E. >2000 hidden member detail needs exhaustive stored truth', () => {
+    const baseAt = Date.parse('2027-01-01T12:00:00+09:00');
+    const fillers = Array.from({ length: HISTORY_PURCHASE_TRUTH_LOAD_LIMIT }, (_, index) =>
+      makeReceipt({
+        id: `gyomu-filler-${index}`,
+        at: baseAt + index * 60_000,
+        createdAt: baseAt + index * 60_000,
+        merchantType: 'supermarket',
+        merchantNormalized: `Filler ${index}`,
+        transactionAt: baseAt + index * 60_000,
+        total: 100,
+        items: [{ name: 'Item', category: 'other', lineTotal: 100, quantity: 1 }],
+      })
+    );
+    const exhaustive = [...fillers, ...gyomuScans];
+    const displaySlice = exhaustive
+      .slice()
+      .sort(
+        (left, right) =>
+          (right.transaction_at ?? right.created_at) -
+          (left.transaction_at ?? left.created_at)
+      )
+      .slice(0, HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+    const view = buildHistoryPurchaseTruthView(exhaustive);
+    const rep = view.visibleRows.find((row) =>
+      row.merchant_normalized?.includes('業務スーパー')
+    )!.id;
+    const hiddenId = [...view.selection.excludedDuplicateReceiptIds][0]!;
+
+    expect(resolveHistoryPurchaseDetailReceiptId(hiddenId, displaySlice)).toBeNull();
+    expect(resolveHistoryPurchaseDetailReceiptId(hiddenId, exhaustive)).toBe(rep);
+  });
+});
+
 describe('History screen wiring (purchase truth)', () => {
-  it('History list uses purchase-truth consumer + group-aware delete', () => {
+  it('History list uses purchase-truth consumer + fresh delete resolution', () => {
     const src = fs.readFileSync(
       path.join(__dirname, '../app/(tabs)/history/index.tsx'),
       'utf8'
     );
     expect(src).toContain('buildHistoryPurchaseTruthView');
-    expect(src).toContain('expandHistoryPurchaseDeleteIds');
+    expect(src).toContain('resolveHistoryPurchaseDeleteIds');
+    expect(src).toContain('listAllReceiptsForCurrentOwnerPurchaseTruth');
+    expect(src).not.toContain('duplicateGroups');
     expect(src).toContain('projectHistorySearchToPurchaseTruth');
     expect(src).toContain('listReceipts');
+    expect(src).toContain('HISTORY_PURCHASE_TRUTH_LOAD_LIMIT');
     expect(src).not.toMatch(/listReceiptsForList\(/);
   });
 
@@ -659,12 +791,13 @@ describe('History screen wiring (purchase truth)', () => {
       path.join(__dirname, '../app/(tabs)/history/[id].tsx'),
       'utf8'
     );
-    expect(src).toContain('expandHistoryPurchaseDeleteIds');
+    expect(src).toContain('resolveHistoryPurchaseDeleteIds');
+    expect(src).toContain('resolveHistoryPurchaseDetailReceiptId');
+    expect(src).toContain('listAllReceiptsForCurrentOwnerPurchaseTruth');
     expect(src).toContain('resolveHistoryPurchaseEditMemberIds');
     expect(src).toContain('updateLogicalPurchaseItemEdit');
     expect(src).toContain('LogicalPurchaseEditPartitionError');
     expect(src).toContain('savePartitionUnsafe');
-    expect(src).toContain('selectAnalyticsReceipts');
     expect(src).toContain('deleteReceipts');
   });
 });

@@ -26,14 +26,15 @@ import {
   deleteReceipts,
   getReceipt,
   getReceiptsDatabase,
+  listAllReceiptsForCurrentOwnerPurchaseTruth,
   listReceipts,
   updateLogicalPurchaseItemEdit,
   type ReceiptRow,
 } from '@/lib/db';
-import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import {
-  expandHistoryPurchaseDeleteIds,
   HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
+  resolveHistoryPurchaseDetailReceiptId,
+  resolveHistoryPurchaseDeleteIds,
   resolveHistoryPurchaseEditMemberIds,
 } from '@/lib/historyPurchaseTruth';
 import { LogicalPurchaseEditPartitionError } from '@/lib/logicalPurchaseEditPartition';
@@ -304,8 +305,26 @@ export default function ReceiptDetailScreen() {
     }
 
     try {
+      const stored = await listAllReceiptsForCurrentOwnerPurchaseTruth();
+      const canonicalId = resolveHistoryPurchaseDetailReceiptId(
+        capturedId,
+        stored
+      );
+      if (!loadUpdateAllowed(generation, capturedId)) {
+        return;
+      }
+      if (canonicalId === null) {
+        setReceipt(null);
+        setPersonalInventory(null);
+        return;
+      }
+      if (canonicalId !== capturedId) {
+        router.replace(`/history/${canonicalId}`);
+        return;
+      }
+
       const [receiptResult, inventoryResult] = await Promise.allSettled([
-        getReceipt(capturedId),
+        getReceipt(canonicalId),
         (async () => {
           try {
             const db = await getReceiptsDatabase();
@@ -353,7 +372,7 @@ export default function ReceiptDetailScreen() {
         setLoading(false);
       }
     }
-  }, [id, loadUpdateAllowed]);
+  }, [id, loadUpdateAllowed, router]);
 
   useEffect(() => {
     load();
@@ -542,11 +561,10 @@ export default function ReceiptDetailScreen() {
             try {
               // Expand confirmed high-confidence duplicate group so the
               // purchase cannot immediately reappear from a hidden scan.
-              const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
-              const selection = selectAnalyticsReceipts(stored);
-              const deleteIds = expandHistoryPurchaseDeleteIds(
+              const stored = await listAllReceiptsForCurrentOwnerPurchaseTruth();
+              const deleteIds = resolveHistoryPurchaseDeleteIds(
                 [receipt.id],
-                selection.highConfidenceDuplicateGroups
+                stored
               );
               await deleteReceipts(deleteIds);
               Alert.alert(t('history.detail.deletedTitle'));

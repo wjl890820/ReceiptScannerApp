@@ -24,8 +24,7 @@ import {
   MerunoGroupedRow,
 } from '@/components/MerunoGroupedList';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
-import { deleteReceipts, getReceiptsDatabase, listReceipts, type ReceiptListRow } from '@/lib/db';
-import type { AnalysisDDuplicateGroup } from '@/lib/analysisDDuplicateAudit';
+import { deleteReceipts, getReceiptsDatabase, listAllReceiptsForCurrentOwnerPurchaseTruth, listReceipts, type ReceiptListRow } from '@/lib/db';
 import { formatJPY } from '@/lib/formatJPY';
 import { getCurrentLocale, t } from '@/lib/i18n';
 import { getCategoryLabel } from '@/lib/categoryPalette';
@@ -36,9 +35,9 @@ import {
 } from '@/lib/historyPresentation';
 import {
   buildHistoryPurchaseTruthView,
-  expandHistoryPurchaseDeleteIds,
   HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
   projectHistorySearchToPurchaseTruth,
+  resolveHistoryPurchaseDeleteIds,
 } from '@/lib/historyPurchaseTruth';
 import { buildHistoryMonthSections } from '@/lib/historyMonthPresentation';
 import { buildTopCategories, buildHistoryMetaLine } from '@/lib/receiptListHelpers';
@@ -87,9 +86,6 @@ export default function HistoryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<ReceiptListRow[]>([]);
-  const [duplicateGroups, setDuplicateGroups] = useState<
-    AnalysisDDuplicateGroup[]
-  >([]);
   const [refreshing, setRefreshing] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -143,7 +139,6 @@ export default function HistoryScreen() {
       const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
       const truth = buildHistoryPurchaseTruthView(stored);
       purchaseTruthRef.current = truth;
-      setDuplicateGroups(truth.selection.highConfidenceDuplicateGroups);
       setRows(truth.visibleRows);
     } catch (e: any) {
       console.error(e);
@@ -193,7 +188,6 @@ export default function HistoryScreen() {
         const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
         truth = buildHistoryPurchaseTruthView(stored);
         purchaseTruthRef.current = truth;
-        setDuplicateGroups(truth.selection.highConfidenceDuplicateGroups);
         setRows(truth.visibleRows);
       }
 
@@ -342,12 +336,6 @@ export default function HistoryScreen() {
     const purchaseIds = Array.from(selectedIds);
     if (purchaseIds.length === 0) return;
 
-    // Confirm by visible purchase count; delete expands confirmed HC groups.
-    const deleteIds = expandHistoryPurchaseDeleteIds(
-      purchaseIds,
-      duplicateGroups
-    );
-
     Alert.alert(
       t('history.batchDelete.confirmTitle'),
       t('history.batchDelete.confirmMessage', { n: purchaseIds.length }),
@@ -359,6 +347,11 @@ export default function HistoryScreen() {
           onPress: async () => {
             try {
               setDeleting(true);
+              const stored = await listAllReceiptsForCurrentOwnerPurchaseTruth();
+              const deleteIds = resolveHistoryPurchaseDeleteIds(
+                purchaseIds,
+                stored
+              );
               await deleteReceipts(deleteIds);
               setSelectMode(false);
               setSelectedIds(new Set());
@@ -366,6 +359,7 @@ export default function HistoryScreen() {
             } catch (e: any) {
               console.error(e);
               Alert.alert(t('history.batchDelete.deleteFailed'));
+              await load();
             } finally {
               setDeleting(false);
             }
@@ -373,7 +367,7 @@ export default function HistoryScreen() {
         },
       ]
     );
-  }, [selectedIds, duplicateGroups, load]);
+  }, [selectedIds, load]);
 
   const onItemPress = useCallback(
     (item: ReceiptListRow) => {

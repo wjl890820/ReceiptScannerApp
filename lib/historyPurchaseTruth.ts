@@ -93,6 +93,63 @@ export function expandHistoryPurchaseDeleteIds(
   return [...out];
 }
 
+export class HistoryPurchaseDeleteResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HistoryPurchaseDeleteResolutionError';
+  }
+}
+
+/**
+ * Fresh purchase-truth expansion for delete: recompute HC groups from stored rows
+ * and fail closed when any selected purchase cannot be resolved safely.
+ */
+export function resolveHistoryPurchaseDeleteIds(
+  selectedPurchaseReceiptIds: readonly string[],
+  storedReceipts: readonly ReceiptRow[]
+): string[] {
+  if (selectedPurchaseReceiptIds.length === 0) return [];
+
+  const selection = selectAnalyticsReceipts([...storedReceipts]);
+  const groups = selection.highConfidenceDuplicateGroups;
+  const storedIds = new Set(storedReceipts.map((row) => row.id));
+  const visibleIds = new Set(selection.analyticsReceipts.map((row) => row.id));
+  const excludedIds = selection.excludedDuplicateReceiptIds;
+
+  for (const id of selectedPurchaseReceiptIds) {
+    if (!storedIds.has(id)) {
+      throw new HistoryPurchaseDeleteResolutionError(`missing receipt: ${id}`);
+    }
+    const isVisible = visibleIds.has(id);
+    const isHiddenMember = excludedIds.has(id);
+    if (!isVisible && !isHiddenMember) {
+      throw new HistoryPurchaseDeleteResolutionError(
+        `unresolvable logical purchase: ${id}`
+      );
+    }
+  }
+
+  return expandHistoryPurchaseDeleteIds(selectedPurchaseReceiptIds, groups);
+}
+
+/**
+ * Canonical History detail receipt id from fresh purchase truth.
+ * Returns null when the captured id is not present in stored receipts.
+ */
+export function resolveHistoryPurchaseDetailReceiptId(
+  capturedReceiptId: string,
+  storedReceipts: readonly ReceiptRow[]
+): string | null {
+  if (!storedReceipts.some((row) => row.id === capturedReceiptId)) {
+    return null;
+  }
+  const selection = selectAnalyticsReceipts([...storedReceipts]);
+  return resolvePurchaseRepresentativeReceiptId(
+    capturedReceiptId,
+    selection.highConfidenceDuplicateGroups
+  );
+}
+
 /**
  * Resolve logical-purchase member IDs for item edit expansion.
  * Works for visible representative or hidden duplicate member entry points.

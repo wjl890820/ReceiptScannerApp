@@ -1057,7 +1057,8 @@ describe('D2-E3 RECONCILED_STRUCTURAL_EXACT_DUPLICATE', () => {
     expect(srcHome).toContain('selectAnalyticsReceipts');
     expect(srcAnalysis).toContain('selectAnalyticsReceipts');
     expect(srcHistory).toContain('buildHistoryPurchaseTruthView');
-    expect(srcHistory).toContain('expandHistoryPurchaseDeleteIds');
+    expect(srcHistory).toContain('resolveHistoryPurchaseDeleteIds');
+    expect(srcHistory).toContain('listAllReceiptsForCurrentOwnerPurchaseTruth');
   });
 
   test('P — price observation / occurrence counts use selected receipt IDs only', () => {

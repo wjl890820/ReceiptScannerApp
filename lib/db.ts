@@ -162,6 +162,27 @@ export class LogicalPurchaseItemEditError extends Error {
   }
 }
 
+export class DeleteReceiptsOwnerScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeleteReceiptsOwnerScopeError';
+  }
+}
+
+export class DeleteReceiptsOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeleteReceiptsOwnershipError';
+  }
+}
+
+export class OwnerPurchaseTruthScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OwnerPurchaseTruthScopeError';
+  }
+}
+
 let _db: SQLite.SQLiteDatabase | null = null;
 let _inited = false;
 let _initPromise: Promise<void> | null = null;
@@ -1284,7 +1305,7 @@ export async function deleteReceipts(ids: string[]): Promise<void> {
   await initIfNeeded();
   const scope = await resolveCurrentLocalReceiptOwnerScope();
   if (scope.status !== 'ready') {
-    return;
+    throw new DeleteReceiptsOwnerScopeError('owner scope unavailable');
   }
   const db = await getDb();
   const uniqueIds = [...new Set(ids)];
@@ -1297,12 +1318,17 @@ export async function deleteReceipts(ids: string[]): Promise<void> {
       `SELECT id, user_id FROM receipts WHERE id IN (${placeholders}) AND ${scope.receiptWhereSql}`,
       [...uniqueIds, ...scope.params]
     );
-    if ((owners ?? []).length === 0) {
-      return;
+    const ownedIds = (owners ?? []).map((row) => row.id);
+    const ownedSet = new Set(ownedIds);
+    if (
+      ownedIds.length !== uniqueIds.length ||
+      !uniqueIds.every((id) => ownedSet.has(id))
+    ) {
+      const missing = uniqueIds.filter((id) => !ownedSet.has(id));
+      throw new DeleteReceiptsOwnershipError(
+        `deleteReceipts exact ownership mismatch: missing or unowned ids: ${missing.join(', ')}`
+      );
     }
-
-    const candidateIds = (owners ?? []).map((row) => row.id);
-    const deletedPlaceholders = candidateIds.map(() => '?').join(',');
 
     for (const row of owners ?? []) {
       const uid =
@@ -1321,16 +1347,16 @@ export async function deleteReceipts(ids: string[]): Promise<void> {
     await dbMutationTestHooks?.afterDeleteSelectedBeforeMutation?.();
 
     const deleteResult = await txn.runAsync(
-      `DELETE FROM receipts WHERE id IN (${deletedPlaceholders}) AND ${scope.receiptWhereSql}`,
-      [...candidateIds, ...scope.params]
+      `DELETE FROM receipts WHERE id IN (${placeholders}) AND ${scope.receiptWhereSql}`,
+      [...uniqueIds, ...scope.params]
     );
     const deletedCount = deleteResult.changes ?? 0;
-    if (deletedCount !== candidateIds.length) {
+    if (deletedCount !== uniqueIds.length) {
       throw new Error(
-        `deleteReceipts ownership delete mismatch: expected ${candidateIds.length}, got ${deletedCount}`
+        `deleteReceipts ownership delete mismatch: expected ${uniqueIds.length}, got ${deletedCount}`
       );
     }
-    provenDeletedIds = candidateIds;
+    provenDeletedIds = uniqueIds;
   });
 
   for (const id of provenDeletedIds) {
@@ -1663,10 +1689,27 @@ async function readOwnerScopedReceiptRowsForPurchaseTruth(
       user_items_json
     FROM receipts
     WHERE ${scope.receiptWhereSql}
+    ORDER BY COALESCE(transaction_at, created_at) DESC
     `,
     scope.params
   );
   return rows ?? [];
+}
+
+/**
+ * Exhaustive owner-scoped stored receipt read for destructive/canonical purchase
+ * truth. Unlike History display listReceipts(limit), this has no row cap.
+ */
+export async function listAllReceiptsForCurrentOwnerPurchaseTruth(): Promise<
+  ReceiptRow[]
+> {
+  await initIfNeeded();
+  const scope = await resolveCurrentLocalReceiptOwnerScope();
+  if (scope.status !== 'ready') {
+    throw new OwnerPurchaseTruthScopeError('owner scope unavailable');
+  }
+  const db = await getDb();
+  return readOwnerScopedReceiptRowsForPurchaseTruth(db, scope);
 }
 
 /**
