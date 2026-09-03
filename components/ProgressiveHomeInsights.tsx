@@ -2,6 +2,7 @@ import React from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { HomeFrequentProductList } from '@/components/home/HomeFrequentProductList';
+import { HomeNextPurchaseList } from '@/components/home/HomeNextPurchaseList';
 import { HomeScanAction } from '@/components/home/HomeScanAction';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { MerunoDisclosureIndicator } from '@/components/MerunoDisclosureIndicator';
@@ -21,6 +22,7 @@ import {
   formatMilestoneRecentChange,
   formatMilestoneSummary,
 } from '@/lib/milestonePresentation';
+import type { NextPurchaseCandidate } from '@/lib/nextPurchaseCandidates';
 import type { ProductCategory } from '@/lib/productCategory';
 import {
   UI_COLORS,
@@ -39,6 +41,7 @@ type ProgressiveHomeInsightsProps = {
   onScan: () => void;
   onRecentPurchasePress: (receiptId: string) => void;
   onProductPress: (product: MilestoneFrequentProduct) => void;
+  onNextPurchasePress?: (candidate: NextPurchaseCandidate) => void;
 };
 
 function categoryLabel(category: string): string {
@@ -59,6 +62,7 @@ export function ProgressiveHomeInsights({
   onScan,
   onRecentPurchasePress,
   onProductPress,
+  onNextPurchasePress,
 }: ProgressiveHomeInsightsProps) {
   const showRecent =
     experience.stage !== 'empty' && experience.latestPurchase != null;
@@ -70,6 +74,9 @@ export function ProgressiveHomeInsights({
   const showFrequentSection =
     experience.stage === 'frequent' ||
     (experience.stage === 'profile' && experience.frequentProducts.length > 0);
+  // Same unlock boundary as Frequent Products; may show empty neutral state.
+  const showNextPurchaseSection =
+    experience.stage === 'frequent' || experience.stage === 'profile';
 
   return (
     <>
@@ -253,6 +260,22 @@ export function ProgressiveHomeInsights({
               )}
             </MerunoText>
           </View>
+        </>
+      ) : null}
+
+      {showNextPurchaseSection ? (
+        <>
+          <SectionTitle title={t('home.progressive.nextPurchase.title')} />
+          {experience.nextPurchaseCandidates.length > 0 ? (
+            <HomeNextPurchaseList
+              candidates={experience.nextPurchaseCandidates}
+              onPress={onNextPurchasePress}
+            />
+          ) : (
+            <MerunoText role="meta" tone="secondary" style={styles.fallbackText}>
+              {t('home.progressive.nextPurchase.empty')}
+            </MerunoText>
+          )}
         </>
       ) : null}
 

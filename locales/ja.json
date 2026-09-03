@@ -46,6 +46,12 @@
         "average": "1回あたりの平均",
         "category": "カテゴリ構成"
       },
+      "nextPurchase": {
+        "title": "そろそろ買い足すもの",
+        "explanation": "通常は約 {medianDays} 日ごと · 前回から {daysSince} 日",
+        "empty": "今のところ、買い足し時期に近い商品はありません",
+        "openHistoryA11y": "{name}の購入履歴を見る"
+      },
       "frequent": {
         "title": "よく買う商品",
         "occurrences": "{count} 回の買い物で記録",

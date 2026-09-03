@@ -46,6 +46,12 @@
         "average": "Average per purchase",
         "category": "Category mix"
       },
+      "nextPurchase": {
+        "title": "May need soon",
+        "explanation": "Usually about every {medianDays} days · {daysSince} days since last purchase",
+        "empty": "Nothing looks due to buy again right now.",
+        "openHistoryA11y": "View purchase history for {name}"
+      },
       "frequent": {
         "title": "Frequent Products",
         "occurrences": "Recorded in {count} purchases",

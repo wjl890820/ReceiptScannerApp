@@ -185,3 +185,59 @@ describe('progressive Home integration boundaries', () => {
     );
   });
 });
+
+describe('Home Next Purchase V0 wiring', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('hides Next Purchase before frequent stage', () => {
+    const experience = buildHomeProgressiveExperience(
+      [receipt('r1'), receipt('r2'), receipt('r3')],
+      null,
+      false,
+      [],
+      null,
+      100 * DAY
+    );
+    expect(experience.stage).toBe('recent');
+    expect(experience.nextPurchaseCandidates).toEqual([]);
+  });
+
+  it('shows empty nextPurchaseCandidates at frequent stage without fabricating', () => {
+    const receipts = [1, 2, 3, 4, 5].map((n) => receipt(`r${n}`));
+    const experience = buildHomeProgressiveExperience(
+      receipts,
+      null,
+      false,
+      [],
+      null,
+      100 * DAY
+    );
+    expect(experience.stage).toBe('frequent');
+    expect(experience.nextPurchaseCandidates).toEqual([]);
+  });
+
+  it('UI places Next Purchase section above Frequent Products', () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../components/ProgressiveHomeInsights.tsx'),
+      'utf8'
+    );
+    const nextIdx = source.indexOf('home.progressive.nextPurchase.title');
+    const frequentIdx = source.indexOf('home.progressive.frequent.title');
+    expect(nextIdx).toBeGreaterThan(-1);
+    expect(frequentIdx).toBeGreaterThan(-1);
+    expect(nextIdx).toBeLessThan(frequentIdx);
+    expect(source).not.toMatch(/shoppingList|Shopping List|加入购物清单/i);
+  });
+
+  it('consumes uncapped Repeat profiles — Home cap=5 does not truncate B2 input', () => {
+    const experienceSource = fs.readFileSync(
+      path.resolve(__dirname, 'homeProgressiveExperience.ts'),
+      'utf8'
+    );
+    expect(experienceSource).toContain('buildNextPurchaseCandidates(allProfiles');
+    expect(experienceSource).toContain('takeHomeRepeatProducts(allProfiles)');
+    expect(experienceSource).toContain(
+      'Home frequent cap must NOT truncate Next Purchase input'
+    );
+  });
+});

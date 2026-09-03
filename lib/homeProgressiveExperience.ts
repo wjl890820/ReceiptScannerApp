@@ -14,7 +14,13 @@ import {
   type ThreeReceiptMilestone,
 } from './engagementMilestones';
 import {
-  buildHomeRepeatFrequentProducts,
+  buildNextPurchaseCandidates,
+  type NextPurchaseCandidate,
+} from './nextPurchaseCandidates';
+import {
+  buildRepeatProductProfiles,
+  mapRepeatProductProfileToHomeFrequentProduct,
+  takeHomeRepeatProducts,
 } from './repeatProductProfile';
 import { filterV1SupportedReceipts } from './merchantType';
 import type { PersonalProductEndpointInventory } from './personalProductEndpointInventory';
@@ -38,6 +44,11 @@ export type HomeProgressiveExperience = {
    * Milestone recent-window frequentProducts remain on milestone results only.
    */
   frequentProducts: MilestoneFrequentProduct[];
+  /**
+   * Next Purchase V0 — derived from uncapped Repeat profiles (not Home cap=5).
+   * Empty until frequent stage unlock; may stay empty when no safe cadence.
+   */
+  nextPurchaseCandidates: NextPurchaseCandidate[];
   profile: TenReceiptMilestone | null;
   dataCoverageIncomplete: boolean;
   analyticsUnavailable: boolean;
@@ -67,16 +78,43 @@ export function filterHomeIdentityProductRows<
   return productRows.filter((row) => supportedReceiptIds.has(row.receiptId));
 }
 
-function buildHomeLongTermFrequentProducts(
-  analyticsReceipts: ReceiptRow[],
-  productRows: readonly EngagementProductRow[],
-  personalInventory: PersonalProductEndpointInventory | null = null
-): MilestoneFrequentProduct[] {
-  return buildHomeRepeatFrequentProducts(
-    analyticsReceipts,
-    productRows,
-    personalInventory
-  );
+function buildHomeRepeatSurfaces(args: {
+  analyticsReceipts: ReceiptRow[];
+  productRows: readonly EngagementProductRow[];
+  personalInventory: PersonalProductEndpointInventory | null;
+  now: number;
+}): {
+  frequentProducts: MilestoneFrequentProduct[];
+  nextPurchaseCandidates: NextPurchaseCandidate[];
+} {
+  try {
+    const { isProductIdentityPriceHistoryV1Enabled } =
+      require('./env') as typeof import('./env');
+    if (!isProductIdentityPriceHistoryV1Enabled()) {
+      return { frequentProducts: [], nextPurchaseCandidates: [] };
+    }
+  } catch {
+    return { frequentProducts: [], nextPurchaseCandidates: [] };
+  }
+
+  try {
+    // Uncapped Repeat SSOT — Home frequent cap must NOT truncate Next Purchase input.
+    const allProfiles = buildRepeatProductProfiles(
+      args.analyticsReceipts,
+      args.productRows,
+      { personalInventory: args.personalInventory }
+    );
+    return {
+      frequentProducts: takeHomeRepeatProducts(allProfiles).map(
+        mapRepeatProductProfileToHomeFrequentProduct
+      ),
+      nextPurchaseCandidates: buildNextPurchaseCandidates(allProfiles, {
+        now: args.now,
+      }),
+    };
+  } catch {
+    return { frequentProducts: [], nextPurchaseCandidates: [] };
+  }
 }
 
 /**
@@ -87,13 +125,15 @@ function buildHomeLongTermFrequentProducts(
  *   than falling back to milestone recent-window frequentProducts.
  * @param personalInventory Owner-scoped G4-2A inventory for Home personal
  *   frequent overlay (optional). When null, identity Home grouping is unchanged.
+ * @param now Reference timestamp for Next Purchase V0 (injected once per build).
  */
 export function buildHomeProgressiveExperience(
   receipts: ReceiptRow[],
   evaluation: CurrentEngagementMilestoneEvaluation | null,
   analyticsUnavailable = false,
   productRows: readonly EngagementProductRow[] = [],
-  personalInventory: PersonalProductEndpointInventory | null = null
+  personalInventory: PersonalProductEndpointInventory | null = null,
+  now: number = 0
 ): HomeProgressiveExperience {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const localCount = countSupportedReceipts(receipts);
@@ -115,13 +155,16 @@ export function buildHomeProgressiveExperience(
   const currentResult = evaluation?.currentResult ?? null;
   // Stage gate unchanged (frequent | profile). Data source = long-term SSOT.
   const frequentUnlocked = stage === 'frequent' || stage === 'profile';
-  const frequentProducts = frequentUnlocked
-    ? buildHomeLongTermFrequentProducts(
-        receipts,
+  const referenceNow =
+    typeof now === 'number' && Number.isFinite(now) && now > 0 ? now : 0;
+  const repeatSurfaces = frequentUnlocked
+    ? buildHomeRepeatSurfaces({
+        analyticsReceipts: receipts,
         productRows,
-        personalInventory
-      )
-    : [];
+        personalInventory,
+        now: referenceNow,
+      })
+    : { frequentProducts: [], nextPurchaseCandidates: [] };
   const profile =
     currentResult?.milestone === 10 ? currentResult : null;
   const dataCoverageIncomplete =
@@ -134,7 +177,8 @@ export function buildHomeProgressiveExperience(
     status,
     latestPurchase,
     recentInsight,
-    frequentProducts,
+    frequentProducts: repeatSurfaces.frequentProducts,
+    nextPurchaseCandidates: repeatSurfaces.nextPurchaseCandidates,
     profile,
     dataCoverageIncomplete,
     analyticsUnavailable,

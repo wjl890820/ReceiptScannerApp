@@ -102,6 +102,7 @@ export default function HomeScreen() {
       const allReceipts = await listReceipts();
       const analyticsSelection = selectAnalyticsReceipts(allReceipts);
       const analyticsReceipts = analyticsSelection.analyticsReceipts;
+      const homeReferenceNow = Date.now();
       let finalCompleteExperience: HomeProgressiveExperience;
       try {
         const [evaluation, productContext, personalInventory] = await Promise.all([
@@ -128,7 +129,8 @@ export default function HomeScreen() {
           evaluation,
           false,
           productContext.rows,
-          personalInventory
+          personalInventory,
+          homeReferenceNow
         );
       } catch (analyticsError) {
         if (hadCompleteSnapshot) throw analyticsError;
@@ -138,7 +140,10 @@ export default function HomeScreen() {
         finalCompleteExperience = buildHomeProgressiveExperience(
           analyticsReceipts,
           null,
-          true
+          true,
+          [],
+          null,
+          homeReferenceNow
         );
       }
       if (
@@ -574,6 +579,20 @@ export default function HomeScreen() {
     },
     [router]
   );
+  const handleNextPurchasePress = useCallback(
+    (candidate: {
+      identityKind: MilestoneFrequentProduct['groupingType'];
+      identityKey: string;
+    }) => {
+      const href = buildHomeFrequentProductDetailHref({
+        groupingType: candidate.identityKind,
+        key: candidate.identityKey,
+      });
+      if (!href) return;
+      router.push(href as any);
+    },
+    [router]
+  );
 
   return (
     <View
@@ -599,6 +618,7 @@ export default function HomeScreen() {
           onScan={handleScanReceipt}
           onRecentPurchasePress={handleRecentPurchasePress}
           onProductPress={handleProductPress}
+          onNextPurchasePress={handleNextPurchasePress}
         />
       </ScrollView>
 
