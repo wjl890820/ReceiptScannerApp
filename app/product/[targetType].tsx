@@ -1,8 +1,10 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,6 +37,12 @@ import {
 import { parseProductDetailTarget } from '@/lib/productDetailTarget';
 import { loadPersonalProductDetailDataWithDb } from '@/lib/productDetailPersonalLoader';
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
+import {
+  addShoppingListItemFromProductDetail,
+  getActiveShoppingListIdentitySet,
+  shoppingListIdentityKey,
+  trustedShoppingIdentityFromProductDetailTarget,
+} from '@/lib/shoppingList';
 import { UI_COLORS, UI_LAYOUT, UI_RADIUS } from '@/lib/uiTokens';
 import {
   loadProductPriceHistory,
@@ -71,6 +79,8 @@ export default function ProductDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [priceLoadFailed, setPriceLoadFailed] = useState(false);
+  const [alreadyOnShoppingList, setAlreadyOnShoppingList] = useState(false);
+  const [addingToShoppingList, setAddingToShoppingList] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -142,12 +152,78 @@ export default function ProductDetailScreen() {
     };
   }, [locale, target]);
 
+  const trustedShoppingIdentity = useMemo(
+    () => trustedShoppingIdentityFromProductDetailTarget(target),
+    [target]
+  );
+
+  const refreshShoppingListCta = useCallback(async () => {
+    if (!trustedShoppingIdentity) {
+      setAlreadyOnShoppingList(false);
+      return;
+    }
+    try {
+      const active = await getActiveShoppingListIdentitySet();
+      setAlreadyOnShoppingList(
+        active.has(
+          shoppingListIdentityKey(
+            trustedShoppingIdentity.identityKind,
+            trustedShoppingIdentity.identityKey
+          )
+        )
+      );
+    } catch (error) {
+      console.error('[ProductDetail] shopping list CTA refresh failed', error);
+    }
+  }, [trustedShoppingIdentity]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshShoppingListCta();
+    }, [refreshShoppingListCta])
+  );
+
   const title =
     target?.type === 'family'
       ? PRODUCT_FAMILY_KEYS.includes(target.key as (typeof PRODUCT_FAMILY_KEYS)[number])
         ? t(`productDetail.family.${target.key}`)
         : t('productDetail.title')
       : summary?.title || target?.key || t('productDetail.title');
+
+  const onAddToShoppingList = useCallback(async () => {
+    if (!summary || addingToShoppingList) return;
+    if (trustedShoppingIdentity && alreadyOnShoppingList) return;
+    const displayName = (summary.title || title).trim();
+    if (!displayName) return;
+    setAddingToShoppingList(true);
+    try {
+      const result = await addShoppingListItemFromProductDetail({
+        displayName,
+        identityKind: trustedShoppingIdentity?.identityKind ?? null,
+        identityKey: trustedShoppingIdentity?.identityKey ?? null,
+      });
+      if (result.status === 'already_exists') {
+        setAlreadyOnShoppingList(true);
+        Alert.alert(t('productDetail.addedToShoppingList'));
+        return;
+      }
+      if (result.status === 'created') {
+        if (trustedShoppingIdentity) setAlreadyOnShoppingList(true);
+        Alert.alert(t('productDetail.addedToShoppingList'));
+      }
+    } catch (error) {
+      console.error('[ProductDetail] add to shopping list failed', error);
+    } finally {
+      setAddingToShoppingList(false);
+    }
+  }, [
+    addingToShoppingList,
+    alreadyOnShoppingList,
+    summary,
+    title,
+    trustedShoppingIdentity,
+  ]);
+
   const specificationLabels = summary
     ? [
         ...new Set(
@@ -215,6 +291,32 @@ export default function ProductDetailScreen() {
             )}
             <Text style={styles.productTitle}>{title}</Text>
           </View>
+          <Pressable
+            onPress={() => void onAddToShoppingList()}
+            disabled={
+              addingToShoppingList ||
+              (Boolean(trustedShoppingIdentity) && alreadyOnShoppingList)
+            }
+            accessibilityRole="button"
+            accessibilityLabel={
+              trustedShoppingIdentity && alreadyOnShoppingList
+                ? t('productDetail.addedToShoppingList')
+                : t('productDetail.addToShoppingListA11y')
+            }
+            style={({ pressed }) => [
+              styles.shoppingListCta,
+              pressed && { opacity: 0.55 },
+              (addingToShoppingList ||
+                (trustedShoppingIdentity && alreadyOnShoppingList)) &&
+                styles.shoppingListCtaDisabled,
+            ]}
+          >
+            <Text style={styles.shoppingListCtaText}>
+              {trustedShoppingIdentity && alreadyOnShoppingList
+                ? t('productDetail.addedToShoppingList')
+                : t('productDetail.addToShoppingList')}
+            </Text>
+          </Pressable>
           {primaryMerchant ? (
             <View style={styles.productMerchantRow}>
               <MerchantIdentityTile
@@ -485,6 +587,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  shoppingListCta: {
+    marginTop: 14,
+    minHeight: 44,
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  shoppingListCtaDisabled: {
+    opacity: 0.55,
+  },
+  shoppingListCtaText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
   productIconTile: {
     width: 34,

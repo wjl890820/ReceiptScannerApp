@@ -46,11 +46,20 @@
         "average": "1回あたりの平均",
         "category": "カテゴリ構成"
       },
+      "shoppingList": {
+        "title": "買い物リスト",
+        "incompleteCount": "未完了 {count} 件",
+        "incompleteCountZero": "まだ買うものはありません",
+        "openA11y": "買い物リストを開く"
+      },
       "nextPurchase": {
         "title": "そろそろ買い足すもの",
         "explanation": "通常は約 {medianDays} 日ごと · 前回から {daysSince} 日",
         "empty": "今のところ、買い足し時期に近い商品はありません",
-        "openHistoryA11y": "{name}の購入履歴を見る"
+        "openHistoryA11y": "{name}の購入履歴を見る",
+        "add": "追加",
+        "addA11y": "{name}を買い物リストに追加",
+        "added": "追加済み"
       },
       "frequent": {
         "title": "よく買う商品",
@@ -412,6 +421,9 @@
     "seriesScopeNote": "同じ商品シリーズで購入した異なる規格をまとめています。",
     "familyScopeNote": "この商品カテゴリで購入した異なる商品をまとめています。",
     "personalScopeNote": "あなたの確認に基づき、同じ商品としてまとめています。",
+    "addToShoppingList": "買い物リストに追加",
+    "addedToShoppingList": "追加済み",
+    "addToShoppingListA11y": "買い物リストに追加",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品シリーズ",
@@ -887,5 +899,20 @@
     "labels": {
       "other": "その他"
     }
+  },
+  "shoppingList": {
+    "title": "買い物リスト",
+    "back": "戻る",
+    "add": "追加",
+    "incomplete": "未完了",
+    "completed": "完了",
+    "clearCompleted": "完了済みを削除",
+    "delete": "削除",
+    "emptyTitle": "買い物リストは空です",
+    "emptySubtitle": "次に買うものを追加しましょう",
+    "inputPlaceholder": "何を買いますか？",
+    "errorTitle": "エラー",
+    "errorMessage": "買い物リストを読み込めませんでした",
+    "alreadyOnList": "この商品はすでに買い物リストにあります。"
   }
 }

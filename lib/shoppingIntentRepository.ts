@@ -1,5 +1,5 @@
 /**
- * Local-first ShoppingIntent repository (M1-D).
+ * Local-first ShoppingIntent repository (M1-D + B3 Shopping List provenance).
  *
  * Persistence: additive SQLite table in receipts_v2.db.
  * Cloud sync: deferred — LOCAL-ONLY FOR V1 FOUNDATION.
@@ -28,6 +28,12 @@ import {
 
 const DB_NAME = 'receipts_v2.db';
 
+export type ShoppingIntentProvenance = {
+  sourceType: string | null;
+  sourceIdentityKind: string | null;
+  sourceIdentityKey: string | null;
+};
+
 export type ShoppingIntentRow = {
   id: string;
   raw_text: string;
@@ -40,6 +46,9 @@ export type ShoppingIntentRow = {
   updated_at: string;
   completed_at: string | null;
   contract_version: string;
+  source_type: string | null;
+  source_identity_kind: string | null;
+  source_identity_key: string | null;
 };
 
 export type ShoppingIntentDatabase = {
@@ -80,7 +89,21 @@ export function __resetShoppingIntentDbForTests(): void {
   _schemaReady = false;
 }
 
-function serializeIntent(intent: ShoppingIntent): ShoppingIntentRow {
+function normalizeProvenance(
+  provenance?: ShoppingIntentProvenance | null
+): ShoppingIntentProvenance {
+  return {
+    sourceType: provenance?.sourceType?.trim() || null,
+    sourceIdentityKind: provenance?.sourceIdentityKind?.trim() || null,
+    sourceIdentityKey: provenance?.sourceIdentityKey?.trim() || null,
+  };
+}
+
+function serializeIntent(
+  intent: ShoppingIntent,
+  provenance?: ShoppingIntentProvenance | null
+): ShoppingIntentRow {
+  const prov = normalizeProvenance(provenance);
   return {
     id: intent.id,
     raw_text: intent.rawText,
@@ -97,6 +120,9 @@ function serializeIntent(intent: ShoppingIntent): ShoppingIntentRow {
     updated_at: intent.updatedAt,
     completed_at: intent.completedAt,
     contract_version: intent.contractVersion,
+    source_type: prov.sourceType,
+    source_identity_kind: prov.sourceIdentityKind,
+    source_identity_key: prov.sourceIdentityKey,
   };
 }
 
@@ -128,17 +154,29 @@ export function rowToShoppingIntent(row: ShoppingIntentRow): ShoppingIntent {
   };
 }
 
+export function rowToShoppingIntentProvenance(
+  row: ShoppingIntentRow
+): ShoppingIntentProvenance {
+  return {
+    sourceType: row.source_type ?? null,
+    sourceIdentityKind: row.source_identity_kind ?? null,
+    sourceIdentityKey: row.source_identity_key ?? null,
+  };
+}
+
 async function insertRow(
   db: ShoppingIntentDatabase,
-  intent: ShoppingIntent
+  intent: ShoppingIntent,
+  provenance?: ShoppingIntentProvenance | null
 ): Promise<void> {
-  const row = serializeIntent(intent);
+  const row = serializeIntent(intent, provenance);
   await db.runAsync(
     `INSERT INTO shopping_intents (
       id, raw_text, intent_type, status, desired_quantity,
       desired_spec_json, resolution_json, created_at, updated_at,
-      completed_at, contract_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      completed_at, contract_version,
+      source_type, source_identity_kind, source_identity_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.raw_text,
@@ -151,15 +189,26 @@ async function insertRow(
       row.updated_at,
       row.completed_at,
       row.contract_version,
+      row.source_type,
+      row.source_identity_kind,
+      row.source_identity_key,
     ]
   );
 }
 
 async function updateRow(
   db: ShoppingIntentDatabase,
-  intent: ShoppingIntent
+  intent: ShoppingIntent,
+  provenance?: ShoppingIntentProvenance | null
 ): Promise<void> {
-  const row = serializeIntent(intent);
+  const existing = await getShoppingIntentRowWithDb(db, intent.id);
+  const mergedProvenance =
+    provenance !== undefined
+      ? provenance
+      : existing
+        ? rowToShoppingIntentProvenance(existing)
+        : null;
+  const row = serializeIntent(intent, mergedProvenance);
   await db.runAsync(
     `UPDATE shopping_intents SET
       raw_text = ?,
@@ -170,7 +219,10 @@ async function updateRow(
       resolution_json = ?,
       updated_at = ?,
       completed_at = ?,
-      contract_version = ?
+      contract_version = ?,
+      source_type = ?,
+      source_identity_kind = ?,
+      source_identity_key = ?
      WHERE id = ?`,
     [
       row.raw_text,
@@ -182,6 +234,9 @@ async function updateRow(
       row.updated_at,
       row.completed_at,
       row.contract_version,
+      row.source_type,
+      row.source_identity_kind,
+      row.source_identity_key,
       row.id,
     ]
   );
@@ -189,30 +244,39 @@ async function updateRow(
 
 export async function createShoppingIntentWithDb(
   db: ShoppingIntentDatabase,
-  input: CreateShoppingIntentInput
+  input: CreateShoppingIntentInput,
+  provenance?: ShoppingIntentProvenance | null
 ): Promise<ShoppingIntent> {
   await ensureShoppingIntentsSchema(db);
   const intent = buildShoppingIntent(input);
-  await insertRow(db, intent);
+  await insertRow(db, intent, provenance);
   return intent;
 }
 
 export async function createShoppingIntent(
-  input: CreateShoppingIntentInput
+  input: CreateShoppingIntentInput,
+  provenance?: ShoppingIntentProvenance | null
 ): Promise<ShoppingIntent> {
   const db = await getSqliteDb();
-  return createShoppingIntentWithDb(db, input);
+  return createShoppingIntentWithDb(db, input, provenance);
+}
+
+export async function getShoppingIntentRowWithDb(
+  db: ShoppingIntentDatabase,
+  id: string
+): Promise<ShoppingIntentRow | null> {
+  await ensureShoppingIntentsSchema(db);
+  return db.getFirstAsync<ShoppingIntentRow>(
+    `SELECT * FROM shopping_intents WHERE id = ?`,
+    [id]
+  );
 }
 
 export async function getShoppingIntentWithDb(
   db: ShoppingIntentDatabase,
   id: string
 ): Promise<ShoppingIntent | null> {
-  await ensureShoppingIntentsSchema(db);
-  const row = await db.getFirstAsync<ShoppingIntentRow>(
-    `SELECT * FROM shopping_intents WHERE id = ?`,
-    [id]
-  );
+  const row = await getShoppingIntentRowWithDb(db, id);
   return row ? rowToShoppingIntent(row) : null;
 }
 
@@ -226,11 +290,12 @@ export async function getShoppingIntent(
 /**
  * Default ordering: updated_at DESC, then created_at DESC, then id ASC.
  * Deterministic; no drag-and-drop in M1-D.
+ * Shopping List UX uses its own sort over mapped rows.
  */
-export async function listShoppingIntentsWithDb(
+export async function listShoppingIntentRowsWithDb(
   db: ShoppingIntentDatabase,
   filter: ListShoppingIntentsFilter = {}
-): Promise<ShoppingIntent[]> {
+): Promise<ShoppingIntentRow[]> {
   await ensureShoppingIntentsSchema(db);
   const statuses = filter.status
     ? Array.isArray(filter.status)
@@ -246,7 +311,14 @@ export async function listShoppingIntentsWithDb(
   }
   sql += ` ORDER BY updated_at DESC, created_at DESC, id ASC`;
 
-  const rows = await db.getAllAsync<ShoppingIntentRow>(sql, params);
+  return db.getAllAsync<ShoppingIntentRow>(sql, params);
+}
+
+export async function listShoppingIntentsWithDb(
+  db: ShoppingIntentDatabase,
+  filter: ListShoppingIntentsFilter = {}
+): Promise<ShoppingIntent[]> {
+  const rows = await listShoppingIntentRowsWithDb(db, filter);
   return rows.map(rowToShoppingIntent);
 }
 
@@ -255,6 +327,26 @@ export async function listShoppingIntents(
 ): Promise<ShoppingIntent[]> {
   const db = await getSqliteDb();
   return listShoppingIntentsWithDb(db, filter);
+}
+
+export async function findActiveShoppingIntentByTrustedIdentityWithDb(
+  db: ShoppingIntentDatabase,
+  identityKind: string,
+  identityKey: string
+): Promise<ShoppingIntentRow | null> {
+  await ensureShoppingIntentsSchema(db);
+  const kind = identityKind.trim();
+  const key = identityKey.trim();
+  if (!kind || !key) return null;
+  return db.getFirstAsync<ShoppingIntentRow>(
+    `SELECT * FROM shopping_intents
+     WHERE status = 'active'
+       AND source_identity_kind = ?
+       AND source_identity_key = ?
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1`,
+    [kind, key]
+  );
 }
 
 export async function updateShoppingIntentWithDb(
@@ -337,6 +429,38 @@ export async function deleteShoppingIntent(id: string): Promise<boolean> {
   return deleteShoppingIntentWithDb(db, id);
 }
 
+export async function deleteCompletedShoppingIntentsWithDb(
+  db: ShoppingIntentDatabase
+): Promise<number> {
+  await ensureShoppingIntentsSchema(db);
+  const result = (await db.runAsync(
+    `DELETE FROM shopping_intents WHERE status = 'completed'`
+  )) as { changes?: number };
+  return result?.changes ?? 0;
+}
+
+function assertMemoryActiveTrustedUnique(
+  rows: Map<string, ShoppingIntentRow>,
+  candidate: Pick<
+    ShoppingIntentRow,
+    'id' | 'status' | 'source_identity_kind' | 'source_identity_key'
+  >
+): void {
+  if (candidate.status !== 'active') return;
+  const kind = candidate.source_identity_kind;
+  const key = candidate.source_identity_key;
+  if (kind == null || key == null) return;
+  for (const row of rows.values()) {
+    if (row.id === candidate.id) continue;
+    if (row.status !== 'active') continue;
+    if (row.source_identity_kind !== kind) continue;
+    if (row.source_identity_key !== key) continue;
+    throw new Error(
+      'UNIQUE constraint failed: shopping_intents.source_identity_kind, shopping_intents.source_identity_key'
+    );
+  }
+}
+
 /** In-memory store for deterministic unit tests (no expo-sqlite). */
 export function createMemoryShoppingIntentDatabase(): ShoppingIntentDatabase & {
   rows: Map<string, ShoppingIntentRow>;
@@ -363,15 +487,19 @@ export function createMemoryShoppingIntentDatabase(): ShoppingIntentDatabase & {
           updated_at: String(values[8]),
           completed_at: values[9] == null ? null : String(values[9]),
           contract_version: String(values[10]),
+          source_type: values[11] == null ? null : String(values[11]),
+          source_identity_kind: values[12] == null ? null : String(values[12]),
+          source_identity_key: values[13] == null ? null : String(values[13]),
         };
+        assertMemoryActiveTrustedUnique(rows, row);
         rows.set(row.id, row);
         return { changes: 1 };
       }
       if (/^\s*UPDATE shopping_intents SET/i.test(source)) {
-        const id = String(values[9]);
+        const id = String(values[values.length - 1]);
         const existing = rows.get(id);
         if (!existing) return { changes: 0 };
-        rows.set(id, {
+        const next: ShoppingIntentRow = {
           ...existing,
           raw_text: String(values[0]),
           intent_type: String(values[1]),
@@ -382,13 +510,31 @@ export function createMemoryShoppingIntentDatabase(): ShoppingIntentDatabase & {
           updated_at: String(values[6]),
           completed_at: values[7] == null ? null : String(values[7]),
           contract_version: String(values[8]),
-        });
+          source_type: values[9] == null ? null : String(values[9]),
+          source_identity_kind: values[10] == null ? null : String(values[10]),
+          source_identity_key: values[11] == null ? null : String(values[11]),
+        };
+        assertMemoryActiveTrustedUnique(rows, next);
+        rows.set(id, next);
         return { changes: 1 };
+      }
+      if (/^\s*DELETE FROM shopping_intents WHERE status = 'completed'/i.test(source)) {
+        let changes = 0;
+        for (const [id, row] of [...rows.entries()]) {
+          if (row.status === 'completed') {
+            rows.delete(id);
+            changes += 1;
+          }
+        }
+        return { changes };
       }
       if (/^\s*DELETE FROM shopping_intents/i.test(source)) {
         const id = String(values[0]);
         const had = rows.delete(id);
         return { changes: had ? 1 : 0 };
+      }
+      if (/^\s*ALTER TABLE shopping_intents ADD COLUMN/i.test(source)) {
+        return { changes: 0 };
       }
       return { changes: 0 };
     },
@@ -401,12 +547,82 @@ export function createMemoryShoppingIntentDatabase(): ShoppingIntentDatabase & {
         const row = rows.get(String(values[0]));
         return (row as T) ?? null;
       }
+      if (/status = 'active'/i.test(source) && /source_identity_kind/i.test(source)) {
+        const kind = String(values[0]);
+        const key = String(values[1]);
+        const matches = [...rows.values()]
+          .filter(
+            (row) =>
+              row.status === 'active' &&
+              row.source_identity_kind === kind &&
+              row.source_identity_key === key
+          )
+          .sort((a, b) =>
+            a.created_at !== b.created_at
+              ? a.created_at < b.created_at
+                ? -1
+                : 1
+              : a.id < b.id
+                ? -1
+                : a.id > b.id
+                  ? 1
+                  : 0
+          );
+        return (matches[0] as T) ?? null;
+      }
       return null;
     },
     async getAllAsync<T>(
       source: string,
       params: SQLite.SQLiteBindParams = []
     ): Promise<T[]> {
+      if (/PRAGMA table_info\(shopping_intents\)/i.test(source)) {
+        return [
+          { name: 'id' },
+          { name: 'raw_text' },
+          { name: 'intent_type' },
+          { name: 'status' },
+          { name: 'desired_quantity' },
+          { name: 'desired_spec_json' },
+          { name: 'resolution_json' },
+          { name: 'created_at' },
+          { name: 'updated_at' },
+          { name: 'completed_at' },
+          { name: 'contract_version' },
+          { name: 'source_type' },
+          { name: 'source_identity_kind' },
+          { name: 'source_identity_key' },
+        ] as T[];
+      }
+      if (
+        /GROUP BY source_identity_kind, source_identity_key/i.test(source) &&
+        /HAVING COUNT\(\*\) > 1/i.test(source)
+      ) {
+        const counts = new Map<
+          string,
+          { kind: string; key: string; count: number }
+        >();
+        for (const row of rows.values()) {
+          if (row.status !== 'active') continue;
+          if (
+            row.source_identity_kind == null ||
+            row.source_identity_key == null
+          ) {
+            continue;
+          }
+          const mapKey = `${row.source_identity_kind}\0${row.source_identity_key}`;
+          const prev = counts.get(mapKey);
+          if (prev) prev.count += 1;
+          else {
+            counts.set(mapKey, {
+              kind: row.source_identity_kind,
+              key: row.source_identity_key,
+              count: 1,
+            });
+          }
+        }
+        return [...counts.values()].filter((entry) => entry.count > 1) as T[];
+      }
       const values = Array.isArray(params) ? [...params] : [];
       let list = [...rows.values()];
       if (/WHERE status IN/i.test(source)) {

@@ -42,6 +42,11 @@ type ProgressiveHomeInsightsProps = {
   onRecentPurchasePress: (receiptId: string) => void;
   onProductPress: (product: MilestoneFrequentProduct) => void;
   onNextPurchasePress?: (candidate: NextPurchaseCandidate) => void;
+  /** Incomplete Shopping List count — independent of Repeat stage. */
+  shoppingListIncompleteCount?: number;
+  activeShoppingListIdentities?: ReadonlySet<string>;
+  onShoppingListPress?: () => void;
+  onAddNextPurchaseToShoppingList?: (candidate: NextPurchaseCandidate) => void;
 };
 
 function categoryLabel(category: string): string {
@@ -63,6 +68,10 @@ export function ProgressiveHomeInsights({
   onRecentPurchasePress,
   onProductPress,
   onNextPurchasePress,
+  shoppingListIncompleteCount = 0,
+  activeShoppingListIdentities,
+  onShoppingListPress,
+  onAddNextPurchaseToShoppingList,
 }: ProgressiveHomeInsightsProps) {
   const showRecent =
     experience.stage !== 'empty' && experience.latestPurchase != null;
@@ -263,13 +272,56 @@ export function ProgressiveHomeInsights({
         </>
       ) : null}
 
+      <>
+        <SectionTitle title={t('home.progressive.shoppingList.title')} />
+        <MerunoGroupedList>
+          <MerunoGroupedRow
+            onPress={onShoppingListPress}
+            accessibilityRole="button"
+            accessibilityLabel={t('home.progressive.shoppingList.openA11y')}
+            showDivider={false}
+            minHeight={64}
+            dividerInset={0}
+            style={styles.shoppingListRow}
+          >
+            {({ pressed }) => (
+              <View style={styles.shoppingListRowInner}>
+                <View style={styles.shoppingListText}>
+                  <MerunoText
+                    role="bodySmall"
+                    tone="primary"
+                    style={styles.shoppingListTitle}
+                    numberOfLines={1}
+                  >
+                    {t('home.progressive.shoppingList.title')}
+                  </MerunoText>
+                  <MerunoText role="meta" tone="secondary" style={styles.shoppingListMeta}>
+                    {shoppingListIncompleteCount > 0
+                      ? t('home.progressive.shoppingList.incompleteCount', {
+                          count: shoppingListIncompleteCount,
+                        })
+                      : t('home.progressive.shoppingList.incompleteCountZero')}
+                  </MerunoText>
+                </View>
+                <MerunoDisclosureIndicator
+                  kind="crossEntity"
+                  pressed={pressed}
+                />
+              </View>
+            )}
+          </MerunoGroupedRow>
+        </MerunoGroupedList>
+      </>
+
       {showNextPurchaseSection ? (
         <>
           <SectionTitle title={t('home.progressive.nextPurchase.title')} />
           {experience.nextPurchaseCandidates.length > 0 ? (
             <HomeNextPurchaseList
               candidates={experience.nextPurchaseCandidates}
+              activeShoppingListIdentities={activeShoppingListIdentities}
               onPress={onNextPurchasePress}
+              onAddToShoppingList={onAddNextPurchaseToShoppingList}
             />
           ) : (
             <MerunoText role="meta" tone="secondary" style={styles.fallbackText}>
@@ -407,6 +459,27 @@ const styles = StyleSheet.create({
   fallbackText: {
     paddingVertical: UI_SPACING.sm,
     lineHeight: 19,
+  },
+  shoppingListRow: {
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  shoppingListRowInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: UI_SPACING.lg,
+    paddingVertical: 14,
+    gap: UI_SPACING.md,
+  },
+  shoppingListText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  shoppingListTitle: {
+    fontWeight: '700',
+  },
+  shoppingListMeta: {
+    marginTop: 4,
   },
   analyticsFallback: {
     marginTop: UI_LAYOUT.sectionGap,

@@ -216,17 +216,19 @@ describe('Home Next Purchase V0 wiring', () => {
     expect(experience.nextPurchaseCandidates).toEqual([]);
   });
 
-  it('UI places Next Purchase section above Frequent Products', () => {
+  it('UI places Shopping List above Next Purchase above Frequent Products', () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, '../components/ProgressiveHomeInsights.tsx'),
       'utf8'
     );
+    const shoppingIdx = source.indexOf('home.progressive.shoppingList.title');
     const nextIdx = source.indexOf('home.progressive.nextPurchase.title');
     const frequentIdx = source.indexOf('home.progressive.frequent.title');
+    expect(shoppingIdx).toBeGreaterThan(-1);
     expect(nextIdx).toBeGreaterThan(-1);
     expect(frequentIdx).toBeGreaterThan(-1);
+    expect(shoppingIdx).toBeLessThan(nextIdx);
     expect(nextIdx).toBeLessThan(frequentIdx);
-    expect(source).not.toMatch(/shoppingList|Shopping List|加入购物清单/i);
   });
 
   it('consumes uncapped Repeat profiles — Home cap=5 does not truncate B2 input', () => {

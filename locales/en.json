@@ -46,11 +46,20 @@
         "average": "Average per purchase",
         "category": "Category mix"
       },
+      "shoppingList": {
+        "title": "Shopping List",
+        "incompleteCount": "{count} to buy",
+        "incompleteCountZero": "Nothing to buy yet",
+        "openA11y": "Open shopping list"
+      },
       "nextPurchase": {
         "title": "May need soon",
         "explanation": "Usually about every {medianDays} days · {daysSince} days since last purchase",
         "empty": "Nothing looks due to buy again right now.",
-        "openHistoryA11y": "View purchase history for {name}"
+        "openHistoryA11y": "View purchase history for {name}",
+        "add": "Add",
+        "addA11y": "Add {name} to shopping list",
+        "added": "Added"
       },
       "frequent": {
         "title": "Frequent Products",
@@ -412,6 +421,9 @@
     "seriesScopeNote": "Includes different specifications purchased from the same product series.",
     "familyScopeNote": "Includes different products purchased in this product category.",
     "personalScopeNote": "These records are grouped as the same product based on your confirmation.",
+    "addToShoppingList": "Add to Shopping List",
+    "addedToShoppingList": "Added",
+    "addToShoppingListA11y": "Add to Shopping List",
     "targetType": {
       "sku": "Specific product",
       "canonical": "Product series",
@@ -887,5 +899,20 @@
     "labels": {
       "other": "Other"
     }
+  },
+  "shoppingList": {
+    "title": "Shopping List",
+    "back": "Back",
+    "add": "Add",
+    "incomplete": "To buy",
+    "completed": "Completed",
+    "clearCompleted": "Clear completed",
+    "delete": "Delete",
+    "emptyTitle": "Your shopping list is empty",
+    "emptySubtitle": "Add what you need to buy next",
+    "inputPlaceholder": "What do you need?",
+    "errorTitle": "Something went wrong",
+    "errorMessage": "Unable to load shopping list",
+    "alreadyOnList": "This item is already on your shopping list."
   }
 }

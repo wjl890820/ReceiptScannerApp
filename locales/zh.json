@@ -46,11 +46,20 @@
         "average": "平均每次支出",
         "category": "分类结构"
       },
+      "shoppingList": {
+        "title": "购物清单",
+        "incompleteCount": "{count} 项未完成",
+        "incompleteCountZero": "还没有待买的东西",
+        "openA11y": "打开购物清单"
+      },
       "nextPurchase": {
         "title": "可能需要补货",
         "explanation": "通常约每 {medianDays} 天购买一次 · 距上次 {daysSince} 天",
         "empty": "当前没有接近补货节奏的商品",
-        "openHistoryA11y": "查看{name}的购买记录"
+        "openHistoryA11y": "查看{name}的购买记录",
+        "add": "添加",
+        "addA11y": "将{name}加入购物清单",
+        "added": "已添加"
       },
       "frequent": {
         "title": "常购商品",
@@ -412,6 +421,9 @@
     "seriesScopeNote": "汇总同一商品系列下购买过的不同规格。",
     "familyScopeNote": "汇总这一商品类别中的不同商品。",
     "personalScopeNote": "这些记录根据你的确认，被作为同一个商品整理。",
+    "addToShoppingList": "加入购物清单",
+    "addedToShoppingList": "已添加",
+    "addToShoppingListA11y": "加入购物清单",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品系列",
@@ -887,5 +899,20 @@
     "labels": {
       "other": "其他"
     }
+  },
+  "shoppingList": {
+    "title": "购物清单",
+    "back": "返回",
+    "add": "添加",
+    "incomplete": "未完成",
+    "completed": "已完成",
+    "clearCompleted": "清除已完成",
+    "delete": "删除",
+    "emptyTitle": "购物清单为空",
+    "emptySubtitle": "先添加下一次要买的东西",
+    "inputPlaceholder": "要买什么？",
+    "errorTitle": "出错了",
+    "errorMessage": "无法加载购物清单",
+    "alreadyOnList": "该商品已在购物清单中。"
   }
 }

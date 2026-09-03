@@ -70,6 +70,13 @@ import {
 import {
   buildHomeFrequentProductDetailHref,
 } from '@/lib/homeValueHierarchy';
+import {
+  addShoppingListItemFromNextPurchase,
+  getActiveShoppingListIdentitySetFromItems,
+  listShoppingListItems,
+  shoppingListIdentityKey,
+} from '@/lib/shoppingList';
+import type { NextPurchaseCandidate } from '@/lib/nextPurchaseCandidates';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 export default function HomeScreen() {
   const router = useRouter();
@@ -91,6 +98,10 @@ export default function HomeScreen() {
     nextDraftId: null,
     pendingCount: 0,
   });
+  const [shoppingListIncompleteCount, setShoppingListIncompleteCount] =
+    useState(0);
+  const [activeShoppingListIdentities, setActiveShoppingListIdentities] =
+    useState<ReadonlySet<string>>(() => new Set());
 
 
   // 加载所有收据； progressive analytics 使用去重后的 purchase candidates
@@ -188,12 +199,29 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const refreshShoppingListHomeState = useCallback(async () => {
+    try {
+      const items = await listShoppingListItems();
+      setShoppingListIncompleteCount(
+        items.filter((item) => !item.isCompleted).length
+      );
+      setActiveShoppingListIdentities(
+        getActiveShoppingListIdentitySetFromItems(items)
+      );
+    } catch (error) {
+      logger.warn('Home', 'shopping list home state refresh failed', {
+        error,
+      });
+    }
+  }, []);
+
   // 当屏幕获得焦点时刷新数据（首次打开 + 从审核页返回都会触发）
   useFocusEffect(
     useCallback(() => {
       loadReceipts();
       void refreshPendingReview();
-    }, [loadReceipts, refreshPendingReview])
+      void refreshShoppingListHomeState();
+    }, [loadReceipts, refreshPendingReview, refreshShoppingListHomeState])
   );
 
   // 点击“继续审核”：始终先刷新最新 pending 状态，再据此决定导航（点击时二次校验）
@@ -594,6 +622,31 @@ export default function HomeScreen() {
     [router]
   );
 
+  const handleShoppingListPress = useCallback(() => {
+    router.push('/shopping-list' as any);
+  }, [router]);
+
+  const handleAddNextPurchaseToShoppingList = useCallback(
+    async (candidate: NextPurchaseCandidate) => {
+      const identity = shoppingListIdentityKey(
+        candidate.identityKind,
+        candidate.identityKey
+      );
+      if (activeShoppingListIdentities.has(identity)) return;
+      try {
+        const result = await addShoppingListItemFromNextPurchase(candidate);
+        if (result.status === 'created' || result.status === 'already_exists') {
+          await refreshShoppingListHomeState();
+        }
+      } catch (error) {
+        logger.warn('Home', 'add next purchase to shopping list failed', {
+          error,
+        });
+      }
+    },
+    [activeShoppingListIdentities, refreshShoppingListHomeState]
+  );
+
   return (
     <View
       style={[
@@ -619,6 +672,10 @@ export default function HomeScreen() {
           onRecentPurchasePress={handleRecentPurchasePress}
           onProductPress={handleProductPress}
           onNextPurchasePress={handleNextPurchasePress}
+          shoppingListIncompleteCount={shoppingListIncompleteCount}
+          activeShoppingListIdentities={activeShoppingListIdentities}
+          onShoppingListPress={handleShoppingListPress}
+          onAddNextPurchaseToShoppingList={handleAddNextPurchaseToShoppingList}
         />
       </ScrollView>
 
