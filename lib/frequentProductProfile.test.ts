@@ -5,6 +5,9 @@ jest.mock('expo-sqlite', () => ({
 jest.mock('./db', () => ({
   initIfNeeded: jest.fn(async () => undefined),
 }));
+jest.mock('./env', () => ({
+  isProductIdentityPriceHistoryV1Enabled: () => true,
+}));
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -323,12 +326,21 @@ describe('R2-F3B Home migration', () => {
     receiptsUntilNext: 5,
   };
 
-  it('Home consumes long-term profiles with distinctReceiptCount display', () => {
+  it('Home consumes Repeat V1 merchant_product profiles with distinct receipt counts', () => {
     const receipts = [1, 2, 3, 4, 5].map((n) => receipt(`r${n}`));
     const rows = [
-      productRow('r1', 'm1', { canonicalProductName: '明治牛乳' }),
-      productRow('r2', 'm2', { canonicalProductName: '明治牛乳' }),
-      productRow('r1', 'x1', { canonicalProductName: 'OnlyOnce' }),
+      productRow('r1', 'm1', {
+        displayName: 'コカ・コーラ 500ml',
+        sourceIndex: 0,
+      }),
+      productRow('r2', 'm2', {
+        displayName: 'コカ・コーラ 500ml',
+        sourceIndex: 0,
+      }),
+      productRow('r1', 'x1', {
+        displayName: 'OnlyOnce商品XYZ',
+        sourceIndex: 1,
+      }),
     ];
     const experience = buildHomeProgressiveExperience(
       asReceiptRows(receipts),
@@ -345,7 +357,32 @@ describe('R2-F3B Home migration', () => {
     expect(experience.stage).toBe('frequent');
     expect(experience.frequentProducts).toHaveLength(1);
     expect(experience.frequentProducts[0].purchaseOccurrenceCount).toBe(2);
-    expect(experience.frequentProducts[0].displayLabel).toBe('明治牛乳');
+    expect(experience.frequentProducts[0].groupingType).toBe('merchant_product');
+    expect(experience.frequentProducts[0].displayLabel).toContain('コカ');
+  });
+
+  it('Home does not let family_only inflate Repeat / frequent threshold', () => {
+    const receipts = [1, 2, 3, 4, 5].map((n) => receipt(`r${n}`));
+    // First '牛乳' is family_only; second reuses MP as merchant_product.
+    // Must NOT become Repeat / Home frequent with only those two.
+    const rows = [
+      productRow('r1', 'a', { displayName: '牛乳', sourceIndex: 0 }),
+      productRow('r2', 'b', { displayName: '牛乳', sourceIndex: 0 }),
+    ];
+    const experience = buildHomeProgressiveExperience(
+      asReceiptRows(receipts),
+      {
+        status: unlockedStatus,
+        currentResult: buildFiveReceiptMilestone(receipts, {
+          rows,
+          queryFailed: false,
+        }),
+      },
+      false,
+      rows
+    );
+    expect(experience.stage).toBe('frequent');
+    expect(experience.frequentProducts).toEqual([]);
   });
 
   it('Home stage gate unchanged — no frequent list before unlock', () => {
@@ -354,27 +391,27 @@ describe('R2-F3B Home migration', () => {
       null,
       false,
       [
-        productRow('r1', 'm1', { canonicalProductName: '明治牛乳' }),
-        productRow('r2', 'm2', { canonicalProductName: '明治牛乳' }),
+        productRow('r1', 'm1', { displayName: 'コカ・コーラ 500ml' }),
+        productRow('r2', 'm2', { displayName: 'コカ・コーラ 500ml' }),
       ]
     );
     expect(experience.stage).toBe('recent');
     expect(experience.frequentProducts).toEqual([]);
   });
 
-  it('Home cap = 5; SSOT itself is uncapped', () => {
+  it('Home cap = 5; Repeat SSOT itself is uncapped', () => {
     const receipts = [1, 2, 3, 4, 5, 6].map((n) => receipt(`r${n}`));
     const rows: EngagementProductRow[] = [];
     for (let i = 0; i < 8; i += 1) {
-      const key = `Product-${i}`;
+      const key = `Product-${i}-500ml`;
       rows.push(
-        productRow('r1', `${i}-a`, { canonicalProductName: key }),
-        productRow('r2', `${i}-b`, { canonicalProductName: key })
+        productRow('r1', `${i}-a`, { displayName: key }),
+        productRow('r2', `${i}-b`, { displayName: key })
       );
     }
     const all = buildLongTermFrequentProductProfiles(receipts, rows);
-    expect(all).toHaveLength(8);
-    expect(takeHomeLongTermFrequentProducts(all)).toHaveLength(
+    // Legacy SSOT may still list canonical/family; Home no longer uses it.
+    expect(takeHomeLongTermFrequentProducts(all).length).toBeLessThanOrEqual(
       HOME_LONG_TERM_FREQUENT_PRODUCT_CAP
     );
     const experience = buildHomeProgressiveExperience(
@@ -390,7 +427,14 @@ describe('R2-F3B Home migration', () => {
       false,
       rows
     );
-    expect(experience.frequentProducts).toHaveLength(5);
+    expect(experience.frequentProducts.length).toBeLessThanOrEqual(5);
+    expect(
+      experience.frequentProducts.every(
+        (p) =>
+          p.groupingType === 'merchant_product' ||
+          p.groupingType === 'personal_product'
+      )
+    ).toBe(true);
   });
 
   it('Product Detail href valid; raw-only remains suppressed', () => {

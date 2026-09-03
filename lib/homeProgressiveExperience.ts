@@ -14,15 +14,8 @@ import {
   type ThreeReceiptMilestone,
 } from './engagementMilestones';
 import {
-  buildLongTermFrequentProductProfiles,
-  mapFrequentProductProfileToHomeFrequentProduct,
-  sumPurchaseQuantityForProfile,
-  takeHomeLongTermFrequentProducts,
-} from './frequentProductProfile';
-import {
-  applyHomePersonalFrequentProductOverlay,
-  mapIdentityFrequentGroupToHomeProduct,
-} from './homePersonalFrequentProducts';
+  buildHomeRepeatFrequentProducts,
+} from './repeatProductProfile';
 import { filterV1SupportedReceipts } from './merchantType';
 import type { PersonalProductEndpointInventory } from './personalProductEndpointInventory';
 
@@ -40,9 +33,8 @@ export type HomeProgressiveExperience = {
   latestPurchase: ReceiptShoppingSummary | null;
   recentInsight: ThreeReceiptMilestone | null;
   /**
-   * Home「常购商品」— long-term FrequentProductProfile (distinct receipts),
-   * mapped onto MilestoneFrequentProduct for existing UI/href contracts.
-   * purchaseOccurrenceCount = distinctReceiptCount.
+   * Home「常购商品」— Repeat V1 SSOT (merchant_product | personal_product only).
+   * purchaseOccurrenceCount = distinct canonical receipt IDs.
    * Milestone recent-window frequentProducts remain on milestone results only.
    */
   frequentProducts: MilestoneFrequentProduct[];
@@ -80,60 +72,11 @@ function buildHomeLongTermFrequentProducts(
   productRows: readonly EngagementProductRow[],
   personalInventory: PersonalProductEndpointInventory | null = null
 ): MilestoneFrequentProduct[] {
-  const supported = filterV1SupportedReceipts(analyticsReceipts);
-  const supportedReceiptIds = new Set(supported.map((receipt) => receipt.id));
-  const identityProductRows = filterHomeIdentityProductRows(
+  return buildHomeRepeatFrequentProducts(
+    analyticsReceipts,
     productRows,
-    supportedReceiptIds
+    personalInventory
   );
-
-  try {
-    // Lazy require keeps env/identity graph out of cold home path when disabled.
-    const { isProductIdentityPriceHistoryV1Enabled } = require('./env') as typeof import('./env');
-    if (isProductIdentityPriceHistoryV1Enabled()) {
-      const {
-        buildIdentityFrequentProductGroups,
-      } = require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
-      const observations = identityProductRows.map((row) => ({
-        receiptId: row.receiptId,
-        itemSourceIndex: row.sourceIndex,
-        rawName: row.displayName,
-        merchantKey:
-          (row.merchantNormalized || row.merchantRaw || '').trim() ||
-          'unknown_merchant',
-        occurredAt: row.occurredAt,
-        lineTotal: row.lineTotal,
-        quantity: row.purchaseQuantity,
-        displayName: row.displayName,
-      }));
-      const { groups, qualified } = buildIdentityFrequentProductGroups(observations);
-      const merged = personalInventory
-        ? applyHomePersonalFrequentProductOverlay({
-            baseGroups: groups,
-            qualified,
-            personalInventory,
-            supportedReceiptIds,
-          })
-        : groups.map(mapIdentityFrequentGroupToHomeProduct);
-      if (merged.length > 0) {
-        return merged.slice(0, 5);
-      }
-    }
-  } catch {
-    // Fall through to legacy grouping.
-  }
-
-  const profiles = takeHomeLongTermFrequentProducts(
-    buildLongTermFrequentProductProfiles(supported, productRows)
-  );
-  return profiles.map((profile) =>
-    mapFrequentProductProfileToHomeFrequentProduct(profile, {
-      totalPurchaseQuantity: sumPurchaseQuantityForProfile(
-        profile,
-        productRows
-      ),
-    })
-  ) as MilestoneFrequentProduct[];
 }
 
 /**
