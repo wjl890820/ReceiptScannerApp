@@ -68,10 +68,10 @@ describe('Home refresh production wiring', () => {
 
   it('publishes no intermediate Home experience before enrichment completes', () => {
     const receiptRead = homeSource.indexOf(
-      'const allReceipts = await listReceipts();'
+      "measureHomeRefreshStage('listReceipts'"
     );
     const enrichment = homeSource.indexOf(
-      'loadEngagementProductInsightContext()'
+      "measureHomeRefreshStage('productContext'"
     );
     const finalSnapshot = homeSource.indexOf(
       'setHomeExperience(finalCompleteExperience)'
@@ -103,10 +103,21 @@ describe('Home refresh production wiring', () => {
 
   it('still revalidates Home and Pending Review on every focus', () => {
     expect(homeSource).toContain('useFocusEffect(');
+    expect(homeSource).toContain('requestVisibleRefresh');
+    expect(homeSource).toContain('createHomeRefreshCoordinator');
     expect(homeSource).toContain('refreshHomeWhenVisible');
-    expect(homeSource).toContain('void refreshPendingReview();');
     expect(homeSource).toContain('isHomeRoutePath(pathname)');
     expect(homeSource).toContain('runHomeShoppingListRefresh');
     expect(homeSource).toContain('shoppingListRefreshGenerationRef');
+  });
+
+  it('coalesces focus and pathname through one coordinator', () => {
+    expect(homeSource).toContain("requestVisibleRefresh('pathname')");
+    expect(homeSource).toContain('markHomeHidden');
+    expect(homeSource).toContain('dispose');
+    expect(homeSource).toContain('canApply');
+    expect(homeSource).not.toMatch(
+      /if \(visible && !homeWasVisibleRef\.current\) \{[\s\S]*void loadReceipts\(\)/
+    );
   });
 });

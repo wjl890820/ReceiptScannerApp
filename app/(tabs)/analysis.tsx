@@ -29,9 +29,31 @@ import {
   buildAnalysisTruthSnapshot,
   type AnalysisLoadedTruth,
 } from '@/lib/analysisTruthCycle';
+import {
+  beginAnalysisRefresh,
+  completeAnalysisRefresh,
+  createInitialAnalysisRefreshUiState,
+  failAnalysisRefresh,
+  shouldShowAnalysisBlockingLoader,
+  shouldShowAnalysisContent,
+  shouldShowAnalysisLoadFailed,
+  type AnalysisRefreshUiState,
+} from '@/lib/analysisRefreshState';
+import {
+  bindPriceChangesToCycle,
+  createInitialPriceChangesBinding,
+  resolveBoundPriceChangesSurface,
+  type AnalysisPriceChangesBinding,
+} from '@/lib/analysisPriceLoadCycle';
+import {
+  measureAnalysisRefreshStage,
+  measureAnalysisRefreshStageSync,
+  recordAnalysisRefreshTiming,
+} from '@/lib/analysisRefreshTimings';
 import { createEmptyStats } from '@/lib/analysisHelpers';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
+import { logger } from '@/lib/logger';
 import { type TimeRange } from '@/lib/statsCalculator';
 import {
   UI_COLORS,
@@ -68,10 +90,12 @@ export default function AnalysisScreen() {
   const [truthCycle, setTruthCycle] = useState<
     (AnalysisLoadedTruth & { cycleId: number }) | null
   >(null);
-  const [priceChanges, setPriceChanges] =
-    useState<AnalysisPriceChangesSurface>(ANALYSIS_PRICE_CHANGES_UNAVAILABLE);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  const [priceChangesBinding, setPriceChangesBinding] =
+    useState<AnalysisPriceChangesBinding>(createInitialPriceChangesBinding);
+  const [refreshUi, setRefreshUi] = useState<AnalysisRefreshUiState>(
+    createInitialAnalysisRefreshUiState
+  );
+  const hasTruthSnapshotRef = useRef(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
 
   const loadReceipts = useCallback(async () => {
@@ -79,30 +103,47 @@ export default function AnalysisScreen() {
     loadCycleRef.current = cycleId;
     priceGenerationRef.current += 1;
     const priceGenerationId = priceGenerationRef.current;
-    setLoading(true);
-    setLoadError(false);
-    if (ANALYSIS_PRICE_CHANGES_ENABLED) {
-      setPriceChanges(ANALYSIS_PRICE_CHANGES_UNAVAILABLE);
-    }
+    setRefreshUi((state) => beginAnalysisRefresh(state));
+    const totalStarted = Date.now();
     let analyticsReceipts: AnalysisLoadedTruth['receipts'] | null = null;
     try {
-      const allReceipts = await listReceiptsForAnalysis();
+      const allReceipts = await measureAnalysisRefreshStage(
+        'listReceiptsForAnalysis',
+        () => listReceiptsForAnalysis()
+      );
+      const selectStarted = Date.now();
       analyticsReceipts =
         selectAnalyticsReceipts(allReceipts).analyticsReceipts;
+      recordAnalysisRefreshTiming({
+        stage: 'selectAnalyticsReceipts',
+        durationMs: Date.now() - selectStarted,
+        receiptCount: allReceipts.length,
+        analyticsReceiptCount: analyticsReceipts.length,
+      });
       if (loadCycleRef.current !== cycleId) return;
+      // Commit newer truth without clearing prior AP-3 binding.
+      // Cross-cycle render is fail-closed via resolveBoundPriceChangesSurface.
       setTruthCycle({
         cycleId,
         receipts: analyticsReceipts,
         nowMs: Date.now(),
       });
+      hasTruthSnapshotRef.current = true;
+      setRefreshUi((state) => completeAnalysisRefresh(state));
     } catch (e) {
       console.error('加载收据失败:', e);
       if (loadCycleRef.current !== cycleId) return;
-      setLoadError(true);
-    } finally {
-      if (loadCycleRef.current === cycleId) {
-        setLoading(false);
+      if (hasTruthSnapshotRef.current) {
+        logger.warn('Analysis', 'background refresh failed', { error: e });
+        setRefreshUi((state) => failAnalysisRefresh(state));
+      } else {
+        setRefreshUi((state) => failAnalysisRefresh(state));
       }
+    } finally {
+      recordAnalysisRefreshTiming({
+        stage: 'total',
+        durationMs: Date.now() - totalStarted,
+      });
     }
     return { analyticsReceipts, cycleId, priceGenerationId };
   }, []);
@@ -154,7 +195,9 @@ export default function AnalysisScreen() {
           ) {
             return;
           }
-          setPriceChanges(surface);
+          setPriceChangesBinding(
+            bindPriceChangesToCycle(loaded.cycleId, surface)
+          );
         } catch {
           if (
             cancelled ||
@@ -163,7 +206,12 @@ export default function AnalysisScreen() {
           ) {
             return;
           }
-          setPriceChanges(ANALYSIS_PRICE_CHANGES_UNAVAILABLE);
+          setPriceChangesBinding(
+            bindPriceChangesToCycle(
+              loaded.cycleId,
+              ANALYSIS_PRICE_CHANGES_UNAVAILABLE
+            )
+          );
         }
       })();
 
@@ -178,36 +226,52 @@ export default function AnalysisScreen() {
 
   const truthSnapshot = useMemo(() => {
     if (!truthCycle) return null;
-    return buildAnalysisTruthSnapshot({
-      receipts: truthCycle.receipts,
-      range: timeRange,
-      nowMs: truthCycle.nowMs,
-    });
+    return measureAnalysisRefreshStageSync('buildAnalysisTruthSnapshot', () =>
+      buildAnalysisTruthSnapshot({
+        receipts: truthCycle.receipts,
+        range: timeRange,
+        nowMs: truthCycle.nowMs,
+      })
+    );
   }, [truthCycle, timeRange]);
 
   const allStats = useMemo(() => {
     if (!truthCycle) return null;
-    return buildAnalysisAllTimeStats({
-      receipts: truthCycle.receipts,
-      nowMs: truthCycle.nowMs,
-    });
+    return measureAnalysisRefreshStageSync('buildAnalysisAllTimeStats', () =>
+      buildAnalysisAllTimeStats({
+        receipts: truthCycle.receipts,
+        nowMs: truthCycle.nowMs,
+      })
+    );
   }, [truthCycle]);
 
-  const viewModel = useMemo(
-    () =>
+  const boundPriceChanges = useMemo(() => {
+    if (!ANALYSIS_PRICE_CHANGES_ENABLED) {
+      return ANALYSIS_PRICE_CHANGES_UNAVAILABLE;
+    }
+    return resolveBoundPriceChangesSurface(
+      truthCycle?.cycleId,
+      priceChangesBinding
+    );
+  }, [truthCycle?.cycleId, priceChangesBinding]);
+
+  const viewModel = useMemo(() => {
+    return measureAnalysisRefreshStageSync('buildAnalysisReleaseViewModel', () =>
       buildAnalysisReleaseViewModel({
         periodStats: truthSnapshot?.periodStats ?? createEmptyStats(),
         allSupportedCount: allStats?.supportedReceiptCount ?? 0,
         itemCount: truthSnapshot?.itemCount ?? 0,
         insights: truthSnapshot?.insights ?? null,
-        priceChanges: ANALYSIS_PRICE_CHANGES_ENABLED
-          ? priceChanges
-          : ANALYSIS_PRICE_CHANGES_UNAVAILABLE,
+        priceChanges: boundPriceChanges,
         proComingSoon: true,
         priceRadarMigrated: false,
-      }),
-    [truthSnapshot, allStats?.supportedReceiptCount, priceChanges]
-  );
+      })
+    );
+  }, [truthSnapshot, allStats, boundPriceChanges]);
+
+  const showBlockingLoader = shouldShowAnalysisBlockingLoader(refreshUi);
+  const showLoadFailed = shouldShowAnalysisLoadFailed(refreshUi);
+  const showContent = shouldShowAnalysisContent(refreshUi);
 
   const renderInsightBody = () => {
     if (!viewModel.insight) return null;
@@ -268,13 +332,13 @@ export default function AnalysisScreen() {
         ))}
       </View>
 
-      {loading ? (
+      {showBlockingLoader ? (
         <View style={styles.inlineLoading}>
           <ActivityIndicator color={UI_COLORS.accent} />
         </View>
       ) : null}
 
-      {loadError ? (
+      {showLoadFailed ? (
         <View style={styles.messageCard}>
           <Text style={styles.messageText}>
             {t('analysis.release.loadFailed')}
@@ -282,14 +346,14 @@ export default function AnalysisScreen() {
         </View>
       ) : null}
 
-      {!loading && !loadError && viewModel.stage === 'empty' ? (
+      {showContent && viewModel.stage === 'empty' ? (
         <AnalysisEmptyState
           variant="empty"
           onGoHome={() => router.push('/(tabs)/' as any)}
         />
       ) : null}
 
-      {!loading && !loadError && viewModel.stage === 'period_empty' ? (
+      {showContent && viewModel.stage === 'period_empty' ? (
         <AnalysisEmptyState
           variant="period_empty"
           onGoHome={() => router.push('/(tabs)/' as any)}
@@ -297,8 +361,7 @@ export default function AnalysisScreen() {
         />
       ) : null}
 
-      {!loading &&
-      !loadError &&
+      {showContent &&
       (viewModel.stage === 'low' || viewModel.stage === 'ready') &&
       viewModel.overview ? (
         <>

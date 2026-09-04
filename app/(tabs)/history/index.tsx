@@ -135,11 +135,20 @@ export default function HistoryScreen() {
   }, []);
 
   const load = useCallback(async () => {
+    const started = Date.now();
     try {
       const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
       const truth = buildHistoryPurchaseTruthView(stored);
       purchaseTruthRef.current = truth;
       setRows(truth.visibleRows);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        // eslint-disable-next-line no-console
+        console.log('[HistoryFocusTiming]', {
+          stage: 'total',
+          durationMs: Date.now() - started,
+          receiptCount: stored.length,
+        });
+      }
     } catch (e: any) {
       console.error(e);
       Alert.alert(t('history.errors.loadTitle'), t('history.errors.loadMessage'));

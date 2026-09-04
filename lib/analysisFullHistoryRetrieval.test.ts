@@ -112,7 +112,7 @@ describe('Analysis full-history retrieval contract', () => {
     const appSource = fs.readFileSync(APP_SOURCE, 'utf8');
     const dbSource = fs.readFileSync(DB_SOURCE, 'utf8');
 
-    expect(appSource).toContain('await listReceiptsForAnalysis()');
+    expect(appSource).toContain('listReceiptsForAnalysis()');
     expect(appSource).not.toContain('await listReceipts()');
     expect(dbSource).toContain('export async function listReceipts(limit = 200)');
     expect(dbSource).toContain('return listReceiptRows(limit);');

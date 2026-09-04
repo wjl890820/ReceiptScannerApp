@@ -61,6 +61,13 @@ import {
   INITIAL_HOME_REFRESH_STATE,
   isLatestHomeRefresh,
 } from '@/lib/homeRefreshState';
+import { createHomeRefreshCoordinator } from '@/lib/homeRefreshCoordinator';
+import {
+  beginHomeRefreshTimingCapture,
+  logHomeRefreshCoordinatorEvent,
+  measureHomeRefreshStage,
+  recordHomeRefreshTiming,
+} from '@/lib/homeRefreshTimings';
 import { isHomeRoutePath } from '@/lib/homeRouteVisibility';
 import { runHomeShoppingListRefresh } from '@/lib/homeShoppingListRefresh';
 import { t } from '@/lib/i18n';
@@ -112,177 +119,275 @@ export default function HomeScreen() {
     useState<ReadonlyMap<string, number>>(() => new Map());
 
 
+  const canApplyHomeUi = useCallback(
+    (options?: { canApply?: () => boolean }) =>
+      options?.canApply == null || options.canApply(),
+    []
+  );
+
   // 加载所有收据； progressive analytics 使用去重后的 purchase candidates
-  const loadReceipts = useCallback(async (options?: { isAutomaticRetry?: boolean }) => {
-    const requestGeneration = ++refreshGenerationRef.current;
-    const hadCompleteSnapshot = hasCompleteSnapshotRef.current;
-    setHomeRefreshState((state) => beginHomeRefresh(state));
-    try {
-      const allReceipts = await listReceipts();
-      const analyticsSelection = selectAnalyticsReceipts(allReceipts);
-      const analyticsReceipts = analyticsSelection.analyticsReceipts;
-      const homeReferenceNow = Date.now();
-      let finalCompleteExperience: HomeProgressiveExperience;
+  const loadReceipts = useCallback(
+    async (options?: {
+      isAutomaticRetry?: boolean;
+      canApply?: () => boolean;
+    }) => {
+      if (!canApplyHomeUi(options)) {
+        return;
+      }
+      const requestGeneration = ++refreshGenerationRef.current;
+      const hadCompleteSnapshot = hasCompleteSnapshotRef.current;
+      setHomeRefreshState((state) => beginHomeRefresh(state));
+      beginHomeRefreshTimingCapture();
+      const totalStarted = Date.now();
       try {
-        const [evaluation, productContext, personalInventory] = await Promise.all([
-          evaluateCurrentEngagementMilestone(),
-          loadEngagementProductInsightContext(),
-          (async () => {
-            try {
-              const db = await getReceiptsDatabase();
-              const inventoryResult =
-                await loadPersonalProductEndpointInventoryWithDb(db);
-              return inventoryResult.status === 'ready'
-                ? inventoryResult.inventory
-                : null;
-            } catch (personalInventoryError) {
-              logger.warn('Home', 'personal inventory enrichment skipped', {
-                error: personalInventoryError,
-              });
-              return null;
-            }
-          })(),
-        ]);
-        finalCompleteExperience = buildHomeProgressiveExperience(
-          analyticsReceipts,
-          evaluation,
-          false,
-          productContext.rows,
-          personalInventory,
-          homeReferenceNow
+        const allReceipts = await measureHomeRefreshStage('listReceipts', () =>
+          listReceipts()
         );
-      } catch (analyticsError) {
-        if (hadCompleteSnapshot) throw analyticsError;
-        logger.warn('Home', 'progressive analytics failed', {
-          error: analyticsError,
+        const selectStarted = Date.now();
+        const analyticsSelection = selectAnalyticsReceipts(allReceipts);
+        const analyticsReceipts = analyticsSelection.analyticsReceipts;
+        recordHomeRefreshTiming({
+          stage: 'selectAnalyticsReceipts',
+          durationMs: Date.now() - selectStarted,
+          receiptCount: allReceipts.length,
+          analyticsReceiptCount: analyticsReceipts.length,
         });
-        finalCompleteExperience = buildHomeProgressiveExperience(
-          analyticsReceipts,
-          null,
-          true,
-          [],
-          null,
-          homeReferenceNow
-        );
-      }
-      if (
-        !isLatestHomeRefresh(
-          requestGeneration,
-          refreshGenerationRef.current
-        )
-      ) {
-        return;
-      }
-      setReceipts(allReceipts);
-      setHomeExperience(finalCompleteExperience);
-      hasCompleteSnapshotRef.current = true;
-      setHomeRefreshState(completeHomeRefresh());
-    } catch (e: any) {
-      if (
-        !isLatestHomeRefresh(
-          requestGeneration,
-          refreshGenerationRef.current
-        )
-      ) {
-        return;
-      }
-      if (hasCompleteSnapshotRef.current) {
-        logger.warn('Home', 'background refresh failed', { error: e });
-        setHomeRefreshState((state) => failHomeRefresh(state));
-        return;
-      }
-
-      console.error('加载收据失败:', e);
-
-      // Cold start: one readiness retry after DB init, then terminal empty/error.
-      if (!options?.isAutomaticRetry && !coldStartRetryUsedRef.current) {
-        coldStartRetryUsedRef.current = true;
-        setHomeRefreshState(holdHomeRefreshForRetry());
+        const homeReferenceNow = Date.now();
+        let finalCompleteExperience: HomeProgressiveExperience;
         try {
-          await initIfNeeded();
-          await getReceiptsDatabase();
-        } catch (initError) {
-          logger.warn('Home', 'cold-start DB readiness failed', {
-            error: initError,
+          const [evaluation, productContext, personalInventory] =
+            await Promise.all([
+              measureHomeRefreshStage('engagementMilestone', () =>
+                evaluateCurrentEngagementMilestone()
+              ),
+              measureHomeRefreshStage('productContext', () =>
+                loadEngagementProductInsightContext()
+              ),
+              measureHomeRefreshStage('personalInventory', async () => {
+                try {
+                  const db = await getReceiptsDatabase();
+                  const inventoryResult =
+                    await loadPersonalProductEndpointInventoryWithDb(db);
+                  return inventoryResult.status === 'ready'
+                    ? inventoryResult.inventory
+                    : null;
+                } catch (personalInventoryError) {
+                  logger.warn('Home', 'personal inventory enrichment skipped', {
+                    error: personalInventoryError,
+                  });
+                  return null;
+                }
+              }),
+            ]);
+          finalCompleteExperience = await measureHomeRefreshStage(
+            'buildHomeProgressiveExperience',
+            () =>
+              buildHomeProgressiveExperience(
+                analyticsReceipts,
+                evaluation,
+                false,
+                productContext.rows,
+                personalInventory,
+                homeReferenceNow
+              ),
+            {
+              receiptCount: allReceipts.length,
+              analyticsReceiptCount: analyticsReceipts.length,
+              productRowCount: productContext.rows.length,
+            }
+          );
+        } catch (analyticsError) {
+          if (hadCompleteSnapshot) throw analyticsError;
+          logger.warn('Home', 'progressive analytics failed', {
+            error: analyticsError,
           });
-          setHomeExperience(buildHomeProgressiveExperience([], null, true));
-          setHomeRefreshState((state) => failHomeRefresh(state));
-          return;
+          finalCompleteExperience = buildHomeProgressiveExperience(
+            analyticsReceipts,
+            null,
+            true,
+            [],
+            null,
+            homeReferenceNow
+          );
         }
         if (
           !isLatestHomeRefresh(
             requestGeneration,
             refreshGenerationRef.current
-          )
+          ) ||
+          !canApplyHomeUi(options)
         ) {
           return;
         }
-        await loadReceipts({ isAutomaticRetry: true });
-        return;
-      }
+        setReceipts(allReceipts);
+        setHomeExperience(finalCompleteExperience);
+        hasCompleteSnapshotRef.current = true;
+        setHomeRefreshState(completeHomeRefresh());
+      } catch (e: any) {
+        if (
+          !isLatestHomeRefresh(
+            requestGeneration,
+            refreshGenerationRef.current
+          ) ||
+          !canApplyHomeUi(options)
+        ) {
+          return;
+        }
+        if (hasCompleteSnapshotRef.current) {
+          logger.warn('Home', 'background refresh failed', { error: e });
+          setHomeRefreshState((state) => failHomeRefresh(state));
+          return;
+        }
 
-      setHomeExperience(buildHomeProgressiveExperience([], null, true));
-      setHomeRefreshState((state) => failHomeRefresh(state));
-    }
-  }, []);
+        console.error('加载收据失败:', e);
+
+        // Cold start: one readiness retry after DB init, then terminal empty/error.
+        if (!options?.isAutomaticRetry && !coldStartRetryUsedRef.current) {
+          coldStartRetryUsedRef.current = true;
+          setHomeRefreshState(holdHomeRefreshForRetry());
+          try {
+            await initIfNeeded();
+            await getReceiptsDatabase();
+          } catch (initError) {
+            logger.warn('Home', 'cold-start DB readiness failed', {
+              error: initError,
+            });
+            if (!canApplyHomeUi(options)) return;
+            setHomeExperience(buildHomeProgressiveExperience([], null, true));
+            setHomeRefreshState((state) => failHomeRefresh(state));
+            return;
+          }
+          if (
+            !isLatestHomeRefresh(
+              requestGeneration,
+              refreshGenerationRef.current
+            ) ||
+            !canApplyHomeUi(options)
+          ) {
+            return;
+          }
+          await loadReceipts({
+            isAutomaticRetry: true,
+            canApply: options?.canApply,
+          });
+          return;
+        }
+
+        setHomeExperience(buildHomeProgressiveExperience([], null, true));
+        setHomeRefreshState((state) => failHomeRefresh(state));
+      } finally {
+        recordHomeRefreshTiming({
+          stage: 'total',
+          durationMs: Date.now() - totalStarted,
+        });
+      }
+    },
+    [canApplyHomeUi]
+  );
 
   // 检测本地是否存在未完成的审核草稿/队列（脏数据会被自动修复）
-  const refreshPendingReview = useCallback(async () => {
-    try {
-      const state = await getPendingScanReviewState();
-      setPendingReview(state);
-    } catch (e) {
-      logger.warn('Home', 'refreshPendingReview failed', { error: e });
-      setPendingReview({ nextDraftId: null, pendingCount: 0 });
+  const refreshPendingReview = useCallback(
+    async (options?: { canApply?: () => boolean }) => {
+      try {
+        const state = await getPendingScanReviewState();
+        if (!canApplyHomeUi(options)) return;
+        setPendingReview(state);
+      } catch (e) {
+        logger.warn('Home', 'refreshPendingReview failed', { error: e });
+        if (!canApplyHomeUi(options)) return;
+        setPendingReview({ nextDraftId: null, pendingCount: 0 });
+      }
+    },
+    [canApplyHomeUi]
+  );
+
+  const refreshShoppingListHomeState = useCallback(
+    async (options?: { canApply?: () => boolean }) => {
+      await runHomeShoppingListRefresh({
+        generationRef: shoppingListRefreshGenerationRef,
+        loadItems: listShoppingListItems,
+        apply: (derived) => {
+          if (!canApplyHomeUi(options)) return;
+          setShoppingListIncompleteCount(derived.incompleteCount);
+          setActiveShoppingListIdentities(derived.activeIdentities);
+          setActiveShoppingListQuantities(derived.activeQuantities);
+        },
+        onError: (error) => {
+          logger.warn('Home', 'shopping list home state refresh failed', {
+            error,
+          });
+        },
+      });
+    },
+    [canApplyHomeUi]
+  );
+
+  const refreshHomeWhenVisible = useCallback(
+    async (ctx: { canApply: () => boolean }) => {
+      const applyOptions = { canApply: ctx.canApply };
+      await Promise.all([
+        loadReceipts(applyOptions),
+        refreshPendingReview(applyOptions),
+        refreshShoppingListHomeState(applyOptions),
+      ]);
+    },
+    [loadReceipts, refreshPendingReview, refreshShoppingListHomeState]
+  );
+
+  const refreshHomeImplRef = useRef(refreshHomeWhenVisible);
+  refreshHomeImplRef.current = refreshHomeWhenVisible;
+
+  const createHomeCoordinator = useCallback(
+    () =>
+      createHomeRefreshCoordinator({
+        runRefresh: (ctx) => refreshHomeImplRef.current(ctx),
+        onEvent: logHomeRefreshCoordinatorEvent,
+      }),
+    []
+  );
+
+  const homeRefreshCoordinatorRef = useRef(createHomeCoordinator());
+
+  const ensureHomeCoordinator = useCallback(() => {
+    if (
+      !homeRefreshCoordinatorRef.current ||
+      homeRefreshCoordinatorRef.current.isDisposed()
+    ) {
+      homeRefreshCoordinatorRef.current = createHomeCoordinator();
     }
-  }, []);
+    return homeRefreshCoordinatorRef.current;
+  }, [createHomeCoordinator]);
 
-  const refreshShoppingListHomeState = useCallback(async () => {
-    await runHomeShoppingListRefresh({
-      generationRef: shoppingListRefreshGenerationRef,
-      loadItems: listShoppingListItems,
-      apply: (derived) => {
-        setShoppingListIncompleteCount(derived.incompleteCount);
-        setActiveShoppingListIdentities(derived.activeIdentities);
-        setActiveShoppingListQuantities(derived.activeQuantities);
-      },
-      onError: (error) => {
-        logger.warn('Home', 'shopping list home state refresh failed', {
-          error,
-        });
-      },
-    });
-  }, []);
-
-  const refreshHomeWhenVisible = useCallback(() => {
-    void loadReceipts();
-    void refreshPendingReview();
-    void refreshShoppingListHomeState();
-  }, [loadReceipts, refreshPendingReview, refreshShoppingListHomeState]);
+  useEffect(() => {
+    const coordinator = ensureHomeCoordinator();
+    return () => {
+      coordinator.dispose();
+    };
+  }, [ensureHomeCoordinator]);
 
   // Tab-level focus (History/Analysis ↔ Home, first mount).
   useFocusEffect(
     useCallback(() => {
-      refreshHomeWhenVisible();
-    }, [refreshHomeWhenVisible])
+      const coordinator = ensureHomeCoordinator();
+      const trigger = hasCompleteSnapshotRef.current ? 'focus' : 'cold';
+      coordinator.requestVisibleRefresh(trigger);
+    }, [ensureHomeCoordinator])
   );
 
   // Root-stack visibility: /shopping-list and /product/* return to Home without
   // always re-firing tab useFocusEffect — pathname becoming Home is authoritative.
+  // Same visibility epoch coalesces focus+pathname even if pathname arrives after
+  // the heavy run has already started (no trailing for visibility duplicates).
   useEffect(() => {
+    const coordinator = ensureHomeCoordinator();
     const visible = isHomeRoutePath(pathname);
     if (visible && !homeWasVisibleRef.current) {
-      void refreshPendingReview();
-      void refreshShoppingListHomeState();
-      void loadReceipts();
+      coordinator.requestVisibleRefresh('pathname');
+    } else if (!visible && homeWasVisibleRef.current) {
+      coordinator.markHomeHidden();
     }
     homeWasVisibleRef.current = visible;
-  }, [
-    pathname,
-    loadReceipts,
-    refreshPendingReview,
-    refreshShoppingListHomeState,
-  ]);
+  }, [pathname, ensureHomeCoordinator]);
 
   // 点击“继续审核”：始终先刷新最新 pending 状态，再据此决定导航（点击时二次校验）
   const handleContinueReview = useCallback(async () => {
