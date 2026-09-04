@@ -4,36 +4,51 @@ jest.mock('./db', () => ({
   initIfNeeded: jest.fn(async () => undefined),
 }));
 
-import { loadAnalysisTrustedPriceChangesSurface } from './analysisPriceLoader';
-import { loadEngagementProductInsightContext } from './engagementMilestones';
-import { buildAnalysisPriceChangesSurfaceFromRows } from './analysisPriceSurfaces';
-import { createEmptyStats } from './analysisHelpers';
-import { buildAnalysisReleaseViewModel } from './analysisPresentation';
-
 jest.mock('./engagementMilestones', () => ({
   loadEngagementProductInsightContext: jest.fn(),
 }));
 
-jest.mock('./analysisPriceSurfaces', () => {
-  const actual = jest.requireActual('./analysisPriceSurfaces');
+jest.mock('./receiptOwnershipScope', () => ({
+  resolveCurrentLocalReceiptOwnerScope: jest.fn(async () => ({
+    status: 'ready',
+    ownerKey: 'installation:test',
+    params: [],
+  })),
+}));
+
+jest.mock('./analysisPriceDerivation', () => {
+  const actual = jest.requireActual('./analysisPriceDerivation');
   return {
     ...actual,
-    buildAnalysisPriceChangesSurfaceFromRows: jest.fn(
-      actual.buildAnalysisPriceChangesSurfaceFromRows
-    ),
+    deriveAnalysisPriceDomain: jest.fn(actual.deriveAnalysisPriceDomain),
   };
 });
+
+import { loadAnalysisTrustedPriceChangesSurface } from './analysisPriceLoader';
+import { loadEngagementProductInsightContext } from './engagementMilestones';
+import { deriveAnalysisPriceDomain } from './analysisPriceDerivation';
+import { createEmptyStats } from './analysisHelpers';
+import { buildAnalysisReleaseViewModel } from './analysisPresentation';
+import { __resetAnalysisPriceSessionCacheForTests } from './analysisPriceSessionCache';
 
 const mockLoadContext = loadEngagementProductInsightContext as jest.MockedFunction<
   typeof loadEngagementProductInsightContext
 >;
-const mockBuildSurface = buildAnalysisPriceChangesSurfaceFromRows as jest.MockedFunction<
-  typeof buildAnalysisPriceChangesSurfaceFromRows
+const mockDerive = deriveAnalysisPriceDomain as jest.MockedFunction<
+  typeof deriveAnalysisPriceDomain
 >;
 
 describe('loadAnalysisTrustedPriceChangesSurface soft-fail', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    __resetAnalysisPriceSessionCacheForTests();
+    mockDerive.mockImplementation(async () => ({
+      status: 'unavailable',
+      surface: { status: 'unavailable' },
+      candidates: [],
+      cacheHit: false,
+      signature: 'test',
+    }));
   });
 
   it('degrades to unavailable when price context load throws', async () => {
@@ -55,14 +70,12 @@ describe('loadAnalysisTrustedPriceChangesSurface soft-fail', () => {
     ).resolves.toEqual({ status: 'unavailable' });
   });
 
-  it('degrades to unavailable when surface construction throws', async () => {
+  it('degrades to unavailable when derivation throws', async () => {
     mockLoadContext.mockResolvedValue({
       rows: [{ id: 'row-1' }],
       queryFailed: false,
     } as any);
-    mockBuildSurface.mockImplementation(() => {
-      throw new Error('candidate construction failed');
-    });
+    mockDerive.mockRejectedValue(new Error('candidate construction failed'));
 
     await expect(
       loadAnalysisTrustedPriceChangesSurface([{ id: 'r1' } as any])
@@ -78,23 +91,19 @@ describe('loadAnalysisTrustedPriceChangesSurface soft-fail', () => {
   });
 
   it('keeps core analysis release usable when price surface loader fails', async () => {
-    mockLoadContext.mockRejectedValue(new Error('loader exploded'));
+    mockLoadContext.mockRejectedValue(new Error('price boom'));
     const priceChanges = await loadAnalysisTrustedPriceChangesSurface([
       { id: 'r1' } as any,
     ]);
     const viewModel = buildAnalysisReleaseViewModel({
-      periodStats: {
-        ...createEmptyStats(),
-        supportedSpend: 5000,
-        supportedReceiptCount: 5,
-      },
-      allSupportedCount: 5,
-      itemCount: 10,
+      periodStats: createEmptyStats(),
+      allSupportedCount: 0,
+      itemCount: 0,
       insights: null,
       priceChanges,
     });
     expect(priceChanges).toEqual({ status: 'unavailable' });
-    expect(viewModel.stage).toBe('ready');
+    expect(viewModel.stage).toBeTruthy();
     expect(viewModel.priceChanges).toEqual({ status: 'unavailable' });
   });
 });

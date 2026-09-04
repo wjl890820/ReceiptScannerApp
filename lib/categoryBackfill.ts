@@ -6,6 +6,12 @@
  * - 只改 category 字段，不动金额/商品名/total。
  * - 幂等：已是合法新 enum 不会变化，重复执行无副作用。
  * - 输出修复了多少张 receipt、多少个 item。
+ *
+ * AP-3 note: category corrections rebuild receipt_items via
+ * applyProductIdentityToItem(finalCategory) → resolveProductFamily → buildSkuKey,
+ * so SKU membership / AP-3 candidates can change. After successful material
+ * changes (fixedReceipts > 0) and index rebuild attempts, invalidate AP-3
+ * session truth. Zero-change runs must not invalidate.
  */
 
 import * as SQLite from 'expo-sqlite';
@@ -160,6 +166,20 @@ export async function backfillReceiptItemCategories(): Promise<BackfillResult> {
     fixedItems,
   };
   logger.info('CategoryBackfill', 'backfill done', result);
+
+  // Category → receipt_items identity/SKU can change AP-3 domain truth.
+  // Invalidate only after durable fixes + rebuild attempts for those receipts.
+  if (fixedReceipts > 0) {
+    try {
+      const { notifyAnalysisPriceTruthInvalidated } = await import(
+        './analysisPriceSessionCache'
+      );
+      notifyAnalysisPriceTruthInvalidated();
+    } catch {
+      // Invalidation must never fail the backfill result.
+    }
+  }
+
   return result;
 }
 

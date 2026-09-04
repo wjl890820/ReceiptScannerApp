@@ -9,6 +9,7 @@ import {
   buildIdentityMerchantProductHistoryView,
   identityObservationsFromPriceHistoryRows,
   resolveIdentityConsumerObservations,
+  resolveIdentityConsumerObservationsAsync,
   resolveMerchantProductTargetMembershipRowKeys,
   type IdentityMerchantProductHistoryView,
   type QualifiedIdentityObservation,
@@ -158,6 +159,24 @@ export function prepareAnalysisPriceInsightContext(
   }
   const receiptEvidenceCache = buildReceiptEvidenceCache(rows);
 
+  return finalizePreparedAnalysisPriceInsightContext({
+    rows,
+    seedReceiptIds,
+    qualified,
+    rowByKey,
+    receiptEvidenceCache,
+  });
+}
+
+function finalizePreparedAnalysisPriceInsightContext(input: {
+  rows: readonly ProductPriceHistoryRow[];
+  seedReceiptIds: ReadonlySet<string>;
+  qualified: readonly QualifiedIdentityObservation[];
+  rowByKey: Map<string, ProductPriceHistoryRow>;
+  receiptEvidenceCache: ReceiptEvidenceCache;
+}): PreparedAnalysisPriceInsightContext {
+  const { rows, seedReceiptIds, qualified, rowByKey, receiptEvidenceCache } =
+    input;
   const rowIdentityMetadata = buildRowIdentityMetadataFromQualified(
     qualified,
     rowByKey
@@ -228,4 +247,95 @@ export function prepareAnalysisPriceInsightContext(
     seededSkuKeys,
     seededMerchantProductIds,
   };
+}
+
+export type PrepareAnalysisPriceInsightContextAsyncOptions = {
+  shouldCancel?: () => boolean;
+  rowsPerChunk?: number;
+};
+
+/**
+ * Cooperative prepare — same result as sync prepare, yields during identity.
+ */
+export async function prepareAnalysisPriceInsightContextAsync(
+  rows: readonly ProductPriceHistoryRow[],
+  seedReceiptIds: ReadonlySet<string>,
+  options: PrepareAnalysisPriceInsightContextAsyncOptions = {}
+): Promise<PreparedAnalysisPriceInsightContext | null> {
+  const { yieldAnalysisPriceChunk, recordAnalysisPriceChunkTiming } =
+    await import('./analysisPriceScheduler');
+  const shouldCancel = options.shouldCancel ?? (() => false);
+  if (shouldCancel()) return null;
+
+  const rowByKey = new Map<string, ProductPriceHistoryRow>();
+  for (const row of rows) {
+    rowByKey.set(priceHistoryRowObservationKey(row), row);
+  }
+  await yieldAnalysisPriceChunk();
+  if (shouldCancel()) return null;
+
+  if (activeWorkCounters) {
+    activeWorkCounters.fullUniverseIdentityResolves += 1;
+  }
+  const resolved = await resolveIdentityConsumerObservationsAsync(
+    identityObservationsFromPriceHistoryRows([...rows]),
+    undefined,
+    {
+      shouldCancel,
+      rowsPerChunk: options.rowsPerChunk ?? 64,
+      yieldFn: yieldAnalysisPriceChunk,
+    }
+  );
+  if (resolved == null || shouldCancel()) return null;
+
+  await yieldAnalysisPriceChunk();
+  if (shouldCancel()) return null;
+
+  if (activeWorkCounters) {
+    activeWorkCounters.evidenceCacheBuilds += 1;
+  }
+  // Evidence is O(unique receipts) linear. Chunk unique-receipt batches so a
+  // 1000+ receipt universe does not monopolize JS in one helper call.
+  const uniqueReceiptRows: ProductPriceHistoryRow[] = [];
+  const seenReceiptIds = new Set<string>();
+  for (const row of rows) {
+    if (seenReceiptIds.has(row.receiptId)) continue;
+    seenReceiptIds.add(row.receiptId);
+    uniqueReceiptRows.push(row);
+  }
+  const receiptEvidenceCache: ReceiptEvidenceCache = new Map();
+  const chunkSize = options.rowsPerChunk ?? 64;
+  for (let i = 0; i < uniqueReceiptRows.length; i += chunkSize) {
+    if (shouldCancel()) return null;
+    const evidenceStarted = Date.now();
+    const slice = uniqueReceiptRows.slice(i, i + chunkSize);
+    const partial = buildReceiptEvidenceCache(slice);
+    for (const [receiptId, evidence] of partial) {
+      receiptEvidenceCache.set(receiptId, evidence);
+    }
+    recordAnalysisPriceChunkTiming(
+      'prepare:evidence',
+      Date.now() - evidenceStarted
+    );
+    await yieldAnalysisPriceChunk();
+  }
+  if (shouldCancel()) return null;
+
+  // Finalize is O(I + MP); yield between merchant-product view builds when large.
+  const finalizeStarted = Date.now();
+  const prepared = finalizePreparedAnalysisPriceInsightContext({
+    rows,
+    seedReceiptIds,
+    qualified: resolved.qualified,
+    rowByKey,
+    receiptEvidenceCache,
+  });
+  recordAnalysisPriceChunkTiming(
+    'prepare:finalize',
+    Date.now() - finalizeStarted
+  );
+  // Finalize currently builds all MP views synchronously. It is linear in
+  // identity observations + MP count; identity/qualify already yielded. If
+  // finalize timings dominate later, split MP view construction similarly.
+  return prepared;
 }

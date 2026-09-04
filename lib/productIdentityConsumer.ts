@@ -12,7 +12,10 @@ import {
 import {
   evaluateMerchantProductHistoryEligibility,
   evaluatePriceObservationQuality,
+  leaveOneOutPeerStats,
+  preparePeerPriceBucket,
   resolveQuantityOcrCorroboration,
+  type PreparedPeerPriceBucket,
   type PriceObservationQualityLevel,
 } from './productIdentityPriceObservationQuality';
 import { resolveMerchantProductDisplayName } from './productIdentityPresentationContract';
@@ -151,52 +154,51 @@ function observationIsNonProductRow(obs: IdentityConsumerObservation): boolean {
   return kind !== 'item';
 }
 
-export function resolveIdentityConsumerObservations(
-  observations: readonly IdentityConsumerObservation[],
-  store: ProductIdentityStore = createMemoryProductIdentityStore()
-): {
-  store: ProductIdentityStore;
-  qualified: QualifiedIdentityObservation[];
-} {
-  type Draft = IdentityConsumerObservation & {
-    merchantProductId: string | null;
-    purchaseUnitPrice: number | null;
-    identityLevel: ProductIdentityLevel;
-    identityConfidence: number;
-    identitySource: string;
-    merchantScopeKey: string;
-  };
-  const draft: Draft[] = [];
+type IdentityDraft = IdentityConsumerObservation & {
+  merchantProductId: string | null;
+  purchaseUnitPrice: number | null;
+  identityLevel: ProductIdentityLevel;
+  identityConfidence: number;
+  identitySource: string;
+  merchantScopeKey: string;
+};
 
-  for (const obs of observations) {
-    const name = (obs.rawName || '').trim();
-    if (!name) continue;
-    const merchantScopeKey = scopeMerchantKeyForIdentity(
-      obs.merchantKey || 'unknown_merchant',
-      obs.receiptId
-    );
-    const result = resolveReceiptItemIdentity(
-      {
-        rawName: name,
-        merchantKey: obs.merchantKey || 'unknown_merchant',
-        receiptId: obs.receiptId,
-        itemSourceIndex: obs.itemSourceIndex,
-        quantity: obs.quantity,
-        lineTotal: obs.lineTotal,
-      },
-      store
-    );
-    draft.push({
-      ...obs,
-      merchantProductId: result.link.merchantProductId,
-      purchaseUnitPrice: computePurchaseUnitPrice(obs.lineTotal, obs.quantity),
-      identityLevel: result.link.identityLevel,
-      identityConfidence: result.link.identityConfidence,
-      identitySource: result.link.identitySource,
-      merchantScopeKey,
-    });
-  }
+function pushIdentityDraft(
+  draft: IdentityDraft[],
+  obs: IdentityConsumerObservation,
+  store: ProductIdentityStore
+): void {
+  const name = (obs.rawName || '').trim();
+  if (!name) return;
+  const merchantScopeKey = scopeMerchantKeyForIdentity(
+    obs.merchantKey || 'unknown_merchant',
+    obs.receiptId
+  );
+  const result = resolveReceiptItemIdentity(
+    {
+      rawName: name,
+      merchantKey: obs.merchantKey || 'unknown_merchant',
+      receiptId: obs.receiptId,
+      itemSourceIndex: obs.itemSourceIndex,
+      quantity: obs.quantity,
+      lineTotal: obs.lineTotal,
+    },
+    store
+  );
+  draft.push({
+    ...obs,
+    merchantProductId: result.link.merchantProductId,
+    purchaseUnitPrice: computePurchaseUnitPrice(obs.lineTotal, obs.quantity),
+    identityLevel: result.link.identityLevel,
+    identityConfidence: result.link.identityConfidence,
+    identitySource: result.link.identitySource,
+    merchantScopeKey,
+  });
+}
 
+function preparePeerBucketsFromDraft(
+  draft: readonly IdentityDraft[]
+): Map<string, PreparedPeerPriceBucket> {
   const peersByMp = new Map<string, number[]>();
   for (const row of draft) {
     if (!row.merchantProductId || row.purchaseUnitPrice == null) continue;
@@ -205,39 +207,200 @@ export function resolveIdentityConsumerObservations(
     peersByMp.set(row.merchantProductId, list);
   }
 
+  const preparedPeersByMp = new Map<string, PreparedPeerPriceBucket>();
+  for (const [mpId, prices] of peersByMp) {
+    preparedPeersByMp.set(mpId, preparePeerPriceBucket(prices));
+  }
+  return preparedPeersByMp;
+}
+
+function qualifyIdentityDraftRow(
+  row: IdentityDraft,
+  preparedPeersByMp: ReadonlyMap<string, PreparedPeerPriceBucket>
+): QualifiedIdentityObservation | null {
+  if (!row.merchantProductId) return null;
+  const bucket = preparedPeersByMp.get(row.merchantProductId);
+  const preparedPeerStats =
+    bucket != null
+      ? leaveOneOutPeerStats(bucket, row.purchaseUnitPrice)
+      : null;
+  const attrs = normalizeProductForIdentity(row.rawName).attributes;
+  const quality = evaluatePriceObservationQuality({
+    lineTotal: row.lineTotal,
+    quantity: row.quantity,
+    preparedPeerStats,
+    attributes: attrs,
+    rawName: row.rawName,
+    isNonProductRow: observationIsNonProductRow(row),
+    quantityOcrCorroborated: resolveQuantityOcrCorroboration(row),
+  });
+  return {
+    ...row,
+    merchantProductId: row.merchantProductId,
+    purchaseUnitPrice: quality.rawPurchaseUnitPrice,
+    quality: quality.quality,
+    includeInHistory: quality.includeInHistory,
+    includeInTrend: quality.includeInTrend,
+    suspectedIntegerMultiple: quality.suspectedIntegerMultiple,
+    identityLevel: row.identityLevel,
+    identityConfidence: row.identityConfidence,
+    identitySource: row.identitySource,
+    merchantScopeKey: row.merchantScopeKey,
+  };
+}
+
+function qualifyIdentityDraft(
+  draft: readonly IdentityDraft[]
+): QualifiedIdentityObservation[] {
+  const preparedPeersByMp = preparePeerBucketsFromDraft(draft);
   const qualified: QualifiedIdentityObservation[] = [];
   for (const row of draft) {
-    if (!row.merchantProductId) continue;
-    const peerPrices = [...(peersByMp.get(row.merchantProductId) ?? [])];
-    if (row.purchaseUnitPrice != null) {
-      const idx = peerPrices.indexOf(row.purchaseUnitPrice);
-      if (idx >= 0) peerPrices.splice(idx, 1);
+    const q = qualifyIdentityDraftRow(row, preparedPeersByMp);
+    if (q) qualified.push(q);
+  }
+  return qualified;
+}
+
+export function resolveIdentityConsumerObservations(
+  observations: readonly IdentityConsumerObservation[],
+  store: ProductIdentityStore = createMemoryProductIdentityStore()
+): {
+  store: ProductIdentityStore;
+  qualified: QualifiedIdentityObservation[];
+} {
+  const draft: IdentityDraft[] = [];
+  for (const obs of observations) {
+    pushIdentityDraft(draft, obs, store);
+  }
+  return { store, qualified: qualifyIdentityDraft(draft) };
+}
+
+export type ResolveIdentityConsumerObservationsAsyncOptions = {
+  shouldCancel?: () => boolean;
+  /** Yield after this many identity resolves. Default 64. */
+  rowsPerChunk?: number;
+  yieldFn?: () => Promise<void>;
+};
+
+/**
+ * Same semantics as resolveIdentityConsumerObservations, with cooperative yields
+ * between identity-resolve chunks so AP-3 preparation does not monopolize JS.
+ */
+export async function resolveIdentityConsumerObservationsAsync(
+  observations: readonly IdentityConsumerObservation[],
+  store: ProductIdentityStore = createMemoryProductIdentityStore(),
+  options: ResolveIdentityConsumerObservationsAsyncOptions = {}
+): Promise<{
+  store: ProductIdentityStore;
+  qualified: QualifiedIdentityObservation[];
+} | null> {
+  const shouldCancel = options.shouldCancel ?? (() => false);
+  const rowsPerChunk = Math.max(1, options.rowsPerChunk ?? 64);
+  const yieldFn =
+    options.yieldFn ??
+    (async () => {
+      const { yieldAnalysisPriceChunk } = await import('./analysisPriceScheduler');
+      await yieldAnalysisPriceChunk();
+    });
+
+  if (shouldCancel()) return null;
+  const draft: IdentityDraft[] = [];
+  let sinceYield = 0;
+  let chunkStarted = Date.now();
+  for (const obs of observations) {
+    if (shouldCancel()) return null;
+    pushIdentityDraft(draft, obs, store);
+    sinceYield += 1;
+    if (sinceYield >= rowsPerChunk) {
+      const chunkMs = Date.now() - chunkStarted;
+      try {
+        const { recordAnalysisPriceChunkTiming } = await import(
+          './analysisPriceScheduler'
+        );
+        recordAnalysisPriceChunkTiming('identity:rows', chunkMs);
+      } catch {
+        // ignore
+      }
+      sinceYield = 0;
+      await yieldFn();
+      if (shouldCancel()) return null;
+      chunkStarted = Date.now();
     }
-    const attrs = normalizeProductForIdentity(row.rawName).attributes;
-    const quality = evaluatePriceObservationQuality({
-      lineTotal: row.lineTotal,
-      quantity: row.quantity,
-      peerPurchaseUnitPrices: peerPrices,
-      attributes: attrs,
-      rawName: row.rawName,
-      isNonProductRow: observationIsNonProductRow(row),
-      quantityOcrCorroborated: resolveQuantityOcrCorroboration(row),
-    });
-    qualified.push({
-      ...row,
-      merchantProductId: row.merchantProductId,
-      purchaseUnitPrice: quality.rawPurchaseUnitPrice,
-      quality: quality.quality,
-      includeInHistory: quality.includeInHistory,
-      includeInTrend: quality.includeInTrend,
-      suspectedIntegerMultiple: quality.suspectedIntegerMultiple,
-      identityLevel: row.identityLevel,
-      identityConfidence: row.identityConfidence,
-      identitySource: row.identitySource,
-      merchantScopeKey: row.merchantScopeKey,
-    });
+  }
+  if (sinceYield > 0) {
+    try {
+      const { recordAnalysisPriceChunkTiming } = await import(
+        './analysisPriceScheduler'
+      );
+      recordAnalysisPriceChunkTiming(
+        'identity:rows',
+        Date.now() - chunkStarted
+      );
+    } catch {
+      // ignore
+    }
   }
 
+  // Peer prepare once per MP bucket, then qualify in bounded row chunks.
+  await yieldFn();
+  if (shouldCancel()) return null;
+  const prepareStarted = Date.now();
+  const preparedPeersByMp = preparePeerBucketsFromDraft(draft);
+  try {
+    const { recordAnalysisPriceChunkTiming } = await import(
+      './analysisPriceScheduler'
+    );
+    recordAnalysisPriceChunkTiming(
+      'identity:peerPrepare',
+      Date.now() - prepareStarted
+    );
+  } catch {
+    // ignore
+  }
+  await yieldFn();
+  if (shouldCancel()) return null;
+
+  const qualified: QualifiedIdentityObservation[] = [];
+  let qualifySinceYield = 0;
+  let qualifyChunkStarted = Date.now();
+  for (const row of draft) {
+    if (shouldCancel()) return null;
+    const q = qualifyIdentityDraftRow(row, preparedPeersByMp);
+    if (q) qualified.push(q);
+    qualifySinceYield += 1;
+    if (qualifySinceYield >= rowsPerChunk) {
+      try {
+        const { recordAnalysisPriceChunkTiming } = await import(
+          './analysisPriceScheduler'
+        );
+        recordAnalysisPriceChunkTiming(
+          'identity:qualify',
+          Date.now() - qualifyChunkStarted
+        );
+      } catch {
+        // ignore
+      }
+      qualifySinceYield = 0;
+      await yieldFn();
+      if (shouldCancel()) return null;
+      qualifyChunkStarted = Date.now();
+    }
+  }
+  if (qualifySinceYield > 0) {
+    try {
+      const { recordAnalysisPriceChunkTiming } = await import(
+        './analysisPriceScheduler'
+      );
+      recordAnalysisPriceChunkTiming(
+        'identity:qualify',
+        Date.now() - qualifyChunkStarted
+      );
+    } catch {
+      // ignore
+    }
+  }
+  await yieldFn();
+  if (shouldCancel()) return null;
   return { store, qualified };
 }
 

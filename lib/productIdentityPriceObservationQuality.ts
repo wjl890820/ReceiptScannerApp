@@ -32,6 +32,11 @@ export type PriceObservationQualityInput = {
   quantity: number | null | undefined;
   /** Peer purchase-unit prices on the same MerchantProduct (excluding self). */
   peerPurchaseUnitPrices?: readonly number[];
+  /**
+   * Optional leave-one-out peer stats (prepared path).
+   * When set, peerPurchaseUnitPrices is ignored for median/CV decisions.
+   */
+  preparedPeerStats?: LeaveOneOutPeerStats | null;
   attributes?: ProductAttributes | null;
   rawName?: string | null;
   isNonProductRow?: boolean;
@@ -102,6 +107,237 @@ function coeffOfVariation(nums: number[]): number {
   return Math.sqrt(variance) / mean;
 }
 
+/** Test/production instrumentation: full-bucket peer sorts (prepare once). */
+let peerBucketSortCount = 0;
+let peerFullScanCount = 0;
+let peerFirstIndexMapBuildCount = 0;
+let peerO1MedianLookups = 0;
+let peerO1VarianceLookups = 0;
+/** Must stay 0 on prepared leave-one-out path (no per-candidate B-scan). */
+let peerCandidateLinearScans = 0;
+
+export function beginPeerQualityWorkCounting(): void {
+  peerBucketSortCount = 0;
+  peerFullScanCount = 0;
+  peerFirstIndexMapBuildCount = 0;
+  peerO1MedianLookups = 0;
+  peerO1VarianceLookups = 0;
+  peerCandidateLinearScans = 0;
+}
+
+export function getPeerQualityWorkCounts(): {
+  peerBucketSortCount: number;
+  peerFullScanCount: number;
+  peerFirstIndexMapBuildCount: number;
+  peerO1MedianLookups: number;
+  peerO1VarianceLookups: number;
+  peerCandidateLinearScans: number;
+} {
+  return {
+    peerBucketSortCount,
+    peerFullScanCount,
+    peerFirstIndexMapBuildCount,
+    peerO1MedianLookups,
+    peerO1VarianceLookups,
+    peerCandidateLinearScans,
+  };
+}
+
+export function endPeerQualityWorkCounting(): {
+  peerBucketSortCount: number;
+  peerFullScanCount: number;
+  peerFirstIndexMapBuildCount: number;
+  peerO1MedianLookups: number;
+  peerO1VarianceLookups: number;
+  peerCandidateLinearScans: number;
+} {
+  const snapshot = getPeerQualityWorkCounts();
+  beginPeerQualityWorkCounting();
+  return snapshot;
+}
+
+export type PreparedPeerPriceBucket = {
+  /** Sorted ascending; positive-finite only (same filter as evaluate). */
+  sorted: readonly number[];
+  count: number;
+  /** Welford running mean of sorted values. */
+  mean: number;
+  /** Welford M2 (sum of squared deviations). */
+  M2: number;
+  /**
+   * value → first index in sorted (legacy indexOf-first-occurrence on the
+   * positive-finite multiset; equal values share one skip index for stats).
+   */
+  firstIndexByValue: ReadonlyMap<number, number>;
+};
+
+export type LeaveOneOutPeerStats = {
+  count: number;
+  median: number;
+  coeffOfVariation: number;
+};
+
+/**
+ * Legacy leave-one-out peer array: copy → indexOf(exclude) → splice once.
+ * Used for equivalence tests against prepared stats.
+ */
+export function legacyLeaveOneOutPeerPrices(
+  allPrices: readonly number[],
+  excludeValue: number | null | undefined
+): number[] {
+  peerFullScanCount += 1;
+  const peers = allPrices.filter(positiveFinite);
+  if (excludeValue != null && positiveFinite(excludeValue)) {
+    const idx = peers.indexOf(excludeValue);
+    if (idx >= 0) peers.splice(idx, 1);
+  }
+  return peers;
+}
+
+/** Legacy population CV (authoritative classification reference for ordinary fixtures). */
+export function legacyPeerCoeffOfVariation(peers: readonly number[]): number {
+  return coeffOfVariation([...peers]);
+}
+
+export function preparePeerPriceBucket(
+  prices: readonly number[]
+): PreparedPeerPriceBucket {
+  peerBucketSortCount += 1;
+  const sorted = prices.filter(positiveFinite).slice().sort((a, b) => a - b);
+  let mean = 0;
+  let M2 = 0;
+  for (let i = 0; i < sorted.length; i += 1) {
+    const x = sorted[i]!;
+    const n = i + 1;
+    const delta = x - mean;
+    mean += delta / n;
+    M2 += delta * (x - mean);
+  }
+  peerFirstIndexMapBuildCount += 1;
+  const firstIndexByValue = new Map<number, number>();
+  for (let i = 0; i < sorted.length; i += 1) {
+    const value = sorted[i]!;
+    if (!firstIndexByValue.has(value)) {
+      firstIndexByValue.set(value, i);
+    }
+  }
+  return {
+    sorted,
+    count: sorted.length,
+    mean,
+    M2,
+    firstIndexByValue,
+  };
+}
+
+/** O(1) kth element among sorted values excluding skipIndex. */
+function kthAfterSkipO1(
+  sorted: readonly number[],
+  skipIndex: number,
+  k: number
+): number {
+  peerO1MedianLookups += 1;
+  const originalIndex = k < skipIndex ? k : k + 1;
+  return sorted[originalIndex]!;
+}
+
+function medianSkippingIndexO1(
+  sorted: readonly number[],
+  skipIndex: number
+): number {
+  const n = sorted.length - 1;
+  if (n <= 0) return 0;
+  if (n % 2 === 1) {
+    return kthAfterSkipO1(sorted, skipIndex, Math.floor(n / 2));
+  }
+  const left = kthAfterSkipO1(sorted, skipIndex, n / 2 - 1);
+  const right = kthAfterSkipO1(sorted, skipIndex, n / 2);
+  return (left + right) / 2;
+}
+
+function medianOfFullSorted(sorted: readonly number[]): number {
+  const n = sorted.length;
+  if (n === 0) return 0;
+  const mid = Math.floor(n / 2);
+  return n % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+function cvFromMeanM2(count: number, mean: number, M2: number): number {
+  peerO1VarianceLookups += 1;
+  if (count < 2) return 0;
+  if (!(mean > 0)) return Number.POSITIVE_INFINITY;
+  let variance = M2 / count;
+  // Tiny negative noise from floating error only; never hide material negatives.
+  if (variance < 0 && variance > -1e-12 * Math.max(1, mean * mean)) {
+    variance = 0;
+  }
+  if (!(variance >= 0) || !Number.isFinite(variance)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.sqrt(variance) / mean;
+}
+
+function statsFromFullBucket(bucket: PreparedPeerPriceBucket): LeaveOneOutPeerStats {
+  if (bucket.count === 0) {
+    return { count: 0, median: 0, coeffOfVariation: 0 };
+  }
+  if (bucket.count < 2) {
+    return {
+      count: bucket.count,
+      median: bucket.sorted[0] ?? 0,
+      coeffOfVariation: 0,
+    };
+  }
+  return {
+    count: bucket.count,
+    median: medianOfFullSorted(bucket.sorted),
+    coeffOfVariation: cvFromMeanM2(bucket.count, bucket.mean, bucket.M2),
+  };
+}
+
+/**
+ * Leave-one-out peer stats matching indexOf+splice(first occurrence) semantics.
+ * After preparePeerPriceBucket: O(1) median + O(1) Welford variance per candidate.
+ */
+export function leaveOneOutPeerStats(
+  bucket: PreparedPeerPriceBucket,
+  excludeValue: number | null | undefined
+): LeaveOneOutPeerStats {
+  if (
+    excludeValue == null ||
+    !positiveFinite(excludeValue) ||
+    bucket.count === 0
+  ) {
+    return statsFromFullBucket(bucket);
+  }
+  const skipIndex = bucket.firstIndexByValue.get(excludeValue);
+  if (skipIndex == null) {
+    return statsFromFullBucket(bucket);
+  }
+  const count = bucket.count - 1;
+  if (count === 0) {
+    return { count: 0, median: 0, coeffOfVariation: 0 };
+  }
+  if (count === 1) {
+    return {
+      count: 1,
+      median: medianSkippingIndexO1(bucket.sorted, skipIndex),
+      coeffOfVariation: 0,
+    };
+  }
+  // Welford leave-one-out removal of X (population variance).
+  const x = excludeValue;
+  const n = bucket.count;
+  const mean = bucket.mean;
+  const newMean = (n * mean - x) / count;
+  const newM2 = bucket.M2 - (x - mean) * (x - newMean);
+  return {
+    count,
+    median: medianSkippingIndexO1(bucket.sorted, skipIndex),
+    coeffOfVariation: cvFromMeanM2(count, newMean, newM2),
+  };
+}
+
 function nearIntegerMultiple(ratio: number): number | null {
   if (!positiveFinite(ratio)) return null;
   for (const k of INTEGER_MULTIPLES) {
@@ -129,6 +365,8 @@ export function looksLikeVariableUnitPriceProduct(input: {
   attributes?: ProductAttributes | null;
   rawName?: string | null;
   peerPurchaseUnitPrices?: readonly number[];
+  preparedPeerCount?: number;
+  preparedPeerCv?: number;
 }): boolean {
   const attrs = input.attributes ?? null;
   const hasMass = numAttr(attrs, 'mass') != null;
@@ -138,9 +376,21 @@ export function looksLikeVariableUnitPriceProduct(input: {
   const hasLength = numAttr(attrs, 'length') != null;
   if (hasMass && !hasVolume && !hasCount && !hasRoll) return true;
 
-  const peers = (input.peerPurchaseUnitPrices ?? []).filter(positiveFinite);
-  if (peers.length >= MIN_PEERS_FOR_ANOMALY && coeffOfVariation(peers) >= 0.35) {
-    return true;
+  if (
+    typeof input.preparedPeerCount === 'number' &&
+    typeof input.preparedPeerCv === 'number'
+  ) {
+    if (
+      input.preparedPeerCount >= MIN_PEERS_FOR_ANOMALY &&
+      input.preparedPeerCv >= 0.35
+    ) {
+      return true;
+    }
+  } else {
+    const peers = (input.peerPurchaseUnitPrices ?? []).filter(positiveFinite);
+    if (peers.length >= MIN_PEERS_FOR_ANOMALY && coeffOfVariation(peers) >= 0.35) {
+      return true;
+    }
   }
 
   const name = (input.rawName || '').toLowerCase();
@@ -209,30 +459,40 @@ export function evaluatePriceObservationQuality(
     };
   }
 
-  const peers = (input.peerPurchaseUnitPrices ?? []).filter(positiveFinite);
+  const prepared = input.preparedPeerStats ?? null;
+  const peers = prepared
+    ? null
+    : (input.peerPurchaseUnitPrices ?? []).filter(positiveFinite);
+  const peerCount = prepared ? prepared.count : peers!.length;
+  const peerMed = prepared ? prepared.median : median(peers!);
+  const peerCv = prepared
+    ? prepared.coeffOfVariation
+    : coeffOfVariation(peers!);
+
   let suspectedIntegerMultiple: number | null = null;
   let quality: PriceObservationQualityLevel = 'trusted';
   let quantityConfidence: number | null = 0.9;
   let potentialOutlier = false;
 
-  if (peers.length < MIN_PEERS_FOR_ANOMALY) {
+  if (peerCount < MIN_PEERS_FOR_ANOMALY) {
     reasons.push('insufficient_history_for_anomaly_check');
   } else if (
     looksLikeVariableUnitPriceProduct({
       attributes: input.attributes,
       rawName: input.rawName,
-      peerPurchaseUnitPrices: peers,
+      peerPurchaseUnitPrices: peers ?? undefined,
+      preparedPeerCount: prepared?.count,
+      preparedPeerCv: prepared?.coeffOfVariation,
     })
   ) {
     reasons.push('high_variance_variable_price');
-    const med = median(peers);
+    const med = peerMed;
     if (med > 0 && Math.abs(rawPurchaseUnitPrice - med) / med >= 0.5) {
       potentialOutlier = true;
       quality = 'usable_with_caution';
     }
   } else {
-    const peerCv = coeffOfVariation(peers);
-    const med = median(peers);
+    const med = peerMed;
     if (peerCv <= MAX_PEER_CV_FOR_ANOMALY && med > 0) {
       const ratio = rawPurchaseUnitPrice / med;
       const multiple = nearIntegerMultiple(ratio);

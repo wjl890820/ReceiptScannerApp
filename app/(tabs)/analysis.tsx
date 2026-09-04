@@ -51,14 +51,25 @@ const ANALYSIS_PRICE_CHANGES_UNAVAILABLE: AnalysisPriceChangesSurface = {
  * Legacy Price Radar / Category Index helpers remain available in
  * lib/analysisHelpers.ts + lib/priceRadar.ts for future migration.
  * Release UI intentionally does not mount them until Safe Price History adopts them.
+ *
+ * C2C: when ANALYSIS_PRICE_CHANGES_ENABLED flips true, AP-3 must:
+ * - render Analysis core first
+ * - schedule derivation after first paint (runAfterAnalysisFirstPaint)
+ * - use session domain cache + generation cancellation
+ * - cancel on Analysis blur/unfocus (focus lifetime token)
+ * Wiring remains dormant while the flag is false.
  */
 export default function AnalysisScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const loadCycleRef = useRef(0);
+  const priceGenerationRef = useRef(0);
+  const focusTokenRef = useRef(0);
   const [truthCycle, setTruthCycle] = useState<
     (AnalysisLoadedTruth & { cycleId: number }) | null
   >(null);
+  const [priceChanges, setPriceChanges] =
+    useState<AnalysisPriceChangesSurface>(ANALYSIS_PRICE_CHANGES_UNAVAILABLE);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
@@ -66,8 +77,13 @@ export default function AnalysisScreen() {
   const loadReceipts = useCallback(async () => {
     const cycleId = loadCycleRef.current + 1;
     loadCycleRef.current = cycleId;
+    priceGenerationRef.current += 1;
+    const priceGenerationId = priceGenerationRef.current;
     setLoading(true);
     setLoadError(false);
+    if (ANALYSIS_PRICE_CHANGES_ENABLED) {
+      setPriceChanges(ANALYSIS_PRICE_CHANGES_UNAVAILABLE);
+    }
     let analyticsReceipts: AnalysisLoadedTruth['receipts'] | null = null;
     try {
       const allReceipts = await listReceiptsForAnalysis();
@@ -88,11 +104,75 @@ export default function AnalysisScreen() {
         setLoading(false);
       }
     }
+    return { analyticsReceipts, cycleId, priceGenerationId };
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      loadReceipts();
+      const focusId = ++focusTokenRef.current;
+      let cancelled = false;
+      let cancelScheduledPrice: (() => void) | null = null;
+
+      void (async () => {
+        const loaded = await loadReceipts();
+        if (
+          cancelled ||
+          focusTokenRef.current !== focusId ||
+          !loaded ||
+          !ANALYSIS_PRICE_CHANGES_ENABLED ||
+          !loaded.analyticsReceipts ||
+          loadCycleRef.current !== loaded.cycleId
+        ) {
+          return;
+        }
+        try {
+          const { scheduleAnalysisPriceLoadAfterPaint } = await import(
+            '@/lib/analysisPriceEnablement'
+          );
+          const { createAnalysisPriceFocusToken } = await import(
+            '@/lib/analysisPriceScheduler'
+          );
+          const focusToken = createAnalysisPriceFocusToken();
+          const scheduled = scheduleAnalysisPriceLoadAfterPaint({
+            analyticsReceipts: loaded.analyticsReceipts,
+            focusToken,
+            isStale: () =>
+              cancelled ||
+              focusTokenRef.current !== focusId ||
+              loadCycleRef.current !== loaded.cycleId ||
+              priceGenerationRef.current !== loaded.priceGenerationId ||
+              !focusToken.isActive(),
+          });
+          cancelScheduledPrice = scheduled.cancel;
+          const surface = await scheduled.promise;
+          if (
+            surface == null ||
+            cancelled ||
+            focusTokenRef.current !== focusId ||
+            loadCycleRef.current !== loaded.cycleId ||
+            priceGenerationRef.current !== loaded.priceGenerationId
+          ) {
+            return;
+          }
+          setPriceChanges(surface);
+        } catch {
+          if (
+            cancelled ||
+            focusTokenRef.current !== focusId ||
+            loadCycleRef.current !== loaded.cycleId
+          ) {
+            return;
+          }
+          setPriceChanges(ANALYSIS_PRICE_CHANGES_UNAVAILABLE);
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+        focusTokenRef.current += 1;
+        priceGenerationRef.current += 1;
+        cancelScheduledPrice?.();
+      };
     }, [loadReceipts])
   );
 
@@ -120,11 +200,13 @@ export default function AnalysisScreen() {
         allSupportedCount: allStats?.supportedReceiptCount ?? 0,
         itemCount: truthSnapshot?.itemCount ?? 0,
         insights: truthSnapshot?.insights ?? null,
-        priceChanges: ANALYSIS_PRICE_CHANGES_UNAVAILABLE,
+        priceChanges: ANALYSIS_PRICE_CHANGES_ENABLED
+          ? priceChanges
+          : ANALYSIS_PRICE_CHANGES_UNAVAILABLE,
         proComingSoon: true,
         priceRadarMigrated: false,
       }),
-    [truthSnapshot, allStats?.supportedReceiptCount]
+    [truthSnapshot, allStats?.supportedReceiptCount, priceChanges]
   );
 
   const renderInsightBody = () => {

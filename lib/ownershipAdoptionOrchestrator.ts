@@ -93,6 +93,9 @@ async function runAdoptionBestEffort(state: AuthState): Promise<void> {
         result.adopted_receipt_ids.length > 0 &&
         authStillMatchesSnapshot(adoptionSnapshot)
       ) {
+        void import('./analysisPriceSessionCache')
+          .then((m) => m.notifyAnalysisPriceTruthInvalidated())
+          .catch(() => undefined);
         try {
           const db = await _getDb!();
           await enqueueUpsertIntentsForReceiptIds(

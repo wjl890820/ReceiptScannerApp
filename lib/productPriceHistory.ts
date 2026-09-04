@@ -29,6 +29,9 @@ import {
 } from './productIdentityStore';
 import {
   evaluatePriceObservationQuality,
+  leaveOneOutPeerStats,
+  preparePeerPriceBucket,
+  type LeaveOneOutPeerStats,
   type PriceObservationQualityLevel,
 } from './productIdentityPriceObservationQuality';
 import type { ProductDetailTarget } from './productDetailTarget';
@@ -937,17 +940,50 @@ function qualityPeersForCandidate(
     .map((peer) => peer.priceValue);
 }
 
+function buildPreparedPeerStatsByStructuralKey(
+  structuralCohort: readonly StructuralCandidate[]
+): Map<string, LeaveOneOutPeerStats> {
+  const byBasis = new Map<string, StructuralCandidate[]>();
+  for (const candidate of structuralCohort) {
+    if (
+      candidate.amountBasis !== 'tax_included' &&
+      candidate.amountBasis !== 'tax_excluded'
+    ) {
+      continue;
+    }
+    const list = byBasis.get(candidate.amountBasis) ?? [];
+    list.push(candidate);
+    byBasis.set(candidate.amountBasis, list);
+  }
+
+  const statsByKey = new Map<string, LeaveOneOutPeerStats>();
+  for (const members of byBasis.values()) {
+    const bucket = preparePeerPriceBucket(
+      members.map((member) => member.priceValue)
+    );
+    for (const member of members) {
+      statsByKey.set(
+        rowObservationKey(member.row),
+        leaveOneOutPeerStats(bucket, member.priceValue)
+      );
+    }
+  }
+  return statsByKey;
+}
+
 function evaluateNormalizedGrossQuality(
   row: ProductPriceHistoryRow,
   candidate: StructuralCandidate,
-  peerPriceValues: readonly number[]
+  peerPriceValues: readonly number[] | null,
+  preparedPeerStats?: LeaveOneOutPeerStats | null
 ): PriceObservationQualityLevel {
   const isPurchaseUnit = candidate.dimension == null;
   const quality = evaluatePriceObservationQuality({
     lineTotal: isPurchaseUnit ? candidate.grossLineAmount : candidate.priceValue,
     quantity: isPurchaseUnit ? (row.purchaseQuantity as number) : 1,
     rawName: row.displayName,
-    peerPurchaseUnitPrices: peerPriceValues,
+    peerPurchaseUnitPrices: peerPriceValues ?? undefined,
+    preparedPeerStats: preparedPeerStats ?? null,
     attributes: normalizeProductForIdentity(row.displayName).attributes,
   });
   return quality.quality;
@@ -1058,6 +1094,8 @@ function buildObservationsAndStructuralCohort(
       candidate,
     ])
   );
+  const peerStatsByKey =
+    buildPreparedPeerStatsByStructuralKey(structuralCohort);
   const observations = rows.map((row) => {
     const promoRead = readPromoMarkersFromRow(row);
     const promoContext = resolvePromoContextFromRow(row);
@@ -1066,11 +1104,13 @@ function buildObservationsAndStructuralCohort(
     let qualityLevel: PriceObservationQualityLevel | null = null;
     const qualityReasons: string[] = [];
     if (structural.pass && candidate) {
-      const peers = qualityPeersForCandidate(candidate, structuralCohort);
+      const key = rowObservationKey(row);
+      const preparedStats = peerStatsByKey.get(key) ?? null;
       qualityLevel = evaluateNormalizedGrossQuality(
         row,
         candidate,
-        peers
+        preparedStats ? null : qualityPeersForCandidate(candidate, structuralCohort),
+        preparedStats
       );
       if (!passesLevel2Quality(qualityLevel)) {
         qualityReasons.push(`price_quality_${qualityLevel}`);

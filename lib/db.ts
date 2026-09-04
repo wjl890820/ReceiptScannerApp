@@ -749,7 +749,15 @@ export async function runReceiptItemIndexMaintenanceBatch(
 ): Promise<ReceiptItemIndexBackfillBatchResult> {
   await initIfNeeded();
   const db = await getDb();
-  return runReceiptItemIndexBackfillBatch(db, { batchSize });
+  const result = await runReceiptItemIndexBackfillBatch(db, { batchSize });
+  // Receipt-item index rebuild can change AP-3 engagement row evidence without
+  // altering receipt JSON length fingerprints — invalidate only when rows changed.
+  if (result.succeeded > 0) {
+    void import('./analysisPriceSessionCache')
+      .then((m) => m.notifyAnalysisPriceTruthInvalidated())
+      .catch(() => undefined);
+  }
+  return result;
 }
 
 // debugReceiptsSchema 函数已移除，改为在 initIfNeeded 最后直接打印
@@ -1081,6 +1089,9 @@ export async function saveReceipt(
     // eslint-disable-next-line no-console
     console.log('[ScanTiming] db_save_end_ms', { id: trace.id, ms: Date.now() - tSave0 });
   }
+  void import('./analysisPriceSessionCache')
+    .then((m) => m.notifyAnalysisPriceTruthInvalidated())
+    .catch(() => undefined);
   return id;
 }
 
@@ -1365,6 +1376,9 @@ export async function deleteReceipts(ids: string[]): Promise<void> {
 
   if (provenDeletedIds.length > 0) {
     void requestCloudBackupFlush();
+    void import('./analysisPriceSessionCache')
+      .then((m) => m.notifyAnalysisPriceTruthInvalidated())
+      .catch(() => undefined);
   }
 }
 
@@ -1666,6 +1680,9 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
   if (ownedUserId) {
     void requestCloudBackupFlush();
   }
+  void import('./analysisPriceSessionCache')
+    .then((m) => m.notifyAnalysisPriceTruthInvalidated())
+    .catch(() => undefined);
 }
 
 async function readOwnerScopedReceiptRowsForPurchaseTruth(
@@ -1836,6 +1853,12 @@ export async function updateLogicalPurchaseItemEdit(
 
   if (shouldFlush) {
     void requestCloudBackupFlush();
+  }
+
+  if (updatedReceiptIds.length > 0) {
+    void import('./analysisPriceSessionCache')
+      .then((m) => m.notifyAnalysisPriceTruthInvalidated())
+      .catch(() => undefined);
   }
 
   return { updatedReceiptIds };

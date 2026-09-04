@@ -1,0 +1,244 @@
+/**
+ * AP-3 scheduling helpers — first paint before CPU work; cooperative yields.
+ *
+ * Intentionally does not import `react-native` (Jest node env cannot parse RN).
+ * Production Analysis enablement wraps with InteractionManager before calling
+ * into the loader; this module adds a macrotask + rAF deferral that is safe
+ * in both RN and Node tests.
+ */
+
+export type AnalysisPriceGeneration = {
+  id: number;
+  isCanceled: () => boolean;
+  cancel: () => void;
+};
+
+let generationSeq = 0;
+
+export function createAnalysisPriceGeneration(): AnalysisPriceGeneration {
+  const id = ++generationSeq;
+  let canceled = false;
+  return {
+    id,
+    isCanceled: () => canceled || id !== generationSeq,
+    cancel: () => {
+      canceled = true;
+    },
+  };
+}
+
+/** Cancel any in-flight generation by advancing the global sequence. */
+export function invalidateAnalysisPriceGenerations(): void {
+  generationSeq += 1;
+}
+
+export function __resetAnalysisPriceGenerationsForTests(): void {
+  generationSeq = 0;
+}
+
+/** Analysis screen focus / lifetime token (blur/unmount cancels). */
+export type AnalysisPriceFocusToken = {
+  id: number;
+  isActive: () => boolean;
+  cancel: () => void;
+};
+
+let focusSeq = 0;
+
+export function createAnalysisPriceFocusToken(): AnalysisPriceFocusToken {
+  const id = ++focusSeq;
+  let active = true;
+  return {
+    id,
+    isActive: () => active && id === focusSeq,
+    cancel: () => {
+      active = false;
+    },
+  };
+}
+
+/** Invalidate all focus tokens (e.g. Analysis blur cleanup). */
+export function invalidateAnalysisPriceFocus(): void {
+  focusSeq += 1;
+}
+
+export function __resetAnalysisPriceFocusForTests(): void {
+  focusSeq = 0;
+}
+
+function scheduleAnimationFrame(cb: (time: number) => void): number {
+  if (typeof requestAnimationFrame === 'function') {
+    return requestAnimationFrame(cb);
+  }
+  return setTimeout(() => cb(Date.now()), 0) as unknown as number;
+}
+
+function cancelScheduledFrame(handle: number): void {
+  if (typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(handle);
+    return;
+  }
+  clearTimeout(handle);
+}
+
+export type ScheduledPaintWork<T> = {
+  promise: Promise<T>;
+  cancel: () => void;
+};
+
+/**
+ * Schedule work after a macrotask + one animation frame so Analysis can paint.
+ * Cancel before start → work never runs. Pair with InteractionManager at enablement.
+ */
+export function scheduleAfterAnalysisFirstPaint<T>(
+  work: () => Promise<T>,
+  options?: {
+    isStale?: () => boolean;
+    canceledResult: () => T;
+  }
+): ScheduledPaintWork<T> {
+  let canceled = false;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let rafId: number | null = null;
+  const isStale = options?.isStale ?? (() => false);
+
+  const promise = new Promise<T>((resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      timeoutId = null;
+      if (canceled || isStale()) {
+        resolve(options!.canceledResult());
+        return;
+      }
+      rafId = scheduleAnimationFrame(() => {
+        rafId = null;
+        if (canceled || isStale()) {
+          resolve(options!.canceledResult());
+          return;
+        }
+        Promise.resolve()
+          .then(work)
+          .then(resolve, reject);
+      });
+    }, 0);
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      canceled = true;
+      if (timeoutId != null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (rafId != null) {
+        cancelScheduledFrame(rafId);
+        rafId = null;
+      }
+    },
+  };
+}
+
+/**
+ * Schedule work after a macrotask + one animation frame so Analysis can paint.
+ * Pair with InteractionManager.runAfterInteractions at the Analysis enablement
+ * boundary (see analysisPriceEnablement) for RN interaction quiescence.
+ */
+export function runAfterAnalysisFirstPaint<T>(
+  work: () => Promise<T>
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    setTimeout(() => {
+      scheduleAnimationFrame(() => {
+        Promise.resolve()
+          .then(work)
+          .then(resolve, reject);
+      });
+    }, 0);
+  });
+}
+
+/** Yield to the JS event loop between cooperative chunks. */
+export function yieldAnalysisPriceChunk(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+export type ChunkTimingSample = {
+  label: string;
+  durationMs: number;
+};
+
+let chunkTimings: ChunkTimingSample[] = [];
+
+export function beginAnalysisPriceChunkTimingCapture(): void {
+  chunkTimings = [];
+}
+
+export function recordAnalysisPriceChunkTiming(
+  label: string,
+  durationMs: number
+): void {
+  chunkTimings.push({ label, durationMs });
+}
+
+export function endAnalysisPriceChunkTimingCapture(): ChunkTimingSample[] {
+  const snapshot = chunkTimings;
+  chunkTimings = [];
+  return snapshot;
+}
+
+export function getMaxAnalysisPriceChunkDurationMs(): number {
+  if (chunkTimings.length === 0) return 0;
+  return Math.max(...chunkTimings.map((sample) => sample.durationMs));
+}
+
+/** Controllable scheduler for G1/G2 race tests. */
+type DeferredPaintGate = {
+  release: () => void;
+  promise: Promise<void>;
+};
+
+let testPaintGate: DeferredPaintGate | null = null;
+
+export function __armAnalysisPricePaintGateForTests(): {
+  release: () => void;
+} {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  testPaintGate = { release, promise };
+  return { release };
+}
+
+export function __clearAnalysisPricePaintGateForTests(): void {
+  testPaintGate = null;
+}
+
+/**
+ * Test-friendly paint deferral: if a paint gate is armed, wait for release
+ * before running work (simulates InteractionManager / rAF delay).
+ */
+export function scheduleAfterAnalysisFirstPaintForTests<T>(
+  work: () => Promise<T>,
+  options: {
+    isStale?: () => boolean;
+    canceledResult: () => T;
+  }
+): ScheduledPaintWork<T> {
+  let canceled = false;
+  const isStale = options.isStale ?? (() => false);
+  const gate = testPaintGate;
+  const promise = (async () => {
+    if (gate) await gate.promise;
+    if (canceled || isStale()) return options.canceledResult();
+    return work();
+  })();
+  return {
+    promise,
+    cancel: () => {
+      canceled = true;
+    },
+  };
+}

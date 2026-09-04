@@ -329,5 +329,9 @@ export async function restoreCloudReceiptsForCurrentUser(
     };
   }
 
+  void import('./analysisPriceSessionCache')
+    .then((m) => m.notifyAnalysisPriceTruthInvalidated())
+    .catch(() => undefined);
+
   return { status: 'ok', restored: mapped.length };
 }

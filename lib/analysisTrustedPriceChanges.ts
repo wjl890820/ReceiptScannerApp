@@ -14,6 +14,7 @@ import type { ProductPriceChangeInterpretation } from './productPriceChangeInter
 import type { ProductIdentitySourceV1 } from './productIdentityContract';
 import {
   prepareAnalysisPriceInsightContext,
+  prepareAnalysisPriceInsightContextAsync,
   recordAnalysisPriceHistoryInputSize,
   type PreparedAnalysisPriceInsightContext,
 } from './analysisPricePreparedContext';
@@ -181,6 +182,19 @@ function buildCandidateForSku(
   if (skuRows.length < 2) return null;
 
   recordAnalysisPriceHistoryInputSize(skuRows.length);
+  const bucketMetadata = new Map<
+    string,
+    NonNullable<
+      ReturnType<
+        PreparedAnalysisPriceInsightContext['rowIdentityMetadata']['get']
+      >
+    >
+  >();
+  for (const row of skuRows) {
+    const key = `${row.receiptId}:${row.sourceIndex}`;
+    const meta = prepared.rowIdentityMetadata.get(key);
+    if (meta) bucketMetadata.set(key, meta);
+  }
   const history: ProductPriceHistoryResult = options.buildHistory(
     { type: 'sku', key: skuKey },
     [...skuRows],
@@ -188,6 +202,8 @@ function buildCandidateForSku(
       receiptEvidenceCache: prepared.receiptEvidenceCache,
       canonicalDuplicateSelectionApplied:
         options.canonicalDuplicateSelectionApplied,
+      preparedRowIdentityMetadata:
+        bucketMetadata.size > 0 ? bucketMetadata : undefined,
     }
   );
   const interpretation = options.interpretChange({
@@ -337,6 +353,114 @@ export function collectAnalysisTrustedPriceChangeCandidates(
     }
   }
 
+  return [...skuCandidates, ...merchantProductCandidates];
+}
+
+export type CollectAnalysisTrustedPriceChangeCandidatesAsyncOptions = {
+  shouldCancel?: () => boolean;
+  /** Yield after this many target buckets (SKU or MP). Default 4. */
+  targetsPerChunk?: number;
+};
+
+/**
+ * Cooperative async collect — same semantics as sync collect, yields between
+ * small target groups so long derivations do not monopolize the JS thread.
+ */
+export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
+  input: CollectAnalysisTrustedPriceChangeCandidatesInput,
+  options: CollectAnalysisTrustedPriceChangeCandidatesAsyncOptions = {}
+): Promise<AnalysisTrustedPriceChangeCandidate[] | null> {
+  const { yieldAnalysisPriceChunk, recordAnalysisPriceChunkTiming } =
+    await import('./analysisPriceScheduler');
+  const shouldCancel = options.shouldCancel ?? (() => false);
+  const targetsPerChunk = Math.max(1, options.targetsPerChunk ?? 4);
+  const buildHistory = input.buildHistory ?? buildProductPriceHistory;
+  const interpretChange = input.interpretChange ?? interpretProductPriceChange;
+  const duplicateApplied = input.canonicalDuplicateSelectionApplied ?? true;
+
+  if (shouldCancel()) return null;
+
+  let prepareStarted = Date.now();
+  const prepared =
+    input.prepared ??
+    (await prepareAnalysisPriceInsightContextAsync(input.rows, input.seedReceiptIds, {
+      shouldCancel,
+      rowsPerChunk: 64,
+    }));
+  if (prepared == null) return null;
+  recordAnalysisPriceChunkTiming(
+    'prepare:totalWall',
+    Date.now() - prepareStarted
+  );
+
+  if (shouldCancel()) return null;
+  if (
+    prepared.seededSkuKeys.size === 0 &&
+    prepared.seededMerchantProductIds.size === 0
+  ) {
+    return [];
+  }
+
+  const skuCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
+  const skuKeys = [...prepared.seededSkuKeys].sort();
+  for (let i = 0; i < skuKeys.length; i += 1) {
+    if (shouldCancel()) return null;
+    const chunkStarted = Date.now();
+    const skuKey = skuKeys[i]!;
+    const skuRows = prepared.skuBuckets.get(skuKey) ?? [];
+    try {
+      const candidate = buildCandidateForSku(skuKey, skuRows, prepared, {
+        canonicalDuplicateSelectionApplied: duplicateApplied,
+        buildHistory,
+        interpretChange,
+      });
+      if (candidate) skuCandidates.push(candidate);
+    } catch {
+      // skip
+    }
+    recordAnalysisPriceChunkTiming(`sku:${skuKey}`, Date.now() - chunkStarted);
+    if ((i + 1) % targetsPerChunk === 0) {
+      await yieldAnalysisPriceChunk();
+    }
+  }
+
+  if (shouldCancel()) return null;
+  const skuCoveredEvents = collectSkuCoveredPurchaseEvents(skuCandidates);
+  const merchantProductCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
+  const mpIds = [...prepared.seededMerchantProductIds].sort();
+  for (let i = 0; i < mpIds.length; i += 1) {
+    if (shouldCancel()) return null;
+    const chunkStarted = Date.now();
+    const merchantProductId = mpIds[i]!;
+    try {
+      const candidate = buildCandidateForMerchantProduct(
+        merchantProductId,
+        prepared,
+        {
+          canonicalDuplicateSelectionApplied: duplicateApplied,
+          buildHistory,
+          interpretChange,
+        }
+      );
+      if (
+        candidate &&
+        !isMerchantProductDuplicateOfSku(candidate, skuCoveredEvents)
+      ) {
+        merchantProductCandidates.push(candidate);
+      }
+    } catch {
+      // skip
+    }
+    recordAnalysisPriceChunkTiming(
+      `mp:${merchantProductId}`,
+      Date.now() - chunkStarted
+    );
+    if ((i + 1) % targetsPerChunk === 0) {
+      await yieldAnalysisPriceChunk();
+    }
+  }
+
+  if (shouldCancel()) return null;
   return [...skuCandidates, ...merchantProductCandidates];
 }
 

@@ -413,6 +413,12 @@ export async function recordPersonalProductIdentityDecisionWithDb(
     throw error;
   }
 
+  if (result.ok) {
+    void import('./analysisPriceSessionCache')
+      .then((m) => m.bumpAnalysisPriceIdentityRevision())
+      .catch(() => undefined);
+  }
+
   return result;
 }
 
