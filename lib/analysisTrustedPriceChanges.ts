@@ -3,6 +3,9 @@
  *
  * Consumes existing Safe Price History + interpretProductPriceChange truth only.
  * Does not reimplement comparison, identity, or quality gates.
+ *
+ * Performance (C2A): one-pass prepared identity + evidence + buckets; history
+ * builds only from the candidate's membership/SKU bucket.
  */
 
 import type { ProductDetailTarget } from './productDetailTarget';
@@ -10,13 +13,12 @@ import { interpretProductPriceChange } from './productPriceChangeInterpretation'
 import type { ProductPriceChangeInterpretation } from './productPriceChangeInterpretation';
 import type { ProductIdentitySourceV1 } from './productIdentityContract';
 import {
-  identityObservationsFromPriceHistoryRows,
-  resolveIdentityConsumerObservations,
-  resolveMerchantProductTargetMembershipRowKeys,
-} from './productIdentityConsumer';
+  prepareAnalysisPriceInsightContext,
+  recordAnalysisPriceHistoryInputSize,
+  type PreparedAnalysisPriceInsightContext,
+} from './analysisPricePreparedContext';
 import {
   buildProductPriceHistory,
-  buildReceiptEvidenceCache,
   type ProductPriceHistoryPoint,
   type ProductPriceHistoryRow,
   type ProductPriceHistoryResult,
@@ -89,6 +91,7 @@ export type AnalysisTrustedPriceChangeCandidate = {
   displayName: string;
   interpretation: Extract<ProductPriceChangeInterpretation, { status: 'available' }>;
   comparableOccurrenceCount: number;
+  /** Trusted timestamp of the current purchase event (period filter later). */
   latestOccurredAt: number;
 };
 
@@ -99,6 +102,8 @@ export type CollectAnalysisTrustedPriceChangeCandidatesInput = {
   canonicalDuplicateSelectionApplied?: boolean;
   buildHistory?: typeof buildProductPriceHistory;
   interpretChange?: typeof interpretProductPriceChange;
+  /** Optional prebuilt context (tests / shared preparation). */
+  prepared?: PreparedAnalysisPriceInsightContext;
 };
 
 function pickDisplayLabel(rows: readonly ProductPriceHistoryRow[]): string {
@@ -116,35 +121,15 @@ function pickDisplayLabel(rows: readonly ProductPriceHistoryRow[]): string {
   )[0]![0];
 }
 
-function discoverSeededSkuKeys(
-  rows: readonly ProductPriceHistoryRow[],
-  seedReceiptIds: ReadonlySet<string>
-): Set<string> {
-  const keys = new Set<string>();
-  for (const row of rows) {
-    if (!seedReceiptIds.has(row.receiptId)) continue;
-    const sku = row.skuKey?.trim();
-    if (sku) keys.add(sku);
-  }
-  return keys;
-}
-
+/** @deprecated Prefer prepareAnalysisPriceInsightContext; kept for tests. */
 export function discoverSeededMerchantProductIds(
   rows: readonly ProductPriceHistoryRow[],
   seedReceiptIds: ReadonlySet<string>
 ): Set<string> {
-  const seedRows = rows.filter((row) => seedReceiptIds.has(row.receiptId));
-  if (seedRows.length === 0) return new Set();
-
-  const { qualified } = resolveIdentityConsumerObservations(
-    identityObservationsFromPriceHistoryRows(seedRows)
+  return new Set(
+    prepareAnalysisPriceInsightContext(rows, seedReceiptIds)
+      .seededMerchantProductIds
   );
-  const ids = new Set<string>();
-  for (const row of qualified) {
-    const merchantProductId = row.merchantProductId?.trim();
-    if (merchantProductId) ids.add(merchantProductId);
-  }
-  return ids;
 }
 
 function skuPurchaseEventKey(receiptId: string, skuKey: string): string {
@@ -185,23 +170,24 @@ export function isMerchantProductDuplicateOfSku(
 
 function buildCandidateForSku(
   skuKey: string,
-  allRows: readonly ProductPriceHistoryRow[],
+  skuRows: readonly ProductPriceHistoryRow[],
+  prepared: PreparedAnalysisPriceInsightContext,
   options: {
     canonicalDuplicateSelectionApplied: boolean;
     buildHistory: typeof buildProductPriceHistory;
     interpretChange: typeof interpretProductPriceChange;
   }
 ): AnalysisTrustedPriceChangeCandidate | null {
-  const skuRows = allRows.filter((row) => row.skuKey?.trim() === skuKey);
   if (skuRows.length < 2) return null;
 
-  const receiptEvidenceCache = buildReceiptEvidenceCache(skuRows);
+  recordAnalysisPriceHistoryInputSize(skuRows.length);
   const history: ProductPriceHistoryResult = options.buildHistory(
     { type: 'sku', key: skuKey },
-    skuRows,
+    [...skuRows],
     {
-      receiptEvidenceCache,
-      canonicalDuplicateSelectionApplied: options.canonicalDuplicateSelectionApplied,
+      receiptEvidenceCache: prepared.receiptEvidenceCache,
+      canonicalDuplicateSelectionApplied:
+        options.canonicalDuplicateSelectionApplied,
     }
   );
   const interpretation = options.interpretChange({
@@ -223,34 +209,46 @@ function buildCandidateForSku(
 
 function buildCandidateForMerchantProduct(
   merchantProductId: string,
-  allRows: readonly ProductPriceHistoryRow[],
+  prepared: PreparedAnalysisPriceInsightContext,
   options: {
     canonicalDuplicateSelectionApplied: boolean;
     buildHistory: typeof buildProductPriceHistory;
     interpretChange: typeof interpretProductPriceChange;
   }
 ): AnalysisTrustedPriceChangeCandidate | null {
-  const membershipKeys = resolveMerchantProductTargetMembershipRowKeys(
-    [...allRows],
-    merchantProductId
-  );
-  if (membershipKeys.length < 2) return null;
-
-  const membershipKeySet = new Set(
-    membershipKeys.map((key) => `${key.receiptId}:${key.itemSourceIndex}`)
-  );
-  const membershipRows = allRows.filter((row) =>
-    membershipKeySet.has(`${row.receiptId}:${row.sourceIndex}`)
-  );
+  const membershipRows =
+    prepared.merchantProductBuckets.get(merchantProductId) ?? [];
   if (membershipRows.length < 2) return null;
 
-  const receiptEvidenceCache = buildReceiptEvidenceCache([...allRows]);
+  const identityView =
+    prepared.merchantProductIdentityViews.get(merchantProductId) ?? null;
+  if (!identityView) return null;
+
+  // Bucket-scoped metadata only (still sourced from the one-pass full resolve).
+  const bucketMetadata = new Map<
+    string,
+    NonNullable<
+      ReturnType<
+        PreparedAnalysisPriceInsightContext['rowIdentityMetadata']['get']
+      >
+    >
+  >();
+  for (const row of membershipRows) {
+    const key = `${row.receiptId}:${row.sourceIndex}`;
+    const meta = prepared.rowIdentityMetadata.get(key);
+    if (meta) bucketMetadata.set(key, meta);
+  }
+
+  recordAnalysisPriceHistoryInputSize(membershipRows.length);
   const history: ProductPriceHistoryResult = options.buildHistory(
     { type: 'merchant_product', key: merchantProductId },
-    [...allRows],
+    [...membershipRows],
     {
-      receiptEvidenceCache,
-      canonicalDuplicateSelectionApplied: options.canonicalDuplicateSelectionApplied,
+      receiptEvidenceCache: prepared.receiptEvidenceCache,
+      canonicalDuplicateSelectionApplied:
+        options.canonicalDuplicateSelectionApplied,
+      preparedMerchantProductIdentityView: identityView,
+      preparedRowIdentityMetadata: bucketMetadata,
     }
   );
   const interpretation = options.interpretChange({
@@ -277,7 +275,8 @@ function buildCandidateForMerchantProduct(
 
 /**
  * Collect trusted Analysis price-change candidates from indexed product rows.
- * Discovery is seeded by analytics receipts; history uses full comparable rows per target.
+ * Discovery is seeded by analytics receipts; history uses full comparable
+ * bucket rows per target (baseline may lie outside a future UI period).
  */
 export function collectAnalysisTrustedPriceChangeCandidates(
   input: CollectAnalysisTrustedPriceChangeCandidatesInput
@@ -285,20 +284,23 @@ export function collectAnalysisTrustedPriceChangeCandidates(
   const buildHistory = input.buildHistory ?? buildProductPriceHistory;
   const interpretChange = input.interpretChange ?? interpretProductPriceChange;
   const duplicateApplied = input.canonicalDuplicateSelectionApplied ?? true;
-  const seededSkuKeys = discoverSeededSkuKeys(input.rows, input.seedReceiptIds);
-  const seededMerchantProductIds = discoverSeededMerchantProductIds(
-    input.rows,
-    input.seedReceiptIds
-  );
-  if (seededSkuKeys.size === 0 && seededMerchantProductIds.size === 0) {
+
+  const prepared =
+    input.prepared ??
+    prepareAnalysisPriceInsightContext(input.rows, input.seedReceiptIds);
+
+  if (
+    prepared.seededSkuKeys.size === 0 &&
+    prepared.seededMerchantProductIds.size === 0
+  ) {
     return [];
   }
 
   const skuCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
-  for (const skuKey of [...seededSkuKeys].sort()) {
-    const skuRows = input.rows.filter((row) => row.skuKey?.trim() === skuKey);
+  for (const skuKey of [...prepared.seededSkuKeys].sort()) {
+    const skuRows = prepared.skuBuckets.get(skuKey) ?? [];
     try {
-      const candidate = buildCandidateForSku(skuKey, skuRows, {
+      const candidate = buildCandidateForSku(skuKey, skuRows, prepared, {
         canonicalDuplicateSelectionApplied: duplicateApplied,
         buildHistory,
         interpretChange,
@@ -311,11 +313,13 @@ export function collectAnalysisTrustedPriceChangeCandidates(
 
   const skuCoveredEvents = collectSkuCoveredPurchaseEvents(skuCandidates);
   const merchantProductCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
-  for (const merchantProductId of [...seededMerchantProductIds].sort()) {
+  for (const merchantProductId of [
+    ...prepared.seededMerchantProductIds,
+  ].sort()) {
     try {
       const candidate = buildCandidateForMerchantProduct(
         merchantProductId,
-        input.rows,
+        prepared,
         {
           canonicalDuplicateSelectionApplied: duplicateApplied,
           buildHistory,

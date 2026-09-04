@@ -218,6 +218,16 @@ export type BuildProductPriceHistoryOptions = {
   receiptEvidenceCache?: ReceiptEvidenceCache;
   canonicalDuplicateSelectionApplied?: boolean;
   personalProductContext?: ResolvedPersonalProductTarget;
+  /**
+   * AP-3 prepared path: skip re-resolving identity over the row list for
+   * merchant_product targets. Must match membership semantics of the row list.
+   */
+  preparedMerchantProductIdentityView?: import('./productIdentityConsumer').IdentityMerchantProductHistoryView | null;
+  /**
+   * Optional prebuilt `${receiptId}:${sourceIndex}` → identity metadata.
+   * When omitted, metadata is resolved from rows (Product Detail default).
+   */
+  preparedRowIdentityMetadata?: Map<string, RowIdentityMetadata>;
 };
 
 type RowIdentityMetadata = {
@@ -228,6 +238,15 @@ type RowIdentityMetadata = {
   identitySource: string | null;
   merchantScopeKey: string;
 };
+
+/** Public alias for prepared AP-3 / history injection. */
+export type ProductPriceHistoryRowIdentityMetadata = RowIdentityMetadata;
+
+export function priceHistoryRowObservationKey(
+  row: Pick<ProductPriceHistoryRow, 'receiptId' | 'sourceIndex'>
+): string {
+  return `${row.receiptId}:${row.sourceIndex}`;
+}
 
 function isValidOpaqueIdentifier(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value === value.trim();
@@ -570,7 +589,7 @@ function trustedAmountBasisForRow(
 }
 
 function rowObservationKey(row: ProductPriceHistoryRow): string {
-  return `${row.receiptId}:${row.sourceIndex}`;
+  return priceHistoryRowObservationKey(row);
 }
 
 function membershipRowKeysToSet(
@@ -1454,14 +1473,21 @@ export function buildMerchantProductPriceHistoryFromRows(
   const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rowList);
   const canonicalDuplicateSelectionApplied =
     options.canonicalDuplicateSelectionApplied === true;
-  const identityByRowKey = buildRowIdentityMetadataByKey(rowList);
+  const identityByRowKey =
+    options.preparedRowIdentityMetadata ??
+    buildRowIdentityMetadataByKey(rowList);
   const target = { type: 'merchant_product' as const, key: merchantProductId };
-  const { tryBuildIdentityPriceHistoryForRows } =
-    require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
-  const identityView = tryBuildIdentityPriceHistoryForRows(
-    rowList,
-    merchantProductId
-  );
+
+  let identityView = options.preparedMerchantProductIdentityView ?? null;
+  if (!identityView) {
+    const { tryBuildIdentityPriceHistoryForRows } =
+      require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
+    identityView = tryBuildIdentityPriceHistoryForRows(
+      rowList,
+      merchantProductId
+    );
+  }
+
   if (!identityView || identityView.merchantProductId !== merchantProductId) {
     return failClosedRequestedMerchantProductTargetResult(
       target,
@@ -1488,7 +1514,8 @@ export function buildProductPriceHistory(
   const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rows);
   const canonicalDuplicateSelectionApplied =
     options.canonicalDuplicateSelectionApplied === true;
-  const identityByRowKey = buildRowIdentityMetadataByKey(rows);
+  const identityByRowKey =
+    options.preparedRowIdentityMetadata ?? buildRowIdentityMetadataByKey(rows);
   const totalOccurrenceCount = rows.length;
 
   if (target.type === 'merchant_product') {
@@ -1707,13 +1734,13 @@ function applyIdentityG3Gates(
         )
       : filtered;
 
+  const rowByKey = new Map<string, ProductPriceHistoryRow>();
+  for (const row of filtered) {
+    rowByKey.set(rowObservationKey(row), row);
+  }
   const identityRows = identityView.historyPoints.flatMap((point) => {
     const src =
-      filtered.find(
-        (row) =>
-          row.receiptId === point.receiptId &&
-          row.sourceIndex === point.itemSourceIndex
-      ) ?? null;
+      rowByKey.get(`${point.receiptId}:${point.itemSourceIndex}`) ?? null;
     return src ? [src] : [];
   });
 

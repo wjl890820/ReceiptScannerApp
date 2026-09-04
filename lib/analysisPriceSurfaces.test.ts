@@ -622,9 +622,14 @@ describe('analysisTrustedPriceChanges merchant_product bridge', () => {
       path.join(__dirname, 'analysisTrustedPriceChanges.ts'),
       'utf8'
     );
+    const prepared = fs.readFileSync(
+      path.join(__dirname, 'analysisPricePreparedContext.ts'),
+      'utf8'
+    );
     expect(source).not.toMatch(/productFamilyKey|comparisonKey|fuzzy|normalizeProductForIdentity/);
-    expect(source).toContain('resolveIdentityConsumerObservations');
-    expect(source).toContain('resolveMerchantProductTargetMembershipRowKeys');
+    expect(prepared).toContain('resolveIdentityConsumerObservations');
+    expect(prepared).toContain('resolveMerchantProductTargetMembershipRowKeys');
+    expect(source).toContain('prepareAnalysisPriceInsightContext');
   });
 
   it('dedup helpers skip merchant_product when sku already covers purchase events', () => {
