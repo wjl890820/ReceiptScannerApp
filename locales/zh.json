@@ -913,6 +913,8 @@
     "inputPlaceholder": "要买什么？",
     "errorTitle": "出错了",
     "errorMessage": "无法加载购物清单",
-    "alreadyOnList": "该商品已在购物清单中。"
+    "alreadyOnList": "该商品已在购物清单中。",
+    "increaseQuantityA11y": "增加数量，当前 {quantity}",
+    "decreaseQuantityA11y": "减少数量，当前 {quantity}"
   }
 }

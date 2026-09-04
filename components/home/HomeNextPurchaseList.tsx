@@ -14,12 +14,16 @@ import {
   formatNextPurchaseMedianDaysForDisplay,
   type NextPurchaseCandidate,
 } from '@/lib/nextPurchaseCandidates';
-import { shoppingListIdentityKey } from '@/lib/shoppingList';
+import {
+  SHOPPING_LIST_QUANTITY_MAX,
+  shoppingListIdentityKey,
+} from '@/lib/shoppingList';
 import { UI_COLORS, UI_RADIUS, UI_SPACING } from '@/lib/uiTokens';
 
 type HomeNextPurchaseListProps = {
   candidates: readonly NextPurchaseCandidate[];
   activeShoppingListIdentities?: ReadonlySet<string>;
+  activeShoppingListQuantities?: ReadonlyMap<string, number>;
   onPress?: (candidate: NextPurchaseCandidate) => void;
   onAddToShoppingList?: (candidate: NextPurchaseCandidate) => void;
 };
@@ -27,6 +31,7 @@ type HomeNextPurchaseListProps = {
 export function HomeNextPurchaseList({
   candidates,
   activeShoppingListIdentities,
+  activeShoppingListQuantities,
   onPress,
   onAddToShoppingList,
 }: HomeNextPurchaseListProps) {
@@ -56,8 +61,13 @@ export function HomeNextPurchaseList({
           identity != null &&
           activeShoppingListIdentities != null &&
           activeShoppingListIdentities.has(identity);
-        const canAdd =
-          typeof onAddToShoppingList === 'function' && !alreadyAdded;
+        const quantity =
+          identity != null && activeShoppingListQuantities
+            ? activeShoppingListQuantities.get(identity) ?? 1
+            : 1;
+        const atMax = alreadyAdded && quantity >= SHOPPING_LIST_QUANTITY_MAX;
+        const canTapPlus =
+          typeof onAddToShoppingList === 'function' && !atMax;
 
         return (
           <MerunoGroupedRow
@@ -99,33 +109,48 @@ export function HomeNextPurchaseList({
                   </MerunoText>
                 </View>
                 {typeof onAddToShoppingList === 'function' ? (
-                  alreadyAdded ? (
-                    <View style={styles.addedBadge} importantForAccessibility="no">
-                      <MerunoText role="caption" tone="muted">
-                        {t('home.progressive.nextPurchase.added')}
+                  <View style={styles.qtyCluster}>
+                    {alreadyAdded ? (
+                      <MerunoText
+                        role="caption"
+                        tone="secondary"
+                        style={styles.qtyLabel}
+                        importantForAccessibility="no"
+                      >
+                        {`×${quantity}`}
                       </MerunoText>
-                    </View>
-                  ) : (
+                    ) : null}
                     <Pressable
                       onPress={() => {
-                        if (canAdd) onAddToShoppingList(candidate);
+                        if (canTapPlus) onAddToShoppingList(candidate);
                       }}
+                      disabled={!canTapPlus}
                       accessibilityRole="button"
-                      accessibilityLabel={t(
-                        'home.progressive.nextPurchase.addA11y',
-                        { name: candidate.displayName }
-                      )}
+                      accessibilityLabel={
+                        alreadyAdded
+                          ? t('shoppingList.increaseQuantityA11y', {
+                              quantity,
+                            })
+                          : t('home.progressive.nextPurchase.addA11y', {
+                              name: candidate.displayName,
+                            })
+                      }
                       hitSlop={8}
                       style={({ pressed: addPressed }) => [
                         styles.addButton,
                         addPressed && styles.addPressed,
+                        !canTapPlus && styles.addDisabled,
                       ]}
                     >
-                      <MerunoText role="bodySmall" tone="primary" style={styles.addLabel}>
+                      <MerunoText
+                        role="bodySmall"
+                        tone="primary"
+                        style={styles.addLabel}
+                      >
                         +
                       </MerunoText>
                     </Pressable>
-                  )
+                  </View>
                 ) : null}
                 {pressable ? (
                   <MerunoDisclosureIndicator
@@ -172,6 +197,17 @@ const styles = StyleSheet.create({
   meta: {
     marginTop: 4,
   },
+  qtyCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+  qtyLabel: {
+    fontWeight: '700',
+    minWidth: 28,
+    textAlign: 'right',
+  },
   addButton: {
     minWidth: 36,
     minHeight: 36,
@@ -185,14 +221,13 @@ const styles = StyleSheet.create({
   addPressed: {
     opacity: 0.55,
   },
+  addDisabled: {
+    opacity: 0.4,
+  },
   addLabel: {
     fontSize: 22,
     lineHeight: 24,
     fontWeight: '600',
     color: UI_COLORS.accent,
-  },
-  addedBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 4,
   },
 });

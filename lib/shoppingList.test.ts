@@ -14,6 +14,7 @@ import {
   addShoppingListItemFromProductDetailWithDb,
   clearCompletedShoppingListItemsWithDb,
   deleteShoppingListItemWithDb,
+  effectiveShoppingListQuantity,
   getActiveShoppingListIdentitySetWithDb,
   listShoppingListItemsWithDb,
   mapShoppingIntentRowToListItem,
@@ -167,6 +168,7 @@ describe('Shopping List 1.0 domain', () => {
       {
         id: 'c-b',
         text: 'cb',
+        quantity: 1,
         isCompleted: true,
         completedAt: 200,
         createdAt: 1,
@@ -178,6 +180,7 @@ describe('Shopping List 1.0 domain', () => {
       {
         id: 'c-a',
         text: 'ca',
+        quantity: 1,
         isCompleted: true,
         completedAt: 200,
         createdAt: 1,
@@ -189,6 +192,7 @@ describe('Shopping List 1.0 domain', () => {
       {
         id: 'i-b',
         text: 'ib',
+        quantity: 1,
         isCompleted: false,
         completedAt: null,
         createdAt: 10,
@@ -200,6 +204,7 @@ describe('Shopping List 1.0 domain', () => {
       {
         id: 'i-a',
         text: 'ia',
+        quantity: 1,
         isCompleted: false,
         completedAt: null,
         createdAt: 10,
@@ -211,6 +216,7 @@ describe('Shopping List 1.0 domain', () => {
       {
         id: 'i-old',
         text: 'old',
+        quantity: 1,
         isCompleted: false,
         completedAt: null,
         createdAt: 5,
@@ -222,6 +228,7 @@ describe('Shopping List 1.0 domain', () => {
       {
         id: 'c-new',
         text: 'cnew',
+        quantity: 1,
         isCompleted: true,
         completedAt: 300,
         createdAt: 1,
@@ -256,7 +263,7 @@ describe('Shopping List 1.0 domain', () => {
     expect(result.item.sourceIdentityKey).toBe('mp:milk-1l');
   });
 
-  it('K — Next Purchase duplicate active trusted identity is no-op', async () => {
+  it('K — Next Purchase duplicate active trusted identity increments', async () => {
     const db = createMemoryShoppingIntentDatabase();
     const first = await addShoppingListItemFromNextPurchaseWithDb(
       db,
@@ -269,9 +276,10 @@ describe('Shopping List 1.0 domain', () => {
       { idFactory: () => 'np-dup-2', now: LATER }
     );
     expect(first.status).toBe('created');
-    expect(second.status).toBe('already_exists');
-    if (second.status !== 'already_exists') return;
+    expect(second.status).toBe('incremented');
+    if (second.status !== 'incremented') return;
     expect(second.item.id).toBe('np-dup-1');
+    expect(second.item.quantity).toBe(2);
     expect(db.rows.size).toBe(1);
   });
 
@@ -337,10 +345,13 @@ describe('Shopping List 1.0 domain', () => {
       { idFactory: () => 'pp-2', now: LATER }
     );
     expect(first.status).toBe('created');
-    expect(second.status).toBe('already_exists');
+    expect(second.status).toBe('incremented');
     if (first.status !== 'created') return;
     expect(first.item.sourceIdentityKind).toBe('personal_product');
     expect(first.item.sourceIdentityKey).toBe('pp:milk-home');
+    if (second.status === 'incremented') {
+      expect(second.item.quantity).toBe(2);
+    }
   });
 
   it('O — Product Detail trusted identity uses history + provenance', async () => {
@@ -436,7 +447,7 @@ describe('Shopping List 1.0 domain', () => {
     );
   });
 
-  it('D — Concurrent trusted add → one active + already_exists', async () => {
+  it('D — Concurrent trusted add → one active + quantity 2', async () => {
     const db = createMemoryShoppingIntentDatabase();
     let seq = 0;
     const [first, second] = await Promise.all([
@@ -450,7 +461,7 @@ describe('Shopping List 1.0 domain', () => {
       }),
     ]);
     const statuses = [first.status, second.status].sort();
-    expect(statuses).toEqual(['already_exists', 'created']);
+    expect(statuses).toEqual(['created', 'incremented']);
     const active = [...db.rows.values()].filter(
       (row) =>
         row.status === 'active' &&
@@ -458,6 +469,7 @@ describe('Shopping List 1.0 domain', () => {
         row.source_identity_key === 'mp:milk-1l'
     );
     expect(active).toHaveLength(1);
+    expect(effectiveShoppingListQuantity(active[0]!.desired_quantity)).toBe(2);
   });
 
   it('E — Cross-source race Next Purchase vs Product Detail', async () => {
@@ -479,7 +491,11 @@ describe('Shopping List 1.0 domain', () => {
       ),
     ]);
     expect(results.some((r) => r.status === 'created')).toBe(true);
-    expect(results.some((r) => r.status === 'already_exists')).toBe(true);
+    expect(
+      results.some(
+        (r) => r.status === 'already_exists' || r.status === 'incremented'
+      )
+    ).toBe(true);
     expect(
       [...db.rows.values()].filter((row) => row.status === 'active')
     ).toHaveLength(1);
@@ -504,8 +520,8 @@ describe('Shopping List 1.0 domain', () => {
       }),
     ]);
     expect(results.map((r) => r.status).sort()).toEqual([
-      'already_exists',
       'created',
+      'incremented',
     ]);
     expect(
       [...db.rows.values()].filter(

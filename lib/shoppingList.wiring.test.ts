@@ -41,10 +41,12 @@ describe('Shopping List 1.0 UI wiring', () => {
     const home = source('app/(tabs)/index.tsx');
     expect(list).toContain('onAddToShoppingList');
     expect(list).toContain('activeShoppingListIdentities');
-    expect(list).toContain("t('home.progressive.nextPurchase.added')");
+    expect(list).toContain('activeShoppingListQuantities');
+    expect(list).toContain('×${quantity}');
     expect(list).toContain('+');
     expect(home).toContain('addShoppingListItemFromNextPurchase');
     expect(home).toContain('refreshShoppingListHomeState');
+    expect(home).toContain("result.status === 'incremented'");
   });
 
   it('8–13 — Shopping List screen contracts', () => {
@@ -55,6 +57,8 @@ describe('Shopping List 1.0 UI wiring', () => {
     expect(screen).toContain("t('shoppingList.alreadyOnList')");
     expect(screen).toContain('canAddManual');
     expect(screen).toContain('disabled={busy || !canAddManual}');
+    expect(screen).toContain('incrementShoppingListItemQuantity');
+    expect(screen).toContain('decrementShoppingListItemQuantity');
     expect(screen).toContain('deleteShoppingListItem');
     expect(screen).toContain('clearCompletedShoppingListItems');
     expect(screen).toContain("t('shoppingList.emptyTitle')");
@@ -100,6 +104,8 @@ describe('Shopping List 1.0 UI wiring', () => {
       expect(json.shoppingList.completed).toBeTruthy();
       expect(json.shoppingList.clearCompleted).toBeTruthy();
       expect(json.shoppingList.alreadyOnList).toBeTruthy();
+      expect(json.shoppingList.increaseQuantityA11y).toBeTruthy();
+      expect(json.shoppingList.decreaseQuantityA11y).toBeTruthy();
       expect(json.home.progressive.shoppingList.title).toBeTruthy();
       expect(json.home.progressive.nextPurchase.added).toBeTruthy();
       expect(json.productDetail.addToShoppingList).toBeTruthy();

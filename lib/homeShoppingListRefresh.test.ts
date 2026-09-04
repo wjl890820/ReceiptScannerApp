@@ -19,6 +19,7 @@ function deferred<T>() {
 
 function item(overrides: Partial<ShoppingListItem> & Pick<ShoppingListItem, 'id' | 'text' | 'isCompleted'>): ShoppingListItem {
   return {
+    quantity: 1,
     completedAt: overrides.isCompleted ? 1 : null,
     createdAt: 1,
     updatedAt: 1,

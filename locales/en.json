@@ -913,6 +913,8 @@
     "inputPlaceholder": "What do you need?",
     "errorTitle": "Something went wrong",
     "errorMessage": "Unable to load shopping list",
-    "alreadyOnList": "This item is already on your shopping list."
+    "alreadyOnList": "This item is already on your shopping list.",
+    "increaseQuantityA11y": "Increase quantity, currently {quantity}",
+    "decreaseQuantityA11y": "Decrease quantity, currently {quantity}"
   }
 }

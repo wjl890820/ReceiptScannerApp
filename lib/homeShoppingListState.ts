@@ -1,14 +1,20 @@
 import type { ShoppingListItem } from './shoppingList';
-import { getActiveShoppingListIdentitySetFromItems } from './shoppingList';
+import {
+  getActiveShoppingListIdentitySetFromItems,
+  getActiveShoppingListQuantityMapFromItems,
+} from './shoppingList';
 
 export type HomeShoppingListDerivedState = {
+  /** Incomplete checklist ROWS (not sum of quantities). */
   incompleteCount: number;
   activeIdentities: ReadonlySet<string>;
+  /** Active trusted identity → quantity from the same snapshot. */
+  activeQuantities: ReadonlyMap<string, number>;
 };
 
 /**
  * Derive Home Shopping List presentation state from one persisted list snapshot.
- * Count and active identity Set always share the same truth.
+ * Count, identity Set, and quantity map always share the same truth.
  */
 export function deriveHomeShoppingListState(
   items: readonly ShoppingListItem[]
@@ -16,6 +22,7 @@ export function deriveHomeShoppingListState(
   return {
     incompleteCount: items.filter((item) => !item.isCompleted).length,
     activeIdentities: getActiveShoppingListIdentitySetFromItems(items),
+    activeQuantities: getActiveShoppingListQuantityMapFromItems(items),
   };
 }
 

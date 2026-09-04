@@ -15,12 +15,15 @@ import { nanoid } from 'nanoid/non-secure';
 import type { NextPurchaseCandidate } from './nextPurchaseCandidates';
 import {
   createShoppingIntentWithDb,
+  decrementActiveShoppingIntentQuantityWithDb,
   deleteCompletedShoppingIntentsWithDb,
   deleteShoppingIntentWithDb,
   ensureShoppingIntentsSchema,
   findActiveShoppingIntentByTrustedIdentityWithDb,
   getShoppingIntentRowWithDb,
+  incrementActiveShoppingIntentQuantityWithDb,
   listShoppingIntentRowsWithDb,
+  normalizeShoppingListStoredQuantity,
   updateShoppingIntentWithDb,
   type ShoppingIntentDatabase,
   type ShoppingIntentProvenance,
@@ -37,6 +40,8 @@ export type ShoppingListIdentityKind =
 export type ShoppingListItem = {
   id: string;
   text: string;
+  /** Positive checklist count in [1, 99]. null desired_quantity reads as 1. */
+  quantity: number;
   isCompleted: boolean;
   completedAt: number | null;
   createdAt: number;
@@ -46,10 +51,26 @@ export type ShoppingListItem = {
   sourceIdentityKey: string | null;
 };
 
+export const SHOPPING_LIST_QUANTITY_MIN = 1;
+export const SHOPPING_LIST_QUANTITY_MAX = 99;
+
 export type ShoppingListAddResult =
   | { status: 'created'; item: ShoppingListItem }
   | { status: 'already_exists'; item: ShoppingListItem }
   | { status: 'rejected'; reason: 'empty_text' };
+
+export type ShoppingListAddOrIncrementResult =
+  | { status: 'created'; item: ShoppingListItem }
+  | { status: 'incremented'; item: ShoppingListItem }
+  | { status: 'max_reached'; item: ShoppingListItem }
+  | { status: 'rejected'; reason: 'empty_text' };
+
+export type ShoppingListQuantityResult =
+  | { status: 'updated'; item: ShoppingListItem }
+  | { status: 'max_reached'; item: ShoppingListItem }
+  | { status: 'min_reached'; item: ShoppingListItem }
+  | { status: 'not_found' }
+  | { status: 'not_active'; item: ShoppingListItem };
 
 export type ShoppingListToggleResult =
   | { status: 'toggled'; item: ShoppingListItem }
@@ -61,6 +82,14 @@ export type AddFromProductDetailInput = {
   identityKind?: ShoppingListIdentityKind | null;
   identityKey?: string | null;
 };
+
+/** Shopping List presentation quantity from persisted desired_quantity. */
+export function effectiveShoppingListQuantity(raw: unknown): number {
+  return normalizeShoppingListStoredQuantity(raw, {
+    min: SHOPPING_LIST_QUANTITY_MIN,
+    max: SHOPPING_LIST_QUANTITY_MAX,
+  });
+}
 
 export function isSqliteUniqueConstraintError(error: unknown): boolean {
   const message =
@@ -144,6 +173,7 @@ export function mapShoppingIntentRowToListItem(
   return {
     id: row.id,
     text,
+    quantity: effectiveShoppingListQuantity(row.desired_quantity),
     isCompleted: row.status === 'completed',
     completedAt: isoToMs(row.completed_at),
     createdAt: requireIsoMs(row.created_at),
@@ -190,6 +220,21 @@ export function getActiveShoppingListIdentitySetFromItems(
     if (!item.sourceIdentityKind || !item.sourceIdentityKey) continue;
     out.add(
       shoppingListIdentityKey(item.sourceIdentityKind, item.sourceIdentityKey)
+    );
+  }
+  return out;
+}
+
+export function getActiveShoppingListQuantityMapFromItems(
+  items: readonly ShoppingListItem[]
+): ReadonlyMap<string, number> {
+  const out = new Map<string, number>();
+  for (const item of items) {
+    if (item.isCompleted) continue;
+    if (!item.sourceIdentityKind || !item.sourceIdentityKey) continue;
+    out.set(
+      shoppingListIdentityKey(item.sourceIdentityKind, item.sourceIdentityKey),
+      item.quantity
     );
   }
   return out;
@@ -245,7 +290,8 @@ async function addWithTrustedDedupe(
       db,
       {
         rawText: text,
-        desiredQuantity: null,
+        // New Shopping List rows persist quantity = 1 (null still reads as 1).
+        desiredQuantity: SHOPPING_LIST_QUANTITY_MIN,
         now: args.now,
         idFactory: args.idFactory ?? (() => nanoid()),
       },
@@ -274,6 +320,147 @@ async function addWithTrustedDedupe(
     if (item) return { status: 'already_exists', item };
     throw error;
   }
+}
+
+async function incrementActiveRow(
+  db: ShoppingIntentDatabase,
+  id: string,
+  now?: () => Date
+): Promise<ShoppingListQuantityResult> {
+  const before = await getShoppingIntentRowWithDb(db, id);
+  if (!before) return { status: 'not_found' };
+  const beforeItem = mapShoppingIntentRowToListItem(before);
+  if (!beforeItem) return { status: 'not_found' };
+  if (before.status !== 'active') {
+    return { status: 'not_active', item: beforeItem };
+  }
+  // Always run atomic normalize+step so legacy RAW is rewritten to 1..99.
+  const row = await incrementActiveShoppingIntentQuantityWithDb(db, id, {
+    max: SHOPPING_LIST_QUANTITY_MAX,
+    min: SHOPPING_LIST_QUANTITY_MIN,
+    now,
+  });
+  const item = row ? mapShoppingIntentRowToListItem(row) : null;
+  if (!item) return { status: 'not_found' };
+  if (item.quantity >= SHOPPING_LIST_QUANTITY_MAX && beforeItem.quantity >= SHOPPING_LIST_QUANTITY_MAX) {
+    return { status: 'max_reached', item };
+  }
+  return { status: 'updated', item };
+}
+
+export async function incrementShoppingListItemQuantityWithDb(
+  db: ShoppingIntentDatabase,
+  id: string,
+  now?: () => Date
+): Promise<ShoppingListQuantityResult> {
+  return incrementActiveRow(db, id, now);
+}
+
+export async function incrementShoppingListItemQuantity(
+  id: string
+): Promise<ShoppingListQuantityResult> {
+  const db = await openShoppingListDatabase();
+  return incrementShoppingListItemQuantityWithDb(db, id);
+}
+
+export async function decrementShoppingListItemQuantityWithDb(
+  db: ShoppingIntentDatabase,
+  id: string,
+  now?: () => Date
+): Promise<ShoppingListQuantityResult> {
+  const before = await getShoppingIntentRowWithDb(db, id);
+  if (!before) return { status: 'not_found' };
+  const beforeItem = mapShoppingIntentRowToListItem(before);
+  if (!beforeItem) return { status: 'not_found' };
+  if (before.status !== 'active') {
+    return { status: 'not_active', item: beforeItem };
+  }
+  // Always run atomic normalize+step so legacy RAW is rewritten to 1..99.
+  const row = await decrementActiveShoppingIntentQuantityWithDb(db, id, {
+    min: SHOPPING_LIST_QUANTITY_MIN,
+    max: SHOPPING_LIST_QUANTITY_MAX,
+    now,
+  });
+  const item = row ? mapShoppingIntentRowToListItem(row) : null;
+  if (!item) return { status: 'not_found' };
+  if (
+    item.quantity <= SHOPPING_LIST_QUANTITY_MIN &&
+    beforeItem.quantity <= SHOPPING_LIST_QUANTITY_MIN
+  ) {
+    return { status: 'min_reached', item };
+  }
+  return { status: 'updated', item };
+}
+
+export async function decrementShoppingListItemQuantity(
+  id: string
+): Promise<ShoppingListQuantityResult> {
+  const db = await openShoppingListDatabase();
+  return decrementShoppingListItemQuantityWithDb(db, id);
+}
+
+/**
+ * Next Purchase / trusted add-or-increment.
+ * Create qty=1, or atomically increment existing active trusted row.
+ */
+export async function addOrIncrementShoppingListItemFromNextPurchaseWithDb(
+  db: ShoppingIntentDatabase,
+  candidate: Pick<
+    NextPurchaseCandidate,
+    'displayName' | 'identityKind' | 'identityKey'
+  >,
+  options?: { now?: () => Date; idFactory?: () => string }
+): Promise<ShoppingListAddOrIncrementResult> {
+  const created = await addWithTrustedDedupe(db, {
+    text: candidate.displayName,
+    sourceType: 'next_purchase',
+    identityKind: candidate.identityKind,
+    identityKey: candidate.identityKey,
+    now: options?.now,
+    idFactory: options?.idFactory,
+  });
+  if (created.status === 'rejected') return created;
+  if (created.status === 'created') return created;
+
+  // already_exists → atomic increment of that active row
+  const bumped = await incrementActiveRow(db, created.item.id, options?.now);
+  if (bumped.status === 'updated') {
+    return { status: 'incremented', item: bumped.item };
+  }
+  if (bumped.status === 'max_reached') {
+    return { status: 'max_reached', item: bumped.item };
+  }
+  // Race: row vanished — retry create once via unique path
+  const retry = await addWithTrustedDedupe(db, {
+    text: candidate.displayName,
+    sourceType: 'next_purchase',
+    identityKind: candidate.identityKind,
+    identityKey: candidate.identityKey,
+    now: options?.now,
+    idFactory: options?.idFactory,
+  });
+  if (retry.status === 'created') return retry;
+  if (retry.status === 'already_exists') {
+    const again = await incrementActiveRow(db, retry.item.id, options?.now);
+    if (again.status === 'updated') {
+      return { status: 'incremented', item: again.item };
+    }
+    if (again.status === 'max_reached') {
+      return { status: 'max_reached', item: again.item };
+    }
+    return { status: 'incremented', item: retry.item };
+  }
+  return retry;
+}
+
+export async function addOrIncrementShoppingListItemFromNextPurchase(
+  candidate: Pick<
+    NextPurchaseCandidate,
+    'displayName' | 'identityKind' | 'identityKey'
+  >
+): Promise<ShoppingListAddOrIncrementResult> {
+  const db = await openShoppingListDatabase();
+  return addOrIncrementShoppingListItemFromNextPurchaseWithDb(db, candidate);
 }
 
 export async function listShoppingListItemsWithDb(
@@ -325,15 +512,12 @@ export async function addShoppingListItemFromNextPurchaseWithDb(
     'displayName' | 'identityKind' | 'identityKey'
   >,
   options?: { now?: () => Date; idFactory?: () => string }
-): Promise<ShoppingListAddResult> {
-  return addWithTrustedDedupe(db, {
-    text: candidate.displayName,
-    sourceType: 'next_purchase',
-    identityKind: candidate.identityKind,
-    identityKey: candidate.identityKey,
-    now: options?.now,
-    idFactory: options?.idFactory,
-  });
+): Promise<ShoppingListAddOrIncrementResult> {
+  return addOrIncrementShoppingListItemFromNextPurchaseWithDb(
+    db,
+    candidate,
+    options
+  );
 }
 
 export async function addShoppingListItemFromNextPurchase(
@@ -341,9 +525,8 @@ export async function addShoppingListItemFromNextPurchase(
     NextPurchaseCandidate,
     'displayName' | 'identityKind' | 'identityKey'
   >
-): Promise<ShoppingListAddResult> {
-  const db = await openShoppingListDatabase();
-  return addShoppingListItemFromNextPurchaseWithDb(db, candidate);
+): Promise<ShoppingListAddOrIncrementResult> {
+  return addOrIncrementShoppingListItemFromNextPurchase(candidate);
 }
 
 export async function addShoppingListItemFromProductDetailWithDb(

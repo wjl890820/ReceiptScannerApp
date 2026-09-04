@@ -45,6 +45,7 @@ type ProgressiveHomeInsightsProps = {
   /** Incomplete Shopping List count — independent of Repeat stage. */
   shoppingListIncompleteCount?: number;
   activeShoppingListIdentities?: ReadonlySet<string>;
+  activeShoppingListQuantities?: ReadonlyMap<string, number>;
   onShoppingListPress?: () => void;
   onAddNextPurchaseToShoppingList?: (candidate: NextPurchaseCandidate) => void;
 };
@@ -70,6 +71,7 @@ export function ProgressiveHomeInsights({
   onNextPurchasePress,
   shoppingListIncompleteCount = 0,
   activeShoppingListIdentities,
+  activeShoppingListQuantities,
   onShoppingListPress,
   onAddNextPurchaseToShoppingList,
 }: ProgressiveHomeInsightsProps) {
@@ -320,6 +322,7 @@ export function ProgressiveHomeInsights({
             <HomeNextPurchaseList
               candidates={experience.nextPurchaseCandidates}
               activeShoppingListIdentities={activeShoppingListIdentities}
+              activeShoppingListQuantities={activeShoppingListQuantities}
               onPress={onNextPurchasePress}
               onAddToShoppingList={onAddNextPurchaseToShoppingList}
             />

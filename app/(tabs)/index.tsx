@@ -77,7 +77,6 @@ import {
 import {
   addShoppingListItemFromNextPurchase,
   listShoppingListItems,
-  shoppingListIdentityKey,
 } from '@/lib/shoppingList';
 import type { NextPurchaseCandidate } from '@/lib/nextPurchaseCandidates';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
@@ -109,6 +108,8 @@ export default function HomeScreen() {
     useState(0);
   const [activeShoppingListIdentities, setActiveShoppingListIdentities] =
     useState<ReadonlySet<string>>(() => new Set());
+  const [activeShoppingListQuantities, setActiveShoppingListQuantities] =
+    useState<ReadonlyMap<string, number>>(() => new Map());
 
 
   // 加载所有收据； progressive analytics 使用去重后的 purchase candidates
@@ -243,6 +244,7 @@ export default function HomeScreen() {
       apply: (derived) => {
         setShoppingListIncompleteCount(derived.incompleteCount);
         setActiveShoppingListIdentities(derived.activeIdentities);
+        setActiveShoppingListQuantities(derived.activeQuantities);
       },
       onError: (error) => {
         logger.warn('Home', 'shopping list home state refresh failed', {
@@ -686,14 +688,13 @@ export default function HomeScreen() {
 
   const handleAddNextPurchaseToShoppingList = useCallback(
     async (candidate: NextPurchaseCandidate) => {
-      const identity = shoppingListIdentityKey(
-        candidate.identityKind,
-        candidate.identityKey
-      );
-      if (activeShoppingListIdentities.has(identity)) return;
       try {
         const result = await addShoppingListItemFromNextPurchase(candidate);
-        if (result.status === 'created' || result.status === 'already_exists') {
+        if (
+          result.status === 'created' ||
+          result.status === 'incremented' ||
+          result.status === 'max_reached'
+        ) {
           await refreshShoppingListHomeState();
         }
       } catch (error) {
@@ -702,7 +703,7 @@ export default function HomeScreen() {
         });
       }
     },
-    [activeShoppingListIdentities, refreshShoppingListHomeState]
+    [refreshShoppingListHomeState]
   );
 
   return (
@@ -732,6 +733,7 @@ export default function HomeScreen() {
           onNextPurchasePress={handleNextPurchasePress}
           shoppingListIncompleteCount={shoppingListIncompleteCount}
           activeShoppingListIdentities={activeShoppingListIdentities}
+          activeShoppingListQuantities={activeShoppingListQuantities}
           onShoppingListPress={handleShoppingListPress}
           onAddNextPurchaseToShoppingList={handleAddNextPurchaseToShoppingList}
         />

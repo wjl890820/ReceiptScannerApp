@@ -23,8 +23,12 @@ import { navigateBackOrHome } from '@/lib/navigationBack';
 import {
   addManualShoppingListItem,
   clearCompletedShoppingListItems,
+  decrementShoppingListItemQuantity,
   deleteShoppingListItem,
+  incrementShoppingListItemQuantity,
   listShoppingListItems,
+  SHOPPING_LIST_QUANTITY_MAX,
+  SHOPPING_LIST_QUANTITY_MIN,
   toggleShoppingListItemCompleted,
   type ShoppingListItem,
 } from '@/lib/shoppingList';
@@ -141,13 +145,45 @@ export default function ShoppingListScreen() {
     }
   }, [busy, completed.length, refresh]);
 
+  const onIncrement = useCallback(
+    async (id: string) => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await incrementShoppingListItemQuantity(id);
+        await refresh();
+      } catch (error) {
+        console.error('[ShoppingList] increment failed', error);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, refresh]
+  );
+
+  const onDecrement = useCallback(
+    async (id: string) => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await decrementShoppingListItemQuantity(id);
+        await refresh();
+      } catch (error) {
+        console.error('[ShoppingList] decrement failed', error);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, refresh]
+  );
+
   const renderItem = (item: ShoppingListItem) => (
     <View key={item.id} style={styles.itemRow}>
       <Pressable
         onPress={() => void onToggle(item.id)}
         accessibilityRole="checkbox"
         accessibilityState={{ checked: item.isCompleted }}
-        accessibilityLabel={item.text}
+        accessibilityLabel={`${item.text} ×${item.quantity}`}
         hitSlop={8}
         style={({ pressed }) => [
           styles.checkboxHit,
@@ -170,8 +206,47 @@ export default function ShoppingListScreen() {
           item.isCompleted ? styles.itemTextCompleted : null,
         ]}
       >
-        {item.text}
+        {`${item.text} ×${item.quantity}`}
       </MerunoText>
+      {!item.isCompleted ? (
+        <View style={styles.qtyControls}>
+          <Pressable
+            onPress={() => void onDecrement(item.id)}
+            disabled={busy || item.quantity <= SHOPPING_LIST_QUANTITY_MIN}
+            accessibilityRole="button"
+            accessibilityLabel={t('shoppingList.decreaseQuantityA11y', {
+              quantity: item.quantity,
+            })}
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.qtyButton,
+              pressed && styles.pressed,
+              (busy || item.quantity <= SHOPPING_LIST_QUANTITY_MIN) &&
+                styles.qtyButtonDisabled,
+            ]}
+          >
+            <Text style={styles.qtyButtonText}>−</Text>
+          </Pressable>
+          <Text style={styles.qtyValue}>{item.quantity}</Text>
+          <Pressable
+            onPress={() => void onIncrement(item.id)}
+            disabled={busy || item.quantity >= SHOPPING_LIST_QUANTITY_MAX}
+            accessibilityRole="button"
+            accessibilityLabel={t('shoppingList.increaseQuantityA11y', {
+              quantity: item.quantity,
+            })}
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.qtyButton,
+              pressed && styles.pressed,
+              (busy || item.quantity >= SHOPPING_LIST_QUANTITY_MAX) &&
+                styles.qtyButtonDisabled,
+            ]}
+          >
+            <Text style={styles.qtyButtonText}>+</Text>
+          </Pressable>
+        </View>
+      ) : null}
       <Pressable
         onPress={() => void onDelete(item.id)}
         accessibilityRole="button"
@@ -405,6 +480,38 @@ const styles = StyleSheet.create({
   },
   itemTextCompleted: {
     textDecorationLine: 'line-through',
+  },
+  qtyControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 0,
+  },
+  qtyButton: {
+    minWidth: 32,
+    minHeight: 32,
+    borderRadius: UI_RADIUS.control,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    backgroundColor: UI_COLORS.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qtyButtonDisabled: {
+    opacity: 0.4,
+  },
+  qtyButtonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: UI_COLORS.accent,
+    lineHeight: 20,
+  },
+  qtyValue: {
+    minWidth: 20,
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '700',
+    color: UI_COLORS.textPrimary,
   },
   deleteButton: {
     paddingVertical: 4,

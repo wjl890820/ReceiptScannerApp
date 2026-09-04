@@ -12,6 +12,7 @@ import {
   buildShoppingIntent,
   markShoppingIntentArchived,
   markShoppingIntentCompleted,
+  toShoppingIntentIsoTimestamp,
   type CreateShoppingIntentInput,
   type ListShoppingIntentsFilter,
   type ShoppingIntent,
@@ -439,6 +440,99 @@ export async function deleteCompletedShoppingIntentsWithDb(
   return result?.changes ?? 0;
 }
 
+/**
+ * Shared Shopping List quantity normalization (read + atomic step base).
+ * null/nonfinite → min; trunc toward 0; clamp to [min, max].
+ */
+export function normalizeShoppingListStoredQuantity(
+  raw: unknown,
+  bounds: { min: number; max: number } = { min: 1, max: 99 }
+): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return bounds.min;
+  }
+  const n = Math.trunc(raw);
+  if (n < bounds.min) return bounds.min;
+  if (n > bounds.max) return bounds.max;
+  return n;
+}
+
+/**
+ * IEEE-754 max finite double. SQLite +Inf/-Inf must be classified before CAST,
+ * because CAST(Inf AS INTEGER) overflows to ±int64 extremes.
+ * Stored as a string literal so SQL embeds `e308` (not JS's `e+308`).
+ */
+export const SHOPPING_LIST_QUANTITY_MAX_FINITE_DOUBLE = 1.7976931348623157e308;
+const SHOPPING_LIST_QUANTITY_MAX_FINITE_DOUBLE_SQL = '1.7976931348623157e308';
+
+/**
+ * In-SQL normalize matching normalizeShoppingListStoredQuantity:
+ * NULL / ±Inf → minParam; else trunc+clamp via CAST.
+ * Bind order for the five `?` inside: min, min, min, max, min.
+ */
+const SHOPPING_LIST_QUANTITY_NORMALIZE_SQL = `CASE
+        WHEN desired_quantity IS NULL THEN ?
+        WHEN desired_quantity > ${SHOPPING_LIST_QUANTITY_MAX_FINITE_DOUBLE_SQL} THEN ?
+        WHEN desired_quantity < -${SHOPPING_LIST_QUANTITY_MAX_FINITE_DOUBLE_SQL} THEN ?
+        ELSE MIN(?, MAX(?, CAST(desired_quantity AS INTEGER)))
+      END`;
+
+/**
+ * Atomic Shopping List quantity bump for an ACTIVE row.
+ * Normalize stored REAL (finite-guard + trunc+clamp), then MIN(max, normalized + 1).
+ */
+export async function incrementActiveShoppingIntentQuantityWithDb(
+  db: ShoppingIntentDatabase,
+  id: string,
+  options?: { max?: number; min?: number; now?: () => Date }
+): Promise<ShoppingIntentRow | null> {
+  await ensureShoppingIntentsSchema(db);
+  const max = options?.max ?? 99;
+  const min = options?.min ?? 1;
+  const iso = toShoppingIntentIsoTimestamp(
+    options?.now ? options.now() : new Date()
+  );
+  await db.runAsync(
+    `UPDATE shopping_intents
+     SET desired_quantity = MIN(
+           ?,
+           (${SHOPPING_LIST_QUANTITY_NORMALIZE_SQL}) + 1
+         ),
+         updated_at = ?
+     WHERE id = ? AND status = 'active'`,
+    [max, min, min, min, max, min, iso, id]
+  );
+  return getShoppingIntentRowWithDb(db, id);
+}
+
+/**
+ * Atomic Shopping List quantity drop for an ACTIVE row.
+ * Normalize stored REAL (finite-guard + trunc+clamp), then MAX(min, normalized - 1).
+ */
+export async function decrementActiveShoppingIntentQuantityWithDb(
+  db: ShoppingIntentDatabase,
+  id: string,
+  options?: { min?: number; max?: number; now?: () => Date }
+): Promise<ShoppingIntentRow | null> {
+  await ensureShoppingIntentsSchema(db);
+  const min = options?.min ?? 1;
+  const max = options?.max ?? 99;
+  const iso = toShoppingIntentIsoTimestamp(
+    options?.now ? options.now() : new Date()
+  );
+  await db.runAsync(
+    `UPDATE shopping_intents
+     SET desired_quantity = MAX(
+           ?,
+           (${SHOPPING_LIST_QUANTITY_NORMALIZE_SQL}) - 1
+         ),
+         updated_at = ?
+     WHERE id = ? AND status = 'active'`,
+    [min, min, min, min, max, min, iso, id]
+  );
+  return getShoppingIntentRowWithDb(db, id);
+}
+
 function assertMemoryActiveTrustedUnique(
   rows: Map<string, ShoppingIntentRow>,
   candidate: Pick<
@@ -495,7 +589,54 @@ export function createMemoryShoppingIntentDatabase(): ShoppingIntentDatabase & {
         rows.set(row.id, row);
         return { changes: 1 };
       }
-      if (/^\s*UPDATE shopping_intents SET/i.test(source)) {
+      if (/^\s*UPDATE shopping_intents\s+SET/i.test(source)) {
+        // Atomic quantity increment/decrement — mirrors production SQLite SQL.
+        if (
+          /desired_quantity = MIN\(/i.test(source) &&
+          /1\.7976931348623157e308/.test(source)
+        ) {
+          const max = Number(values[0]);
+          const clampMin = Number(values[1]);
+          const clampMax = Number(values[4]);
+          const updatedAt = String(values[6]);
+          const id = String(values[7]);
+          const existing = rows.get(id);
+          if (!existing || existing.status !== 'active') return { changes: 0 };
+          const normalized = normalizeShoppingListStoredQuantity(
+            existing.desired_quantity,
+            { min: clampMin, max: clampMax }
+          );
+          const nextQty = Math.min(max, normalized + 1);
+          rows.set(id, {
+            ...existing,
+            desired_quantity: nextQty,
+            updated_at: updatedAt,
+          });
+          return { changes: 1 };
+        }
+        if (
+          /desired_quantity = MAX\(/i.test(source) &&
+          /1\.7976931348623157e308/.test(source)
+        ) {
+          const min = Number(values[0]);
+          const clampMin = Number(values[1]);
+          const clampMax = Number(values[4]);
+          const updatedAt = String(values[6]);
+          const id = String(values[7]);
+          const existing = rows.get(id);
+          if (!existing || existing.status !== 'active') return { changes: 0 };
+          const normalized = normalizeShoppingListStoredQuantity(
+            existing.desired_quantity,
+            { min: clampMin, max: clampMax }
+          );
+          const nextQty = Math.max(min, normalized - 1);
+          rows.set(id, {
+            ...existing,
+            desired_quantity: nextQty,
+            updated_at: updatedAt,
+          });
+          return { changes: 1 };
+        }
         const id = String(values[values.length - 1]);
         const existing = rows.get(id);
         if (!existing) return { changes: 0 };

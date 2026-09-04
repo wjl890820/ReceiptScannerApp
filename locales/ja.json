@@ -913,6 +913,8 @@
     "inputPlaceholder": "何を買いますか？",
     "errorTitle": "エラー",
     "errorMessage": "買い物リストを読み込めませんでした",
-    "alreadyOnList": "この商品はすでに買い物リストにあります。"
+    "alreadyOnList": "この商品はすでに買い物リストにあります。",
+    "increaseQuantityA11y": "数量を増やす、現在 {quantity}",
+    "decreaseQuantityA11y": "数量を減らす、現在 {quantity}"
   }
 }
