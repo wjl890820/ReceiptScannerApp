@@ -491,8 +491,12 @@ describe('db receipt ownership isolation (Privacy-H2)', () => {
       status: 'owner_unavailable',
     });
 
-    await expect(listReceipts()).resolves.toEqual([]);
-    await expect(listReceiptsForAnalysis()).resolves.toEqual([]);
+    await expect(listReceipts()).rejects.toMatchObject({
+      code: 'OWNER_SCOPE_UNAVAILABLE',
+    });
+    await expect(listReceiptsForAnalysis()).rejects.toMatchObject({
+      code: 'OWNER_SCOPE_UNAVAILABLE',
+    });
     await expect(getReceipt('a')).resolves.toBeNull();
   });
 

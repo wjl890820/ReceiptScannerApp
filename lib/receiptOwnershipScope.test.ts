@@ -3,14 +3,45 @@ jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn(),
 }));
 jest.mock('./anonAuth', () => ({
-  getAuthState: jest.fn(() => ({ status: 'unauthenticated', userId: null })),
+  getAuthState: jest.fn(() => ({
+    status: 'unavailable',
+    userId: null,
+    isAnonymous: null,
+    hasAppleIdentity: null,
+    accessToken: null,
+    error: null,
+  })),
   subscribeAuthState: jest.fn(() => () => undefined),
-  ensureAnonAuth: jest.fn(async () => undefined),
+  ensureAnonAuth: jest.fn(async () => ({
+    status: 'unavailable',
+    userId: null,
+    isAnonymous: null,
+    hasAppleIdentity: null,
+    accessToken: null,
+    error: null,
+  })),
+}));
+jest.mock('./env', () => ({
+  isAnonAuthEnabled: jest.fn(() => true),
+}));
+jest.mock('./ownershipAdoptionOrchestrator', () => ({
+  ensureOwnershipAdoptionSettledForOwnerRead: jest.fn(async () => ({
+    status: 'settled',
+    reason: 'noop',
+    userId: 'user-auth',
+  })),
+  settleOwnershipAdoptionForCurrentAuth: jest.fn(async () => ({
+    status: 'settled',
+    reason: 'noop',
+    userId: 'user-auth',
+  })),
 }));
 jest.mock('./installationId', () => ({
   getOrCreateInstallationId: jest.fn(async () => 'install-test'),
 }));
 
+import { getAuthState } from './anonAuth';
+import { isAnonAuthEnabled } from './env';
 import {
   buildOwnerScopedInventoryPredicates,
   buildOwnerScopedReceiptNamedPredicates,
@@ -25,9 +56,23 @@ import {
   type LocalOwnershipStamp,
 } from './receiptOwnershipContext';
 
+const mockGetAuthState = getAuthState as jest.MockedFunction<typeof getAuthState>;
+const mockIsAnonAuthEnabled = isAnonAuthEnabled as jest.MockedFunction<
+  typeof isAnonAuthEnabled
+>;
+
 describe('receiptOwnershipScope', () => {
   afterEach(() => {
     __setOwnershipStampProviderForTests(null);
+    mockIsAnonAuthEnabled.mockReturnValue(true);
+    mockGetAuthState.mockReturnValue({
+      status: 'unavailable',
+      userId: null,
+      isAnonymous: null,
+      hasAppleIdentity: null,
+      accessToken: null,
+      error: null,
+    });
   });
 
   describe('buildOwnerScopedReceiptPredicates', () => {
@@ -114,7 +159,15 @@ describe('receiptOwnershipScope', () => {
       __setOwnershipStampProviderForTests(async () => stamp);
     }
 
-    it('authenticated stamp resolves to user scope', async () => {
+    it('authenticated stamp resolves to user scope when auth matches', async () => {
+      mockGetAuthState.mockReturnValue({
+        status: 'authenticated',
+        userId: 'user-auth',
+        isAnonymous: true,
+        hasAppleIdentity: false,
+        accessToken: 't',
+        error: null,
+      });
       setStamp({
         userId: 'user-auth',
         installationId: 'install-x',
@@ -130,6 +183,14 @@ describe('receiptOwnershipScope', () => {
     });
 
     it('installation stamp resolves when user is absent', async () => {
+      mockGetAuthState.mockReturnValue({
+        status: 'unavailable',
+        userId: null,
+        isAnonymous: null,
+        hasAppleIdentity: null,
+        accessToken: null,
+        error: null,
+      });
       setStamp({
         userId: null,
         installationId: 'install-only',
@@ -147,6 +208,14 @@ describe('receiptOwnershipScope', () => {
     });
 
     it('both unavailable resolves owner_unavailable', async () => {
+      mockGetAuthState.mockReturnValue({
+        status: 'unavailable',
+        userId: null,
+        isAnonymous: null,
+        hasAppleIdentity: null,
+        accessToken: null,
+        error: null,
+      });
       setStamp({
         userId: null,
         installationId: null,
@@ -154,6 +223,24 @@ describe('receiptOwnershipScope', () => {
       });
       await expect(resolveCurrentLocalReceiptOwnerScope()).resolves.toEqual({
         status: 'owner_unavailable',
+      });
+    });
+
+    it('auth disabled forces installation scope even if stamp has userId', async () => {
+      mockIsAnonAuthEnabled.mockReturnValue(false);
+      setStamp({
+        userId: 'user-auth',
+        installationId: 'install-only',
+        transactionSource: 'receipt_ocr',
+      });
+      await expect(resolveCurrentLocalReceiptOwnerScope()).resolves.toEqual({
+        status: 'ready',
+        ownerKey: 'installation:install-only',
+        receiptWhereSql:
+          'receipts.user_id IS NULL AND receipts.installation_id = ?',
+        itemWhereSql:
+          'receipts.user_id IS NULL AND receipts.installation_id = ?',
+        params: ['install-only'],
       });
     });
   });

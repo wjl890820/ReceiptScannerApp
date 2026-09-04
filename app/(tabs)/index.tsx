@@ -41,6 +41,7 @@ import {
   listReceipts,
   getReceiptsDatabase,
   initIfNeeded,
+  isOwnerScopedReceiptReadUnavailableError,
   type ReceiptRow,
 } from '@/lib/db';
 import {
@@ -271,6 +272,13 @@ export default function HomeScreen() {
             isAutomaticRetry: true,
             canApply: options?.canApply,
           });
+          return;
+        }
+
+        // Transient owner truth: never mark authoritative empty snapshot.
+        if (isOwnerScopedReceiptReadUnavailableError(e)) {
+          logger.warn('Home', 'owner-scoped read unavailable', { error: e });
+          setHomeRefreshState((state) => failHomeRefresh(state));
           return;
         }
 

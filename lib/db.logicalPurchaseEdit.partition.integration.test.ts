@@ -27,6 +27,44 @@ jest.mock('./receiptOwnershipContext', () => ({
   __setOwnershipStampProviderForTests: jest.fn(),
 }));
 
+jest.mock('./anonAuth', () => ({
+  getAuthState: jest.fn(() => ({
+    status: 'authenticated',
+    userId: 'user-1',
+    isAnonymous: true,
+    hasAppleIdentity: false,
+    accessToken: 't',
+    error: null,
+  })),
+  ensureAnonAuth: jest.fn(async () => ({
+    status: 'authenticated',
+    userId: 'user-1',
+    isAnonymous: true,
+    hasAppleIdentity: false,
+    accessToken: 't',
+    error: null,
+  })),
+  subscribeAuthState: jest.fn(() => () => undefined),
+}));
+
+jest.mock('./env', () => ({
+  isAnonAuthEnabled: () => true,
+}));
+
+jest.mock('./ownershipAdoptionOrchestrator', () => ({
+  ensureOwnershipAdoptionSettledForOwnerRead: jest.fn(async () => ({
+    status: 'settled',
+    reason: 'noop',
+    userId: 'user-1',
+  })),
+  settleOwnershipAdoptionForCurrentAuth: jest.fn(async () => ({
+    status: 'settled',
+    reason: 'noop',
+    userId: 'user-1',
+  })),
+  startOwnershipAdoptionOrchestrator: jest.fn(),
+}));
+
 jest.mock('./cloudBackupWorker', () => ({
   requestCloudBackupFlush: jest.fn(async () => ({
     ran: false,

@@ -18,18 +18,19 @@ export type LocalOwnershipStamp = {
 export type OwnershipStampProvider = () => Promise<LocalOwnershipStamp>;
 
 async function defaultOwnershipStampProvider(): Promise<LocalOwnershipStamp> {
-  const auth = getAuthState();
-  const userId =
-    auth.status === 'authenticated' && typeof auth.userId === 'string' && auth.userId.trim()
-      ? auth.userId.trim()
-      : null;
-
+  // Resolve installation id first (async), then re-read auth so userId is not stale.
   let installationId: string | null = null;
   try {
     installationId = await getOrCreateInstallationId();
   } catch (e) {
     console.warn('[Ownership] installation_id unavailable (nonfatal):', e);
   }
+
+  const auth = getAuthState();
+  const userId =
+    auth.status === 'authenticated' && typeof auth.userId === 'string' && auth.userId.trim()
+      ? auth.userId.trim()
+      : null;
 
   return {
     userId,

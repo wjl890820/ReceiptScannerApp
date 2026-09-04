@@ -28,6 +28,11 @@ import {
   type LocalReceiptOwnerScopeReady,
 } from './receiptOwnershipScope';
 import {
+  throwIfOwnerScopeUnavailable,
+  OwnerScopedReceiptReadUnavailableError,
+  isOwnerScopedReceiptReadUnavailableError,
+} from './ownerScopedReceiptReadError';
+import {
   ensureSyncOutboxSchema,
   generateSyncIntentId,
   replaceSyncOutboxIntent,
@@ -1104,7 +1109,10 @@ async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
   await initIfNeeded();
   const scope = await resolveCurrentLocalReceiptOwnerScope();
   if (scope.status !== 'ready') {
-    return [];
+    throwIfOwnerScopeUnavailable(
+      scope,
+      scope.reason ?? 'owner_unavailable'
+    );
   }
   const db = await getDb();
 
@@ -1140,6 +1148,11 @@ export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
   return listReceiptRows(limit);
 }
 
+export {
+  OwnerScopedReceiptReadUnavailableError,
+  isOwnerScopedReceiptReadUnavailableError,
+} from './ownerScopedReceiptReadError';
+
 export { countScopedLocalReceiptsForOwnerScope } from './scopedLocalReceiptCount';
 
 /**
@@ -1172,7 +1185,10 @@ export async function listReceiptsForList(
   await initIfNeeded();
   const scope = await resolveCurrentLocalReceiptOwnerScope();
   if (scope.status !== 'ready') {
-    return [];
+    throwIfOwnerScopeUnavailable(
+      scope,
+      scope.reason ?? 'owner_unavailable'
+    );
   }
   const db = await getDb();
   const { orderBy, limit, offset, whereClause, whereParams } =

@@ -34,6 +34,7 @@ import { getAuthState, subscribeAuthState, type AuthState } from './anonAuth';
 import { enqueueUpsertIntentsForReceiptIds } from './cloudBackupBootstrap';
 import {
   __resetOwnershipAdoptionOrchestratorForTests,
+  ensureOwnershipAdoptionSettledForOwnerRead,
   startOwnershipAdoptionOrchestrator,
 } from './ownershipAdoptionOrchestrator';
 
@@ -169,5 +170,55 @@ describe('ownershipAdoptionOrchestrator', () => {
 
     expect(mockAdoptWithDefaults).toHaveBeenCalled();
     expect(mockEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('ensureOwnershipAdoptionSettledForOwnerRead awaits/runs anonymous adoption once', async () => {
+    mockAdoptWithDefaults.mockResolvedValue({
+      adopted: 0,
+      adopted_receipt_ids: [],
+      already_owned_by_current_user: 0,
+      owned_by_other_user: 0,
+      eligible_current_install_unowned: 0,
+      remaining_eligible_current_install_unowned: 0,
+      ambiguous_double_null: 0,
+      other_install_unowned: 0,
+      remaining_unowned: 0,
+    });
+    // Start while unavailable so startup does not auto-adopt yet.
+    mockGetAuthState.mockReturnValue(
+      authState({
+        status: 'unavailable',
+        userId: null,
+        isAnonymous: null,
+      })
+    );
+    startOwnershipAdoptionOrchestrator(async () => ({}) as any);
+    mockAdoptWithDefaults.mockClear();
+
+    mockGetAuthState.mockReturnValue(
+      authState({
+        status: 'authenticated',
+        userId: 'anon-settle',
+        isAnonymous: true,
+      })
+    );
+
+    const first = await ensureOwnershipAdoptionSettledForOwnerRead();
+    expect(first).toEqual({
+      status: 'settled',
+      reason: 'noop',
+      userId: 'anon-settle',
+    });
+    expect(mockAdoptWithDefaults).toHaveBeenCalledTimes(1);
+
+    mockAdoptWithDefaults.mockClear();
+    const second = await ensureOwnershipAdoptionSettledForOwnerRead();
+    expect(second).toEqual({
+      status: 'settled',
+      reason: 'noop',
+      userId: 'anon-settle',
+    });
+    // Already settled for this user — no second adoption pass.
+    expect(mockAdoptWithDefaults).not.toHaveBeenCalled();
   });
 });
