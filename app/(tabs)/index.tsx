@@ -2,8 +2,8 @@
 
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
+import { usePathname, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -40,6 +40,7 @@ import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import {
   listReceipts,
   getReceiptsDatabase,
+  initIfNeeded,
   type ReceiptRow,
 } from '@/lib/db';
 import {
@@ -56,9 +57,12 @@ import {
   beginHomeRefresh,
   completeHomeRefresh,
   failHomeRefresh,
+  holdHomeRefreshForRetry,
   INITIAL_HOME_REFRESH_STATE,
   isLatestHomeRefresh,
 } from '@/lib/homeRefreshState';
+import { isHomeRoutePath } from '@/lib/homeRouteVisibility';
+import { runHomeShoppingListRefresh } from '@/lib/homeShoppingListRefresh';
 import { t } from '@/lib/i18n';
 import {
   UI_COLORS,
@@ -72,7 +76,6 @@ import {
 } from '@/lib/homeValueHierarchy';
 import {
   addShoppingListItemFromNextPurchase,
-  getActiveShoppingListIdentitySetFromItems,
   listShoppingListItems,
   shoppingListIdentityKey,
 } from '@/lib/shoppingList';
@@ -80,6 +83,7 @@ import type { NextPurchaseCandidate } from '@/lib/nextPurchaseCandidates';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 export default function HomeScreen() {
   const router = useRouter();
+  const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [homeRefreshState, setHomeRefreshState] = useState(
@@ -87,6 +91,9 @@ export default function HomeScreen() {
   );
   const hasCompleteSnapshotRef = useRef(false);
   const refreshGenerationRef = useRef(0);
+  const shoppingListRefreshGenerationRef = useRef(0);
+  const coldStartRetryUsedRef = useRef(false);
+  const homeWasVisibleRef = useRef(false);
   const [homeExperience, setHomeExperience] =
     useState<HomeProgressiveExperience>(() =>
       buildHomeProgressiveExperience([], null)
@@ -105,7 +112,7 @@ export default function HomeScreen() {
 
 
   // 加载所有收据； progressive analytics 使用去重后的 purchase candidates
-  const loadReceipts = useCallback(async () => {
+  const loadReceipts = useCallback(async (options?: { isAutomaticRetry?: boolean }) => {
     const requestGeneration = ++refreshGenerationRef.current;
     const hadCompleteSnapshot = hasCompleteSnapshotRef.current;
     setHomeRefreshState((state) => beginHomeRefresh(state));
@@ -180,10 +187,40 @@ export default function HomeScreen() {
       }
       if (hasCompleteSnapshotRef.current) {
         logger.warn('Home', 'background refresh failed', { error: e });
-      } else {
-        console.error('加载收据失败:', e);
-        setHomeExperience(buildHomeProgressiveExperience([], null, true));
+        setHomeRefreshState((state) => failHomeRefresh(state));
+        return;
       }
+
+      console.error('加载收据失败:', e);
+
+      // Cold start: one readiness retry after DB init, then terminal empty/error.
+      if (!options?.isAutomaticRetry && !coldStartRetryUsedRef.current) {
+        coldStartRetryUsedRef.current = true;
+        setHomeRefreshState(holdHomeRefreshForRetry());
+        try {
+          await initIfNeeded();
+          await getReceiptsDatabase();
+        } catch (initError) {
+          logger.warn('Home', 'cold-start DB readiness failed', {
+            error: initError,
+          });
+          setHomeExperience(buildHomeProgressiveExperience([], null, true));
+          setHomeRefreshState((state) => failHomeRefresh(state));
+          return;
+        }
+        if (
+          !isLatestHomeRefresh(
+            requestGeneration,
+            refreshGenerationRef.current
+          )
+        ) {
+          return;
+        }
+        await loadReceipts({ isAutomaticRetry: true });
+        return;
+      }
+
+      setHomeExperience(buildHomeProgressiveExperience([], null, true));
       setHomeRefreshState((state) => failHomeRefresh(state));
     }
   }, []);
@@ -200,29 +237,50 @@ export default function HomeScreen() {
   }, []);
 
   const refreshShoppingListHomeState = useCallback(async () => {
-    try {
-      const items = await listShoppingListItems();
-      setShoppingListIncompleteCount(
-        items.filter((item) => !item.isCompleted).length
-      );
-      setActiveShoppingListIdentities(
-        getActiveShoppingListIdentitySetFromItems(items)
-      );
-    } catch (error) {
-      logger.warn('Home', 'shopping list home state refresh failed', {
-        error,
-      });
-    }
+    await runHomeShoppingListRefresh({
+      generationRef: shoppingListRefreshGenerationRef,
+      loadItems: listShoppingListItems,
+      apply: (derived) => {
+        setShoppingListIncompleteCount(derived.incompleteCount);
+        setActiveShoppingListIdentities(derived.activeIdentities);
+      },
+      onError: (error) => {
+        logger.warn('Home', 'shopping list home state refresh failed', {
+          error,
+        });
+      },
+    });
   }, []);
 
-  // 当屏幕获得焦点时刷新数据（首次打开 + 从审核页返回都会触发）
+  const refreshHomeWhenVisible = useCallback(() => {
+    void loadReceipts();
+    void refreshPendingReview();
+    void refreshShoppingListHomeState();
+  }, [loadReceipts, refreshPendingReview, refreshShoppingListHomeState]);
+
+  // Tab-level focus (History/Analysis ↔ Home, first mount).
   useFocusEffect(
     useCallback(() => {
-      loadReceipts();
+      refreshHomeWhenVisible();
+    }, [refreshHomeWhenVisible])
+  );
+
+  // Root-stack visibility: /shopping-list and /product/* return to Home without
+  // always re-firing tab useFocusEffect — pathname becoming Home is authoritative.
+  useEffect(() => {
+    const visible = isHomeRoutePath(pathname);
+    if (visible && !homeWasVisibleRef.current) {
       void refreshPendingReview();
       void refreshShoppingListHomeState();
-    }, [loadReceipts, refreshPendingReview, refreshShoppingListHomeState])
-  );
+      void loadReceipts();
+    }
+    homeWasVisibleRef.current = visible;
+  }, [
+    pathname,
+    loadReceipts,
+    refreshPendingReview,
+    refreshShoppingListHomeState,
+  ]);
 
   // 点击“继续审核”：始终先刷新最新 pending 状态，再据此决定导航（点击时二次校验）
   const handleContinueReview = useCallback(async () => {

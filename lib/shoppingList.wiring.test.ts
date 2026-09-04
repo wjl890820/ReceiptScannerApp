@@ -53,6 +53,8 @@ describe('Shopping List 1.0 UI wiring', () => {
     expect(screen).toContain('toggleShoppingListItemCompleted');
     expect(screen).toContain('already_active_identity');
     expect(screen).toContain("t('shoppingList.alreadyOnList')");
+    expect(screen).toContain('canAddManual');
+    expect(screen).toContain('disabled={busy || !canAddManual}');
     expect(screen).toContain('deleteShoppingListItem');
     expect(screen).toContain('clearCompletedShoppingListItems');
     expect(screen).toContain("t('shoppingList.emptyTitle')");

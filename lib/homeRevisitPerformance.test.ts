@@ -11,6 +11,7 @@ import {
 
 describe('Home revisit refresh state', () => {
   it('allows blocking loading only before the first complete snapshot', () => {
+    expect(INITIAL_HOME_REFRESH_STATE.initialLoading).toBe(true);
     const cold = beginHomeRefresh(INITIAL_HOME_REFRESH_STATE);
     expect(cold).toEqual({
       initialLoading: true,
@@ -102,7 +103,10 @@ describe('Home refresh production wiring', () => {
 
   it('still revalidates Home and Pending Review on every focus', () => {
     expect(homeSource).toContain('useFocusEffect(');
-    expect(homeSource).toContain('loadReceipts();');
+    expect(homeSource).toContain('refreshHomeWhenVisible');
     expect(homeSource).toContain('void refreshPendingReview();');
+    expect(homeSource).toContain('isHomeRoutePath(pathname)');
+    expect(homeSource).toContain('runHomeShoppingListRefresh');
+    expect(homeSource).toContain('shoppingListRefreshGenerationRef');
   });
 });

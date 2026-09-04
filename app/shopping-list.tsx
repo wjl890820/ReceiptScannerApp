@@ -71,9 +71,10 @@ export default function ShoppingListScreen() {
     () => items.filter((item) => item.isCompleted),
     [items]
   );
+  const canAddManual = draft.trim().length > 0;
 
   const onAdd = useCallback(async () => {
-    if (busy) return;
+    if (busy || draft.trim().length === 0) return;
     setBusy(true);
     try {
       const result = await addManualShoppingListItem(draft);
@@ -232,11 +233,11 @@ export default function ShoppingListScreen() {
             onPress={() => void onAdd()}
             accessibilityRole="button"
             accessibilityLabel={t('shoppingList.add')}
-            disabled={busy}
+            disabled={busy || !canAddManual}
             style={({ pressed }) => [
               styles.addButton,
               pressed && styles.pressed,
-              busy && styles.addButtonDisabled,
+              (busy || !canAddManual) && styles.addButtonDisabled,
             ]}
           >
             <Text style={styles.addButtonText}>{t('shoppingList.add')}</Text>
