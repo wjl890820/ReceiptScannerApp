@@ -1,7 +1,13 @@
 /**
  * DEV/validation-only Home refresh stage timings (P1A).
- * No production telemetry.
+ * Also feeds Internal Diagnostics when the diagnostics gate is enabled.
  */
+
+import {
+  recordDiagnosticTiming,
+  recordHomeCoordinatorDiagnostic,
+} from './internalDiagnostics';
+import { isInternalDiagnosticsEnabled } from './internalDiagnosticsGate';
 
 export type HomeRefreshTimingStage =
   | 'listReceipts'
@@ -29,7 +35,11 @@ export function enableHomeRefreshTimingsForTests(on = true): void {
 }
 
 export function isHomeRefreshTimingEnabled(): boolean {
-  return enabled || (typeof __DEV__ !== 'undefined' && __DEV__);
+  return (
+    enabled ||
+    (typeof __DEV__ !== 'undefined' && __DEV__) ||
+    isInternalDiagnosticsEnabled()
+  );
 }
 
 export function beginHomeRefreshTimingCapture(): void {
@@ -42,6 +52,17 @@ export function recordHomeRefreshTiming(sample: HomeRefreshTimingSample): void {
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
     // eslint-disable-next-line no-console
     console.log('[HomeRefreshTiming]', sample);
+  }
+  try {
+    if (isInternalDiagnosticsEnabled()) {
+      recordDiagnosticTiming('home', sample.stage, sample.durationMs, {
+        receiptCount: sample.receiptCount,
+        analyticsReceiptCount: sample.analyticsReceiptCount,
+        productRowCount: sample.productRowCount,
+      });
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -72,7 +93,19 @@ export function endHomeRefreshTimingCapture(): HomeRefreshTimingSample[] {
 }
 
 export function logHomeRefreshCoordinatorEvent(event: unknown): void {
-  if (!(typeof __DEV__ !== 'undefined' && __DEV__)) return;
-  // eslint-disable-next-line no-console
-  console.log('[HomeRefreshCoordinator]', event);
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    // eslint-disable-next-line no-console
+    console.log('[HomeRefreshCoordinator]', event);
+  }
+  try {
+    if (
+      event &&
+      typeof event === 'object' &&
+      typeof (event as { type?: unknown }).type === 'string'
+    ) {
+      recordHomeCoordinatorDiagnostic(event as { type: string });
+    }
+  } catch {
+    // ignore
+  }
 }

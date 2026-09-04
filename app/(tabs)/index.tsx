@@ -68,6 +68,7 @@ import {
   measureHomeRefreshStage,
   recordHomeRefreshTiming,
 } from '@/lib/homeRefreshTimings';
+import { recordDiagnosticEvent } from '@/lib/internalDiagnostics';
 import { isHomeRoutePath } from '@/lib/homeRouteVisibility';
 import { runHomeShoppingListRefresh } from '@/lib/homeShoppingListRefresh';
 import { t } from '@/lib/i18n';
@@ -368,9 +369,21 @@ export default function HomeScreen() {
   // Tab-level focus (History/Analysis ↔ Home, first mount).
   useFocusEffect(
     useCallback(() => {
+      recordDiagnosticEvent({
+        category: 'lifecycle',
+        name: 'focus',
+        screen: 'home',
+      });
       const coordinator = ensureHomeCoordinator();
       const trigger = hasCompleteSnapshotRef.current ? 'focus' : 'cold';
       coordinator.requestVisibleRefresh(trigger);
+      return () => {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'blur',
+          screen: 'home',
+        });
+      };
     }, [ensureHomeCoordinator])
   );
 
@@ -382,8 +395,20 @@ export default function HomeScreen() {
     const coordinator = ensureHomeCoordinator();
     const visible = isHomeRoutePath(pathname);
     if (visible && !homeWasVisibleRef.current) {
+      recordDiagnosticEvent({
+        category: 'lifecycle',
+        name: 'visible',
+        screen: 'home',
+        meta: { via: 'pathname' },
+      });
       coordinator.requestVisibleRefresh('pathname');
     } else if (!visible && homeWasVisibleRef.current) {
+      recordDiagnosticEvent({
+        category: 'lifecycle',
+        name: 'hidden',
+        screen: 'home',
+        meta: { via: 'pathname' },
+      });
       coordinator.markHomeHidden();
     }
     homeWasVisibleRef.current = visible;

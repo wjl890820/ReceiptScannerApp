@@ -653,6 +653,24 @@
     },
     "devTools": {
       "unlocked": "Developer Tools enabled"
+    },
+    "internalDiagnostics": {
+      "section": "Internal Diagnostics",
+      "status": "Enabled: {enabled} · Events: {count} · Session …{session}",
+      "enabledYes": "yes",
+      "enabledNo": "no",
+      "export": "Export Diagnostics",
+      "exportSubtitle": "Share a recent timings & lifecycle timeline (no receipt contents)",
+      "exportDoneTitle": "Diagnostics exported",
+      "exportDoneMessage": "Shared {filename}",
+      "exportFailedTitle": "Export failed",
+      "exportFailedMessage": "Could not export diagnostics. App data was not changed.",
+      "clear": "Clear Diagnostics",
+      "clearSubtitle": "Remove the local diagnostic timeline only",
+      "clearConfirmTitle": "Clear diagnostics?",
+      "clearConfirmMessage": "This clears the diagnostic event buffer only. Receipts and shopping data are not deleted.",
+      "clearCancel": "Cancel",
+      "clearConfirm": "Clear"
     }
   },
   "feedback": {

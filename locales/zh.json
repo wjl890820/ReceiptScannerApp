@@ -653,6 +653,24 @@
     },
     "devTools": {
       "unlocked": "开发者工具已开启"
+    },
+    "internalDiagnostics": {
+      "section": "内部诊断",
+      "status": "启用: {enabled} · 事件: {count} · 会话 …{session}",
+      "enabledYes": "是",
+      "enabledNo": "否",
+      "export": "导出诊断",
+      "exportSubtitle": "分享近期计时与生命周期时间线（不含小票内容）",
+      "exportDoneTitle": "诊断已导出",
+      "exportDoneMessage": "已分享 {filename}",
+      "exportFailedTitle": "导出失败",
+      "exportFailedMessage": "无法导出诊断。应用数据未改动。",
+      "clear": "清除诊断",
+      "clearSubtitle": "仅清除本地诊断时间线",
+      "clearConfirmTitle": "清除诊断？",
+      "clearConfirmMessage": "仅清除诊断事件缓冲，不会删除小票或购物数据。",
+      "clearCancel": "取消",
+      "clearConfirm": "清除"
     }
   },
   "feedback": {

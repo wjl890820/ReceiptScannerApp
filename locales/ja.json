@@ -653,6 +653,24 @@
     },
     "devTools": {
       "unlocked": "開発者ツールを有効にしました"
+    },
+    "internalDiagnostics": {
+      "section": "内部診断",
+      "status": "有効: {enabled} · イベント: {count} · セッション …{session}",
+      "enabledYes": "はい",
+      "enabledNo": "いいえ",
+      "export": "診断を書き出す",
+      "exportSubtitle": "直近のタイミングとライフサイクルのタイムラインを共有（レシート内容は含みません）",
+      "exportDoneTitle": "診断を書き出しました",
+      "exportDoneMessage": "{filename} を共有しました",
+      "exportFailedTitle": "書き出しに失敗",
+      "exportFailedMessage": "診断を書き出せませんでした。アプリデータは変更されていません。",
+      "clear": "診断をクリア",
+      "clearSubtitle": "ローカルの診断タイムラインのみ削除",
+      "clearConfirmTitle": "診断をクリアしますか？",
+      "clearConfirmMessage": "診断イベントバッファのみ削除します。レシートや買い物リストは削除されません。",
+      "clearCancel": "キャンセル",
+      "clearConfirm": "クリア"
     }
   },
   "feedback": {

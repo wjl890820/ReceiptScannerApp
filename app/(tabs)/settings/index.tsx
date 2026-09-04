@@ -34,6 +34,16 @@ import {
 } from '@/lib/env';
 import { shouldShowAnalysisDDiagnosticsEntry } from '@/lib/analysisDDiagnosticsAccess';
 import {
+  clearDiagnostics,
+  getDiagnosticSnapshot,
+  hydrateInternalDiagnostics,
+} from '@/lib/internalDiagnostics';
+import { exportInternalDiagnosticsToShare } from '@/lib/internalDiagnosticsExport';
+import {
+  isInternalDiagnosticsEnabled,
+  shouldShowInternalDiagnosticsSettingsEntry,
+} from '@/lib/internalDiagnosticsGate';
+import {
   getCurrentLocalePreference,
   setLocalePreference,
   t,
@@ -182,6 +192,15 @@ export default function SettingsScreen() {
   const showAnalysisDDiagnostics = shouldShowAnalysisDDiagnosticsEntry(
     isAnalysisDDiagnosticsEnabled()
   );
+  const showInternalDiagnostics = shouldShowInternalDiagnosticsSettingsEntry(
+    isInternalDiagnosticsEnabled()
+  );
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState({
+    eventCount: 0,
+    sessionId: '',
+    enabled: false,
+  });
+  const [diagnosticsExportBusy, setDiagnosticsExportBusy] = useState(false);
   const aboutVersionLine = formatAboutVersionLine(currentVersion, currentBuild);
 
   const accountStatusRefresherRef = useRef(
@@ -222,7 +241,17 @@ export default function SettingsScreen() {
   useFocusEffect(
     useCallback(() => {
       void refreshAccountStatus();
-    }, [refreshAccountStatus])
+      if (showInternalDiagnostics) {
+        void hydrateInternalDiagnostics().then(() => {
+          const snap = getDiagnosticSnapshot();
+          setDiagnosticsStatus({
+            eventCount: snap.eventCount,
+            sessionId: snap.sessionId,
+            enabled: snap.enabled,
+          });
+        });
+      }
+    }, [refreshAccountStatus, showInternalDiagnostics])
   );
 
   useEffect(() => {
@@ -938,6 +967,105 @@ export default function SettingsScreen() {
           accessibilityLabel={`${t('settings.about.title')}, ${aboutVersionLine}`}
         />
       </View>
+
+      {showInternalDiagnostics ? (
+        <View style={styles.devGroup}>
+          <Text style={styles.devSectionLabel}>
+            {t('settings.internalDiagnostics.section')}
+          </Text>
+          <View style={styles.group}>
+            <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+              <Text style={{ color: UI_COLORS.textSecondary, fontSize: 13 }}>
+                {t('settings.internalDiagnostics.status', {
+                  enabled: diagnosticsStatus.enabled
+                    ? t('settings.internalDiagnostics.enabledYes')
+                    : t('settings.internalDiagnostics.enabledNo'),
+                  count: diagnosticsStatus.eventCount,
+                  session: diagnosticsStatus.sessionId
+                    ? diagnosticsStatus.sessionId.slice(-8)
+                    : '—',
+                })}
+              </Text>
+            </View>
+            <View style={styles.separator} />
+            <SettingsRow
+              title={t('settings.internalDiagnostics.export')}
+              subtitle={t('settings.internalDiagnostics.exportSubtitle')}
+              onPress={async () => {
+                if (diagnosticsExportBusy) return;
+                setDiagnosticsExportBusy(true);
+                try {
+                  const result = await exportInternalDiagnosticsToShare({
+                    cacheDirectory: FileSystem.cacheDirectory,
+                    writeAsStringAsync: FileSystem.writeAsStringAsync,
+                    shareAsync: Sharing.shareAsync,
+                    deleteAsync: async (uri) => {
+                      await FileSystem.deleteAsync(uri, { idempotent: true });
+                    },
+                  });
+                  if (result.status === 'busy') {
+                    return;
+                  }
+                  const snap = getDiagnosticSnapshot();
+                  setDiagnosticsStatus({
+                    eventCount: snap.eventCount,
+                    sessionId: snap.sessionId,
+                    enabled: snap.enabled,
+                  });
+                  Alert.alert(
+                    t('settings.internalDiagnostics.exportDoneTitle'),
+                    t('settings.internalDiagnostics.exportDoneMessage', {
+                      filename: result.filename,
+                    })
+                  );
+                } catch (e: any) {
+                  Alert.alert(
+                    t('settings.internalDiagnostics.exportFailedTitle'),
+                    e?.message ||
+                      t('settings.internalDiagnostics.exportFailedMessage')
+                  );
+                } finally {
+                  setDiagnosticsExportBusy(false);
+                }
+              }}
+              accessibilityLabel={t('settings.internalDiagnostics.export')}
+            />
+            <View style={styles.separator} />
+            <SettingsRow
+              title={t('settings.internalDiagnostics.clear')}
+              subtitle={t('settings.internalDiagnostics.clearSubtitle')}
+              onPress={() => {
+                Alert.alert(
+                  t('settings.internalDiagnostics.clearConfirmTitle'),
+                  t('settings.internalDiagnostics.clearConfirmMessage'),
+                  [
+                    {
+                      text: t('settings.internalDiagnostics.clearCancel'),
+                      style: 'cancel',
+                    },
+                    {
+                      text: t('settings.internalDiagnostics.clearConfirm'),
+                      style: 'destructive',
+                      onPress: () => {
+                        void (async () => {
+                          await clearDiagnostics();
+                          const snap = getDiagnosticSnapshot();
+                          setDiagnosticsStatus({
+                            eventCount: snap.eventCount,
+                            sessionId: snap.sessionId,
+                            enabled: snap.enabled,
+                          });
+                        })();
+                      },
+                    },
+                  ]
+                );
+              }}
+              accessibilityLabel={t('settings.internalDiagnostics.clear')}
+            />
+          </View>
+        </View>
+      ) : null}
 
       {showAnalysisDDiagnostics ? (
         <View style={styles.devGroup}>

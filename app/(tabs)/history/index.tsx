@@ -67,6 +67,11 @@ import {
   shouldApplyAsyncRequestGeneration,
 } from '@/lib/asyncRequestGeneration';
 import {
+  recordDiagnosticEvent,
+  recordDiagnosticTiming,
+  recordDiagnosticError,
+} from '@/lib/internalDiagnostics';
+import {
   loadPersonalProductEndpointInventoryWithDb,
   type PersonalProductEndpointInventory,
 } from '@/lib/personalProductEndpointInventory';
@@ -136,21 +141,35 @@ export default function HistoryScreen() {
 
   const load = useCallback(async () => {
     const started = Date.now();
+    recordDiagnosticEvent({
+      category: 'lifecycle',
+      name: 'load_start',
+      screen: 'history',
+    });
     try {
       const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
       const truth = buildHistoryPurchaseTruthView(stored);
       purchaseTruthRef.current = truth;
       setRows(truth.visibleRows);
+      const durationMs = Date.now() - started;
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
         // eslint-disable-next-line no-console
         console.log('[HistoryFocusTiming]', {
           stage: 'total',
-          durationMs: Date.now() - started,
+          durationMs,
           receiptCount: stored.length,
         });
       }
+      recordDiagnosticTiming('history', 'total', durationMs, {
+        receiptCount: stored.length,
+        success: true,
+      });
     } catch (e: any) {
       console.error(e);
+      recordDiagnosticError('history', 'load_failed', e);
+      recordDiagnosticTiming('history', 'total', Date.now() - started, {
+        success: false,
+      });
       Alert.alert(t('history.errors.loadTitle'), t('history.errors.loadMessage'));
     }
   }, []);
@@ -233,6 +252,11 @@ export default function HistoryScreen() {
 
   useFocusEffect(
     React.useCallback(() => {
+      recordDiagnosticEvent({
+        category: 'lifecycle',
+        name: 'focus',
+        screen: 'history',
+      });
       void load();
       void loadPersonalInventory();
       const currentQuery = searchQueryRef.current;
@@ -240,6 +264,11 @@ export default function HistoryScreen() {
         void executeSearch(currentQuery);
       }
       return () => {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'blur',
+          screen: 'history',
+        });
         invalidateAsyncRequestGeneration(personalInventoryGenerationRef);
       };
     }, [executeSearch, load, loadPersonalInventory])

@@ -1,6 +1,10 @@
 /**
  * DEV/validation-only Analysis focus timings (AP-3 OFF path).
+ * Also feeds Internal Diagnostics when the diagnostics gate is enabled.
  */
+
+import { isInternalDiagnosticsEnabled } from './internalDiagnosticsGate';
+import { recordDiagnosticTiming } from './internalDiagnostics';
 
 export type AnalysisRefreshTimingStage =
   | 'listReceiptsForAnalysis'
@@ -27,7 +31,9 @@ export function enableAnalysisRefreshTimingsForTests(on = true): void {
 
 export function isAnalysisRefreshTimingEnabled(): boolean {
   return (
-    forceEnabledForTests || (typeof __DEV__ !== 'undefined' && __DEV__)
+    forceEnabledForTests ||
+    (typeof __DEV__ !== 'undefined' && __DEV__) ||
+    isInternalDiagnosticsEnabled()
   );
 }
 
@@ -43,6 +49,16 @@ export function recordAnalysisRefreshTiming(
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
     // eslint-disable-next-line no-console
     console.log('[AnalysisRefreshTiming]', sample);
+  }
+  try {
+    if (isInternalDiagnosticsEnabled()) {
+      recordDiagnosticTiming('analysis', sample.stage, sample.durationMs, {
+        receiptCount: sample.receiptCount,
+        analyticsReceiptCount: sample.analyticsReceiptCount,
+      });
+    }
+  } catch {
+    // ignore
   }
 }
 

@@ -50,6 +50,7 @@ import {
   measureAnalysisRefreshStageSync,
   recordAnalysisRefreshTiming,
 } from '@/lib/analysisRefreshTimings';
+import { recordDiagnosticEvent } from '@/lib/internalDiagnostics';
 import { createEmptyStats } from '@/lib/analysisHelpers';
 import { formatJPY } from '@/lib/formatJPY';
 import { t } from '@/lib/i18n';
@@ -103,6 +104,14 @@ export default function AnalysisScreen() {
     loadCycleRef.current = cycleId;
     priceGenerationRef.current += 1;
     const priceGenerationId = priceGenerationRef.current;
+    const hadTruth = hasTruthSnapshotRef.current;
+    const mode = hadTruth ? 'background' : 'initial';
+    recordDiagnosticEvent({
+      category: 'lifecycle',
+      name: 'refresh_begin',
+      screen: 'analysis',
+      meta: { cycleId, mode },
+    });
     setRefreshUi((state) => beginAnalysisRefresh(state));
     const totalStarted = Date.now();
     let analyticsReceipts: AnalysisLoadedTruth['receipts'] | null = null;
@@ -120,7 +129,15 @@ export default function AnalysisScreen() {
         receiptCount: allReceipts.length,
         analyticsReceiptCount: analyticsReceipts.length,
       });
-      if (loadCycleRef.current !== cycleId) return;
+      if (loadCycleRef.current !== cycleId) {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'refresh_superseded',
+          screen: 'analysis',
+          meta: { cycleId, mode },
+        });
+        return;
+      }
       // Commit newer truth without clearing prior AP-3 binding.
       // Cross-cycle render is fail-closed via resolveBoundPriceChangesSurface.
       setTruthCycle({
@@ -130,15 +147,40 @@ export default function AnalysisScreen() {
       });
       hasTruthSnapshotRef.current = true;
       setRefreshUi((state) => completeAnalysisRefresh(state));
+      recordDiagnosticEvent({
+        category: 'lifecycle',
+        name: 'refresh_success',
+        screen: 'analysis',
+        meta: {
+          cycleId,
+          mode,
+          receiptCount: allReceipts.length,
+          analyticsReceiptCount: analyticsReceipts.length,
+        },
+      });
     } catch (e) {
       console.error('加载收据失败:', e);
-      if (loadCycleRef.current !== cycleId) return;
+      if (loadCycleRef.current !== cycleId) {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'refresh_superseded',
+          screen: 'analysis',
+          meta: { cycleId, mode },
+        });
+        return;
+      }
       if (hasTruthSnapshotRef.current) {
         logger.warn('Analysis', 'background refresh failed', { error: e });
         setRefreshUi((state) => failAnalysisRefresh(state));
       } else {
         setRefreshUi((state) => failAnalysisRefresh(state));
       }
+      recordDiagnosticEvent({
+        category: 'lifecycle',
+        name: 'refresh_failure',
+        screen: 'analysis',
+        meta: { cycleId, mode },
+      });
     } finally {
       recordAnalysisRefreshTiming({
         stage: 'total',
@@ -153,6 +195,12 @@ export default function AnalysisScreen() {
       const focusId = ++focusTokenRef.current;
       let cancelled = false;
       let cancelScheduledPrice: (() => void) | null = null;
+      recordDiagnosticEvent({
+        category: 'lifecycle',
+        name: 'focus',
+        screen: 'analysis',
+        meta: { focusId },
+      });
 
       void (async () => {
         const loaded = await loadReceipts();
@@ -216,6 +264,12 @@ export default function AnalysisScreen() {
       })();
 
       return () => {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'blur',
+          screen: 'analysis',
+          meta: { focusId },
+        });
         cancelled = true;
         focusTokenRef.current += 1;
         priceGenerationRef.current += 1;

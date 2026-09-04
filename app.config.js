@@ -100,6 +100,12 @@ export default ({ config }) => {
         process.env.ENABLE_ANALYSIS_D_DIAGNOSTICS ||
         process.env.EXPO_PUBLIC_ENABLE_ANALYSIS_D_DIAGNOSTICS ||
         'false',
+      // Internal Diagnostics V1 timeline export (default OFF). Validation builds set true.
+      // __DEV__ also enables at runtime via isInternalDiagnosticsEnabled().
+      ENABLE_INTERNAL_DIAGNOSTICS:
+        process.env.ENABLE_INTERNAL_DIAGNOSTICS ||
+        process.env.EXPO_PUBLIC_ENABLE_INTERNAL_DIAGNOSTICS ||
+        'false',
     },
   };
 };
