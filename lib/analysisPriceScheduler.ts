@@ -169,6 +169,91 @@ export type ChunkTimingSample = {
   durationMs: number;
 };
 
+/** Wall-clock prepare span — includes yields; never part of sync chunk max. */
+export const AP3_PREPARE_TOTAL_WALL_LABEL = 'prepare:totalWall';
+
+const SYNC_EXACT_LABELS = new Set([
+  'identity:rows',
+  'identity:qualify',
+  'identity:peerPrepare',
+  'prepare:evidence',
+  'prepare:finalize',
+]);
+
+/**
+ * True when the label's timer bounds contain only contiguous sync work
+ * (no await/yield inside the measured interval).
+ */
+export function isSyncAp3ChunkTimingLabel(label: string): boolean {
+  if (label === AP3_PREPARE_TOTAL_WALL_LABEL) return false;
+  if (SYNC_EXACT_LABELS.has(label)) return true;
+  if (label.startsWith('sku:')) return true;
+  if (label.startsWith('mp:')) return true;
+  return false;
+}
+
+/**
+ * Strip dynamic identifiers (sku keys / mp ids) for diagnostics privacy.
+ */
+export function sanitizeAp3ChunkTimingLabelForDiagnostics(label: string): string {
+  if (label.startsWith('sku:')) return 'sku';
+  if (label.startsWith('mp:')) return 'mp';
+  if (SYNC_EXACT_LABELS.has(label)) return label;
+  if (label === AP3_PREPARE_TOTAL_WALL_LABEL) return AP3_PREPARE_TOTAL_WALL_LABEL;
+  return 'unknown';
+}
+
+export type Ap3SyncChunkTimingSummary = {
+  /** Max duration among sync-only samples (ms). */
+  maxDurationMs: number;
+  /** Safe static label of the max sync sample, or null if none. */
+  maxLabel: string | null;
+  /** Number of sync samples included in the max. */
+  sampleCount: number;
+  /** prepare:totalWall duration if present; otherwise null. */
+  prepareWallMs: number | null;
+};
+
+/**
+ * Split wall-clock prepare from contiguous sync chunk timings.
+ */
+export function summarizeAp3SyncChunkTimings(
+  samples: readonly ChunkTimingSample[]
+): Ap3SyncChunkTimingSummary {
+  let prepareWallMs: number | null = null;
+  let maxDurationMs = 0;
+  let maxRawLabel: string | null = null;
+  let sampleCount = 0;
+
+  for (const sample of samples) {
+    if (!Number.isFinite(sample.durationMs) || sample.durationMs < 0) continue;
+    if (sample.label === AP3_PREPARE_TOTAL_WALL_LABEL) {
+      prepareWallMs =
+        prepareWallMs == null
+          ? sample.durationMs
+          : Math.max(prepareWallMs, sample.durationMs);
+      continue;
+    }
+    if (!isSyncAp3ChunkTimingLabel(sample.label)) continue;
+    sampleCount += 1;
+    // First valid sample initializes max (including 0ms); later only when greater.
+    if (maxRawLabel == null || sample.durationMs > maxDurationMs) {
+      maxDurationMs = sample.durationMs;
+      maxRawLabel = sample.label;
+    }
+  }
+
+  return {
+    maxDurationMs,
+    maxLabel:
+      maxRawLabel != null
+        ? sanitizeAp3ChunkTimingLabelForDiagnostics(maxRawLabel)
+        : null,
+    sampleCount,
+    prepareWallMs,
+  };
+}
+
 let chunkTimings: ChunkTimingSample[] = [];
 
 export function beginAnalysisPriceChunkTimingCapture(): void {
@@ -189,8 +274,7 @@ export function endAnalysisPriceChunkTimingCapture(): ChunkTimingSample[] {
 }
 
 export function getMaxAnalysisPriceChunkDurationMs(): number {
-  if (chunkTimings.length === 0) return 0;
-  return Math.max(...chunkTimings.map((sample) => sample.durationMs));
+  return summarizeAp3SyncChunkTimings(chunkTimings).maxDurationMs;
 }
 
 /** Controllable scheduler for G1/G2 race tests. */

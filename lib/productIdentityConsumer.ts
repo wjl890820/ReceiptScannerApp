@@ -296,14 +296,13 @@ export async function resolveIdentityConsumerObservationsAsync(
 } | null> {
   const shouldCancel = options.shouldCancel ?? (() => false);
   const rowsPerChunk = Math.max(1, options.rowsPerChunk ?? 64);
-  const yieldFn =
-    options.yieldFn ??
-    (async () => {
-      const { yieldAnalysisPriceChunk } = await import('./analysisPriceScheduler');
-      await yieldAnalysisPriceChunk();
-    });
 
   if (shouldCancel()) return null;
+  const { yieldAnalysisPriceChunk, recordAnalysisPriceChunkTiming } =
+    await import('./analysisPriceScheduler');
+  const yieldFn =
+    options.yieldFn ?? (() => yieldAnalysisPriceChunk());
+
   const draft: IdentityDraft[] = [];
   let sinceYield = 0;
   let chunkStarted = Date.now();
@@ -312,15 +311,9 @@ export async function resolveIdentityConsumerObservationsAsync(
     pushIdentityDraft(draft, obs, store);
     sinceYield += 1;
     if (sinceYield >= rowsPerChunk) {
+      // Capture sync duration before any await/yield.
       const chunkMs = Date.now() - chunkStarted;
-      try {
-        const { recordAnalysisPriceChunkTiming } = await import(
-          './analysisPriceScheduler'
-        );
-        recordAnalysisPriceChunkTiming('identity:rows', chunkMs);
-      } catch {
-        // ignore
-      }
+      recordAnalysisPriceChunkTiming('identity:rows', chunkMs);
       sinceYield = 0;
       await yieldFn();
       if (shouldCancel()) return null;
@@ -328,17 +321,8 @@ export async function resolveIdentityConsumerObservationsAsync(
     }
   }
   if (sinceYield > 0) {
-    try {
-      const { recordAnalysisPriceChunkTiming } = await import(
-        './analysisPriceScheduler'
-      );
-      recordAnalysisPriceChunkTiming(
-        'identity:rows',
-        Date.now() - chunkStarted
-      );
-    } catch {
-      // ignore
-    }
+    const chunkMs = Date.now() - chunkStarted;
+    recordAnalysisPriceChunkTiming('identity:rows', chunkMs);
   }
 
   // Peer prepare once per MP bucket, then qualify in bounded row chunks.
@@ -346,17 +330,8 @@ export async function resolveIdentityConsumerObservationsAsync(
   if (shouldCancel()) return null;
   const prepareStarted = Date.now();
   const preparedPeersByMp = preparePeerBucketsFromDraft(draft);
-  try {
-    const { recordAnalysisPriceChunkTiming } = await import(
-      './analysisPriceScheduler'
-    );
-    recordAnalysisPriceChunkTiming(
-      'identity:peerPrepare',
-      Date.now() - prepareStarted
-    );
-  } catch {
-    // ignore
-  }
+  const peerPrepareMs = Date.now() - prepareStarted;
+  recordAnalysisPriceChunkTiming('identity:peerPrepare', peerPrepareMs);
   await yieldFn();
   if (shouldCancel()) return null;
 
@@ -369,17 +344,8 @@ export async function resolveIdentityConsumerObservationsAsync(
     if (q) qualified.push(q);
     qualifySinceYield += 1;
     if (qualifySinceYield >= rowsPerChunk) {
-      try {
-        const { recordAnalysisPriceChunkTiming } = await import(
-          './analysisPriceScheduler'
-        );
-        recordAnalysisPriceChunkTiming(
-          'identity:qualify',
-          Date.now() - qualifyChunkStarted
-        );
-      } catch {
-        // ignore
-      }
+      const qualifyMs = Date.now() - qualifyChunkStarted;
+      recordAnalysisPriceChunkTiming('identity:qualify', qualifyMs);
       qualifySinceYield = 0;
       await yieldFn();
       if (shouldCancel()) return null;
@@ -387,17 +353,8 @@ export async function resolveIdentityConsumerObservationsAsync(
     }
   }
   if (qualifySinceYield > 0) {
-    try {
-      const { recordAnalysisPriceChunkTiming } = await import(
-        './analysisPriceScheduler'
-      );
-      recordAnalysisPriceChunkTiming(
-        'identity:qualify',
-        Date.now() - qualifyChunkStarted
-      );
-    } catch {
-      // ignore
-    }
+    const qualifyMs = Date.now() - qualifyChunkStarted;
+    recordAnalysisPriceChunkTiming('identity:qualify', qualifyMs);
   }
   await yieldFn();
   if (shouldCancel()) return null;

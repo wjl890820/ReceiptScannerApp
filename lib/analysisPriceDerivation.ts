@@ -25,6 +25,7 @@ import {
   beginAnalysisPriceChunkTimingCapture,
   createAnalysisPriceGeneration,
   endAnalysisPriceChunkTimingCapture,
+  summarizeAp3SyncChunkTimings,
   runAfterAnalysisFirstPaint,
   scheduleAfterAnalysisFirstPaint,
   scheduleAfterAnalysisFirstPaintForTests,
@@ -210,12 +211,17 @@ export function scheduleDeriveAnalysisPriceDomain(
       { shouldCancel: isStale }
     );
     const chunkSamples = endAnalysisPriceChunkTimingCapture();
-    const maxChunkMs = chunkSamples.reduce(
-      (max, sample) => Math.max(max, sample.durationMs),
-      0
-    );
-    emitAp3Timing('ap3_chunk_max', maxChunkMs, {
-      chunkCount: chunkSamples.length,
+    const syncSummary = summarizeAp3SyncChunkTimings(chunkSamples);
+    if (syncSummary.prepareWallMs != null) {
+      emitAp3Timing('ap3_prepare_wall', syncSummary.prepareWallMs);
+    }
+    emitAp3Timing('ap3_chunk_max', syncSummary.maxDurationMs, {
+      // Sync-only sample count (excludes prepare:totalWall).
+      sampleCount: syncSummary.sampleCount,
+      chunkCount: syncSummary.sampleCount,
+      ...(syncSummary.maxLabel != null
+        ? { maxLabel: syncSummary.maxLabel }
+        : {}),
     });
     if (candidates == null || isStale()) {
       emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 0 });
