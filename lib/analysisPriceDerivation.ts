@@ -34,6 +34,7 @@ import {
   type ScheduledPaintWork,
 } from './analysisPriceScheduler';
 import type { ProductPriceHistoryRow } from './productPriceHistory';
+import { emitAp3CandidateFunnel } from './analysisPriceCandidateFunnel';
 import { recordDiagnosticEvent } from './internalDiagnostics';
 
 const UNAVAILABLE: AnalysisPriceChangesSurface = { status: 'unavailable' };
@@ -202,7 +203,7 @@ export function scheduleDeriveAnalysisPriceDomain(
       return canceledResult(signature, false);
     }
     beginAnalysisPriceChunkTimingCapture();
-    const candidates = await collectAnalysisTrustedPriceChangeCandidatesAsync(
+    const collected = await collectAnalysisTrustedPriceChangeCandidatesAsync(
       {
         rows: input.rows,
         seedReceiptIds: new Set(seedReceiptIds),
@@ -223,9 +224,21 @@ export function scheduleDeriveAnalysisPriceDomain(
         ? { maxLabel: syncSummary.maxLabel }
         : {}),
     });
-    if (candidates == null || isStale()) {
+    if (collected == null || isStale()) {
       emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 0 });
       return canceledResult(signature, false);
+    }
+    const { candidates, funnel } = collected;
+    // Final pre-emission boundary: never emit a completed funnel for a run
+    // that is already stale (closes the former dynamic-import await window).
+    if (isStale()) {
+      emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 0 });
+      return canceledResult(signature, false);
+    }
+    try {
+      emitAp3CandidateFunnel(funnel);
+    } catch {
+      // Diagnostics-only: never affect AP-3 product derivation.
     }
     emitAp3Timing('ap3_candidates', undefined, {
       candidateCount: candidates.length,

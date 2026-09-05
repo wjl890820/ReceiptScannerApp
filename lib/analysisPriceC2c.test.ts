@@ -341,7 +341,9 @@ describe('AP-3 C2C structural fixtures + flag', () => {
     );
     expect(asyncResult).not.toBeNull();
     expect(
-      (asyncResult ?? []).map((c) => `${c.target.type}:${c.target.key}`)
+      (asyncResult?.candidates ?? []).map(
+        (c) => `${c.target.type}:${c.target.key}`
+      )
     ).toEqual(sync.map((c) => `${c.target.type}:${c.target.key}`));
   });
 });

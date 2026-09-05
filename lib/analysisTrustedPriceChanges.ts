@@ -24,6 +24,16 @@ import {
   type ProductPriceHistoryRow,
   type ProductPriceHistoryResult,
 } from './productPriceHistory';
+import {
+  assertAp3CandidateFunnelInvariants,
+  createEmptyAp3CandidateFunnel,
+  recordAp3InterpretUnavailableReasons,
+  recordAp3MpTerminal,
+  recordAp3SkuTerminal,
+  type Ap3CandidateFunnelCounts,
+  type Ap3MpTerminal,
+  type Ap3SkuTerminal,
+} from './analysisPriceCandidateFunnel';
 
 /** AP-3-only exact merchant_product identity sources (resolver deterministic paths). */
 export const ANALYSIS_MERCHANT_PRODUCT_APPROVED_IDENTITY_SOURCES = [
@@ -178,8 +188,20 @@ function buildCandidateForSku(
     buildHistory: typeof buildProductPriceHistory;
     interpretChange: typeof interpretProductPriceChange;
   }
-): AnalysisTrustedPriceChangeCandidate | null {
-  if (skuRows.length < 2) return null;
+): {
+  terminal: Exclude<Ap3SkuTerminal, 'exception'>;
+  candidate: AnalysisTrustedPriceChangeCandidate | null;
+  history: ProductPriceHistoryResult | null;
+  interpretation: ProductPriceChangeInterpretation | null;
+} {
+  if (skuRows.length < 2) {
+    return {
+      terminal: 'bucket_lt_2',
+      candidate: null,
+      history: null,
+      interpretation: null,
+    };
+  }
 
   recordAnalysisPriceHistoryInputSize(skuRows.length);
   const bucketMetadata = new Map<
@@ -211,15 +233,34 @@ function buildCandidateForSku(
     targetType: 'sku',
     targetKey: skuKey,
   });
-  if (interpretation.status !== 'available') return null;
-  if (interpretation.grossDirection === 'unchanged') return null;
+  if (interpretation.status !== 'available') {
+    return {
+      terminal: 'interpret_unavailable',
+      candidate: null,
+      history,
+      interpretation,
+    };
+  }
+  if (interpretation.grossDirection === 'unchanged') {
+    return {
+      terminal: 'unchanged',
+      candidate: null,
+      history,
+      interpretation,
+    };
+  }
 
   return {
-    target: { type: 'sku', key: skuKey },
-    displayName: pickDisplayLabel(skuRows),
+    terminal: 'changed',
+    candidate: {
+      target: { type: 'sku', key: skuKey },
+      displayName: pickDisplayLabel(skuRows),
+      interpretation,
+      comparableOccurrenceCount: history.comparableOccurrenceCount,
+      latestOccurredAt: interpretation.current.occurredAt,
+    },
+    history,
     interpretation,
-    comparableOccurrenceCount: history.comparableOccurrenceCount,
-    latestOccurredAt: interpretation.current.occurredAt,
   };
 }
 
@@ -231,14 +272,33 @@ function buildCandidateForMerchantProduct(
     buildHistory: typeof buildProductPriceHistory;
     interpretChange: typeof interpretProductPriceChange;
   }
-): AnalysisTrustedPriceChangeCandidate | null {
+): {
+  terminal: Exclude<Ap3MpTerminal, 'exception'>;
+  candidate: AnalysisTrustedPriceChangeCandidate | null;
+  history: ProductPriceHistoryResult | null;
+  interpretation: ProductPriceChangeInterpretation | null;
+} {
   const membershipRows =
     prepared.merchantProductBuckets.get(merchantProductId) ?? [];
-  if (membershipRows.length < 2) return null;
+  if (membershipRows.length < 2) {
+    return {
+      terminal: 'bucket_lt_2',
+      candidate: null,
+      history: null,
+      interpretation: null,
+    };
+  }
 
   const identityView =
     prepared.merchantProductIdentityViews.get(merchantProductId) ?? null;
-  if (!identityView) return null;
+  if (!identityView) {
+    return {
+      terminal: 'missing_identity_view',
+      candidate: null,
+      history: null,
+      interpretation: null,
+    };
+  }
 
   // Bucket-scoped metadata only (still sourced from the one-pass full resolve).
   const bucketMetadata = new Map<
@@ -272,21 +332,137 @@ function buildCandidateForMerchantProduct(
     targetType: 'merchant_product',
     targetKey: merchantProductId,
   });
-  if (interpretation.status !== 'available') return null;
-  if (interpretation.grossDirection === 'unchanged') return null;
+  if (interpretation.status !== 'available') {
+    return {
+      terminal: 'interpret_unavailable',
+      candidate: null,
+      history,
+      interpretation,
+    };
+  }
+  if (interpretation.grossDirection === 'unchanged') {
+    return {
+      terminal: 'unchanged',
+      candidate: null,
+      history,
+      interpretation,
+    };
+  }
   if (
     !merchantProductInterpretationPurchasePointsApproved(history, interpretation)
   ) {
-    return null;
+    return {
+      terminal: 'approval_rejected',
+      candidate: null,
+      history,
+      interpretation,
+    };
   }
 
   return {
-    target: { type: 'merchant_product', key: merchantProductId },
-    displayName: pickDisplayLabel(membershipRows),
+    terminal: 'changed',
+    candidate: {
+      target: { type: 'merchant_product', key: merchantProductId },
+      displayName: pickDisplayLabel(membershipRows),
+      interpretation,
+      comparableOccurrenceCount: history.comparableOccurrenceCount,
+      latestOccurredAt: interpretation.current.occurredAt,
+    },
+    history,
     interpretation,
-    comparableOccurrenceCount: history.comparableOccurrenceCount,
-    latestOccurredAt: interpretation.current.occurredAt,
   };
+}
+
+export type CollectAnalysisTrustedPriceChangeCandidatesResult = {
+  candidates: AnalysisTrustedPriceChangeCandidate[];
+  funnel: Ap3CandidateFunnelCounts;
+};
+
+function collectFromPrepared(
+  prepared: PreparedAnalysisPriceInsightContext,
+  options: {
+    canonicalDuplicateSelectionApplied: boolean;
+    buildHistory: typeof buildProductPriceHistory;
+    interpretChange: typeof interpretProductPriceChange;
+  }
+): CollectAnalysisTrustedPriceChangeCandidatesResult {
+  const funnel = createEmptyAp3CandidateFunnel();
+  funnel.seededSkuCount = prepared.seededSkuKeys.size;
+  funnel.seededMpCount = prepared.seededMerchantProductIds.size;
+
+  if (
+    prepared.seededSkuKeys.size === 0 &&
+    prepared.seededMerchantProductIds.size === 0
+  ) {
+    funnel.finalCandidateCount = 0;
+    return { candidates: [], funnel };
+  }
+
+  const skuCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
+  for (const skuKey of [...prepared.seededSkuKeys].sort()) {
+    const skuRows = prepared.skuBuckets.get(skuKey) ?? [];
+    try {
+      const result = buildCandidateForSku(skuKey, skuRows, prepared, options);
+      recordAp3SkuTerminal(funnel, result.terminal);
+      if (
+        result.terminal === 'interpret_unavailable' &&
+        result.interpretation?.status === 'unavailable'
+      ) {
+        recordAp3InterpretUnavailableReasons(
+          funnel,
+          'sku',
+          result.interpretation.reasonCodes,
+          result.history?.status ?? null
+        );
+      }
+      if (result.candidate) skuCandidates.push(result.candidate);
+    } catch {
+      // Optional surface: skip SKUs that fail candidate construction.
+      recordAp3SkuTerminal(funnel, 'exception');
+    }
+  }
+
+  const skuCoveredEvents = collectSkuCoveredPurchaseEvents(skuCandidates);
+  const merchantProductCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
+  for (const merchantProductId of [
+    ...prepared.seededMerchantProductIds,
+  ].sort()) {
+    try {
+      const result = buildCandidateForMerchantProduct(
+        merchantProductId,
+        prepared,
+        options
+      );
+      recordAp3MpTerminal(funnel, result.terminal);
+      if (
+        result.terminal === 'interpret_unavailable' &&
+        result.interpretation?.status === 'unavailable'
+      ) {
+        recordAp3InterpretUnavailableReasons(
+          funnel,
+          'mp',
+          result.interpretation.reasonCodes,
+          result.history?.status ?? null
+        );
+      }
+      if (result.candidate) {
+        if (isMerchantProductDuplicateOfSku(result.candidate, skuCoveredEvents)) {
+          funnel.mpDuplicateOfSku += 1;
+        } else {
+          merchantProductCandidates.push(result.candidate);
+        }
+      }
+    } catch {
+      // Optional surface: skip merchant products that fail candidate construction.
+      recordAp3MpTerminal(funnel, 'exception');
+    }
+  }
+
+  const candidates = [...skuCandidates, ...merchantProductCandidates];
+  funnel.finalCandidateCount = candidates.length;
+  // Diagnostics-only invariant; never throws into product path.
+  void assertAp3CandidateFunnelInvariants(funnel);
+  return { candidates, funnel };
 }
 
 /**
@@ -297,6 +473,12 @@ function buildCandidateForMerchantProduct(
 export function collectAnalysisTrustedPriceChangeCandidates(
   input: CollectAnalysisTrustedPriceChangeCandidatesInput
 ): AnalysisTrustedPriceChangeCandidate[] {
+  return collectAnalysisTrustedPriceChangeCandidatesWithFunnel(input).candidates;
+}
+
+export function collectAnalysisTrustedPriceChangeCandidatesWithFunnel(
+  input: CollectAnalysisTrustedPriceChangeCandidatesInput
+): CollectAnalysisTrustedPriceChangeCandidatesResult {
   const buildHistory = input.buildHistory ?? buildProductPriceHistory;
   const interpretChange = input.interpretChange ?? interpretProductPriceChange;
   const duplicateApplied = input.canonicalDuplicateSelectionApplied ?? true;
@@ -305,55 +487,11 @@ export function collectAnalysisTrustedPriceChangeCandidates(
     input.prepared ??
     prepareAnalysisPriceInsightContext(input.rows, input.seedReceiptIds);
 
-  if (
-    prepared.seededSkuKeys.size === 0 &&
-    prepared.seededMerchantProductIds.size === 0
-  ) {
-    return [];
-  }
-
-  const skuCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
-  for (const skuKey of [...prepared.seededSkuKeys].sort()) {
-    const skuRows = prepared.skuBuckets.get(skuKey) ?? [];
-    try {
-      const candidate = buildCandidateForSku(skuKey, skuRows, prepared, {
-        canonicalDuplicateSelectionApplied: duplicateApplied,
-        buildHistory,
-        interpretChange,
-      });
-      if (candidate) skuCandidates.push(candidate);
-    } catch {
-      // Optional surface: skip SKUs that fail candidate construction.
-    }
-  }
-
-  const skuCoveredEvents = collectSkuCoveredPurchaseEvents(skuCandidates);
-  const merchantProductCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
-  for (const merchantProductId of [
-    ...prepared.seededMerchantProductIds,
-  ].sort()) {
-    try {
-      const candidate = buildCandidateForMerchantProduct(
-        merchantProductId,
-        prepared,
-        {
-          canonicalDuplicateSelectionApplied: duplicateApplied,
-          buildHistory,
-          interpretChange,
-        }
-      );
-      if (
-        candidate &&
-        !isMerchantProductDuplicateOfSku(candidate, skuCoveredEvents)
-      ) {
-        merchantProductCandidates.push(candidate);
-      }
-    } catch {
-      // Optional surface: skip merchant products that fail candidate construction.
-    }
-  }
-
-  return [...skuCandidates, ...merchantProductCandidates];
+  return collectFromPrepared(prepared, {
+    canonicalDuplicateSelectionApplied: duplicateApplied,
+    buildHistory,
+    interpretChange,
+  });
 }
 
 export type CollectAnalysisTrustedPriceChangeCandidatesAsyncOptions = {
@@ -369,7 +507,7 @@ export type CollectAnalysisTrustedPriceChangeCandidatesAsyncOptions = {
 export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
   input: CollectAnalysisTrustedPriceChangeCandidatesInput,
   options: CollectAnalysisTrustedPriceChangeCandidatesAsyncOptions = {}
-): Promise<AnalysisTrustedPriceChangeCandidate[] | null> {
+): Promise<CollectAnalysisTrustedPriceChangeCandidatesResult | null> {
   const { yieldAnalysisPriceChunk, recordAnalysisPriceChunkTiming } =
     await import('./analysisPriceScheduler');
   const shouldCancel = options.shouldCancel ?? (() => false);
@@ -377,6 +515,11 @@ export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
   const buildHistory = input.buildHistory ?? buildProductPriceHistory;
   const interpretChange = input.interpretChange ?? interpretProductPriceChange;
   const duplicateApplied = input.canonicalDuplicateSelectionApplied ?? true;
+  const buildOpts = {
+    canonicalDuplicateSelectionApplied: duplicateApplied,
+    buildHistory,
+    interpretChange,
+  };
 
   if (shouldCancel()) return null;
 
@@ -394,11 +537,17 @@ export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
   );
 
   if (shouldCancel()) return null;
+
+  const funnel = createEmptyAp3CandidateFunnel();
+  funnel.seededSkuCount = prepared.seededSkuKeys.size;
+  funnel.seededMpCount = prepared.seededMerchantProductIds.size;
+
   if (
     prepared.seededSkuKeys.size === 0 &&
     prepared.seededMerchantProductIds.size === 0
   ) {
-    return [];
+    funnel.finalCandidateCount = 0;
+    return { candidates: [], funnel };
   }
 
   const skuCandidates: AnalysisTrustedPriceChangeCandidate[] = [];
@@ -409,14 +558,23 @@ export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
     const skuKey = skuKeys[i]!;
     const skuRows = prepared.skuBuckets.get(skuKey) ?? [];
     try {
-      const candidate = buildCandidateForSku(skuKey, skuRows, prepared, {
-        canonicalDuplicateSelectionApplied: duplicateApplied,
-        buildHistory,
-        interpretChange,
-      });
-      if (candidate) skuCandidates.push(candidate);
+      const result = buildCandidateForSku(skuKey, skuRows, prepared, buildOpts);
+      recordAp3SkuTerminal(funnel, result.terminal);
+      if (
+        result.terminal === 'interpret_unavailable' &&
+        result.interpretation?.status === 'unavailable'
+      ) {
+        recordAp3InterpretUnavailableReasons(
+          funnel,
+          'sku',
+          result.interpretation.reasonCodes,
+          result.history?.status ?? null
+        );
+      }
+      if (result.candidate) skuCandidates.push(result.candidate);
     } catch {
       // skip
+      recordAp3SkuTerminal(funnel, 'exception');
     }
     recordAnalysisPriceChunkTiming(`sku:${skuKey}`, Date.now() - chunkStarted);
     if ((i + 1) % targetsPerChunk === 0) {
@@ -433,23 +591,33 @@ export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
     const chunkStarted = Date.now();
     const merchantProductId = mpIds[i]!;
     try {
-      const candidate = buildCandidateForMerchantProduct(
+      const result = buildCandidateForMerchantProduct(
         merchantProductId,
         prepared,
-        {
-          canonicalDuplicateSelectionApplied: duplicateApplied,
-          buildHistory,
-          interpretChange,
-        }
+        buildOpts
       );
+      recordAp3MpTerminal(funnel, result.terminal);
       if (
-        candidate &&
-        !isMerchantProductDuplicateOfSku(candidate, skuCoveredEvents)
+        result.terminal === 'interpret_unavailable' &&
+        result.interpretation?.status === 'unavailable'
       ) {
-        merchantProductCandidates.push(candidate);
+        recordAp3InterpretUnavailableReasons(
+          funnel,
+          'mp',
+          result.interpretation.reasonCodes,
+          result.history?.status ?? null
+        );
+      }
+      if (result.candidate) {
+        if (isMerchantProductDuplicateOfSku(result.candidate, skuCoveredEvents)) {
+          funnel.mpDuplicateOfSku += 1;
+        } else {
+          merchantProductCandidates.push(result.candidate);
+        }
       }
     } catch {
       // skip
+      recordAp3MpTerminal(funnel, 'exception');
     }
     recordAnalysisPriceChunkTiming(
       `mp:${merchantProductId}`,
@@ -461,7 +629,10 @@ export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
   }
 
   if (shouldCancel()) return null;
-  return [...skuCandidates, ...merchantProductCandidates];
+  const candidates = [...skuCandidates, ...merchantProductCandidates];
+  funnel.finalCandidateCount = candidates.length;
+  void assertAp3CandidateFunnelInvariants(funnel);
+  return { candidates, funnel };
 }
 
 /** Deterministic ranking: magnitude → recency → evidence → label → target. */
