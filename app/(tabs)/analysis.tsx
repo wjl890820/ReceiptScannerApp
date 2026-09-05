@@ -2,7 +2,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
@@ -45,6 +45,7 @@ import {
   resolveBoundPriceChangesSurface,
   type AnalysisPriceChangesBinding,
 } from '@/lib/analysisPriceLoadCycle';
+import { isAnalysisPriceChangesEnabled } from '@/lib/analysisPriceChangesGate';
 import {
   measureAnalysisRefreshStage,
   measureAnalysisRefreshStageSync,
@@ -63,8 +64,11 @@ import {
   UI_TYPOGRAPHY,
 } from '@/lib/uiTokens';
 
-/** Build 80 release gate: AP-3 disabled at Analysis entry (fail-closed). */
-export const ANALYSIS_PRICE_CHANGES_ENABLED = false;
+/**
+ * C2D validation-only gate — fail-closed unless ENABLE_ANALYSIS_PRICE_CHANGES.
+ * Production / missing env => OFF. See isAnalysisPriceChangesEnabled().
+ */
+export { isAnalysisPriceChangesEnabled };
 
 const ANALYSIS_PRICE_CHANGES_UNAVAILABLE: AnalysisPriceChangesSurface = {
   status: 'unavailable',
@@ -75,12 +79,12 @@ const ANALYSIS_PRICE_CHANGES_UNAVAILABLE: AnalysisPriceChangesSurface = {
  * lib/analysisHelpers.ts + lib/priceRadar.ts for future migration.
  * Release UI intentionally does not mount them until Safe Price History adopts them.
  *
- * C2C: when ANALYSIS_PRICE_CHANGES_ENABLED flips true, AP-3 must:
+ * C2D: when the validation gate is ON, AP-3 must:
  * - render Analysis core first
  * - schedule derivation after first paint (runAfterAnalysisFirstPaint)
  * - use session domain cache + generation cancellation
+ * - filter CURRENT events by selected period (baseline may predate period)
  * - cancel on Analysis blur/unfocus (focus lifetime token)
- * Wiring remains dormant while the flag is false.
  */
 export default function AnalysisScreen() {
   const router = useRouter();
@@ -88,6 +92,7 @@ export default function AnalysisScreen() {
   const loadCycleRef = useRef(0);
   const priceGenerationRef = useRef(0);
   const focusTokenRef = useRef(0);
+  const cancelScheduledPriceRef = useRef<(() => void) | null>(null);
   const [truthCycle, setTruthCycle] = useState<
     (AnalysisLoadedTruth & { cycleId: number }) | null
   >(null);
@@ -98,12 +103,12 @@ export default function AnalysisScreen() {
   );
   const hasTruthSnapshotRef = useRef(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
+  const priceChangesEnabled = isAnalysisPriceChangesEnabled();
 
   const loadReceipts = useCallback(async () => {
     const cycleId = loadCycleRef.current + 1;
     loadCycleRef.current = cycleId;
     priceGenerationRef.current += 1;
-    const priceGenerationId = priceGenerationRef.current;
     const hadTruth = hasTruthSnapshotRef.current;
     const mode = hadTruth ? 'background' : 'initial';
     recordDiagnosticEvent({
@@ -187,14 +192,11 @@ export default function AnalysisScreen() {
         durationMs: Date.now() - totalStarted,
       });
     }
-    return { analyticsReceipts, cycleId, priceGenerationId };
   }, []);
 
   useFocusEffect(
     useCallback(() => {
       const focusId = ++focusTokenRef.current;
-      let cancelled = false;
-      let cancelScheduledPrice: (() => void) | null = null;
       recordDiagnosticEvent({
         category: 'lifecycle',
         name: 'focus',
@@ -202,66 +204,7 @@ export default function AnalysisScreen() {
         meta: { focusId },
       });
 
-      void (async () => {
-        const loaded = await loadReceipts();
-        if (
-          cancelled ||
-          focusTokenRef.current !== focusId ||
-          !loaded ||
-          !ANALYSIS_PRICE_CHANGES_ENABLED ||
-          !loaded.analyticsReceipts ||
-          loadCycleRef.current !== loaded.cycleId
-        ) {
-          return;
-        }
-        try {
-          const { scheduleAnalysisPriceLoadAfterPaint } = await import(
-            '@/lib/analysisPriceEnablement'
-          );
-          const { createAnalysisPriceFocusToken } = await import(
-            '@/lib/analysisPriceScheduler'
-          );
-          const focusToken = createAnalysisPriceFocusToken();
-          const scheduled = scheduleAnalysisPriceLoadAfterPaint({
-            analyticsReceipts: loaded.analyticsReceipts,
-            focusToken,
-            isStale: () =>
-              cancelled ||
-              focusTokenRef.current !== focusId ||
-              loadCycleRef.current !== loaded.cycleId ||
-              priceGenerationRef.current !== loaded.priceGenerationId ||
-              !focusToken.isActive(),
-          });
-          cancelScheduledPrice = scheduled.cancel;
-          const surface = await scheduled.promise;
-          if (
-            surface == null ||
-            cancelled ||
-            focusTokenRef.current !== focusId ||
-            loadCycleRef.current !== loaded.cycleId ||
-            priceGenerationRef.current !== loaded.priceGenerationId
-          ) {
-            return;
-          }
-          setPriceChangesBinding(
-            bindPriceChangesToCycle(loaded.cycleId, surface)
-          );
-        } catch {
-          if (
-            cancelled ||
-            focusTokenRef.current !== focusId ||
-            loadCycleRef.current !== loaded.cycleId
-          ) {
-            return;
-          }
-          setPriceChangesBinding(
-            bindPriceChangesToCycle(
-              loaded.cycleId,
-              ANALYSIS_PRICE_CHANGES_UNAVAILABLE
-            )
-          );
-        }
-      })();
+      void loadReceipts();
 
       return () => {
         recordDiagnosticEvent({
@@ -270,13 +213,100 @@ export default function AnalysisScreen() {
           screen: 'analysis',
           meta: { focusId },
         });
-        cancelled = true;
         focusTokenRef.current += 1;
         priceGenerationRef.current += 1;
-        cancelScheduledPrice?.();
+        cancelScheduledPriceRef.current?.();
+        cancelScheduledPriceRef.current = null;
       };
     }, [loadReceipts])
   );
+
+  // AP-3 cooperative load: after main truth paints; re-runs on period change.
+  useEffect(() => {
+    if (!priceChangesEnabled) {
+      setPriceChangesBinding(createInitialPriceChangesBinding());
+      return;
+    }
+    if (!truthCycle) return;
+
+    const focusId = focusTokenRef.current;
+    const cycleId = truthCycle.cycleId;
+    const range = timeRange;
+    const priceGenerationId = ++priceGenerationRef.current;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const { scheduleAnalysisPriceLoadAfterPaint } = await import(
+          '@/lib/analysisPriceEnablement'
+        );
+        const { createAnalysisPriceFocusToken } = await import(
+          '@/lib/analysisPriceScheduler'
+        );
+        if (
+          cancelled ||
+          focusTokenRef.current !== focusId ||
+          loadCycleRef.current !== cycleId ||
+          priceGenerationRef.current !== priceGenerationId
+        ) {
+          return;
+        }
+        const focusToken = createAnalysisPriceFocusToken();
+        const scheduled = scheduleAnalysisPriceLoadAfterPaint({
+          analyticsReceipts: truthCycle.receipts,
+          period: { range, nowMs: truthCycle.nowMs },
+          focusToken,
+          isStale: () =>
+            cancelled ||
+            focusTokenRef.current !== focusId ||
+            loadCycleRef.current !== cycleId ||
+            priceGenerationRef.current !== priceGenerationId ||
+            !focusToken.isActive(),
+        });
+        cancelScheduledPriceRef.current = scheduled.cancel;
+        const surface = await scheduled.promise;
+        if (
+          surface == null ||
+          cancelled ||
+          focusTokenRef.current !== focusId ||
+          loadCycleRef.current !== cycleId ||
+          priceGenerationRef.current !== priceGenerationId
+        ) {
+          recordDiagnosticEvent({
+            category: 'timing',
+            name: 'ap3_stale_discarded',
+            screen: 'analysis',
+            meta: { reason: 'range_or_focus' },
+          });
+          return;
+        }
+        setPriceChangesBinding(
+          bindPriceChangesToCycle(cycleId, surface, range)
+        );
+      } catch {
+        if (
+          cancelled ||
+          focusTokenRef.current !== focusId ||
+          loadCycleRef.current !== cycleId
+        ) {
+          return;
+        }
+        setPriceChangesBinding(
+          bindPriceChangesToCycle(
+            cycleId,
+            ANALYSIS_PRICE_CHANGES_UNAVAILABLE,
+            range
+          )
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      cancelScheduledPriceRef.current?.();
+      cancelScheduledPriceRef.current = null;
+    };
+  }, [truthCycle, timeRange, priceChangesEnabled]);
 
   const truthSnapshot = useMemo(() => {
     if (!truthCycle) return null;
@@ -300,14 +330,20 @@ export default function AnalysisScreen() {
   }, [truthCycle]);
 
   const boundPriceChanges = useMemo(() => {
-    if (!ANALYSIS_PRICE_CHANGES_ENABLED) {
+    if (!priceChangesEnabled) {
       return ANALYSIS_PRICE_CHANGES_UNAVAILABLE;
     }
     return resolveBoundPriceChangesSurface(
       truthCycle?.cycleId,
-      priceChangesBinding
+      priceChangesBinding,
+      timeRange
     );
-  }, [truthCycle?.cycleId, priceChangesBinding]);
+  }, [
+    priceChangesEnabled,
+    truthCycle?.cycleId,
+    priceChangesBinding,
+    timeRange,
+  ]);
 
   const viewModel = useMemo(() => {
     return measureAnalysisRefreshStageSync('buildAnalysisReleaseViewModel', () =>

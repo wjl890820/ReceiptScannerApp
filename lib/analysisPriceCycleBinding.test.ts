@@ -75,19 +75,20 @@ describe('AP-3 truth-cycle binding (P1A hardening)', () => {
     expect(resolveBoundPriceChangesSurface(5, cached)).toBe(SAMPLE_AVAILABLE);
   });
 
-  it('F: flag=false => no AP3 dynamic loader execution path in Analysis', () => {
+  it('F: flag=false => no AP3 dynamic loader execution path when gate off', () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
-    expect(source).toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    expect(source).toContain('isAnalysisPriceChangesEnabled');
     expect(source).toContain('resolveBoundPriceChangesSurface');
     expect(source).toContain('bindPriceChangesToCycle');
-    expect(source).toContain('!ANALYSIS_PRICE_CHANGES_ENABLED');
-    // Dynamic import remains gated; flag false short-circuits before import.
+    expect(source).toContain('!priceChangesEnabled');
+    // Dynamic import remains gated; gate false short-circuits before import.
     expect(source).toMatch(
-      /!ANALYSIS_PRICE_CHANGES_ENABLED[\s\S]*return;[\s\S]*scheduleAnalysisPriceLoadAfterPaint/
+      /if \(!priceChangesEnabled\)[\s\S]*createInitialPriceChangesBinding/
     );
+    expect(source).toContain('scheduleAnalysisPriceLoadAfterPaint');
   });
 
   it('initial binding is unavailable and unmatched', () => {

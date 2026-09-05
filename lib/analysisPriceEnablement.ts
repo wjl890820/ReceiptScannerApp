@@ -1,7 +1,7 @@
 /**
- * AP-3 Analysis enablement helper (dormant until flag flips).
- * Keeps loader/scheduler imports out of the Analysis screen module text
- * while the release gate remains false.
+ * AP-3 Analysis enablement helper.
+ * Keeps loader/scheduler imports out of the Analysis screen module graph
+ * until the validation gate flips on.
  *
  * RN InteractionManager runs here (not in the Jest-loaded scheduler) so
  * Analysis can paint before AP-3 CPU work begins.
@@ -10,6 +10,7 @@
 import { InteractionManager } from 'react-native';
 
 import type { ReceiptRow } from './db';
+import type { AnalysisPeriodRange } from './analysisPeriod';
 import type { AnalysisPriceChangesSurface } from './analysisPriceSurfaces';
 import { loadAnalysisTrustedPriceChangesSurface } from './analysisPriceLoader';
 import {
@@ -61,6 +62,7 @@ export function scheduleAnalysisPriceLoadAfterPaint(input: {
   analyticsReceipts: readonly ReceiptRow[];
   isStale: () => boolean;
   focusToken?: AnalysisPriceFocusToken;
+  period?: { range: AnalysisPeriodRange; nowMs: number };
 }): ScheduledAnalysisPriceLoad {
   const generation = createAnalysisPriceGeneration();
   const focusToken = input.focusToken ?? createAnalysisPriceFocusToken();
@@ -83,6 +85,7 @@ export function scheduleAnalysisPriceLoadAfterPaint(input: {
         focusToken,
         shouldCancel: isStaleNow,
         deferUntilPaint: true,
+        period: input.period,
       }
     );
     if (isStaleNow()) return null;
@@ -106,6 +109,7 @@ export function scheduleAnalysisPriceLoadAfterPaint(input: {
 export async function runAnalysisPriceLoadAfterPaint(input: {
   analyticsReceipts: readonly ReceiptRow[];
   isStale: () => boolean;
+  period?: { range: AnalysisPeriodRange; nowMs: number };
 }): Promise<AnalysisPriceChangesSurface | null> {
   const scheduled = scheduleAnalysisPriceLoadAfterPaint(input);
   return scheduled.promise;

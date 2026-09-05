@@ -3,20 +3,51 @@ import path from 'path';
 
 import { buildAnalysisReleaseViewModel } from './analysisPresentation';
 import { createEmptyStats } from './analysisHelpers';
+import {
+  isAnalysisPriceChangesEnabled,
+  setAnalysisPriceChangesEnabledForTests,
+} from './analysisPriceChangesGate';
 
 const ANALYSIS_SCREEN = path.join(__dirname, '../app/(tabs)/analysis.tsx');
+const EAS_JSON = path.join(__dirname, '../eas.json');
 
 function readAnalysisScreenSource(): string {
   return fs.readFileSync(ANALYSIS_SCREEN, 'utf8');
 }
 
-describe('Analysis Build 80 — AP-3 release gate', () => {
-  it('disables AP-3 at the production Analysis screen', () => {
+describe('Analysis C2D — AP-3 validation-only release gate', () => {
+  afterEach(() => {
+    setAnalysisPriceChangesEnabledForTests(null);
+    delete process.env.ENABLE_ANALYSIS_PRICE_CHANGES;
+  });
+
+  it('disables AP-3 by default (fail closed / production path)', () => {
+    expect(isAnalysisPriceChangesEnabled()).toBe(false);
+    const eas = JSON.parse(fs.readFileSync(EAS_JSON, 'utf8'));
+    expect(eas.build.production.env.ENABLE_ANALYSIS_PRICE_CHANGES).toBe('false');
+  });
+
+  it('enables AP-3 only via validation profile configuration', () => {
+    const eas = JSON.parse(fs.readFileSync(EAS_JSON, 'utf8'));
+    expect(eas.build.validation.env.ENABLE_ANALYSIS_PRICE_CHANGES).toBe('true');
+    for (const [name, profile] of Object.entries(eas.build) as [
+      string,
+      { env?: Record<string, string> },
+    ][]) {
+      const value = profile.env?.ENABLE_ANALYSIS_PRICE_CHANGES;
+      expect(value).toBeDefined();
+      expect(value).toBe(name === 'validation' ? 'true' : 'false');
+    }
+    setAnalysisPriceChangesEnabledForTests(true);
+    expect(isAnalysisPriceChangesEnabled()).toBe(true);
+  });
+
+  it('Analysis screen wires the validation gate + cooperative AP-3 path', () => {
     const source = readAnalysisScreenSource();
-    expect(source).toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
-    expect(source).not.toContain('loadAnalysisTrustedPriceChangesSurface');
-    expect(source).not.toContain('analysisScreenLoadLifecycle');
-    expect(source).not.toContain('yieldToUiThread');
+    expect(source).toContain('isAnalysisPriceChangesEnabled');
+    expect(source).toContain('scheduleAnalysisPriceLoadAfterPaint');
+    expect(source).toContain('period:');
+    expect(source).not.toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
   });
 
   it('passes unavailable priceChanges to the release view model', () => {

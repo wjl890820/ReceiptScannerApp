@@ -623,12 +623,13 @@ describe('Internal Diagnostics V1 hardening', () => {
     expect(runs).toBe(1);
   });
 
-  it('ANALYSIS_PRICE_CHANGES_ENABLED remains false; env has no duplicate gate', () => {
+  it('ANALYSIS_PRICE_CHANGES gate is fail-closed; env has no duplicate diagnostics gate', () => {
     const analysis = fs.readFileSync(
       path.resolve(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
-    expect(analysis).toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    expect(analysis).toContain('isAnalysisPriceChangesEnabled');
+    expect(analysis).not.toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
     const envSource = fs.readFileSync(
       path.resolve(__dirname, './env.ts'),
       'utf8'

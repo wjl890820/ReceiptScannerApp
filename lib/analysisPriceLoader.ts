@@ -6,6 +6,7 @@
  */
 
 import type { ReceiptRow } from './db';
+import type { AnalysisPeriodRange } from './analysisPeriod';
 import { loadEngagementProductInsightContext } from './engagementMilestones';
 import {
   buildDefaultAnalysisPriceReceiptFingerprints,
@@ -18,6 +19,7 @@ import {
   type AnalysisPriceFocusToken,
   type AnalysisPriceGeneration,
 } from './analysisPriceScheduler';
+import { recordDiagnosticEvent } from './internalDiagnostics';
 
 const UNAVAILABLE_PRICE_CHANGES_SURFACE: AnalysisPriceChangesSurface = {
   status: 'unavailable',
@@ -30,6 +32,7 @@ export async function loadAnalysisTrustedPriceChangesSurface(
     focusToken?: AnalysisPriceFocusToken;
     shouldCancel?: () => boolean;
     deferUntilPaint?: boolean;
+    period?: { range: AnalysisPeriodRange; nowMs: number };
   }
 ): Promise<AnalysisPriceChangesSurface> {
   try {
@@ -47,6 +50,12 @@ export async function loadAnalysisTrustedPriceChangesSurface(
     if (context.queryFailed || context.rows.length === 0) {
       return UNAVAILABLE_PRICE_CHANGES_SURFACE;
     }
+    recordDiagnosticEvent({
+      category: 'timing',
+      name: 'ap3_prepared_context',
+      screen: 'analysis',
+      meta: { rowCount: context.rows.length },
+    });
     if (options?.shouldCancel?.()) {
       return UNAVAILABLE_PRICE_CHANGES_SURFACE;
     }
@@ -64,11 +73,27 @@ export async function loadAnalysisTrustedPriceChangesSurface(
       shouldCancel: options?.shouldCancel,
       deferUntilPaint: options?.deferUntilPaint ?? false,
       limit: 3,
+      period: options?.period,
     });
     const result = await scheduled.promise;
     if (result.status === 'canceled' || options?.shouldCancel?.()) {
+      recordDiagnosticEvent({
+        category: 'timing',
+        name: 'ap3_stale_discarded',
+        screen: 'analysis',
+        meta: { cacheHit: result.cacheHit ? 1 : 0 },
+      });
       return UNAVAILABLE_PRICE_CHANGES_SURFACE;
     }
+    recordDiagnosticEvent({
+      category: 'timing',
+      name: 'ap3_applied',
+      screen: 'analysis',
+      meta: {
+        cacheHit: result.cacheHit ? 1 : 0,
+        surfaceAvailable: result.surface.status === 'available' ? 1 : 0,
+      },
+    });
     return result.surface;
   } catch {
     return UNAVAILABLE_PRICE_CHANGES_SURFACE;

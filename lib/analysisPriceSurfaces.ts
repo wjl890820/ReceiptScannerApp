@@ -4,6 +4,8 @@
  * Presentation-only adapter over interpretProductPriceChange results.
  */
 
+import type { AnalysisPeriodRange } from './analysisPeriod';
+import { filterAnalysisTrustedPriceChangeCandidatesByCurrentEventPeriod } from './analysisPricePeriodEligibility';
 import type { AnalysisTrustedPriceChangeCandidate } from './analysisTrustedPriceChanges';
 import {
   collectAnalysisTrustedPriceChangeCandidates,
@@ -45,9 +47,18 @@ export function buildAnalysisPriceChangeRow(
 
 export function buildAnalysisPriceChangesSurface(
   candidates: readonly AnalysisTrustedPriceChangeCandidate[],
-  limit = 3
+  limit = 3,
+  period?: { range: AnalysisPeriodRange; nowMs: number }
 ): AnalysisPriceChangesSurface {
-  const selected = selectAnalysisTrustedPriceChangeCandidates(candidates, limit);
+  const eligible =
+    period != null
+      ? filterAnalysisTrustedPriceChangeCandidatesByCurrentEventPeriod(
+          candidates,
+          period.range,
+          period.nowMs
+        )
+      : candidates;
+  const selected = selectAnalysisTrustedPriceChangeCandidates(eligible, limit);
   if (selected.length === 0) {
     return { status: 'unavailable' };
   }
@@ -62,11 +73,17 @@ export function buildAnalysisPriceChangesSurfaceFromRows(input: {
   seedReceiptIds: ReadonlySet<string>;
   canonicalDuplicateSelectionApplied?: boolean;
   limit?: number;
+  /** When set, filters CURRENT event into the selected Analysis period. */
+  period?: { range: AnalysisPeriodRange; nowMs: number };
 }): AnalysisPriceChangesSurface {
   const candidates = collectAnalysisTrustedPriceChangeCandidates({
     rows: input.rows,
     seedReceiptIds: input.seedReceiptIds,
     canonicalDuplicateSelectionApplied: input.canonicalDuplicateSelectionApplied,
   });
-  return buildAnalysisPriceChangesSurface(candidates, input.limit ?? 3);
+  return buildAnalysisPriceChangesSurface(
+    candidates,
+    input.limit ?? 3,
+    input.period
+  );
 }

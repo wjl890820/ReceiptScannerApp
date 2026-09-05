@@ -302,12 +302,19 @@ describe('owner-scope cold-start readiness', () => {
     }
   });
 
-  it('P — ANALYSIS_PRICE_CHANGES_ENABLED remains false', () => {
+  it('P — ANALYSIS_PRICE_CHANGES gate remains fail-closed by default', () => {
     const analysis = fs.readFileSync(
       path.resolve(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
-    expect(analysis).toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    expect(analysis).toContain('isAnalysisPriceChangesEnabled');
+    expect(analysis).not.toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    const eas = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, '../eas.json'), 'utf8')
+    );
+    expect(eas.build.production.env?.ENABLE_ANALYSIS_PRICE_CHANGES).toBe(
+      'false'
+    );
   });
 
   it('Q — not_applicable → anonymous V during stamp must not reuse not_applicable', async () => {

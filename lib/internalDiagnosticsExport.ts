@@ -90,6 +90,18 @@ export function buildInternalDiagnosticsFilename(
   return `meruno-diagnostics-${stamp}.json`;
 }
 
+function readAnalysisPriceChangesFlag(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const gate = require('./analysisPriceChangesGate') as {
+      isAnalysisPriceChangesEnabled?: () => boolean;
+    };
+    return Boolean(gate.isAnalysisPriceChangesEnabled?.());
+  } catch {
+    return ANALYSIS_PRICE_CHANGES_ENABLED_MIRROR;
+  }
+}
+
 function defaultFeatureFlags(): InternalDiagnosticsExportPackage['featureFlags'] {
   return {
     ANALYSIS_PRICE_CHANGES_ENABLED: ANALYSIS_PRICE_CHANGES_ENABLED_MIRROR,
@@ -111,7 +123,7 @@ function readRuntimeFeatureFlags(): InternalDiagnosticsExportPackage['featureFla
       isAppleLinkEnabled?: () => boolean;
     };
     return {
-      ANALYSIS_PRICE_CHANGES_ENABLED: ANALYSIS_PRICE_CHANGES_ENABLED_MIRROR,
+      ANALYSIS_PRICE_CHANGES_ENABLED: readAnalysisPriceChangesFlag(),
       ENABLE_INTERNAL_DIAGNOSTICS: isInternalDiagnosticsEnabled(),
       ENABLE_ANALYSIS_D_DIAGNOSTICS: Boolean(
         env.isAnalysisDDiagnosticsEnabled?.()

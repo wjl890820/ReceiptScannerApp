@@ -1,9 +1,13 @@
 /**
  * AP-3 derivation orchestration: session cache + generation cancel + paint deferral.
  * Feature flag gating lives at the Analysis screen entry.
+ *
+ * Domain cache is global (no period truncation). Period filters CURRENT events
+ * only when building the release surface.
  */
 
 import type { ReceiptRow } from './db';
+import type { AnalysisPeriodRange } from './analysisPeriod';
 import {
   collectAnalysisTrustedPriceChangeCandidatesAsync,
   type AnalysisTrustedPriceChangeCandidate,
@@ -18,7 +22,9 @@ import {
   writeAnalysisPriceDomainCache,
 } from './analysisPriceSessionCache';
 import {
+  beginAnalysisPriceChunkTimingCapture,
   createAnalysisPriceGeneration,
+  endAnalysisPriceChunkTimingCapture,
   runAfterAnalysisFirstPaint,
   scheduleAfterAnalysisFirstPaint,
   scheduleAfterAnalysisFirstPaintForTests,
@@ -27,6 +33,7 @@ import {
   type ScheduledPaintWork,
 } from './analysisPriceScheduler';
 import type { ProductPriceHistoryRow } from './productPriceHistory';
+import { recordDiagnosticEvent } from './internalDiagnostics';
 
 const UNAVAILABLE: AnalysisPriceChangesSurface = { status: 'unavailable' };
 
@@ -44,6 +51,11 @@ export type DeriveAnalysisPriceDomainInput = {
   /** Use controllable test paint gate instead of timer/rAF. */
   useTestPaintGate?: boolean;
   limit?: number;
+  /**
+   * Selected Analysis period — filters CURRENT event eligibility only.
+   * Omitted ⇒ no period filter (tests / legacy callers).
+   */
+  period?: { range: AnalysisPeriodRange; nowMs: number };
 };
 
 export type DeriveAnalysisPriceDomainResult = {
@@ -101,11 +113,27 @@ export async function deriveAnalysisPriceDomain(
   return scheduled.promise;
 }
 
+function emitAp3Timing(
+  name: string,
+  durationMs?: number,
+  meta?: Record<string, unknown>
+): void {
+  recordDiagnosticEvent({
+    category: 'timing',
+    name,
+    screen: 'analysis',
+    ...(durationMs != null ? { durationMs } : {}),
+    ...(meta != null ? { meta } : {}),
+  });
+}
+
 export function scheduleDeriveAnalysisPriceDomain(
   input: DeriveAnalysisPriceDomainInput
 ): ScheduledAnalysisPriceDerivation {
   const generation = input.generation ?? createAnalysisPriceGeneration();
   const seedReceiptIds = input.analyticsReceipts.map((receipt) => receipt.id);
+  // Domain signature intentionally excludes Analysis timeRange — baseline
+  // history is global; period only filters CURRENT events at surface build.
   const signature = buildAnalysisPriceSnapshotSignature({
     ownerKey: input.ownerKey,
     seedReceiptIds,
@@ -118,25 +146,43 @@ export function scheduleDeriveAnalysisPriceDomain(
     (input.focusToken != null && !input.focusToken.isActive()) ||
     (input.shouldCancel?.() ?? false);
 
+  const buildSurface = (
+    candidates: readonly AnalysisTrustedPriceChangeCandidate[]
+  ) =>
+    buildAnalysisPriceChangesSurface(
+      candidates,
+      input.limit ?? 3,
+      input.period
+    );
+
   if (isStale()) {
+    emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 0 });
     return {
       promise: Promise.resolve(canceledResult(signature, false)),
       cancel: () => generation.cancel(),
     };
   }
 
+  emitAp3Timing('ap3_start', undefined, {
+    range: input.period?.range ?? 'none',
+  });
+  const totalStarted = Date.now();
+
   const cached = readAnalysisPriceDomainCache(signature);
   if (cached) {
     if (isStale()) {
+      emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 1 });
       return {
         promise: Promise.resolve(canceledResult(signature, true)),
         cancel: () => generation.cancel(),
       };
     }
-    const surface = buildAnalysisPriceChangesSurface(
-      cached.candidates,
-      input.limit ?? 3
-    );
+    const surface = buildSurface(cached.candidates);
+    emitAp3Timing('ap3_total', Date.now() - totalStarted, {
+      cacheHit: 1,
+      candidateCount: cached.candidates.length,
+      applied: surface.status === 'available' ? 1 : 0,
+    });
     return {
       promise: Promise.resolve({
         status: surface.status === 'available' ? 'available' : 'unavailable',
@@ -150,7 +196,11 @@ export function scheduleDeriveAnalysisPriceDomain(
   }
 
   const runDerive = async (): Promise<DeriveAnalysisPriceDomainResult> => {
-    if (isStale()) return canceledResult(signature, false);
+    if (isStale()) {
+      emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 0 });
+      return canceledResult(signature, false);
+    }
+    beginAnalysisPriceChunkTimingCapture();
     const candidates = await collectAnalysisTrustedPriceChangeCandidatesAsync(
       {
         rows: input.rows,
@@ -159,21 +209,37 @@ export function scheduleDeriveAnalysisPriceDomain(
       },
       { shouldCancel: isStale }
     );
+    const chunkSamples = endAnalysisPriceChunkTimingCapture();
+    const maxChunkMs = chunkSamples.reduce(
+      (max, sample) => Math.max(max, sample.durationMs),
+      0
+    );
+    emitAp3Timing('ap3_chunk_max', maxChunkMs, {
+      chunkCount: chunkSamples.length,
+    });
     if (candidates == null || isStale()) {
+      emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 0 });
       return canceledResult(signature, false);
     }
+    emitAp3Timing('ap3_candidates', undefined, {
+      candidateCount: candidates.length,
+    });
+    // Cache stores unfiltered global candidates (period applied at surface).
     writeAnalysisPriceDomainCache({
       signature,
       candidates,
       generationMatches: !isStale(),
     });
     if (isStale()) {
+      emitAp3Timing('ap3_stale_discarded', undefined, { cacheHit: 0 });
       return canceledResult(signature, false);
     }
-    const surface = buildAnalysisPriceChangesSurface(
-      candidates,
-      input.limit ?? 3
-    );
+    const surface = buildSurface(candidates);
+    emitAp3Timing('ap3_total', Date.now() - totalStarted, {
+      cacheHit: 0,
+      candidateCount: candidates.length,
+      applied: surface.status === 'available' ? 1 : 0,
+    });
     return {
       status: surface.status === 'available' ? 'available' : 'unavailable',
       surface,

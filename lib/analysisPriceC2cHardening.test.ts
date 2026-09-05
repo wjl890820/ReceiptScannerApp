@@ -400,13 +400,14 @@ describe('C2C hardening — focus lifetime / G1 G2', () => {
     expect(getAnalysisPriceDomainDerivationCount()).toBe(1);
   });
 
-  it('ANALYSIS_PRICE_CHANGES_ENABLED remains false', () => {
+  it('ANALYSIS_PRICE_CHANGES gate remains fail-closed by default', () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
-    expect(source).toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    expect(source).toContain('isAnalysisPriceChangesEnabled');
+    expect(source).not.toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
     expect(source).toContain('focusTokenRef');
-    expect(source).toContain('cancelScheduledPrice');
+    expect(source).toContain('cancelScheduledPriceRef');
   });
 });

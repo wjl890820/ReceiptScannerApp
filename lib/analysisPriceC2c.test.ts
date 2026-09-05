@@ -317,12 +317,14 @@ describe('AP-3 C2C structural fixtures + flag', () => {
     expect(surfaceCandidates.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('ANALYSIS_PRICE_CHANGES_ENABLED remains false', () => {
+  it('ANALYSIS_PRICE_CHANGES gate remains fail-closed by default', () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
-    expect(source).toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    expect(source).toContain('isAnalysisPriceChangesEnabled');
+    expect(source).not.toContain('ANALYSIS_PRICE_CHANGES_ENABLED = false');
+    // Loader stays behind dynamic enablement import, not Analysis module text.
     expect(source).not.toContain('loadAnalysisTrustedPriceChangesSurface');
   });
 

@@ -106,6 +106,12 @@ export default ({ config }) => {
         process.env.ENABLE_INTERNAL_DIAGNOSTICS ||
         process.env.EXPO_PUBLIC_ENABLE_INTERNAL_DIAGNOSTICS ||
         'false',
+      // AP-3 Analysis price changes (default OFF). Validation builds set true.
+      // Never enable via __DEV__; fail closed when missing.
+      ENABLE_ANALYSIS_PRICE_CHANGES:
+        process.env.ENABLE_ANALYSIS_PRICE_CHANGES ||
+        process.env.EXPO_PUBLIC_ENABLE_ANALYSIS_PRICE_CHANGES ||
+        'false',
     },
   };
 };
