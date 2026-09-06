@@ -30,6 +30,7 @@ import { deriveAnalysisPriceDomain } from './analysisPriceDerivation';
 import { createEmptyStats } from './analysisHelpers';
 import { buildAnalysisReleaseViewModel } from './analysisPresentation';
 import { __resetAnalysisPriceSessionCacheForTests } from './analysisPriceSessionCache';
+import { setAp3TaxProvenanceDiagnosticsEnabledForTests } from './analysisPriceCandidateFunnel';
 
 const mockLoadContext = loadEngagementProductInsightContext as jest.MockedFunction<
   typeof loadEngagementProductInsightContext
@@ -41,6 +42,7 @@ const mockDerive = deriveAnalysisPriceDomain as jest.MockedFunction<
 describe('loadAnalysisTrustedPriceChangesSurface soft-fail', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(null);
     __resetAnalysisPriceSessionCacheForTests();
     mockDerive.mockImplementation(async () => ({
       status: 'unavailable',
@@ -49,6 +51,10 @@ describe('loadAnalysisTrustedPriceChangesSurface soft-fail', () => {
       cacheHit: false,
       signature: 'test',
     }));
+  });
+
+  afterEach(() => {
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(null);
   });
 
   it('degrades to unavailable when price context load throws', async () => {
@@ -105,5 +111,25 @@ describe('loadAnalysisTrustedPriceChangesSurface soft-fail', () => {
     expect(priceChanges).toEqual({ status: 'unavailable' });
     expect(viewModel.stage).toBeTruthy();
     expect(viewModel.priceChanges).toEqual({ status: 'unavailable' });
+  });
+
+  it('requests recognition snapshot only when tax-provenance diagnostics gates are on', async () => {
+    mockLoadContext.mockResolvedValue({
+      rows: [],
+      queryFailed: true,
+    } as any);
+
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(false);
+    await loadAnalysisTrustedPriceChangesSurface([{ id: 'r1' } as any]);
+    expect(mockLoadContext).toHaveBeenCalledWith({
+      includeRecognitionSnapshot: false,
+    });
+
+    mockLoadContext.mockClear();
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(true);
+    await loadAnalysisTrustedPriceChangesSurface([{ id: 'r1' } as any]);
+    expect(mockLoadContext).toHaveBeenCalledWith({
+      includeRecognitionSnapshot: true,
+    });
   });
 });

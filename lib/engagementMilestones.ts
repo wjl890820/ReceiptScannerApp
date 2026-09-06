@@ -1024,10 +1024,31 @@ function filterProductRowsByExcludedReceiptIds<T extends { receiptId: string }>(
 
 async function readProductRows(
   db: EngagementMilestoneDatabase,
-  ownerScope: LocalReceiptOwnerScopeReady
+  ownerScope: LocalReceiptOwnerScopeReady,
+  options: { includeRecognitionSnapshot?: boolean } = {}
 ): Promise<EngagementProductRow[]> {
   return db.getAllAsync<EngagementProductRow>(
-    `SELECT
+    buildEngagementProductInsightSelectSql({
+      itemWhereSql: ownerScope.itemWhereSql,
+      includeRecognitionSnapshot: options.includeRecognitionSnapshot === true,
+    }),
+    ownerScope.params
+  );
+}
+
+/**
+ * Single product-insight SELECT used by engagement / AP-3 loaders.
+ * `includeRecognitionSnapshot` default false — diagnostics-only additive column.
+ */
+export function buildEngagementProductInsightSelectSql(options: {
+  itemWhereSql: string;
+  includeRecognitionSnapshot?: boolean;
+}): string {
+  const includeRecognitionSnapshot = options.includeRecognitionSnapshot === true;
+  const recognitionSnapshotSelect = includeRecognitionSnapshot
+    ? `,\n       receipts.recognition_snapshot_json AS receiptRecognitionSnapshotJson`
+    : '';
+  return `SELECT
        receipt_items.receipt_id AS receiptId,
        receipt_items.id AS itemId,
        receipt_items.source_index AS sourceIndex,
@@ -1037,7 +1058,7 @@ async function readProductRows(
        receipts.merchant_raw AS merchant_raw,
        receipts.merchant_normalized AS merchant_normalized,
        receipts.merchant_type AS merchant_type,
-       receipts.analysis_json AS receiptAnalysisJson,
+       receipts.analysis_json AS receiptAnalysisJson${recognitionSnapshotSelect},
        COALESCE(
          NULLIF(receipt_items.normalized_full_name, ''),
          NULLIF(receipt_items.raw_name, ''),
@@ -1074,22 +1095,21 @@ async function readProductRows(
        receipts.currency AS receiptCurrency
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${ownerScope.itemWhereSql}
+     WHERE ${options.itemWhereSql}
      ORDER BY
        COALESCE(receipts.transaction_at, receipts.created_at) ASC,
        receipt_items.receipt_id ASC,
-       receipt_items.source_index ASC`,
-    ownerScope.params
-  );
+       receipt_items.source_index ASC`;
 }
 
 async function readProductInsightContext(
   db: EngagementMilestoneDatabase,
   ownerScope: LocalReceiptOwnerScopeReady,
-  excludedDuplicateReceiptIds?: ReadonlySet<string>
+  excludedDuplicateReceiptIds?: ReadonlySet<string>,
+  options: { includeRecognitionSnapshot?: boolean } = {}
 ): Promise<MilestoneProductInsightContext> {
   try {
-    const rows = await readProductRows(db, ownerScope);
+    const rows = await readProductRows(db, ownerScope, options);
     const filtered =
       excludedDuplicateReceiptIds && excludedDuplicateReceiptIds.size > 0
         ? filterProductRowsByExcludedReceiptIds(
@@ -1326,8 +1346,14 @@ export async function evaluateSavedReceiptMilestone(
  * Load analytics-deduped product insight rows for long-term Home frequent
  * profiles. Reuses the same selectAnalyticsReceipts exclusion set as
  * evaluateCurrentEngagementMilestone — no second duplicate policy.
+ *
+ * `includeRecognitionSnapshot` is AP-3 tax-diagnostics only (default false).
+ * When true, projects recognition_snapshot_json on the same product-rows query
+ * (no extra SELECT). Home / ordinary callers must leave this false.
  */
-export async function loadEngagementProductInsightContext(): Promise<MilestoneProductInsightContext> {
+export async function loadEngagementProductInsightContext(options?: {
+  includeRecognitionSnapshot?: boolean;
+}): Promise<MilestoneProductInsightContext> {
   const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
   if (ownerScope.status !== 'ready') {
     return emptyOwnerProductInsightContext();
@@ -1336,7 +1362,12 @@ export async function loadEngagementProductInsightContext(): Promise<MilestonePr
   const receipts = await readAllReceipts(db, ownerScope);
   const { excludedDuplicateReceiptIds } =
     await selectEngagementAnalyticsReceipts(receipts);
-  return readProductInsightContext(db, ownerScope, excludedDuplicateReceiptIds);
+  return readProductInsightContext(
+    db,
+    ownerScope,
+    excludedDuplicateReceiptIds,
+    { includeRecognitionSnapshot: options?.includeRecognitionSnapshot === true }
+  );
 }
 
 export async function evaluateCurrentEngagementMilestone(

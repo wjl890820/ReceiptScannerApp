@@ -94,7 +94,8 @@ export type AmountBasisConfidence = 'high' | 'medium' | 'low' | 'unknown';
 
 /**
  * Tax field provenance trust (separate from AmountTaxBasis / confidence).
- * tax_is_known=1 → trusted; otherwise untrusted for exact comparison.
+ * Effective trust: tax_is_known=1, or legacy analysis recovery when
+ * resolveReceiptTax confirms the same positive persisted tax.
  */
 export type TaxProvenanceTrust = 'trusted' | 'untrusted';
 

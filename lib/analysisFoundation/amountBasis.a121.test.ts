@@ -316,7 +316,7 @@ describe('A1.2.1 monetary source coherence', () => {
     expect(a.basis).toBe('tax_excluded');
   });
 
-  test('11: user_items without coherent final total => unknown', () => {
+  test('11: user_items without final_total uses receipt.total paidTotal (not incoherent)', () => {
     const r = makeReceipt({
       id: 'user-no-total',
       items: [{ name: 'x', lineTotal: 1000 }],
@@ -328,8 +328,11 @@ describe('A1.2.1 monetary source coherence', () => {
       userItems: [{ name: 'x', lineTotal: 900, amountUserEdited: true }],
     });
     const a = assessReceiptAmountBasis(r);
-    expect(a.basis).toBe('unknown');
-    expect(a.reasonCodes).toContain('monetary_source_incoherent');
+    expect(a.reasonCodes).not.toContain('user_items_without_authoritative_total');
+    expect(a.reasonCodes).not.toContain('inconsistent_legacy_user_edit_metadata');
+    // Closure may still fail — that is a later gate, not source-layer rejection.
+    expect(a.analyticsItemSum).toBe(900);
+    expect(a.receiptTotal).toBe(1080);
   });
 
   test('12: final_total without matching user item layer => unknown', () => {
@@ -348,9 +351,9 @@ describe('A1.2.1 monetary source coherence', () => {
     expect(a.reasonCodes).toContain('monetary_source_incoherent');
   });
 
-  test('13: inconsistent legacy user-edit metadata => unknown', () => {
+  test('13: user_items + final_total without user_edited still uses full user layer', () => {
     const r = makeReceipt({
-      id: 'legacy-inconsistent',
+      id: 'override-fields-without-flag',
       items: [{ name: 'x', lineTotal: 1000 }],
       tax: 80,
       total: 1080,
@@ -360,8 +363,61 @@ describe('A1.2.1 monetary source coherence', () => {
       userItems: [{ name: 'x', lineTotal: 1000 }],
     });
     const a = assessReceiptAmountBasis(r);
+    expect(a.reasonCodes).not.toContain('inconsistent_legacy_user_edit_metadata');
+    expect(a.basis).toBe('tax_excluded');
+    expect(a.analyticsItemSum).toBe(1000);
+    expect(a.receiptTotal).toBe(1080);
+  });
+
+  test('13b: legacy user_edited=1 without override fields uses OCR layer', () => {
+    const r = makeReceipt({
+      id: 'legacy-reviewed-flag',
+      items: [{ name: 'x', lineTotal: 1000 }],
+      tax: 80,
+      total: 1080,
+      taxIsKnown: 1,
+      userEdited: 1,
+      finalTotal: null,
+      userItems: null,
+    });
+    const a = assessReceiptAmountBasis(r);
+    expect(a.reasonCodes).not.toContain('inconsistent_legacy_user_edit_metadata');
+    expect(a.basis).toBe('tax_excluded');
+    expect(a.analyticsItemSum).toBe(1000);
+    expect(a.receiptTotal).toBe(1080);
+  });
+
+  test('13c: user_edited=0 without override fields matches legacy flag path', () => {
+    const r = makeReceipt({
+      id: 'no-flag-base',
+      items: [{ name: 'x', lineTotal: 1000 }],
+      tax: 80,
+      total: 1080,
+      taxIsKnown: 1,
+      userEdited: 0,
+      finalTotal: null,
+      userItems: null,
+    });
+    const a = assessReceiptAmountBasis(r);
+    expect(a.basis).toBe('tax_excluded');
+    expect(a.analyticsItemSum).toBe(1000);
+  });
+
+  test('13d: user_items without final_total + invalid receipt.total => invalid_authoritative_total', () => {
+    const r = makeReceipt({
+      id: 'user-items-bad-total',
+      items: [{ name: 'x', lineTotal: 1000 }],
+      tax: 80,
+      total: 1080,
+      taxIsKnown: 1,
+      userEdited: 1,
+      finalTotal: null,
+      userItems: [{ name: 'x', lineTotal: 900 }],
+    });
+    (r as { total: number }).total = Number.NaN;
+    const a = assessReceiptAmountBasis(r);
     expect(a.basis).toBe('unknown');
-    expect(a.reasonCodes).toContain('inconsistent_legacy_user_edit_metadata');
+    expect(a.reasonCodes).toContain('invalid_authoritative_total');
   });
 });
 

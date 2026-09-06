@@ -137,7 +137,8 @@ export type SaveReceiptParams = {
   };
   /** 与 analysis 分离存储的识别快照（审核保存时写入；直扫旧路径可省略） */
   recognitionSnapshot?: unknown;
-  /** 审核页保存：标记 user_edited=1 */
+  /** Reviewed-save semantics (material projection / merchant recompute / review flow).
+   * Not equivalent to user_edited — does not stamp user_edited=1. */
   reviewedSave?: boolean;
   note?: string | null;
   /** Edge provenance.requestId — stored separately; never merged into analysis_json */
@@ -1048,24 +1049,15 @@ export async function saveReceipt(
   await db.withTransactionAsync(async () => {
     await db.runAsync(insertSql, insertParams);
 
-    if (params.reviewedSave || params.note !== undefined) {
-      const sets: string[] = [];
-      const vals: SQLite.SQLiteBindValue[] = [];
-      if (params.reviewedSave) {
-        sets.push('user_edited = 1');
-      }
-      if (params.note !== undefined) {
-        sets.push('note = ?');
-        vals.push(
-          params.note !== null && typeof params.note === 'string'
-            ? params.note.trim() || null
-            : null
-        );
-      }
-      if (sets.length > 0) {
-        vals.push(id);
-        await db.runAsync(`UPDATE receipts SET ${sets.join(', ')} WHERE id = ?`, vals);
-      }
+    // reviewedSave is review-flow semantics only; it must not stamp user_edited.
+    // user_edited is reserved for actual user monetary/item override writers.
+    if (params.note !== undefined) {
+      await db.runAsync(`UPDATE receipts SET note = ? WHERE id = ?`, [
+        params.note !== null && typeof params.note === 'string'
+          ? params.note.trim() || null
+          : null,
+        id,
+      ]);
     }
 
     if (ownership.userId) {

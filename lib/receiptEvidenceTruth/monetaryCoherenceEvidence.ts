@@ -4,6 +4,7 @@
 
 import type { ReceiptRow } from '../db';
 import { resolveReceiptMonetarySourceBundle } from '../analysisFoundation/monetarySourceBundle';
+import type { BoundEffectiveReceiptTaxProvenance } from '../analysisFoundation/taxProvenance';
 import { assessSameLayerMonetaryClosure } from './monetaryClosure';
 import type {
   MonetaryCoherenceState,
@@ -40,13 +41,19 @@ function readOcrReconciliationFlags(analysis: Record<string, unknown> | null): {
 }
 
 export function buildReceiptMonetaryCoherenceEvidence(
-  receipt: ReceiptRow
+  receipt: ReceiptRow,
+  opts?: { boundTaxProvenance?: BoundEffectiveReceiptTaxProvenance | null }
 ): ReceiptMonetaryCoherenceEvidence {
   const bundle = resolveReceiptMonetarySourceBundle(receipt);
   const analysis = parseAnalysisJson(receipt);
   const ocrFlags = readOcrReconciliationFlags(analysis);
 
-  const closure = assessSameLayerMonetaryClosure(receipt, bundle, ocrFlags);
+  const closure = assessSameLayerMonetaryClosure(
+    receipt,
+    bundle,
+    ocrFlags,
+    opts?.boundTaxProvenance
+  );
   let state: MonetaryCoherenceState = closure.state;
   const evidence = [...new Set([...bundle.evidence, ...closure.evidence])].sort();
   const reasonCodes = [

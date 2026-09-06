@@ -13,6 +13,10 @@ import {
   hasFinitePositive,
   type ReceiptMonetarySourceBundle,
 } from '../analysisFoundation/monetarySourceBundle';
+import {
+  resolveOrReuseEffectiveReceiptTaxProvenance,
+  type BoundEffectiveReceiptTaxProvenance,
+} from '../analysisFoundation/taxProvenance';
 import type { MonetaryCoherenceState } from './types';
 
 function parseAnalysisJson(receipt: ReceiptRow): Record<string, unknown> | null {
@@ -98,8 +102,21 @@ function moneyClose(a: number, b: number, tol = AMOUNT_BASIS_TOLERANCE_JPY): boo
   return Math.abs(a - b) <= tol;
 }
 
-function trustedPositiveTax(receipt: ReceiptRow): number | null {
-  if (receipt.tax_is_known !== 1) return null;
+/**
+ * Positive tax usable for tax-excluded same-layer closure.
+ * Provenance trust comes ONLY from resolveOrReuseEffectiveReceiptTaxProvenance
+ * (same authority as amountBasis) — never raw tax_is_known alone, never a POJO.
+ * Trusted provenance + non-positive tax → still null (zero semantics unchanged).
+ */
+function trustedPositiveTax(
+  receipt: ReceiptRow,
+  boundTaxProvenance?: BoundEffectiveReceiptTaxProvenance | null
+): number | null {
+  const bound = resolveOrReuseEffectiveReceiptTaxProvenance(
+    receipt,
+    boundTaxProvenance
+  );
+  if (bound.decision.trust !== 'trusted') return null;
   const tax = Number(receipt.tax);
   if (!Number.isFinite(tax) || tax <= 0) return null;
   return tax;
@@ -488,42 +505,6 @@ function assessAuthoritativeItemSide(
   };
 }
 
-function assessUserItemsItemSide(
-  receipt: ReceiptRow
-): AuthoritativeItemSideResult {
-  const raw = receipt.user_items_json;
-  if (raw == null || typeof raw !== 'string' || !raw.trim()) {
-    return {
-      complete: false,
-      reasonCodes: ['incomplete_authoritative_item_monetary_evidence'],
-      evidence: ['user_items_unavailable'],
-    };
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return {
-        complete: false,
-        reasonCodes: ['incomplete_authoritative_item_monetary_evidence'],
-        evidence: ['user_items_not_array'],
-      };
-    }
-    return assessAuthoritativeItemSide(
-      parsed.map((row) =>
-        row && typeof row === 'object'
-          ? (row as DiscountableItem)
-          : ({} as DiscountableItem)
-      )
-    );
-  } catch {
-    return {
-      complete: false,
-      reasonCodes: ['incomplete_authoritative_item_monetary_evidence'],
-      evidence: ['user_items_json_malformed'],
-    };
-  }
-}
-
 export type SameLayerClosureAssessment = {
   state: MonetaryCoherenceState;
   hypothesis: string | null;
@@ -607,7 +588,8 @@ function appendOcrMetadataReasonCodes(
 function assessOcrSameLayerClosure(
   bundle: ReceiptMonetarySourceBundle,
   receipt: ReceiptRow,
-  ocrFlags: { reconciliationOk: boolean | null; amountMismatch: boolean | null }
+  ocrFlags: { reconciliationOk: boolean | null; amountMismatch: boolean | null },
+  boundTaxProvenance?: BoundEffectiveReceiptTaxProvenance | null
 ): SameLayerClosureAssessment {
   const evidence: string[] = ['authoritative_monetary_layer=ocr'];
   const reasonCodes: string[] = [];
@@ -655,7 +637,7 @@ function assessOcrSameLayerClosure(
   }
 
   const remainder = bundle.receiptLevelUnallocatedDiscountTotal;
-  const trustedTax = trustedPositiveTax(receipt);
+  const trustedTax = trustedPositiveTax(receipt, boundTaxProvenance);
   const attempt = trySameLayerArithmeticClosure(
     itemSideResult.itemSide,
     remainder,
@@ -696,15 +678,25 @@ function assessOcrSameLayerClosure(
 
 function assessUserSameLayerClosure(
   bundle: ReceiptMonetarySourceBundle,
-  receipt: ReceiptRow
+  receipt: ReceiptRow,
+  boundTaxProvenance?: BoundEffectiveReceiptTaxProvenance | null
 ): SameLayerClosureAssessment {
   const evidence: string[] = ['authoritative_monetary_layer=user'];
+  // Preserve resolver paidTotal provenance — do not re-infer from receipt fields.
+  for (const marker of bundle.evidence) {
+    if (
+      marker === 'paid_total_from_final_total' ||
+      marker === 'paid_total_from_receipt_total_unoverridden' ||
+      marker === 'monetary_layer=user' ||
+      marker === 'monetary_layer=user_items_override'
+    ) {
+      evidence.push(marker);
+    }
+  }
   const reasonCodes: string[] = [];
 
-  const paidTotal =
-    receipt.final_total != null && Number.isFinite(Number(receipt.final_total))
-      ? Number(receipt.final_total)
-      : null;
+  // Single source of truth: resolver already chose final_total or receipt.total.
+  const paidTotal = bundle.paidTotal;
 
   if (paidTotal == null) {
     return {
@@ -724,7 +716,8 @@ function assessUserSameLayerClosure(
     };
   }
 
-  const itemSideResult = assessUserItemsItemSide(receipt);
+  // Consume resolver items (same layer as paidTotal), not a second parse path.
+  const itemSideResult = assessAuthoritativeItemSide(bundle.items);
   evidence.push(...itemSideResult.evidence);
 
   if (!itemSideResult.complete) {
@@ -742,7 +735,7 @@ function assessUserSameLayerClosure(
   const remainder = bundle.receiptLevelUnallocatedDiscountTotal;
   // USER and OCR share H1/H2 — pass trusted positive tax into shared evaluator.
   // Stale OCR reconciliation / amount_mismatch are intentionally ignored here.
-  const trustedTax = trustedPositiveTax(receipt);
+  const trustedTax = trustedPositiveTax(receipt, boundTaxProvenance);
   const attempt = trySameLayerArithmeticClosure(
     itemSideResult.itemSide,
     remainder,
@@ -753,7 +746,7 @@ function assessUserSameLayerClosure(
   evidence.push(
     `user_items_sum=${attempt.itemSide}`,
     `remainder=${attempt.remainder}`,
-    `final_total=${attempt.paidTotal}`
+    `paid_total=${attempt.paidTotal}`
   );
   if (attempt.trustedTax != null) {
     evidence.push(`trusted_tax=${attempt.trustedTax}`);
@@ -779,7 +772,8 @@ function assessUserSameLayerClosure(
 export function assessSameLayerMonetaryClosure(
   receipt: ReceiptRow,
   bundle: ReceiptMonetarySourceBundle,
-  ocrFlags: { reconciliationOk: boolean | null; amountMismatch: boolean | null }
+  ocrFlags: { reconciliationOk: boolean | null; amountMismatch: boolean | null },
+  boundTaxProvenance?: BoundEffectiveReceiptTaxProvenance | null
 ): SameLayerClosureAssessment {
   if (!bundle.coherent || bundle.layer == null) {
     const substantiveIncoherentCodes = bundle.reasonCodes.filter(
@@ -795,7 +789,8 @@ export function assessSameLayerMonetaryClosure(
       return assessOcrSameLayerClosure(
         rebuildLegacyUserEditOcrBundle(receipt),
         receipt,
-        ocrFlags
+        ocrFlags,
+        boundTaxProvenance
       );
     }
 
@@ -808,8 +803,17 @@ export function assessSameLayerMonetaryClosure(
   }
 
   if (bundle.layer === 'user') {
-    return assessUserSameLayerClosure(bundle, receipt);
+    return assessUserSameLayerClosure(
+      bundle,
+      receipt,
+      boundTaxProvenance
+    );
   }
 
-  return assessOcrSameLayerClosure(bundle, receipt, ocrFlags);
+  return assessOcrSameLayerClosure(
+    bundle,
+    receipt,
+    ocrFlags,
+    boundTaxProvenance
+  );
 }

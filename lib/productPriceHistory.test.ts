@@ -1006,6 +1006,9 @@ describe('Price History query safety', () => {
       /receipt_items\.price_observation_version AS priceObservationVersion/i
     );
     expect(calls[0].source).toMatch(/receipts\.analysis_json AS receiptAnalysisJson/i);
+    expect(calls[0].source).not.toMatch(
+      /recognition_snapshot_json/i
+    );
     expect(calls[0].source).toMatch(
       /receipts\.user_items_json AS receiptUserItemsJson/i
     );

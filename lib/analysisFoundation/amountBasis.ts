@@ -20,6 +20,10 @@ import {
   resolveReceiptMonetarySourceBundle,
   sumBundleAnalyticsItemAmounts,
 } from './monetarySourceBundle';
+import {
+  resolveOrReuseEffectiveReceiptTaxProvenance,
+} from './taxProvenance';
+import type { BoundEffectiveReceiptTaxProvenance } from './taxProvenance';
 
 /**
  * Reuse receiptTotalResolve's yen tolerance default (2 JPY).
@@ -33,6 +37,11 @@ export const EXACT_PRICE_AMOUNT_BASIS_MIN_CONFIDENCE: AmountBasisConfidence =
 
 export type AssessReceiptAmountBasisOptions = {
   toleranceJpy?: number;
+  /**
+   * Optional module-issued bound provenance from evidence-cache construction.
+   * Forged / mismatched tokens are ignored (fallback resolve). Never trust a POJO.
+   */
+  boundTaxProvenance?: BoundEffectiveReceiptTaxProvenance | null;
 };
 
 function roundMoney(n: number): number {
@@ -49,13 +58,24 @@ function readReceiptTax(receipt: ReceiptRow): number | null {
   return tax;
 }
 
-function resolveTaxProvenance(receipt: ReceiptRow): TaxProvenanceTrust {
-  return receipt.tax_is_known === 1 ? 'trusted' : 'untrusted';
+function resolveTaxProvenanceWithEvidence(
+  receipt: ReceiptRow,
+  shared?: BoundEffectiveReceiptTaxProvenance | null
+): {
+  trust: TaxProvenanceTrust;
+  evidenceMarker: string;
+} {
+  const bound = resolveOrReuseEffectiveReceiptTaxProvenance(receipt, shared);
+  return {
+    trust: bound.decision.trust,
+    evidenceMarker: `tax_provenance_source=${bound.decision.source}`,
+  };
 }
 
 /**
  * Whether amount-basis evidence is trusted enough for exact price comparison.
  * Known basis alone is insufficient — confidence + tax provenance must pass.
+ * Generic receipt-level contract — NOT Product Price History gross-specific.
  */
 export function isExactPriceAmountEvidenceTrusted(
   evidence: ExactPriceAmountEvidence | null | undefined
@@ -66,6 +86,43 @@ export function isExactPriceAmountEvidenceTrusted(
   }
   if (evidence.confidence !== 'high') return false;
   if (evidence.taxProvenance !== 'trusted') return false;
+  return true;
+}
+
+/**
+ * Whether amount-basis evidence is safe for G3 / Product Price History
+ * gross item-price comparison (grossLineAmount / quantity).
+ *
+ * Broader than exactComparisonTrusted: allows known+trusted assessments whose
+ * only medium reason is a resolved receipt-level unallocated discount remainder.
+ * Does NOT authorize effective/paid-price surfaces or promote confidence.
+ */
+export function isGrossPriceComparisonAmountBasisTrusted(
+  assessment: ReceiptAmountBasisAssessment | null | undefined
+): boolean {
+  if (!assessment) return false;
+  const known =
+    assessment.basis === 'tax_included' ||
+    assessment.basis === 'tax_excluded';
+  if (!known) return false;
+  if (assessment.taxProvenance !== 'trusted') return false;
+
+  if (assessment.exactComparisonTrusted) return true;
+
+  // Narrow medium exception: only resolved receipt-level unallocated remainder.
+  // Do not trust arbitrary medium (future medium reasons must not pass).
+  if (assessment.confidence !== 'medium') return false;
+  if (!assessment.evidence.includes('unallocated_discount_present')) {
+    return false;
+  }
+  if (
+    !(
+      Number.isFinite(assessment.unallocatedDiscountTotal) &&
+      Math.abs(assessment.unallocatedDiscountTotal) > AMOUNT_BASIS_TOLERANCE_JPY
+    )
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -115,13 +172,18 @@ export function assessReceiptAmountBasis(
   const tol = opts?.toleranceJpy ?? AMOUNT_BASIS_TOLERANCE_JPY;
   const receiptId = receipt.id;
   const receiptTax = readReceiptTax(receipt);
-  const taxProvenance = resolveTaxProvenance(receipt);
+  const provenance = resolveTaxProvenanceWithEvidence(
+    receipt,
+    opts?.boundTaxProvenance
+  );
+  const taxProvenance = provenance.trust;
   const bundle = resolveReceiptMonetarySourceBundle(receipt);
 
   const evidence: string[] = [
     ...bundle.evidence,
     `tolerance_jpy=${tol}`,
     `tax_provenance=${taxProvenance}`,
+    provenance.evidenceMarker,
   ];
   const reasonCodes: string[] = [...bundle.reasonCodes];
 

@@ -55,7 +55,17 @@ export {
   exactPriceAmountEvidenceFromAssessment,
   evaluateExactPriceAmountBasisGate,
   isExactPriceAmountEvidenceTrusted,
+  isGrossPriceComparisonAmountBasisTrusted,
 } from './amountBasis';
+
+export {
+  resolveEffectiveReceiptTaxProvenance,
+  resolveOrReuseEffectiveReceiptTaxProvenance,
+  type EffectiveReceiptTaxProvenance,
+  type EffectiveTaxProvenanceSource,
+  // BoundEffectiveReceiptTaxProvenance intentionally not barrel-exported —
+  // evidence pipeline imports it from ./taxProvenance directly.
+} from './taxProvenance';
 
 export {
   resolveReceiptMonetarySourceBundle,

@@ -349,10 +349,30 @@ describe('R1-B3b merchant edit consistency', () => {
     );
     expect(row?.merchant_type).toBe('supermarket');
     expect(isV1SupportedReceipt(row!)).toBe(true);
+    // reviewedSave must not stamp user_edited — that flag is for real overrides.
+    expect(row?.user_edited).toBe(0);
 
     const store = await readStoreMirror(id);
     expect(store.store_raw).toBe(row?.merchant_raw);
     expect(store.store_normalized).toBe(row?.merchant_normalized);
+  });
+
+  it('reviewedSave still persists recognition snapshot without user_edited stamp', async () => {
+    const id = await saveReceipt({
+      imageUri: 'file://snap.jpg',
+      reviewedSave: true,
+      recognitionSnapshot: { source: 'scan-review', v: 1 },
+      analysis: {
+        merchant: 'テスト店',
+        total: 500,
+        tax: 0,
+        currency: 'JPY',
+        items: [{ name: 'パン' }],
+      },
+    });
+    const row = await getReceipt(id);
+    expect(row?.user_edited).toBe(0);
+    expect(row?.recognition_snapshot_json).toContain('scan-review');
   });
 
   it('B — unknown → 7-Eleven → convenience + supported', async () => {

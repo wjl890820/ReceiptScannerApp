@@ -2,6 +2,8 @@ import type * as SQLite from 'expo-sqlite';
 import * as ExpoSQLite from 'expo-sqlite';
 
 import { assessReceiptAmountBasis } from './analysisFoundation/amountBasis';
+import { isGrossPriceComparisonAmountBasisTrusted } from './analysisFoundation/amountBasis';
+import { resolveEffectiveReceiptTaxProvenance } from './analysisFoundation/taxProvenance';
 import type {
   AmountTaxBasis,
   ReceiptAmountBasisAssessment,
@@ -194,6 +196,11 @@ export type ProductPriceHistoryRow = {
   identitySource?: string | null;
   identityConfidence?: number | null;
   receiptAnalysisJson?: string | null;
+  /**
+   * Optional AP-3 engagement diagnostics projection only.
+   * Ordinary Product Price History SELECT must NOT load this field.
+   */
+  receiptRecognitionSnapshotJson?: string | null;
   receiptUserItemsJson?: string | null;
   receiptUserEdited?: number | null;
   receiptTotal?: number | null;
@@ -452,9 +459,16 @@ export function buildReceiptEvidenceCache(
   for (const row of rows) {
     if (cache.has(row.receiptId)) continue;
     const receipt = rowToReceiptRow(row);
+    // One module-issued bound tax-provenance resolve per receipt for amountBasis + closure.
+    const boundTaxProvenance = resolveEffectiveReceiptTaxProvenance(receipt);
     cache.set(row.receiptId, {
-      amountBasisAssessment: assessReceiptAmountBasis(receipt),
-      monetaryCoherenceEvidence: buildReceiptMonetaryCoherenceEvidence(receipt),
+      amountBasisAssessment: assessReceiptAmountBasis(receipt, {
+        boundTaxProvenance,
+      }),
+      monetaryCoherenceEvidence: buildReceiptMonetaryCoherenceEvidence(
+        receipt,
+        { boundTaxProvenance }
+      ),
     });
   }
   return cache;
@@ -585,8 +599,10 @@ function trustedAmountBasisForRow(
   cache: ReceiptEvidenceCache
 ): AmountTaxBasis | null {
   const evidence = receiptEvidenceForRow(row, cache);
-  if (!evidence?.amountBasisAssessment.exactComparisonTrusted) return null;
-  const basis = evidence.amountBasisAssessment.basis;
+  const assessment = evidence?.amountBasisAssessment;
+  // G3 gross comparison surface — not generic exactComparisonTrusted.
+  if (!isGrossPriceComparisonAmountBasisTrusted(assessment)) return null;
+  const basis = assessment!.basis;
   if (basis === 'tax_included' || basis === 'tax_excluded') return basis;
   return null;
 }
@@ -904,9 +920,11 @@ function evaluateStructuralGates(
   const basisAssessment = receiptEvidence?.amountBasisAssessment;
   const monetaryEvidence = receiptEvidence?.monetaryCoherenceEvidence;
   const trustedBasis = trustedAmountBasisForRow(row, cache);
+  const grossAmountBasisTrusted =
+    isGrossPriceComparisonAmountBasisTrusted(basisAssessment);
 
   if (
-    !basisAssessment?.exactComparisonTrusted ||
+    !grossAmountBasisTrusted ||
     (trustedBasis !== 'tax_included' && trustedBasis !== 'tax_excluded')
   ) {
     reasons.push('amount_basis_untrusted');

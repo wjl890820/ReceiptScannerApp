@@ -184,7 +184,7 @@ export function resolveReceiptMonetarySourceBundle(
     );
   }
 
-  // --- Incoherent user-edit / layer combinations ---
+  // --- Incoherent / partial user monetary layer combinations ---
   if (userParsed.ok === false && userParsed.malformed) {
     return incoherent(
       ['malformed_user_items_json', 'monetary_source_incoherent'],
@@ -192,13 +192,8 @@ export function resolveReceiptMonetarySourceBundle(
     );
   }
 
-  if (hasUserItemsField && userParsed.ok && !hasFinalTotal) {
-    return incoherent(
-      ['user_items_without_authoritative_total', 'monetary_source_incoherent'],
-      ['user_items_present_final_total_absent']
-    );
-  }
-
+  // final_total without a matching user item layer remains fail-closed
+  // unless an active writer contract is proven (none today).
   if (hasFinalTotal && !userParsed.ok) {
     return incoherent(
       ['final_total_without_matching_item_layer', 'monetary_source_incoherent'],
@@ -206,26 +201,16 @@ export function resolveReceiptMonetarySourceBundle(
     );
   }
 
-  if (hasUserItemsField && userParsed.ok && hasFinalTotal && !userEdited) {
-    return incoherent(
-      ['inconsistent_legacy_user_edit_metadata', 'monetary_source_incoherent'],
-      ['user_items_and_final_total_but_user_edited_flag_off']
-    );
-  }
-
-  if (userEdited && !hasUserItemsField && !hasFinalTotal) {
-    return incoherent(
-      ['inconsistent_legacy_user_edit_metadata', 'monetary_source_incoherent'],
-      ['user_edited_flag_without_monetary_layers']
-    );
-  }
-
-  // --- Coherent user monetary layer ---
-  if (userEdited && userParsed.ok && hasFinalTotal) {
+  // Full user override: user_items_json + authoritative final_total.
+  // Presence of override fields decides the layer — not user_edited alone.
+  if (userParsed.ok && hasFinalTotal) {
     const paidTotal = Number(receipt.final_total);
     evidence.push('monetary_layer=user', 'paid_total_from_final_total');
-    // Inherit ONLY genuine receipt-level remainder from resolved OCR ownership.
-    // unresolved leftovers are never inherited (blocked above).
+    if (userEdited) {
+      evidence.push('user_edited_flag_present');
+    } else {
+      evidence.push('user_edited_flag_absent_override_fields_present');
+    }
     return {
       coherent: true,
       layer: 'user',
@@ -242,7 +227,46 @@ export function resolveReceiptMonetarySourceBundle(
     };
   }
 
-  // --- Coherent OCR monetary layer ---
+  // Partial user item override without final_total: items from user_items_json,
+  // paid total falls back to unchanged receipt.total (not a missing total).
+  if (userParsed.ok && !hasFinalTotal) {
+    const receiptTotal = Number(receipt.total);
+    if (!hasFinitePositive(receiptTotal)) {
+      return incoherent(
+        ['invalid_authoritative_total', 'monetary_source_incoherent'],
+        [
+          'user_items_override_without_final_total',
+          'receipt_total_not_positive_finite',
+        ]
+      );
+    }
+    evidence.push(
+      'monetary_layer=user_items_override',
+      'paid_total_from_receipt_total_unoverridden'
+    );
+    return {
+      coherent: true,
+      layer: 'user',
+      items: userParsed.items,
+      ocrDiscounts,
+      receiptLevelUnallocatedDiscountTotal:
+        ownership.genuineReceiptLevelRemainder,
+      analyticsItemSumOverride: null,
+      paidTotal: receiptTotal,
+      discountReconciliationAmbiguous: false,
+      discountOwnershipStatus: ownership.status,
+      reasonCodes: [],
+      evidence,
+    };
+  }
+
+  // Legacy reviewedSave side effect: user_edited=1 without override fields.
+  // Ignore the flag and use the base/OCR monetary layer (not a reject reason).
+  if (userEdited && !hasUserItemsField && !hasFinalTotal) {
+    evidence.push('legacy_user_edited_without_monetary_override_ignored');
+  }
+
+  // --- Coherent OCR / base monetary layer ---
   const ocrTotal = Number(receipt.total);
   evidence.push('monetary_layer=ocr', 'paid_total_from_receipt_total');
   return {

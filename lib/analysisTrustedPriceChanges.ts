@@ -27,12 +27,16 @@ import {
 import {
   assertAp3CandidateFunnelInvariants,
   createEmptyAp3CandidateFunnel,
+  createAp3TaxProvenanceReceiptMemo,
   recordAp3InterpretUnavailableReasons,
+  recordAp3MpNotEnoughPointsComparability,
   recordAp3MpTerminal,
   recordAp3SkuTerminal,
+  shouldRecordAp3TaxProvenanceDiagnostics,
   type Ap3CandidateFunnelCounts,
   type Ap3MpTerminal,
   type Ap3SkuTerminal,
+  type Ap3TaxProvenanceReceiptMemo,
 } from './analysisPriceCandidateFunnel';
 
 /** AP-3-only exact merchant_product identity sources (resolver deterministic paths). */
@@ -378,6 +382,30 @@ export type CollectAnalysisTrustedPriceChangeCandidatesResult = {
   funnel: Ap3CandidateFunnelCounts;
 };
 
+/** Observe-only: membership>=2 && history.status===not_enough_points. */
+function recordMpNotEnoughPointsCohortIfNeeded(
+  funnel: Ap3CandidateFunnelCounts,
+  merchantProductId: string,
+  prepared: PreparedAnalysisPriceInsightContext,
+  history: ProductPriceHistoryResult | null,
+  taxProvenanceReceiptMemo: Ap3TaxProvenanceReceiptMemo | null
+): void {
+  if (!history || history.status !== 'not_enough_points') return;
+  const membershipRows =
+    prepared.merchantProductBuckets.get(merchantProductId) ?? [];
+  if (membershipRows.length < 2) return;
+  const identityView =
+    prepared.merchantProductIdentityViews.get(merchantProductId) ?? null;
+  recordAp3MpNotEnoughPointsComparability(funnel, {
+    membershipRowCount: membershipRows.length,
+    identityRowCount: identityView?.historyPoints.length ?? 0,
+    history,
+    receiptEvidenceCache: prepared.receiptEvidenceCache,
+    membershipRows,
+    taxProvenanceReceiptMemo,
+  });
+}
+
 function collectFromPrepared(
   prepared: PreparedAnalysisPriceInsightContext,
   options: {
@@ -389,6 +417,10 @@ function collectFromPrepared(
   const funnel = createEmptyAp3CandidateFunnel();
   funnel.seededSkuCount = prepared.seededSkuKeys.size;
   funnel.seededMpCount = prepared.seededMerchantProductIds.size;
+  // One memo per derivation — shared across all MP targets (not per-target).
+  const taxProvenanceReceiptMemo = shouldRecordAp3TaxProvenanceDiagnostics()
+    ? createAp3TaxProvenanceReceiptMemo()
+    : null;
 
   if (
     prepared.seededSkuKeys.size === 0 &&
@@ -445,6 +477,13 @@ function collectFromPrepared(
           result.history?.status ?? null
         );
       }
+      recordMpNotEnoughPointsCohortIfNeeded(
+        funnel,
+        merchantProductId,
+        prepared,
+        result.history,
+        taxProvenanceReceiptMemo
+      );
       if (result.candidate) {
         if (isMerchantProductDuplicateOfSku(result.candidate, skuCoveredEvents)) {
           funnel.mpDuplicateOfSku += 1;
@@ -541,6 +580,10 @@ export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
   const funnel = createEmptyAp3CandidateFunnel();
   funnel.seededSkuCount = prepared.seededSkuKeys.size;
   funnel.seededMpCount = prepared.seededMerchantProductIds.size;
+  // One memo per async derivation — shared across all MP targets.
+  const taxProvenanceReceiptMemo = shouldRecordAp3TaxProvenanceDiagnostics()
+    ? createAp3TaxProvenanceReceiptMemo()
+    : null;
 
   if (
     prepared.seededSkuKeys.size === 0 &&
@@ -608,6 +651,13 @@ export async function collectAnalysisTrustedPriceChangeCandidatesAsync(
           result.history?.status ?? null
         );
       }
+      recordMpNotEnoughPointsCohortIfNeeded(
+        funnel,
+        merchantProductId,
+        prepared,
+        result.history,
+        taxProvenanceReceiptMemo
+      );
       if (result.candidate) {
         if (isMerchantProductDuplicateOfSku(result.candidate, skuCoveredEvents)) {
           funnel.mpDuplicateOfSku += 1;

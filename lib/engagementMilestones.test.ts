@@ -571,6 +571,38 @@ describe('fifth receipt frequent products', () => {
       /receipts\.analysis_json AS analysis_json/i
     );
   });
+
+  it('engagement product SELECT omits recognition_snapshot by default', () => {
+    const {
+      buildEngagementProductInsightSelectSql,
+    } = require('./engagementMilestones') as typeof import('./engagementMilestones');
+    const sql = buildEngagementProductInsightSelectSql({
+      itemWhereSql: '1=1',
+    });
+    expect(sql).toMatch(/receipts\.analysis_json AS receiptAnalysisJson/i);
+    expect(sql).not.toMatch(/recognition_snapshot_json/i);
+  });
+
+  it('engagement product SELECT includes recognition_snapshot only when opted in', () => {
+    const {
+      buildEngagementProductInsightSelectSql,
+    } = require('./engagementMilestones') as typeof import('./engagementMilestones');
+    const off = buildEngagementProductInsightSelectSql({
+      itemWhereSql: 'owner = ?',
+      includeRecognitionSnapshot: false,
+    });
+    const on = buildEngagementProductInsightSelectSql({
+      itemWhereSql: 'owner = ?',
+      includeRecognitionSnapshot: true,
+    });
+    expect(off).not.toMatch(/recognition_snapshot_json/i);
+    expect(on).toMatch(
+      /receipts\.recognition_snapshot_json AS receiptRecognitionSnapshotJson/i
+    );
+    // Same single-query shape: one SELECT … FROM receipt_items INNER JOIN receipts
+    expect((on.match(/SELECT/gi) || []).length).toBe(1);
+    expect((on.match(/FROM receipt_items/gi) || []).length).toBe(1);
+  });
 });
 
 describe('tenth receipt shopping profile', () => {

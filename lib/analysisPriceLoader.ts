@@ -20,6 +20,7 @@ import {
   type AnalysisPriceGeneration,
 } from './analysisPriceScheduler';
 import { recordDiagnosticEvent } from './internalDiagnostics';
+import { shouldRecordAp3TaxProvenanceDiagnostics } from './analysisPriceCandidateFunnel';
 
 const UNAVAILABLE_PRICE_CHANGES_SURFACE: AnalysisPriceChangesSurface = {
   status: 'unavailable',
@@ -46,7 +47,10 @@ export async function loadAnalysisTrustedPriceChangesSurface(
     if (options?.shouldCancel?.()) {
       return UNAVAILABLE_PRICE_CHANGES_SURFACE;
     }
-    const context = await loadEngagementProductInsightContext();
+    const context = await loadEngagementProductInsightContext({
+      includeRecognitionSnapshot:
+        shouldRecordAp3TaxProvenanceDiagnostics(),
+    });
     if (context.queryFailed || context.rows.length === 0) {
       return UNAVAILABLE_PRICE_CHANGES_SURFACE;
     }
