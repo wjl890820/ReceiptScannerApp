@@ -15,6 +15,19 @@ export function shouldShowSettingsDevTools(
 }
 
 /**
+ * Experiment Snapshot is an internal/validation research export.
+ * Visible when Developer Tools are already shown (local __DEV__/unlock)
+ * OR when Analysis D validation gate is on (TestFlight validation builds).
+ * Does not unlock or expand the full Developer Tools section.
+ */
+export function shouldShowExperimentSnapshotEntry(options: {
+  showDevTools: boolean;
+  showAnalysisDDiagnostics: boolean;
+}): boolean {
+  return Boolean(options.showDevTools || options.showAnalysisDDiagnostics);
+}
+
+/**
  * Secret About-area tap unlock is intentional only for development /
  * internal builds. Production Release must not unlock by accident.
  */

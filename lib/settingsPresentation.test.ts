@@ -7,6 +7,7 @@ import {
   localePreferenceLabelKey,
   resolveInstalledAppMetadata,
   SETTINGS_RELEASE_FORBIDDEN_TOKENS,
+  shouldShowExperimentSnapshotEntry,
   shouldShowSettingsDevTools,
   shouldShowSettingsProEntry,
 } from './settingsPresentation';
@@ -30,6 +31,37 @@ describe('settings release visibility', () => {
   it('hides coming-soon Pro from the release Settings list', () => {
     expect(shouldShowSettingsProEntry({ comingSoon: true })).toBe(false);
     expect(shouldShowSettingsProEntry({ comingSoon: false })).toBe(true);
+  });
+
+  it('Experiment Snapshot visibility: validation / dev / production / both', () => {
+    // CASE A — validation release
+    expect(
+      shouldShowExperimentSnapshotEntry({
+        showDevTools: false,
+        showAnalysisDDiagnostics: true,
+      })
+    ).toBe(true);
+    // CASE B — normal production
+    expect(
+      shouldShowExperimentSnapshotEntry({
+        showDevTools: false,
+        showAnalysisDDiagnostics: false,
+      })
+    ).toBe(false);
+    // CASE C — local dev
+    expect(
+      shouldShowExperimentSnapshotEntry({
+        showDevTools: true,
+        showAnalysisDDiagnostics: false,
+      })
+    ).toBe(true);
+    // CASE D — both gates true (still a single boolean true; UI renders once)
+    expect(
+      shouldShowExperimentSnapshotEntry({
+        showDevTools: true,
+        showAnalysisDDiagnostics: true,
+      })
+    ).toBe(true);
   });
 });
 
@@ -149,6 +181,44 @@ describe('settings release surface contracts', () => {
     expect(settingsSource).toContain('isAnalysisDDiagnosticsEnabled');
     expect(settingsSource).toContain('showAnalysisDDiagnostics');
     expect(settingsSource).toContain('Analysis D Diagnostics');
+  });
+
+  it('places Experiment Snapshot under Internal/Validation via shared gate (once)', () => {
+    expect(settingsSource).toContain('shouldShowExperimentSnapshotEntry');
+    expect(settingsSource).toContain('showExperimentSnapshot');
+    expect(settingsSource).toContain(
+      'showAnalysisDDiagnostics || showExperimentSnapshot'
+    );
+    expect(settingsSource).toContain('Export Experiment Snapshot');
+    expect(settingsSource).toContain('Experiment completed sequence');
+
+    const exportMatches = settingsSource.match(
+      /title="Export Experiment Snapshot"/g
+    );
+    expect(exportMatches).toHaveLength(1);
+
+    const completedMatches = settingsSource.match(
+      /title="Experiment completed sequence"/g
+    );
+    expect(completedMatches).toHaveLength(1);
+
+    // Must not remain exclusively nested inside Developer Tools only.
+    const validationBlockStart = settingsSource.indexOf(
+      'showAnalysisDDiagnostics || showExperimentSnapshot'
+    );
+    const devToolsBlockStart = settingsSource.indexOf('{showDevTools ? (');
+    const exportTitleIndex = settingsSource.indexOf(
+      'title="Export Experiment Snapshot"'
+    );
+    expect(validationBlockStart).toBeGreaterThan(-1);
+    expect(devToolsBlockStart).toBeGreaterThan(validationBlockStart);
+    expect(exportTitleIndex).toBeGreaterThan(validationBlockStart);
+    expect(exportTitleIndex).toBeLessThan(devToolsBlockStart);
+
+    // Validation visibility must not force-open Developer Tools section.
+    expect(settingsSource).toContain(
+      'shouldShowSettingsDevTools(devToolsEnabled, __DEV__)'
+    );
   });
 
   it('does not introduce payment or quota code', () => {

@@ -208,6 +208,53 @@ export async function getReceiptsDatabase(): Promise<SQLite.SQLiteDatabase> {
   return getDb();
 }
 
+/**
+ * Observational accessor for Experiment Snapshot (and similar read-only exports).
+ * Returns the already-initialized handle only — never opens, migrates, or backfills.
+ */
+export class ReceiptsDatabaseNotInitializedError extends Error {
+  constructor(
+    message = 'Experiment Snapshot requires an already initialized local database.'
+  ) {
+    super(message);
+    this.name = 'ReceiptsDatabaseNotInitializedError';
+  }
+}
+
+export function isReceiptsDatabaseInitialized(): boolean {
+  return _inited === true && _db != null;
+}
+
+/**
+ * Fail-closed observational DB access.
+ * Does not call initIfNeeded / openDatabaseAsync / migration / backfill.
+ */
+export function getInitializedReceiptsDatabaseOrThrow(): SQLite.SQLiteDatabase {
+  if (!isReceiptsDatabaseInitialized() || _db == null) {
+    throw new ReceiptsDatabaseNotInitializedError();
+  }
+  return _db;
+}
+
+/** Test-only: clear module DB lifecycle state (does not touch disk schema). */
+export function __resetReceiptsDatabaseLifecycleForTests(): void {
+  _db = null;
+  _inited = false;
+  _initPromise = null;
+}
+
+/**
+ * Test-only: mark an existing handle as initialized without running initIfNeeded.
+ * Production code must never call this.
+ */
+export function __setReceiptsDatabaseInitializedForTests(
+  db: SQLite.SQLiteDatabase
+): void {
+  _db = db;
+  _inited = true;
+  _initPromise = null;
+}
+
 // receiptsHasTransactionAt 函数已删除
 // 新数据库 receipts_v2.db 强制包含 transaction_at 列，不再需要检测
 
@@ -1097,8 +1144,10 @@ export async function saveReceipt(
  * 排序依据：优先 transaction_at（小票发生时间），没有则 fallback created_at
  * 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
  */
-async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
-  await initIfNeeded();
+async function listReceiptRowsWithDb(
+  db: SQLite.SQLiteDatabase,
+  limit: number | null
+): Promise<ReceiptRow[]> {
   const scope = await resolveCurrentLocalReceiptOwnerScope();
   if (scope.status !== 'ready') {
     throwIfOwnerScopeUnavailable(
@@ -1106,7 +1155,6 @@ async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
       scope.reason ?? 'owner_unavailable'
     );
   }
-  const db = await getDb();
 
   const sql = `
     SELECT
@@ -1134,6 +1182,12 @@ async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
       : await db.getAllAsync<ReceiptRow>(sql, [...scope.params, limit]);
 
   return rows ?? [];
+}
+
+async function listReceiptRows(limit: number | null): Promise<ReceiptRow[]> {
+  await initIfNeeded();
+  const db = await getDb();
+  return listReceiptRowsWithDb(db, limit);
 }
 
 export async function listReceipts(limit = 200): Promise<ReceiptRow[]> {
@@ -1165,6 +1219,16 @@ export async function countScopedLocalReceiptsForCurrentOwner(): Promise<number 
 /** Full local receipt history for Analysis before purchase-truth projection. */
 export async function listReceiptsForAnalysis(): Promise<ReceiptRow[]> {
   return listReceiptRows(null);
+}
+
+/**
+ * Observational full-history receipt read using an already-initialized DB handle.
+ * Never calls initIfNeeded.
+ */
+export async function listReceiptsForAnalysisWithDb(
+  db: SQLite.SQLiteDatabase
+): Promise<ReceiptRow[]> {
+  return listReceiptRowsWithDb(db, null);
 }
 
 /**

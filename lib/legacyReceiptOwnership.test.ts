@@ -659,8 +659,13 @@ describe('schema migration contract (db source)', () => {
 
   it('H5 — db init invokes legacy installation backfill before _inited', () => {
     expect(dbSource).toContain('ensureLegacyReceiptInstallationBackfill');
-    const backfillIndex = dbSource.indexOf('ensureLegacyReceiptInstallationBackfill');
-    const initedIndex = dbSource.indexOf('_inited = true');
+    const initStart = dbSource.indexOf('async function initIfNeeded');
+    expect(initStart).toBeGreaterThan(0);
+    const initSlice = dbSource.slice(initStart);
+    const backfillIndex = initSlice.indexOf(
+      'ensureLegacyReceiptInstallationBackfill'
+    );
+    const initedIndex = initSlice.indexOf('_inited = true');
     expect(backfillIndex).toBeGreaterThan(0);
     expect(initedIndex).toBeGreaterThan(backfillIndex);
   });

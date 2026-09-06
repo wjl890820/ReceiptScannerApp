@@ -1350,15 +1350,19 @@ export async function evaluateSavedReceiptMilestone(
  * `includeRecognitionSnapshot` is AP-3 tax-diagnostics only (default false).
  * When true, projects recognition_snapshot_json on the same product-rows query
  * (no extra SELECT). Home / ordinary callers must leave this false.
+ *
+ * Observational variant: uses the provided DB handle and never initializes.
  */
-export async function loadEngagementProductInsightContext(options?: {
-  includeRecognitionSnapshot?: boolean;
-}): Promise<MilestoneProductInsightContext> {
+export async function loadEngagementProductInsightContextWithDb(
+  db: EngagementMilestoneDatabase,
+  options?: {
+    includeRecognitionSnapshot?: boolean;
+  }
+): Promise<MilestoneProductInsightContext> {
   const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
   if (ownerScope.status !== 'ready') {
     return emptyOwnerProductInsightContext();
   }
-  const db = await getEngagementMilestoneDb();
   const receipts = await readAllReceipts(db, ownerScope);
   const { excludedDuplicateReceiptIds } =
     await selectEngagementAnalyticsReceipts(receipts);
@@ -1368,6 +1372,18 @@ export async function loadEngagementProductInsightContext(options?: {
     excludedDuplicateReceiptIds,
     { includeRecognitionSnapshot: options?.includeRecognitionSnapshot === true }
   );
+}
+
+export async function loadEngagementProductInsightContext(options?: {
+  includeRecognitionSnapshot?: boolean;
+}): Promise<MilestoneProductInsightContext> {
+  // Keep production short-circuit before DB open/init (owner-unavailable → empty).
+  const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+  if (ownerScope.status !== 'ready') {
+    return emptyOwnerProductInsightContext();
+  }
+  const db = await getEngagementMilestoneDb();
+  return loadEngagementProductInsightContextWithDb(db, options);
 }
 
 export async function evaluateCurrentEngagementMilestone(

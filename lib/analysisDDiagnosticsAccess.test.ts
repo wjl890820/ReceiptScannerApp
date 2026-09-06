@@ -204,7 +204,11 @@ describe('Analysis D1-A diagnostics access', () => {
     expect(settingsSource).toContain('Analysis D Diagnostics');
     expect(settingsSource).toContain('/analysis-d-diagnostics');
 
-    // Entry is behind the flag gate, not always visible JSX without condition.
+    // Internal / Validation section may also host Experiment Snapshot, but
+    // Analysis D row itself remains behind showAnalysisDDiagnostics.
+    expect(settingsSource).toMatch(
+      /\{showAnalysisDDiagnostics \|\| showExperimentSnapshot \? \([\s\S]*Analysis D Diagnostics[\s\S]*\) : null\}/
+    );
     expect(settingsSource).toMatch(
       /\{showAnalysisDDiagnostics \? \([\s\S]*Analysis D Diagnostics[\s\S]*\) : null\}/
     );
@@ -212,10 +216,12 @@ describe('Analysis D1-A diagnostics access', () => {
     // Release-forbidden engineering tokens remain outside the gated Internal section.
     const jsxStart = settingsSource.indexOf('return (\n    <ScrollView');
     const beforeDiagnostics =
-      settingsSource.slice(jsxStart).split('{showAnalysisDDiagnostics ?')[0] ??
-      '';
+      settingsSource
+        .slice(jsxStart)
+        .split('{showAnalysisDDiagnostics || showExperimentSnapshot ?')[0] ?? '';
     expect(beforeDiagnostics).not.toContain('Analysis D Diagnostics');
     expect(beforeDiagnostics).not.toContain('Internal / Validation');
+    expect(beforeDiagnostics).not.toContain('Export Experiment Snapshot');
   });
 
   test('view-model formats report fields only (no subjective labels)', () => {

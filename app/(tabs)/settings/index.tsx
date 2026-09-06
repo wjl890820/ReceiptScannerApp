@@ -44,6 +44,7 @@ import {
   shouldShowInternalDiagnosticsSettingsEntry,
 } from '@/lib/internalDiagnosticsGate';
 import {
+  getCurrentLocale,
   getCurrentLocalePreference,
   setLocalePreference,
   t,
@@ -62,6 +63,16 @@ import {
   RECEIPTS_DB_EXPORT_PRIVACY_WARNING,
 } from '@/lib/receiptsDbExport';
 import {
+  EXPERIMENT_SNAPSHOT_NAME,
+  exportAndShareExperimentSnapshot,
+  formatExperimentSnapshotExportSummary,
+} from '@/lib/experimentSnapshotExport';
+import {
+  getExperimentSnapshotSequencePreference,
+  setExperimentSnapshotSequencePreference,
+  type ExperimentSnapshotSequencePreference,
+} from '@/lib/experimentSnapshotSettings';
+import {
   UI_COLORS,
   UI_LAYOUT,
   UI_RADIUS,
@@ -77,6 +88,7 @@ import {
   formatAboutVersionLine,
   localePreferenceLabelKey,
   resolveInstalledAppMetadata,
+  shouldShowExperimentSnapshotEntry,
   shouldShowSettingsDevTools,
   shouldShowSettingsProEntry,
 } from '@/lib/settingsPresentation';
@@ -192,6 +204,10 @@ export default function SettingsScreen() {
   const showAnalysisDDiagnostics = shouldShowAnalysisDDiagnosticsEntry(
     isAnalysisDDiagnosticsEnabled()
   );
+  const showExperimentSnapshot = shouldShowExperimentSnapshotEntry({
+    showDevTools,
+    showAnalysisDDiagnostics,
+  });
   const showInternalDiagnostics = shouldShowInternalDiagnosticsSettingsEntry(
     isInternalDiagnosticsEnabled()
   );
@@ -201,6 +217,13 @@ export default function SettingsScreen() {
     enabled: false,
   });
   const [diagnosticsExportBusy, setDiagnosticsExportBusy] = useState(false);
+  const [experimentSnapshotBusy, setExperimentSnapshotBusy] = useState(false);
+  const [experimentSequence, setExperimentSequence] =
+    useState<ExperimentSnapshotSequencePreference>({
+      phase: 2,
+      completedReceiptSequence: 37,
+      nextReceiptSequence: 38,
+    });
   const aboutVersionLine = formatAboutVersionLine(currentVersion, currentBuild);
 
   const accountStatusRefresherRef = useRef(
@@ -293,6 +316,18 @@ export default function SettingsScreen() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!showExperimentSnapshot) return;
+    let cancelled = false;
+    (async () => {
+      const pref = await getExperimentSnapshotSequencePreference();
+      if (!cancelled) setExperimentSequence(pref);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showExperimentSnapshot]);
 
   const onPressProtectWithApple = useMemo(() => {
     return async () => {
@@ -493,6 +528,113 @@ export default function SettingsScreen() {
       ]);
     };
   }, []);
+
+  const applyExperimentSequence = useCallback(async (completed: number) => {
+    const next = await setExperimentSnapshotSequencePreference({
+      phase: experimentSequence.phase,
+      completedReceiptSequence: completed,
+    });
+    setExperimentSequence(next);
+    return next;
+  }, [experimentSequence.phase]);
+
+  const onPressExperimentSequence = useCallback(() => {
+    Alert.alert(
+      'Experiment completed sequence',
+      'Research metadata only. Export does not auto-increment. next = completed + 1.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: '37 (baseline)',
+          onPress: () => {
+            void applyExperimentSequence(37);
+          },
+        },
+        {
+          text: '38',
+          onPress: () => {
+            void applyExperimentSequence(38);
+          },
+        },
+        {
+          text: '39',
+          onPress: () => {
+            void applyExperimentSequence(39);
+          },
+        },
+        {
+          text: '40',
+          onPress: () => {
+            void applyExperimentSequence(40);
+          },
+        },
+        {
+          text: '+1',
+          onPress: () => {
+            void applyExperimentSequence(
+              experimentSequence.completedReceiptSequence + 1
+            );
+          },
+        },
+      ]
+    );
+  }, [applyExperimentSequence, experimentSequence.completedReceiptSequence]);
+
+  const runExportExperimentSnapshot = useCallback(() => {
+    if (experimentSnapshotBusy) return;
+    Alert.alert(
+      EXPERIMENT_SNAPSHOT_NAME,
+      `Phase ${experimentSequence.phase}\nCompleted: ${experimentSequence.completedReceiptSequence}\nNext: ${experimentSequence.nextReceiptSequence}\n\nLocal research export. Does not change receipts or auto-increment sequence.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Export',
+          onPress: () => {
+            void (async () => {
+              setExperimentSnapshotBusy(true);
+              try {
+                const result = await exportAndShareExperimentSnapshot({
+                  experiment: {
+                    phase: experimentSequence.phase,
+                    completedReceiptSequence:
+                      experimentSequence.completedReceiptSequence,
+                  },
+                  app: {
+                    version: currentVersion || null,
+                    build: currentBuild || null,
+                    locale: getCurrentLocale(),
+                  },
+                  cacheDirectory: FileSystem.cacheDirectory,
+                  writeAsStringAsync: FileSystem.writeAsStringAsync,
+                  isAvailableAsync: Sharing.isAvailableAsync,
+                  shareAsync: Sharing.shareAsync,
+                });
+                // Re-read preference — export must not auto-increment.
+                const pref = await getExperimentSnapshotSequencePreference();
+                setExperimentSequence(pref);
+                Alert.alert(
+                  'Export ready',
+                  `${result.filename}\n${formatExperimentSnapshotExportSummary(result.snapshot)}`
+                );
+              } catch (e: unknown) {
+                Alert.alert(
+                  'Export failed',
+                  e instanceof Error ? e.message : String(e)
+                );
+              } finally {
+                setExperimentSnapshotBusy(false);
+              }
+            })();
+          },
+        },
+      ]
+    );
+  }, [
+    currentBuild,
+    currentVersion,
+    experimentSequence,
+    experimentSnapshotBusy,
+  ]);
 
   const runReclassifyExistingReceipts = useMemo(() => {
     return async () => {
@@ -1067,18 +1209,40 @@ export default function SettingsScreen() {
         </View>
       ) : null}
 
-      {showAnalysisDDiagnostics ? (
+      {showAnalysisDDiagnostics || showExperimentSnapshot ? (
         <View style={styles.devGroup}>
           <Text style={styles.devSectionLabel}>Internal / Validation</Text>
           <View style={styles.group}>
-            <SettingsRow
-              title="Analysis D Diagnostics"
-              subtitle="Read-only real-data validation report"
-              onPress={() =>
-                router.push('/analysis-d-diagnostics' as Href)
-              }
-              accessibilityLabel="Analysis D Diagnostics"
-            />
+            {showAnalysisDDiagnostics ? (
+              <SettingsRow
+                title="Analysis D Diagnostics"
+                subtitle="Read-only real-data validation report"
+                onPress={() =>
+                  router.push('/analysis-d-diagnostics' as Href)
+                }
+                accessibilityLabel="Analysis D Diagnostics"
+              />
+            ) : null}
+            {showAnalysisDDiagnostics && showExperimentSnapshot ? (
+              <View style={styles.separator} />
+            ) : null}
+            {showExperimentSnapshot ? (
+              <>
+                <SettingsRow
+                  title="Export Experiment Snapshot"
+                  subtitle={`Phase ${experimentSequence.phase} · completed ${experimentSequence.completedReceiptSequence} → next ${experimentSequence.nextReceiptSequence}`}
+                  onPress={runExportExperimentSnapshot}
+                  accessibilityLabel="Export Experiment Snapshot"
+                />
+                <View style={styles.separator} />
+                <SettingsRow
+                  title="Experiment completed sequence"
+                  subtitle={`Research metadata only · next = ${experimentSequence.nextReceiptSequence}`}
+                  onPress={onPressExperimentSequence}
+                  accessibilityLabel="Experiment completed sequence"
+                />
+              </>
+            ) : null}
           </View>
         </View>
       ) : null}
