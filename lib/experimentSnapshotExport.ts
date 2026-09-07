@@ -27,6 +27,7 @@ import {
 import {
   loadEngagementProductInsightContextWithDb,
 } from './engagementMilestones';
+import { enrichProductRowsWithCurrentItemMonetaryTruth } from './currentItemMonetaryTruth';
 import {
   assertExperimentSnapshotExperimentInput,
 } from './experimentSnapshotSettings';
@@ -683,7 +684,9 @@ export function buildExperimentSnapshot(
   const seedReceiptIds = new Set(
     selection.analyticsReceipts.map((receipt) => receipt.id)
   );
-  const productRows = [...input.productRows];
+  const productRows = enrichProductRowsWithCurrentItemMonetaryTruth([
+    ...input.productRows,
+  ]);
   const prepared = prepareAnalysisPriceInsightContext(
     productRows,
     seedReceiptIds

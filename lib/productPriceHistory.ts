@@ -49,6 +49,7 @@ import type {
 } from './receiptEvidenceTruth/types';
 import { sanitizePromoMarkers } from './receiptPrintedEvidence';
 import { buildPurchaseEventDatesFromRows } from './repeatProductProfile';
+import { enrichProductRowsWithCurrentItemMonetaryTruth } from './currentItemMonetaryTruth';
 
 export type ProductPriceKind =
   | 'purchase_unit'
@@ -1898,19 +1899,29 @@ export function buildProductPriceHistory(
   rows: ProductPriceHistoryRow[],
   options: BuildProductPriceHistoryOptions = {}
 ): ProductPriceHistoryResult {
-  const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rows);
+  // Observational overlay: legacy adjacent discounts recovered from analysis_json
+  // without mutating receipt_items. Gross comparison fields stay on gross.
+  const truthRows = enrichProductRowsWithCurrentItemMonetaryTruth(rows);
+  const cache =
+    options.receiptEvidenceCache ?? buildReceiptEvidenceCache(truthRows);
   const canonicalDuplicateSelectionApplied =
     options.canonicalDuplicateSelectionApplied === true;
   const identityByRowKey =
-    options.preparedRowIdentityMetadata ?? buildRowIdentityMetadataByKey(rows);
-  const totalOccurrenceCount = countDistinctPurchaseEventOccurrences(rows);
+    options.preparedRowIdentityMetadata ??
+    buildRowIdentityMetadataByKey(truthRows);
+  const totalOccurrenceCount =
+    countDistinctPurchaseEventOccurrences(truthRows);
 
   if (target.type === 'merchant_product') {
-    return buildMerchantProductPriceHistoryFromRows(target.key, rows, options);
+    return buildMerchantProductPriceHistoryFromRows(
+      target.key,
+      truthRows,
+      options
+    );
   }
 
   if (target.type === 'occurrence') {
-    const observations = buildObservations(rows, cache);
+    const observations = buildObservations(truthRows, cache);
     return emptyResult(
       target,
       'not_enough_points',
@@ -1924,7 +1935,7 @@ export function buildProductPriceHistory(
   if (target.type === 'sku') {
     return buildExactPurchaseUnitPriceHistory(
       target,
-      rows,
+      truthRows,
       identityByRowKey,
       options
     );
@@ -1934,7 +1945,7 @@ export function buildProductPriceHistory(
     target.type === 'family' &&
     UNSUPPORTED_PRICE_FAMILIES.has(target.key)
   ) {
-    const observations = buildObservations(rows, cache);
+    const observations = buildObservations(truthRows, cache);
     return emptyResult(
       target,
       'unsupported_family',
@@ -1948,7 +1959,7 @@ export function buildProductPriceHistory(
   const requiredFamilyDimension =
     target.type === 'family' ? FAMILY_PRICE_DIMENSIONS[target.key] : null;
   if (target.type === 'family' && !requiredFamilyDimension) {
-    const observations = buildObservations(rows, cache);
+    const observations = buildObservations(truthRows, cache);
     return emptyResult(
       target,
       'unsupported_family',
@@ -1959,9 +1970,9 @@ export function buildProductPriceHistory(
     );
   }
 
-  const structuralCohort = buildSpecStructuralCohort(rows, cache, target);
+  const structuralCohort = buildSpecStructuralCohort(truthRows, cache, target);
   const { observations, observationsByKey } = buildObservationsAndStructuralCohort(
-    rows,
+    truthRows,
     cache,
     structuralCohort
   );

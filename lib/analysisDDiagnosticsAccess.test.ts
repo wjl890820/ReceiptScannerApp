@@ -222,6 +222,7 @@ describe('Analysis D1-A diagnostics access', () => {
     expect(beforeDiagnostics).not.toContain('Analysis D Diagnostics');
     expect(beforeDiagnostics).not.toContain('Internal / Validation');
     expect(beforeDiagnostics).not.toContain('Export Experiment Snapshot');
+    expect(beforeDiagnostics).not.toContain('Export Target Receipt Evidence');
   });
 
   test('view-model formats report fields only (no subjective labels)', () => {

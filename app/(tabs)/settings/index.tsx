@@ -68,6 +68,11 @@ import {
   formatExperimentSnapshotExportSummary,
 } from '@/lib/experimentSnapshotExport';
 import {
+  exportAndShareTargetReceiptEvidence,
+  TARGET_RECEIPT_EVIDENCE_PRIVACY_WARNING,
+  TARGET_RECEIPT_EVIDENCE_RECEIPT_ID,
+} from '@/lib/targetReceiptEvidenceExport';
+import {
   getExperimentSnapshotSequencePreference,
   setExperimentSnapshotSequencePreference,
   type ExperimentSnapshotSequencePreference,
@@ -218,6 +223,10 @@ export default function SettingsScreen() {
   });
   const [diagnosticsExportBusy, setDiagnosticsExportBusy] = useState(false);
   const [experimentSnapshotBusy, setExperimentSnapshotBusy] = useState(false);
+  const [targetReceiptEvidenceBusy, setTargetReceiptEvidenceBusy] =
+    useState(false);
+  const showTargetReceiptEvidence =
+    showAnalysisDDiagnostics || showExperimentSnapshot;
   const [experimentSequence, setExperimentSequence] =
     useState<ExperimentSnapshotSequencePreference>({
       phase: 2,
@@ -635,6 +644,49 @@ export default function SettingsScreen() {
     experimentSequence,
     experimentSnapshotBusy,
   ]);
+
+  const runExportTargetReceiptEvidence = useCallback(() => {
+    if (targetReceiptEvidenceBusy) return;
+    Alert.alert(
+      'Export Target Receipt Evidence',
+      `${TARGET_RECEIPT_EVIDENCE_PRIVACY_WARNING}\n\nTarget: ${TARGET_RECEIPT_EVIDENCE_RECEIPT_ID}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Export',
+          onPress: () => {
+            void (async () => {
+              setTargetReceiptEvidenceBusy(true);
+              try {
+                const result = await exportAndShareTargetReceiptEvidence({
+                  app: {
+                    version: currentVersion || null,
+                    build: currentBuild || null,
+                  },
+                  cacheDirectory: FileSystem.cacheDirectory,
+                  writeAsStringAsync: FileSystem.writeAsStringAsync,
+                  isAvailableAsync: Sharing.isAvailableAsync,
+                  shareAsync: Sharing.shareAsync,
+                });
+                const found = result.payload.receipt.found ? 'found' : 'missing';
+                Alert.alert(
+                  'Export ready',
+                  `${result.filename}\nreceipt=${found}\nuserItemsKind=${result.payload.receipt.userItemsJsonRawKind}\ndiscounts=${result.payload.analysis.discounts.length}`
+                );
+              } catch (e: unknown) {
+                Alert.alert(
+                  'Export failed',
+                  e instanceof Error ? e.message : String(e)
+                );
+              } finally {
+                setTargetReceiptEvidenceBusy(false);
+              }
+            })();
+          },
+        },
+      ]
+    );
+  }, [currentBuild, currentVersion, targetReceiptEvidenceBusy]);
 
   const runReclassifyExistingReceipts = useMemo(() => {
     return async () => {
@@ -1240,6 +1292,19 @@ export default function SettingsScreen() {
                   subtitle={`Research metadata only · next = ${experimentSequence.nextReceiptSequence}`}
                   onPress={onPressExperimentSequence}
                   accessibilityLabel="Experiment completed sequence"
+                />
+              </>
+            ) : null}
+            {showTargetReceiptEvidence ? (
+              <>
+                {showAnalysisDDiagnostics || showExperimentSnapshot ? (
+                  <View style={styles.separator} />
+                ) : null}
+                <SettingsRow
+                  title="Export Target Receipt Evidence"
+                  subtitle="Read-only · auq8r7qU… monetary evidence"
+                  onPress={runExportTargetReceiptEvidence}
+                  accessibilityLabel="Export Target Receipt Evidence"
                 />
               </>
             ) : null}

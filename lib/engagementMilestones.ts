@@ -1027,13 +1027,17 @@ async function readProductRows(
   ownerScope: LocalReceiptOwnerScopeReady,
   options: { includeRecognitionSnapshot?: boolean } = {}
 ): Promise<EngagementProductRow[]> {
-  return db.getAllAsync<EngagementProductRow>(
+  const rows = await db.getAllAsync<EngagementProductRow>(
     buildEngagementProductInsightSelectSql({
       itemWhereSql: ownerScope.itemWhereSql,
       includeRecognitionSnapshot: options.includeRecognitionSnapshot === true,
     }),
     ownerScope.params
   );
+  const { enrichProductRowsWithCurrentItemMonetaryTruth } = await import(
+    './currentItemMonetaryTruth'
+  );
+  return enrichProductRowsWithCurrentItemMonetaryTruth(rows);
 }
 
 /**
