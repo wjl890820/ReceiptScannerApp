@@ -310,8 +310,11 @@ describe('analysisDReport (D0 fixtures A–N)', () => {
   });
 
   test('F — reliable 1L / 900ml normalized family price (milk)', () => {
-    const receipt = makeReceipt({
-      id: 'f-milk',
+    // Two distinct purchase events (receipts). Same-receipt multi-line milk
+    // is one purchase event under PPH purchase-event semantics and cannot
+    // alone make family history ready.
+    const receiptA = makeReceipt({
+      id: 'f-milk-a',
       at: nowMs - MS_DAY,
       merchantType: 'supermarket',
       items: [
@@ -321,6 +324,13 @@ describe('analysisDReport (D0 fixtures A–N)', () => {
           lineTotal: 250,
           quantity: 1,
         },
+      ],
+    });
+    const receiptB = makeReceipt({
+      id: 'f-milk-b',
+      at: nowMs - MS_DAY * 2,
+      merchantType: 'supermarket',
+      items: [
         {
           name: '明治おいしい牛乳 900ml',
           category: 'food_ingredients',
@@ -331,7 +341,7 @@ describe('analysisDReport (D0 fixtures A–N)', () => {
     });
 
     const report = buildAnalysisDReport({
-      receipts: [receipt],
+      receipts: [receiptA, receiptB],
       nowMs,
       priceHistoryBuilder: (target, rows) =>
         buildTrustedProductPriceHistory(target, rows),

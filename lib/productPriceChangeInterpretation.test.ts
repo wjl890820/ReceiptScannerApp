@@ -1071,13 +1071,13 @@ describe('G4-2B personal_product interpretation authority', () => {
 
   it('same-receipt multi-row aggregation succeeds when every row is authorized', () => {
     const rows = [
-      trustedSkuRow('1', 60, {
+      trustedSkuRow('1', 50, {
         receiptId: 'r-shared',
         itemId: 'item-shared-a',
         sourceIndex: 0,
         occurredAt: 86_400_000,
       }),
-      trustedSkuRow('2', 40, {
+      trustedSkuRow('2', 50, {
         receiptId: 'r-shared',
         itemId: 'item-shared-b',
         sourceIndex: 1,
@@ -1110,18 +1110,29 @@ describe('G4-2B personal_product interpretation authority', () => {
         merchantProductId: MEMBER,
       },
     ]);
-    expect(interpretPersonal(history).status).toBe('available');
+    expect(history.status).toBe('ready');
+    expect(history.points).toHaveLength(2);
+    expect(history.points.find((p) => p.receiptId === 'r-shared')?.purchaseQuantity).toBe(
+      2
+    );
+    const result = interpretPersonal(history);
+    expect(result.status).toBe('available');
+    if (result.status === 'available') {
+      expect(result.previous.purchaseQuantity).toBe(2);
+      expect(result.previous.priceValue).toBe(50);
+      expect(result.current.priceValue).toBe(120);
+    }
   });
 
-  it('same-receipt multi-row aggregation fails when one row is unauthorized', () => {
+  it('same-receipt multi-row aggregation fails when representative row is unauthorized', () => {
     const rows = [
-      trustedSkuRow('1', 60, {
+      trustedSkuRow('1', 50, {
         receiptId: 'r-shared',
         itemId: 'item-shared-a',
         sourceIndex: 0,
         occurredAt: 86_400_000,
       }),
-      trustedSkuRow('2', 40, {
+      trustedSkuRow('2', 50, {
         receiptId: 'r-shared',
         itemId: 'item-shared-b',
         sourceIndex: 1,
@@ -1134,11 +1145,12 @@ describe('G4-2B personal_product interpretation authority', () => {
         occurredAt: 172_800_000,
       }),
     ];
+    // PPH collapses to representative sourceIndex 0; authorize only sourceIndex 1.
     const history = readyPersonalHistory(rows, [
       {
         receiptId: 'r-shared',
-        itemId: 'item-shared-a',
-        sourceIndex: 0,
+        itemId: 'item-shared-b',
+        sourceIndex: 1,
         merchantProductId: ANCHOR,
       },
       {
@@ -1148,6 +1160,7 @@ describe('G4-2B personal_product interpretation authority', () => {
         merchantProductId: MEMBER,
       },
     ]);
+    expect(history.status).toBe('ready');
     expect(interpretPersonal(history)).toMatchObject({
       status: 'unavailable',
       reasonCodes: ['identity_not_exact'],
