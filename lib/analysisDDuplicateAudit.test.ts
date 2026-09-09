@@ -22,6 +22,9 @@ import {
   evaluateReconciledStructuralExactPair,
   evaluateSemanticRescanExactPair,
   areSemanticRescanItemNamesCompatible,
+  areStructuralExactMerchantKeysCompatible,
+  areStructuralExactDuplicateSummaries,
+  evaluateReconciledStructuralQuantityNoisePair,
   hasExactTransactionTime,
   hasValidTransactionAt,
   selectExactDedupedReceipts,
@@ -2370,5 +2373,328 @@ describe('A1.3.3 Remove Ambiguous Aggregate Tax Compatibility', () => {
     expect(
       canonical[0]!.evidence.some((e) => e.startsWith('tax_compatibility='))
     ).toBe(false);
+  });
+});
+
+describe('Receipt052 STRUCTURAL_EXACT generic/store merchant bridge', () => {
+  const receipt052At = Date.parse('2026-04-16T15:43:00+09:00');
+
+  /** 24 merchandise rows / 25 units; shared qty+gross structure. */
+  const receipt052PlainItems: FixtureItem[] = (() => {
+    const rows: FixtureItem[] = [
+      { name: 'とりきも', category: 'food_ingredients', lineTotal: 378, quantity: 1 },
+      { name: 'えのき茸', category: 'food_ingredients', lineTotal: 98, quantity: 1 },
+      { name: 'もやし', category: 'food_ingredients', lineTotal: 58, quantity: 2 },
+    ];
+    for (let i = 0; i < 21; i += 1) {
+      rows.push({
+        name: `商品${i}`,
+        category: 'food_ingredients',
+        lineTotal: 198 + (i % 7) * 10,
+        quantity: 1,
+      });
+    }
+    return rows;
+  })();
+
+  const receipt052StarItems: FixtureItem[] = receipt052PlainItems.map((row, idx) => {
+    if (idx === 0) {
+      return { ...row, name: '*とりも' };
+    }
+    return { ...row, name: `*${row.name}` };
+  });
+
+  function makeReceipt052(args: {
+    id: string;
+    merchant: string;
+    taxIsKnown: number;
+    items: FixtureItem[];
+    transactionAt?: number;
+    createdAt?: number;
+    tax?: number;
+    total?: number;
+    userEdited?: number;
+  }): ReceiptRow {
+    return makeReceipt({
+      id: args.id,
+      at: args.createdAt ?? receipt052At,
+      merchantType: 'supermarket',
+      items: args.items,
+      total: args.total ?? 5787,
+      merchantNormalized: args.merchant,
+      transactionAt: args.transactionAt ?? receipt052At,
+      createdAt: args.createdAt ?? receipt052At,
+      tax: args.tax ?? 441,
+      taxIsKnown: args.taxIsKnown,
+      userEdited: args.userEdited,
+    });
+  }
+
+  function groupsFor(receipts: ReceiptRow[]) {
+    return buildHighConfidenceDuplicateGroups(
+      receipts.map(summarizeReceiptForDuplicateAudit),
+      receipts
+    );
+  }
+
+  it('merchant helper: generic vs store-specific york_benimaru is compatible', () => {
+    const generic = summarizeReceiptForDuplicateAudit(
+      makeReceipt052({
+        id: 'Xfn6ERN9_NVzI1zWJQ-du',
+        merchant: 'ヨークベニマル',
+        taxIsKnown: 0,
+        items: receipt052PlainItems,
+      })
+    );
+    const store = summarizeReceiptForDuplicateAudit(
+      makeReceipt052({
+        id: 'wvLjAkJOi-COpbdhpFJNJ',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        items: receipt052StarItems,
+      })
+    );
+    expect(generic.merchantKey).not.toBe(store.merchantKey);
+    expect(areStructuralExactMerchantKeysCompatible(generic, store)).toBe(true);
+  });
+
+  it('positive — Receipt052 forms STRUCTURAL_EXACT_DUPLICATE despite merchant/tax/name noise', () => {
+    const oldReceipt = makeReceipt052({
+      id: 'Xfn6ERN9_NVzI1zWJQ-du',
+      merchant: 'ヨークベニマル',
+      taxIsKnown: 0,
+      items: receipt052PlainItems,
+      userEdited: 1,
+      createdAt: receipt052At - 1000,
+    });
+    const newReceipt = makeReceipt052({
+      id: 'wvLjAkJOi-COpbdhpFJNJ',
+      merchant: 'ヨークベニマル古川南店',
+      taxIsKnown: 1,
+      items: receipt052StarItems,
+      createdAt: receipt052At + 1000,
+    });
+
+    const oldSum = summarizeReceiptForDuplicateAudit(oldReceipt);
+    const newSum = summarizeReceiptForDuplicateAudit(newReceipt);
+    expect(areStructuralExactDuplicateSummaries(oldSum, newSum)).toBe(true);
+    expect(oldSum.contentFingerprint).not.toBe(newSum.contentFingerprint);
+    expect(evaluateSemanticRescanExactPair(oldSum, newSum)).toBeNull();
+
+    const groups = groupsFor([oldReceipt, newReceipt]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.confidence).toBe('STRUCTURAL_EXACT_DUPLICATE');
+    expect(groups[0]!.receiptIds.sort()).toEqual(
+      ['Xfn6ERN9_NVzI1zWJQ-du', 'wvLjAkJOi-COpbdhpFJNJ'].sort()
+    );
+    // Current representative policy: taxKnown preferred over user_edited.
+    expect(groups[0]!.representativeReceiptId).toBe('wvLjAkJOi-COpbdhpFJNJ');
+  });
+
+  it('analytics integration — one analytics receipt + one excluded duplicate', () => {
+    const oldReceipt = makeReceipt052({
+      id: 'Xfn6ERN9_NVzI1zWJQ-du',
+      merchant: 'ヨークベニマル',
+      taxIsKnown: 0,
+      items: receipt052PlainItems,
+      userEdited: 1,
+      createdAt: receipt052At - 1000,
+    });
+    const newReceipt = makeReceipt052({
+      id: 'wvLjAkJOi-COpbdhpFJNJ',
+      merchant: 'ヨークベニマル古川南店',
+      taxIsKnown: 1,
+      items: receipt052StarItems,
+      createdAt: receipt052At + 1000,
+    });
+
+    const selection = selectAnalyticsReceipts([oldReceipt, newReceipt]);
+    expect(selection.storedReceipts).toHaveLength(2);
+    expect(selection.analyticsReceipts).toHaveLength(1);
+    expect(selection.excludedDuplicateReceiptIds.size).toBe(1);
+    expect(selection.analyticsPurchaseCandidateCount).toBe(1);
+    expect(selection.analyticsReceipts[0]!.id).toBe('wvLjAkJOi-COpbdhpFJNJ');
+    expect(selection.excludedDuplicateReceiptIds.has('Xfn6ERN9_NVzI1zWJQ-du')).toBe(
+      true
+    );
+  });
+
+  it('CASE A — two explicit different stores of same retailer are NOT compatible', () => {
+    const a = summarizeReceiptForDuplicateAudit(
+      makeReceipt052({
+        id: 'store-a',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        items: receipt052PlainItems,
+      })
+    );
+    const b = summarizeReceiptForDuplicateAudit(
+      makeReceipt052({
+        id: 'store-b',
+        merchant: 'ヨークベニマル仙台駅前店',
+        taxIsKnown: 1,
+        items: receipt052PlainItems,
+      })
+    );
+    expect(areStructuralExactMerchantKeysCompatible(a, b)).toBe(false);
+    expect(areStructuralExactDuplicateSummaries(a, b)).toBe(false);
+    expect(
+      groupsFor([
+        makeReceipt052({
+          id: 'store-a',
+          merchant: 'ヨークベニマル古川南店',
+          taxIsKnown: 1,
+          items: receipt052PlainItems,
+        }),
+        makeReceipt052({
+          id: 'store-b',
+          merchant: 'ヨークベニマル仙台駅前店',
+          taxIsKnown: 1,
+          items: receipt052PlainItems,
+        }),
+      ])
+    ).toHaveLength(0);
+  });
+
+  it('CASE B — generic vs store but different transactionAt → not duplicate', () => {
+    const groups = groupsFor([
+      makeReceipt052({
+        id: 'old-time',
+        merchant: 'ヨークベニマル',
+        taxIsKnown: 0,
+        items: receipt052PlainItems,
+        transactionAt: receipt052At,
+      }),
+      makeReceipt052({
+        id: 'new-time',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        items: receipt052StarItems,
+        transactionAt: receipt052At + 60_000,
+      }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it('CASE C — same retailer + exact time + total but different basket → not duplicate', () => {
+    const altered = receipt052StarItems.map((row, idx) =>
+      idx === 0 ? { ...row, lineTotal: row.lineTotal + 50 } : row
+    );
+    const groups = groupsFor([
+      makeReceipt052({
+        id: 'old-basket',
+        merchant: 'ヨークベニマル',
+        taxIsKnown: 0,
+        items: receipt052PlainItems,
+      }),
+      makeReceipt052({
+        id: 'new-basket',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        items: altered,
+        total: 5787,
+      }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it('CASE D — different retailers with identical structure → not duplicate', () => {
+    const groups = groupsFor([
+      makeReceipt052({
+        id: 'york',
+        merchant: 'ヨークベニマル',
+        taxIsKnown: 0,
+        items: receipt052PlainItems,
+      }),
+      makeReceipt052({
+        id: 'aeon',
+        merchant: 'イオン',
+        taxIsKnown: 1,
+        items: receipt052PlainItems,
+      }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it('CASE E — both tax known but incompatible tax values → not duplicate', () => {
+    const groups = groupsFor([
+      makeReceipt052({
+        id: 'tax-a',
+        merchant: 'ヨークベニマル',
+        taxIsKnown: 1,
+        tax: 441,
+        items: receipt052PlainItems,
+      }),
+      makeReceipt052({
+        id: 'tax-b',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        tax: 500,
+        items: receipt052StarItems,
+      }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it('CASE F — quantity-noise path does NOT gain cross-merchant retailer relaxation', () => {
+    // Distinct item names so SEMANTIC cannot fire; only qty drifts on matching amounts.
+    const baseItems: FixtureItem[] = receipt052PlainItems.map((row, idx) => ({
+      ...row,
+      name: `base-${idx}`,
+    }));
+    const qtyNoiseItems: FixtureItem[] = baseItems.map((row, idx) =>
+      idx === 0
+        ? { ...row, name: `noise-${idx}`, quantity: row.quantity + 1 }
+        : { ...row, name: `noise-${idx}` }
+    );
+
+    const sameMerchant = [
+      makeReceipt052({
+        id: 'noise-a',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        items: baseItems,
+        createdAt: receipt052At - 1,
+      }),
+      makeReceipt052({
+        id: 'noise-b',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        items: qtyNoiseItems,
+        createdAt: receipt052At + 1,
+      }),
+    ];
+    const sameA = summarizeReceiptForDuplicateAudit(sameMerchant[0]!);
+    const sameB = summarizeReceiptForDuplicateAudit(sameMerchant[1]!);
+    expect(areStructuralExactDuplicateSummaries(sameA, sameB)).toBe(false);
+    expect(evaluateSemanticRescanExactPair(sameA, sameB)).toBeNull();
+    expect(evaluateReconciledStructuralQuantityNoisePair(sameA, sameB)).not.toBeNull();
+    const sameMerchantNoise = groupsFor(sameMerchant);
+    expect(sameMerchantNoise).toHaveLength(1);
+    expect(sameMerchantNoise[0]!.confidence).toBe(
+      'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
+    );
+
+    // Cross merchant generic vs store: quantity-noise must stay blocked.
+    const crossMerchant = [
+      makeReceipt052({
+        id: 'noise-cross-a',
+        merchant: 'ヨークベニマル',
+        taxIsKnown: 0,
+        items: baseItems,
+      }),
+      makeReceipt052({
+        id: 'noise-cross-b',
+        merchant: 'ヨークベニマル古川南店',
+        taxIsKnown: 1,
+        items: qtyNoiseItems,
+      }),
+    ];
+    const a = summarizeReceiptForDuplicateAudit(crossMerchant[0]!);
+    const b = summarizeReceiptForDuplicateAudit(crossMerchant[1]!);
+    expect(areStructuralExactMerchantKeysCompatible(a, b)).toBe(true);
+    expect(evaluateReconciledStructuralQuantityNoisePair(a, b)).toBeNull();
+    expect(areStructuralExactDuplicateSummaries(a, b)).toBe(false);
+    expect(groupsFor(crossMerchant)).toHaveLength(0);
   });
 });

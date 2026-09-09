@@ -7,7 +7,11 @@
  * Confidence contract:
  *   CONTENT_EXACT_DUPLICATE — identical content fingerprint (incl. item names)
  *   STRUCTURAL_EXACT_DUPLICATE — merchant + valid transaction_at + total + tax
- *     slot + ordered qty+lineAmount (NO item names); OCR name variance allowed
+ *     slot + ordered qty+lineAmount (NO item names); OCR name variance allowed.
+ *     Merchant gate: exact merchantAnalyticsKey OR narrow duplicate-only
+ *     generic-vs-store-specific retailer bridge (same retailerKey; exactly one
+ *     side has empty storeHint). Does NOT change merchantAnalyticsKey /
+ *     identity namespaces. Weaker duplicate paths keep strict merchant equality.
  *   RECONCILED_STRUCTURAL_EXACT_DUPLICATE — additive high-confidence path for
  *     trailing OCR-artifact rescans: same merchantAnalyticsKey + exact
  *     transaction_at + exact total + exact ordered (qty,amount) PREFIX where
@@ -74,6 +78,7 @@ import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { getReceiptItems } from './receiptItems';
 import { parseProductSpecification } from './productSpecification';
 import { pickBestRepresentativeReceiptId } from './receiptRepresentativeQuality';
+import { deriveRetailerIdentity } from './retailerIdentity';
 
 export const ANALYSIS_D_DUPLICATE_AUDIT_VERSION =
   'meruno-analysis-d-duplicate-audit-v8' as const;
@@ -616,6 +621,50 @@ function moneyEquals(a: number, b: number): boolean {
   return roundMoney(a) === roundMoney(b);
 }
 
+/**
+ * STRUCTURAL_EXACT-only merchant equivalence.
+ * Exact merchantAnalyticsKey match always wins.
+ * Otherwise: same known retailerKey AND exactly one side is generic
+ * (empty storeHint) while the other is store-specific (non-empty storeHint).
+ * Two explicit different stores never match. Does not affect analytics keys.
+ */
+export function areStructuralExactMerchantKeysCompatible(
+  left: Pick<AnalysisDDuplicateReceiptSummary, 'merchantKey' | 'merchantLabel'>,
+  right: Pick<AnalysisDDuplicateReceiptSummary, 'merchantKey' | 'merchantLabel'>
+): boolean {
+  if (!left.merchantKey || !right.merchantKey) return false;
+  if (left.merchantKey === right.merchantKey) return true;
+
+  const leftSeed = (left.merchantLabel || left.merchantKey).trim();
+  const rightSeed = (right.merchantLabel || right.merchantKey).trim();
+  if (!leftSeed || !rightSeed) return false;
+
+  const leftId = deriveRetailerIdentity({
+    merchantNormalized: leftSeed,
+    merchantRaw: leftSeed,
+  });
+  const rightId = deriveRetailerIdentity({
+    merchantNormalized: rightSeed,
+    merchantRaw: rightSeed,
+  });
+
+  if (
+    !leftId.retailerKey ||
+    !rightId.retailerKey ||
+    leftId.retailerKey !== rightId.retailerKey
+  ) {
+    return false;
+  }
+  if (leftId.confidence !== 'exact' || rightId.confidence !== 'exact') {
+    return false;
+  }
+
+  const leftGeneric = !leftId.storeHint;
+  const rightGeneric = !rightId.storeHint;
+  // Exactly one generic chain form vs one store-specific form.
+  return leftGeneric !== rightGeneric;
+}
+
 function qtyAmountRowEquals(
   a: AnalysisDQtyAmountRow,
   b: AnalysisDQtyAmountRow
@@ -812,7 +861,7 @@ export function areStructuralExactDuplicateSummaries(
   }
   if (!left.currency || left.currency !== right.currency) return false;
   if (!left.hasExactTransactionTime || !right.hasExactTransactionTime) return false;
-  if (!left.merchantKey || left.merchantKey !== right.merchantKey) return false;
+  if (!areStructuralExactMerchantKeysCompatible(left, right)) return false;
   if (left.transactionAt == null || left.transactionAt !== right.transactionAt) {
     return false;
   }

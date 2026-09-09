@@ -423,14 +423,24 @@ describe('exact-transaction receipt collision (Level 1/2 only)', () => {
     });
   });
 
-  it('does not change Level 3 analytics grouping for the York fixture', () => {
-    const selection = selectAnalyticsReceipts([
-      makeYorkCollisionReceiptA(),
-      makeYorkCollisionReceiptB(),
-      makeYorkCollisionReceiptC(),
-    ]);
-    expect(selection.highConfidenceDuplicateGroups).toEqual([]);
-    expect(selection.excludedDuplicateReceiptIds.size).toBe(0);
-    expect(selection.analyticsPurchaseCandidateCount).toBe(3);
+  it('Level 3 analytics bridges generic vs store-specific York structural rescans', () => {
+    // Scan Review collision stays separate; Level 3 STRUCTURAL_EXACT may now
+    // group generic ヨークベニマル with store-specific ヨークベニマル古川南店 when
+    // qty/amount baskets match (Receipt052-class repair). Spaced merchant
+    // "ヨークベニマル 古川南店" remains a distinct analytics key from the
+    // unspaced store form, so B does not complete-link with C.
+    const a = makeYorkCollisionReceiptA();
+    const b = makeYorkCollisionReceiptB();
+    const c = makeYorkCollisionReceiptC();
+    const selection = selectAnalyticsReceipts([a, b, c]);
+    expect(selection.highConfidenceDuplicateGroups).toHaveLength(1);
+    const group = selection.highConfidenceDuplicateGroups[0]!;
+    expect(group.confidence).toBe('STRUCTURAL_EXACT_DUPLICATE');
+    expect(group.receiptIds.sort()).toEqual([a.id, c.id].sort());
+    expect(selection.excludedDuplicateReceiptIds.size).toBe(1);
+    expect(selection.analyticsPurchaseCandidateCount).toBe(2);
+    expect(selection.analyticsReceipts.some((row) => row.id === b.id)).toBe(
+      true
+    );
   });
 });
