@@ -720,7 +720,70 @@ export default function SettingsScreen() {
                 const found = result.payload.receipt.found ? 'found' : 'missing';
                 Alert.alert(
                   'Export ready',
-                  `${result.filename}\nreceipt=${found}\nuserItemsKind=${result.payload.receipt.userItemsJsonRawKind}\nrecognition=${result.payload.recognition.present ? 'present' : 'absent'}\ndiscounts=${result.payload.analysis.discounts.length}`
+                  `${result.filename}\nreceipt=${found}\nuserItemsKind=${result.payload.receipt.userItemsJsonRawKind}\nrecognition=${result.payload.recognition.jsonColumnState.kind}\ndiscounts=${result.payload.analysis.discounts.length}`
+                );
+              } catch (e: unknown) {
+                Alert.alert(
+                  'Export failed',
+                  e instanceof Error ? e.message : String(e)
+                );
+              } finally {
+                setTargetReceiptEvidenceBusy(false);
+              }
+            })();
+          },
+        },
+      ]
+    );
+  }, [currentBuild, currentVersion, targetReceiptEvidenceBusy]);
+
+  const runExportReceipt061Evidence = useCallback(() => {
+    if (targetReceiptEvidenceBusy) return;
+    const target = resolveTargetReceiptEvidenceSpec('receipt061_aeon_quantity');
+    Alert.alert(
+      'Export Receipt061 Evidence',
+      `${TARGET_RECEIPT_EVIDENCE_PRIVACY_WARNING}\n\nTarget: ${target.receiptId}\nIndexes: ${target.sourceIndices.join(', ')}\nFocus: quantity / unitPrice chain`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Export',
+          onPress: () => {
+            void (async () => {
+              setTargetReceiptEvidenceBusy(true);
+              try {
+                const result = await exportAndShareTargetReceiptEvidence({
+                  targetKey: 'receipt061_aeon_quantity',
+                  app: {
+                    version: currentVersion || null,
+                    build: currentBuild || null,
+                  },
+                  cacheDirectory: FileSystem.cacheDirectory,
+                  writeAsStringAsync: FileSystem.writeAsStringAsync,
+                  isAvailableAsync: Sharing.isAvailableAsync,
+                  shareAsync: Sharing.shareAsync,
+                });
+                const found = result.payload.receipt.found ? 'found' : 'missing';
+                const ev = result.payload.quantityEvidence;
+                const mapping = ev.mapping.status;
+                const analysisQty = ev.analysisPrimary?.fields.quantity;
+                const analysisQtySummary =
+                  analysisQty?.kind === 'finite_number'
+                    ? String(analysisQty.value)
+                    : analysisQty?.kind ?? 'n/a';
+                const indexFields = ev.receiptItemsIndex?.fields as
+                  | Record<string, { kind: string; value?: number }>
+                  | undefined;
+                const indexQty = indexFields?.['purch' + 'ase_quantity'];
+                const indexQtySummary =
+                  indexQty?.kind === 'finite_number'
+                    ? String(indexQty.value)
+                    : indexQty?.kind ?? 'n/a';
+                const textProbe = ev.recognitionTextProbe.enabled
+                  ? ev.recognitionTextProbe.state
+                  : 'disabled';
+                Alert.alert(
+                  'Export ready',
+                  `${result.filename}\nreceipt=${found}\nmapping=${mapping}\nanalysisQty=${analysisQtySummary}\nuserPrimary=${ev.userItemsPrimary ? 'present' : 'absent'}\nindexQty=${indexQtySummary}\ntextProbe=${textProbe}`
                 );
               } catch (e: unknown) {
                 Alert.alert(
@@ -1361,6 +1424,13 @@ export default function SettingsScreen() {
                   subtitle="Read-only · SEIYU xQCDD… idx 8/9"
                   onPress={runExportReceipt063Evidence}
                   accessibilityLabel="Export Receipt063 Evidence"
+                />
+                <View style={styles.separator} />
+                <SettingsRow
+                  title="Export Receipt061 Evidence"
+                  subtitle="Read-only · AEON Lgo6… qty/unitPrice idx 1–3"
+                  onPress={runExportReceipt061Evidence}
+                  accessibilityLabel="Export Receipt061 Evidence"
                 />
               </>
             ) : null}
