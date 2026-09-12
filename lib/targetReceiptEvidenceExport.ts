@@ -1,6 +1,6 @@
 /**
  * Temporary INTERNAL / Validation instrumentation.
- * Read-only SELECT evidence for one hard-coded receipt.
+ * Read-only SELECT evidence for fixed target receipts only.
  * Does not alter monetary recovery, indexes, or domain semantics.
  */
 
@@ -9,10 +9,55 @@ import {
   ReceiptsDatabaseNotInitializedError,
 } from './db';
 
-export const TARGET_RECEIPT_EVIDENCE_SCHEMA_VERSION = 1 as const;
+export const TARGET_RECEIPT_EVIDENCE_SCHEMA_VERSION = 2 as const;
 
+/**
+ * Authoritative static-target registry — MODULE-PRIVATE.
+ * Must never be exported (runtime-mutable if exposed).
+ */
+const TARGET_RECEIPT_EVIDENCE_SPECS = {
+  auq_poultry: {
+    key: 'auq_poultry',
+    receiptId: 'auq8r7qU-EN_l38Y2xDea',
+    sourceIndices: [0, 1] as const,
+    filenameSlug: 'auq',
+  },
+  receipt063_seiyu_inline_markdown: {
+    key: 'receipt063_seiyu_inline_markdown',
+    receiptId: 'xQCDD8d8OAAewZdYpTs4p',
+    sourceIndices: [8, 9] as const,
+    filenameSlug: 'receipt063',
+  },
+} as const;
+
+export type TargetReceiptEvidenceTargetKey =
+  keyof typeof TARGET_RECEIPT_EVIDENCE_SPECS;
+
+/** Module-private resolved target — never accepted from public callers. */
+type TargetReceiptEvidenceSpec = {
+  key: TargetReceiptEvidenceTargetKey;
+  receiptId: string;
+  sourceIndices: readonly number[];
+  filenameSlug: string;
+};
+
+/** Safe public key list (strings only — not the authoritative registry). */
+export const TARGET_RECEIPT_EVIDENCE_TARGET_KEYS = Object.freeze(
+  Object.keys(TARGET_RECEIPT_EVIDENCE_SPECS) as TargetReceiptEvidenceTargetKey[]
+);
+
+export class UnknownTargetReceiptEvidenceTargetKeyError extends Error {
+  readonly targetKey: string;
+  constructor(targetKey: string) {
+    super(`target_receipt_evidence_unknown_target_key:${targetKey}`);
+    this.name = 'UnknownTargetReceiptEvidenceTargetKeyError';
+    this.targetKey = targetKey;
+  }
+}
+
+/** Auq receipt id constant (immutable string; not a live registry reference). */
 export const TARGET_RECEIPT_EVIDENCE_RECEIPT_ID =
-  'auq8r7qU-EN_l38Y2xDea' as const;
+  TARGET_RECEIPT_EVIDENCE_SPECS.auq_poultry.receiptId;
 
 export const TARGET_RECEIPT_EVIDENCE_PRIVACY_WARNING =
   'This JSON contains narrow monetary evidence for one local receipt. Share only with trusted recipients.';
@@ -25,6 +70,47 @@ export const TARGET_RECEIPT_EVIDENCE_FORBIDDEN_JSON_SUBSTRINGS = [
   'access_token',
   'refresh_token',
   'Authorization',
+  'ocr_raw_text',
+  '"rawText"',
+  '"raw_text"',
+  '"fullText"',
+] as const;
+
+/** Top-level recognition keys that may hold unbounded OCR/text — never exported. */
+const RECOGNITION_RAW_TEXT_TOP_LEVEL_KEYS = [
+  'ocr_raw_text',
+  'rawText',
+  'raw_text',
+  'ocrText',
+  'fullText',
+  'text',
+  'lines',
+  'blocks',
+  'words',
+  'tokens',
+] as const;
+
+const RECOGNITION_IMAGE_TOP_LEVEL_KEYS = [
+  'image',
+  'imageUri',
+  'image_uri',
+  'imageBase64',
+  'image_bytes',
+] as const;
+
+export const TARGET_RECEIPT_RECOGNITION_OMITTED_TOP_LEVEL_KEYS = [
+  ...RECOGNITION_RAW_TEXT_TOP_LEVEL_KEYS,
+  ...RECOGNITION_IMAGE_TOP_LEVEL_KEYS,
+] as const;
+
+const RECONCILIATION_ALLOWLIST = [
+  'ok',
+  'itemsPositiveSum',
+  'discountsSum',
+  'tax',
+  'total',
+  'expectedTotal',
+  'diff',
 ] as const;
 
 export type UserItemsJsonRawKind =
@@ -45,6 +131,7 @@ export type TargetReceiptEvidenceAnalysisItem = {
   effectiveLineTotal: number | null;
   discountAllocated: number | null;
   amountUserEdited: boolean | null;
+  kind: string | null;
 };
 
 export type TargetReceiptEvidenceDiscount = {
@@ -68,6 +155,19 @@ export type TargetReceiptEvidencePersistedItem = {
   priceObservationVersion: number | null;
 };
 
+export type TargetReceiptEvidenceRecognition = {
+  present: boolean;
+  parseable: boolean;
+  itemCount: number | null;
+  items: TargetReceiptEvidenceAnalysisItem[];
+  discounts: TargetReceiptEvidenceDiscount[];
+  reconciliation: Record<string, unknown> | null;
+  /** True when snapshot had unbounded OCR/text top-level keys (values omitted). */
+  unboundedTextFieldsOmitted: boolean;
+  /** True when snapshot had image-related top-level keys (values omitted). */
+  imageEvidenceOmitted: boolean;
+};
+
 export type TargetReceiptEvidenceExport = {
   schemaVersion: typeof TARGET_RECEIPT_EVIDENCE_SCHEMA_VERSION;
   exportedAt: string;
@@ -75,7 +175,9 @@ export type TargetReceiptEvidenceExport = {
     version: string | null;
     build: string | null;
   };
-  targetReceiptId: typeof TARGET_RECEIPT_EVIDENCE_RECEIPT_ID;
+  targetKey: string;
+  targetReceiptId: string;
+  sourceIndices: number[];
   receipt: {
     found: boolean;
     analysisJsonPresent: boolean;
@@ -84,6 +186,8 @@ export type TargetReceiptEvidenceExport = {
     userItemsJsonParseableArray: boolean;
     userItemsJsonRawKind: UserItemsJsonRawKind;
     userItemsArrayLength: number | null;
+    recognitionSnapshotPresent: boolean;
+    recognitionSnapshotParseable: boolean;
   };
   analysis: {
     items: TargetReceiptEvidenceAnalysisItem[];
@@ -96,6 +200,7 @@ export type TargetReceiptEvidenceExport = {
     rawKind: UserItemsJsonRawKind;
     items: TargetReceiptEvidenceAnalysisItem[];
   };
+  recognition: TargetReceiptEvidenceRecognition;
   persistedReceiptItems: TargetReceiptEvidencePersistedItem[];
 };
 
@@ -103,6 +208,7 @@ type ReceiptEvidenceRow = {
   id: string;
   analysis_json: string | null;
   user_items_json: string | null;
+  recognition_snapshot_json: string | null;
 };
 
 type ReceiptItemEvidenceRow = {
@@ -125,13 +231,54 @@ export type TargetReceiptEvidenceDatabase = {
   getAllAsync<T>(source: string, params?: unknown): Promise<T[]>;
 };
 
-export const TARGET_RECEIPT_SELECT_SQL = `
-SELECT id, analysis_json, user_items_json
+/**
+ * Runtime fail-closed resolver: only known static target keys.
+ * Accepts string so invalid runtime values cannot silently coerce.
+ * Returns a detached copy — mutating the result cannot alter authority.
+ */
+export function resolveTargetReceiptEvidenceSpec(
+  targetKey: string
+): TargetReceiptEvidenceSpec {
+  if (
+    typeof targetKey !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(
+      TARGET_RECEIPT_EVIDENCE_SPECS,
+      targetKey
+    )
+  ) {
+    throw new UnknownTargetReceiptEvidenceTargetKeyError(String(targetKey));
+  }
+  const key = targetKey as TargetReceiptEvidenceTargetKey;
+  const spec = TARGET_RECEIPT_EVIDENCE_SPECS[key];
+  return {
+    key: spec.key,
+    receiptId: spec.receiptId,
+    sourceIndices: [...spec.sourceIndices],
+    filenameSlug: spec.filenameSlug,
+  };
+}
+
+export function buildTargetReceiptSelectSql(): string {
+  return `
+SELECT id, analysis_json, user_items_json, recognition_snapshot_json
 FROM receipts
 WHERE id = ?
 `.trim();
+}
 
-export const TARGET_RECEIPT_ITEMS_SELECT_SQL = `
+function buildTargetReceiptItemsSelectSql(
+  sourceIndices: readonly number[]
+): string {
+  if (sourceIndices.length === 0) {
+    throw new Error('target_receipt_evidence_empty_source_indices');
+  }
+  for (const index of sourceIndices) {
+    if (!Number.isInteger(index) || index < 0) {
+      throw new Error(`target_receipt_evidence_invalid_source_index:${index}`);
+    }
+  }
+  const placeholders = sourceIndices.map(() => '?').join(', ');
+  return `
 SELECT
   source_index,
   raw_name,
@@ -144,9 +291,24 @@ SELECT
   price_observation_version
 FROM receipt_items
 WHERE receipt_id = ?
-  AND source_index IN (0, 1)
+  AND source_index IN (${placeholders})
 ORDER BY source_index ASC
 `.trim();
+}
+
+/** SELECT-only items SQL for a static target key. */
+export function buildTargetReceiptItemsSelectSqlForTarget(
+  targetKey: string
+): string {
+  const spec = resolveTargetReceiptEvidenceSpec(targetKey);
+  return buildTargetReceiptItemsSelectSql(spec.sourceIndices);
+}
+
+/** Auq back-compat SQL constants (SELECT-only). */
+export const TARGET_RECEIPT_SELECT_SQL = buildTargetReceiptSelectSql();
+
+export const TARGET_RECEIPT_ITEMS_SELECT_SQL =
+  buildTargetReceiptItemsSelectSqlForTarget('auq_poultry');
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -192,7 +354,48 @@ function projectAnalysisItem(
     effectiveLineTotal,
     discountAllocated: readNullableNumber(item.discountAllocated),
     amountUserEdited: readNullableBoolean(item.amountUserEdited),
+    kind: readNullableString(item.kind),
   };
+}
+
+function projectDiscounts(raw: unknown): TargetReceiptEvidenceDiscount[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((row) => {
+    const d = asRecord(row) ?? {};
+    const adj = d.adjacentPrecedingItemIndex;
+    return {
+      label: readNullableString(d.label),
+      amount: readNullableNumber(d.amount),
+      adjacentPrecedingItemIndex:
+        typeof adj === 'number' && Number.isInteger(adj) ? adj : null,
+      kind: readNullableString(d.kind),
+      type: readNullableString(d.type),
+    };
+  });
+}
+
+function projectReconciliation(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const src = raw as Record<string, unknown>;
+  const picked: Record<string, unknown> = {};
+  for (const key of RECONCILIATION_ALLOWLIST) {
+    if (src[key] !== undefined) picked[key] = src[key];
+  }
+  return Object.keys(picked).length > 0 ? picked : null;
+}
+
+function projectItemsAtIndices(
+  itemsRaw: unknown,
+  sourceIndices: readonly number[]
+): TargetReceiptEvidenceAnalysisItem[] {
+  const list = Array.isArray(itemsRaw) ? itemsRaw : [];
+  const out: TargetReceiptEvidenceAnalysisItem[] = [];
+  for (const index of sourceIndices) {
+    if (index < list.length) {
+      out.push(projectAnalysisItem(list[index], index));
+    }
+  }
+  return out;
 }
 
 export function classifyUserItemsJsonRaw(
@@ -260,16 +463,76 @@ export function classifyUserItemsJsonRaw(
   }
 }
 
-/**
- * Pure projection: narrow analysis + user_items + already-fetched raw item rows.
- * Does not call monetary recovery / enrichment.
- */
-export function buildTargetReceiptEvidenceExport(input: {
-  receipt: ReceiptEvidenceRow | null;
+function projectRecognitionSnapshot(
+  raw: string | null | undefined,
+  sourceIndices: readonly number[]
+): TargetReceiptEvidenceRecognition {
+  const empty: TargetReceiptEvidenceRecognition = {
+    present: false,
+    parseable: false,
+    itemCount: null,
+    items: [],
+    discounts: [],
+    reconciliation: null,
+    unboundedTextFieldsOmitted: false,
+    imageEvidenceOmitted: false,
+  };
+  if (raw == null || typeof raw !== 'string' || !raw.trim()) {
+    return empty;
+  }
+  const present = true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ...empty, present: true, parseable: false };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ...empty, present: true, parseable: false };
+  }
+  const obj = parsed as Record<string, unknown>;
+  const unboundedTextFieldsOmitted = RECOGNITION_RAW_TEXT_TOP_LEVEL_KEYS.some(
+    (key) => obj[key] !== undefined
+  );
+  const imageEvidenceOmitted = RECOGNITION_IMAGE_TOP_LEVEL_KEYS.some(
+    (key) => obj[key] !== undefined
+  );
+  const itemsRaw = Array.isArray(obj.items) ? obj.items : [];
+  return {
+    present,
+    parseable: true,
+    itemCount: itemsRaw.length,
+    items: projectItemsAtIndices(itemsRaw, sourceIndices),
+    discounts: projectDiscounts(obj.discounts),
+    reconciliation: projectReconciliation(obj.reconciliation),
+    unboundedTextFieldsOmitted,
+    imageEvidenceOmitted,
+  };
+}
+
+export type PersistedTargetReceiptEvidenceInput = {
+  receipt: {
+    id: string;
+    analysis_json: string | null;
+    user_items_json: string | null;
+    recognition_snapshot_json: string | null;
+  } | null;
   persistedItemRows: readonly ReceiptItemEvidenceRow[];
   nowMs?: number;
   app?: { version?: string | null; build?: string | null };
-}): TargetReceiptEvidenceExport {
+};
+
+/**
+ * Pure projection for a static target key only.
+ * Does not call monetary recovery / enrichment.
+ * Does not accept caller-supplied receiptId / sourceIndices.
+ */
+export function buildTargetReceiptEvidenceExport(
+  targetKey: string,
+  input: PersistedTargetReceiptEvidenceInput
+): TargetReceiptEvidenceExport {
+  const spec = resolveTargetReceiptEvidenceSpec(targetKey);
+  const sourceIndices = [...spec.sourceIndices];
   const nowMs = input.nowMs ?? Date.now();
   const receipt = input.receipt;
   const analysisRaw = receipt?.analysis_json ?? null;
@@ -290,56 +553,18 @@ export function buildTargetReceiptEvidenceExport(input: {
   }
 
   const userClass = classifyUserItemsJsonRaw(receipt?.user_items_json);
+  const recognition = projectRecognitionSnapshot(
+    receipt?.recognition_snapshot_json,
+    sourceIndices
+  );
 
-  const analysisItemsRaw = Array.isArray(analysisObj?.items)
-    ? (analysisObj!.items as unknown[])
-    : [];
-  const analysisItems: TargetReceiptEvidenceAnalysisItem[] = [];
-  for (const index of [0, 1] as const) {
-    if (index < analysisItemsRaw.length) {
-      analysisItems.push(projectAnalysisItem(analysisItemsRaw[index], index));
-    }
-  }
-
-  const discountsRaw = Array.isArray(analysisObj?.discounts)
-    ? (analysisObj!.discounts as unknown[])
-    : [];
-  const discounts: TargetReceiptEvidenceDiscount[] = discountsRaw.map((row) => {
-    const d = asRecord(row) ?? {};
-    const adj = d.adjacentPrecedingItemIndex;
-    return {
-      label: readNullableString(d.label),
-      amount: readNullableNumber(d.amount),
-      adjacentPrecedingItemIndex:
-        typeof adj === 'number' && Number.isInteger(adj) ? adj : null,
-      kind: readNullableString(d.kind),
-      type: readNullableString(d.type),
-    };
-  });
-
-  const reconciliationRaw = analysisObj?.reconciliation;
-  let reconciliation: Record<string, unknown> | null = null;
-  if (reconciliationRaw && typeof reconciliationRaw === 'object' && !Array.isArray(reconciliationRaw)) {
-    const src = reconciliationRaw as Record<string, unknown>;
-    const keys = [
-      'ok',
-      'itemsPositiveSum',
-      'discountsSum',
-      'tax',
-      'total',
-      'expectedTotal',
-      'diff',
-    ] as const;
-    const picked: Record<string, unknown> = {};
-    for (const key of keys) {
-      if (src[key] !== undefined) picked[key] = src[key];
-    }
-    reconciliation = Object.keys(picked).length > 0 ? picked : null;
-  }
+  const analysisItems = projectItemsAtIndices(analysisObj?.items, sourceIndices);
+  const discounts = projectDiscounts(analysisObj?.discounts);
+  const reconciliation = projectReconciliation(analysisObj?.reconciliation);
 
   const userItemsProjected: TargetReceiptEvidenceAnalysisItem[] = [];
   if (userClass.items) {
-    for (const index of [0, 1] as const) {
+    for (const index of sourceIndices) {
       if (index < userClass.items.length) {
         userItemsProjected.push(
           projectAnalysisItem(userClass.items[index], index)
@@ -348,10 +573,11 @@ export function buildTargetReceiptEvidenceExport(input: {
     }
   }
 
+  const indexSet = new Set(sourceIndices);
   const persistedReceiptItems: TargetReceiptEvidencePersistedItem[] = [
     ...input.persistedItemRows,
   ]
-    .filter((row) => row.source_index === 0 || row.source_index === 1)
+    .filter((row) => indexSet.has(row.source_index))
     .sort((a, b) => a.source_index - b.source_index)
     .map((row) => ({
       sourceIndex: row.source_index,
@@ -372,7 +598,9 @@ export function buildTargetReceiptEvidenceExport(input: {
       version: input.app?.version ?? null,
       build: input.app?.build ?? null,
     },
-    targetReceiptId: TARGET_RECEIPT_EVIDENCE_RECEIPT_ID,
+    targetKey: spec.key,
+    targetReceiptId: spec.receiptId,
+    sourceIndices,
     receipt: {
       found: receipt != null,
       analysisJsonPresent: analysisPresent,
@@ -381,6 +609,8 @@ export function buildTargetReceiptEvidenceExport(input: {
       userItemsJsonParseableArray: userClass.parseableArray,
       userItemsJsonRawKind: userClass.rawKind,
       userItemsArrayLength: userClass.arrayLength,
+      recognitionSnapshotPresent: recognition.present,
+      recognitionSnapshotParseable: recognition.parseable,
     },
     analysis: {
       items: analysisItems,
@@ -393,6 +623,7 @@ export function buildTargetReceiptEvidenceExport(input: {
       rawKind: userClass.rawKind,
       items: userItemsProjected,
     },
+    recognition,
     persistedReceiptItems,
   };
 }
@@ -416,19 +647,23 @@ export function assertTargetReceiptEvidenceJsonSafe(
 export async function loadTargetReceiptEvidenceWithDb(
   db: TargetReceiptEvidenceDatabase,
   options?: {
+    targetKey?: string;
     nowMs?: number;
     app?: { version?: string | null; build?: string | null };
   }
 ): Promise<TargetReceiptEvidenceExport> {
-  const receipt = await db.getFirstAsync<ReceiptEvidenceRow>(
-    TARGET_RECEIPT_SELECT_SQL,
-    [TARGET_RECEIPT_EVIDENCE_RECEIPT_ID]
-  );
+  const targetKey = options?.targetKey ?? 'auq_poultry';
+  const spec = resolveTargetReceiptEvidenceSpec(targetKey);
+  const selectSql = buildTargetReceiptSelectSql();
+  const itemsSql = buildTargetReceiptItemsSelectSql(spec.sourceIndices);
+  const receipt = await db.getFirstAsync<ReceiptEvidenceRow>(selectSql, [
+    spec.receiptId,
+  ]);
   const persistedItemRows = await db.getAllAsync<ReceiptItemEvidenceRow>(
-    TARGET_RECEIPT_ITEMS_SELECT_SQL,
-    [TARGET_RECEIPT_EVIDENCE_RECEIPT_ID]
+    itemsSql,
+    [spec.receiptId, ...spec.sourceIndices]
   );
-  return buildTargetReceiptEvidenceExport({
+  return buildTargetReceiptEvidenceExport(targetKey, {
     receipt,
     persistedItemRows: persistedItemRows ?? [],
     nowMs: options?.nowMs,
@@ -437,6 +672,7 @@ export async function loadTargetReceiptEvidenceWithDb(
 }
 
 export async function buildTargetReceiptEvidenceFromLocalDb(options?: {
+  targetKey?: string;
   nowMs?: number;
   app?: { version?: string | null; build?: string | null };
   requireInitializedDb?: () => TargetReceiptEvidenceDatabase;
@@ -445,18 +681,20 @@ export async function buildTargetReceiptEvidenceFromLocalDb(options?: {
     options?.requireInitializedDb ?? getInitializedReceiptsDatabaseOrThrow;
   const db = requireDb();
   return loadTargetReceiptEvidenceWithDb(db, {
+    targetKey: options?.targetKey,
     nowMs: options?.nowMs,
     app: options?.app,
   });
 }
 
 export function buildTargetReceiptEvidenceFilename(
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  filenameSlug: string = TARGET_RECEIPT_EVIDENCE_SPECS.auq_poultry.filenameSlug
 ): string {
   const d = new Date(nowMs);
   const pad = (n: number) => String(n).padStart(2, '0');
   const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  return `target-receipt-evidence-auq-${stamp}.json`;
+  return `target-receipt-evidence-${filenameSlug}-${stamp}.json`;
 }
 
 export async function writeTargetReceiptEvidenceFile(deps: {
@@ -464,6 +702,7 @@ export async function writeTargetReceiptEvidenceFile(deps: {
   cacheDirectory: string | null | undefined;
   writeAsStringAsync: (fileUri: string, contents: string) => Promise<void>;
   nowMs?: number;
+  filenameSlug?: string;
 }): Promise<{ fileUri: string; filename: string; json: string }> {
   if (!deps.cacheDirectory) {
     throw new Error(
@@ -471,7 +710,10 @@ export async function writeTargetReceiptEvidenceFile(deps: {
     );
   }
   assertTargetReceiptEvidenceJsonSafe(deps.payload);
-  const filename = buildTargetReceiptEvidenceFilename(deps.nowMs);
+  const filename = buildTargetReceiptEvidenceFilename(
+    deps.nowMs,
+    deps.filenameSlug ?? deps.payload.targetKey
+  );
   const json = JSON.stringify(deps.payload, null, 2);
   const fileUri = `${deps.cacheDirectory}${filename}`;
   await deps.writeAsStringAsync(fileUri, json);
@@ -518,15 +760,19 @@ export async function exportAndShareTargetReceiptEvidence(deps: {
   shareAsync: Parameters<typeof shareTargetReceiptEvidenceFile>[0]['shareAsync'];
   nowMs?: number;
   app?: { version?: string | null; build?: string | null };
+  targetKey?: string;
   buildExport?: () => Promise<TargetReceiptEvidenceExport>;
 }): Promise<{
   fileUri: string;
   filename: string;
   payload: TargetReceiptEvidenceExport;
 }> {
+  const targetKey = deps.targetKey ?? 'auq_poultry';
+  const spec = resolveTargetReceiptEvidenceSpec(targetKey);
   const payload = deps.buildExport
     ? await deps.buildExport()
     : await buildTargetReceiptEvidenceFromLocalDb({
+        targetKey,
         nowMs: deps.nowMs,
         app: deps.app ?? readInstalledAppMeta(),
       });
@@ -535,6 +781,7 @@ export async function exportAndShareTargetReceiptEvidence(deps: {
     cacheDirectory: deps.cacheDirectory,
     writeAsStringAsync: deps.writeAsStringAsync,
     nowMs: deps.nowMs,
+    filenameSlug: spec.filenameSlug,
   });
   await shareTargetReceiptEvidenceFile({
     fileUri: written.fileUri,

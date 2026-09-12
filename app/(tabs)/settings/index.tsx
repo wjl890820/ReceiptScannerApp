@@ -69,6 +69,7 @@ import {
 } from '@/lib/experimentSnapshotExport';
 import {
   exportAndShareTargetReceiptEvidence,
+  resolveTargetReceiptEvidenceSpec,
   TARGET_RECEIPT_EVIDENCE_PRIVACY_WARNING,
   TARGET_RECEIPT_EVIDENCE_RECEIPT_ID,
 } from '@/lib/targetReceiptEvidenceExport';
@@ -659,6 +660,7 @@ export default function SettingsScreen() {
               setTargetReceiptEvidenceBusy(true);
               try {
                 const result = await exportAndShareTargetReceiptEvidence({
+                  targetKey: 'auq_poultry',
                   app: {
                     version: currentVersion || null,
                     build: currentBuild || null,
@@ -672,6 +674,53 @@ export default function SettingsScreen() {
                 Alert.alert(
                   'Export ready',
                   `${result.filename}\nreceipt=${found}\nuserItemsKind=${result.payload.receipt.userItemsJsonRawKind}\ndiscounts=${result.payload.analysis.discounts.length}`
+                );
+              } catch (e: unknown) {
+                Alert.alert(
+                  'Export failed',
+                  e instanceof Error ? e.message : String(e)
+                );
+              } finally {
+                setTargetReceiptEvidenceBusy(false);
+              }
+            })();
+          },
+        },
+      ]
+    );
+  }, [currentBuild, currentVersion, targetReceiptEvidenceBusy]);
+
+  const runExportReceipt063Evidence = useCallback(() => {
+    if (targetReceiptEvidenceBusy) return;
+    const target = resolveTargetReceiptEvidenceSpec(
+      'receipt063_seiyu_inline_markdown'
+    );
+    Alert.alert(
+      'Export Receipt063 Evidence',
+      `${TARGET_RECEIPT_EVIDENCE_PRIVACY_WARNING}\n\nTarget: ${target.receiptId}\nIndexes: ${target.sourceIndices.join(', ')}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Export',
+          onPress: () => {
+            void (async () => {
+              setTargetReceiptEvidenceBusy(true);
+              try {
+                const result = await exportAndShareTargetReceiptEvidence({
+                  targetKey: 'receipt063_seiyu_inline_markdown',
+                  app: {
+                    version: currentVersion || null,
+                    build: currentBuild || null,
+                  },
+                  cacheDirectory: FileSystem.cacheDirectory,
+                  writeAsStringAsync: FileSystem.writeAsStringAsync,
+                  isAvailableAsync: Sharing.isAvailableAsync,
+                  shareAsync: Sharing.shareAsync,
+                });
+                const found = result.payload.receipt.found ? 'found' : 'missing';
+                Alert.alert(
+                  'Export ready',
+                  `${result.filename}\nreceipt=${found}\nuserItemsKind=${result.payload.receipt.userItemsJsonRawKind}\nrecognition=${result.payload.recognition.present ? 'present' : 'absent'}\ndiscounts=${result.payload.analysis.discounts.length}`
                 );
               } catch (e: unknown) {
                 Alert.alert(
@@ -1305,6 +1354,13 @@ export default function SettingsScreen() {
                   subtitle="Read-only · auq8r7qU… monetary evidence"
                   onPress={runExportTargetReceiptEvidence}
                   accessibilityLabel="Export Target Receipt Evidence"
+                />
+                <View style={styles.separator} />
+                <SettingsRow
+                  title="Export Receipt063 Evidence"
+                  subtitle="Read-only · SEIYU xQCDD… idx 8/9"
+                  onPress={runExportReceipt063Evidence}
+                  accessibilityLabel="Export Receipt063 Evidence"
                 />
               </>
             ) : null}
