@@ -129,13 +129,35 @@ export function discountsHaveAggregateSummaryAmbiguity(
 }
 
 /**
+ * Structured inline markdown original-price label, e.g. 値下(元 651) / 値下（元 ¥651）.
+ * Entire label must match; bare "元" elsewhere does not parse.
+ * Returns a positive integer yen amount, or null.
+ */
+export function parseInlineOriginalPriceYenFromDiscountLabel(
+  label: string
+): number | null {
+  const raw = String(label ?? '').normalize('NFKC').trim();
+  if (!raw) return null;
+  const m = raw.match(
+    /^値下(?:げ)?\s*[（(]\s*元\s*[¥￥]?\s*(\d{1,7})\s*[）)]\s*$/u
+  );
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+/**
  * Conservative adjacent product discount labels (値引 / N%割引 / 割引 N% / 値下げ).
  * Excludes bundle/まとめ売り and receipt-level summaries.
+ * Includes structured inline-original morphology 値下(元 N) so ownership can
+ * bind after collapsed gross has been lifted to the label original.
  */
 export function isOrdinaryAdjacentProductDiscountLabel(label: string): boolean {
   if (isBundleSummaryDiscountLabel(label)) return false;
   const raw = String(label || '').trim();
   if (!raw) return false;
+  if (parseInlineOriginalPriceYenFromDiscountLabel(raw) != null) return true;
   const n = normalizeToken(raw);
   if (!n || isReceiptLevelDiscountSummaryLabel(label)) return false;
   if (n.includes('クーポン') || n.includes('coupon') || n.includes('cpn')) return false;
@@ -177,6 +199,15 @@ export function findAdjacentProductDiscountItemIndex(
   if (typeof adj !== 'number' || adj < 0 || adj >= items.length) return -1;
   const gross = grossOf(items[adj]);
   if (gross <= 0 || absDisc > gross) return -1;
+
+  // Inline-original morphology may bind only after gross equals the label
+  // original (lifted or already-correct). Never attach -D onto charged-as-gross.
+  const inlineOriginal = parseInlineOriginalPriceYenFromDiscountLabel(
+    String(discount.label ?? '')
+  );
+  if (inlineOriginal != null && gross !== inlineOriginal) {
+    return -1;
+  }
 
   const pct = parseDiscountPercentFromLabel(discount.label);
   if (pct != null) {
@@ -264,18 +295,125 @@ export function findBundleDiscountItemIndex(
 }
 
 /**
+ * When charged/effective was stored as collapsed gross, but structured discounts[]
+ * carry deterministic inline original-price evidence (値下(元 N)), lift lineTotal
+ * to that original so subsequent adjacent binding recovers gross/discount/effective.
+ *
+ * Fail-closed: never invents originals; never lifts without exact yen closure.
+ */
+export function liftCollapsedGrossUsingInlineOriginalPriceEvidence<
+  T extends DiscountableItem,
+>(items: T[], discounts: DiscountLine[]): T[] {
+  if (!Array.isArray(items) || items.length === 0) return items;
+  if (!Array.isArray(discounts) || discounts.length === 0) return items;
+
+  type Cand = { original: number; amount: number };
+  const byOwner = new Map<number, Cand[]>();
+
+  for (const discount of discounts) {
+    const original = parseInlineOriginalPriceYenFromDiscountLabel(
+      String(discount.label ?? '')
+    );
+    if (original == null) continue;
+    const amountRaw = Number(discount.amount);
+    // Fail-closed: only negative structured discount amounts.
+    if (!Number.isFinite(amountRaw) || !(amountRaw < 0)) continue;
+    const amount = amountRaw;
+    const adj = discount.adjacentPrecedingItemIndex;
+    if (
+      typeof adj !== 'number' ||
+      !Number.isInteger(adj) ||
+      adj < 0 ||
+      adj >= items.length
+    ) {
+      continue;
+    }
+    const list = byOwner.get(adj) ?? [];
+    list.push({ original, amount });
+    byOwner.set(adj, list);
+  }
+
+  if (byOwner.size === 0) return items;
+
+  let changed = false;
+  const next = items.map((item) => ({ ...item })) as T[];
+
+  for (const [itemIndex, cands] of byOwner) {
+    // Multiple inline-original discounts for one item → ambiguous; skip item.
+    if (cands.length !== 1) continue;
+    const { original, amount } = cands[0]!;
+    const item = next[itemIndex]!;
+    if (item.amountUserEdited === true) continue;
+
+    const camel = Number(item.lineTotal);
+    const snake = Number(item.line_total);
+    if (Number.isFinite(camel) && Number.isFinite(snake) && camel !== snake) {
+      continue;
+    }
+    const gross = Number.isFinite(camel)
+      ? camel
+      : Number.isFinite(snake)
+        ? snake
+        : Number.NaN;
+    if (!Number.isFinite(gross) || !(gross > 0)) continue;
+
+    const expectedCharged = original + amount;
+    if (!(expectedCharged > 0) || !(original > expectedCharged)) continue;
+    // Exact yen arithmetic required.
+    if (expectedCharged !== original + amount) continue;
+
+    const eff = Number(item.effectiveLineTotal);
+    const discRaw = Number(item.discountAllocated);
+    const disc = Number.isFinite(discRaw) ? discRaw : 0;
+
+    // Already-correct canonical tuple — do not touch.
+    if (
+      gross === original &&
+      disc === amount &&
+      Number.isFinite(eff) &&
+      eff === expectedCharged
+    ) {
+      continue;
+    }
+
+    // Collapsed charged-as-gross only.
+    const collapsed =
+      gross === expectedCharged &&
+      disc === 0 &&
+      (!Number.isFinite(eff) || eff === expectedCharged);
+    if (!collapsed) continue;
+
+    next[itemIndex] = {
+      ...item,
+      lineTotal: original,
+      line_total: original,
+    };
+    changed = true;
+  }
+
+  return changed ? next : items;
+}
+
+/**
  * Apply product-level coupons onto items as effectiveLineTotal while keeping
  * gross lineTotal. Unbound coupons remain receipt-level.
  *
  * Bundle/まとめ売り値引 may bind via adjacency, group-price evidence, or
  * adjacentPrecedingItemIndex when token binding fails.
+ *
+ * Structured inline-original discounts (値下(元 N)) first lift collapsed
+ * charged-as-gross lineTotals when exact yen evidence closes, then bind.
  */
 export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
   items: T[],
   discounts: DiscountLine[],
   options?: { evidenceTexts?: string[] }
 ): DiscountAllocationResult<T> {
-  const next = items.map((item) => {
+  const lifted = liftCollapsedGrossUsingInlineOriginalPriceEvidence(
+    items,
+    discounts
+  );
+  const next = lifted.map((item) => {
     const gross = grossOf(item);
     return {
       ...item,

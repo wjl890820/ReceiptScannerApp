@@ -42,6 +42,11 @@ export type PriceObservationQualityInput = {
   isNonProductRow?: boolean;
   /** When true, reciprocal half/integer price drop may be treated as qty OCR anomaly. */
   quantityOcrCorroborated?: boolean;
+  /**
+   * When false, skip strong random-weight meat-cut purchase-unit fail-closed
+   * (mass-/spec-normalized ¥/100g paths). Default true.
+   */
+  forPurchaseUnitComparison?: boolean;
 };
 
 /**
@@ -360,6 +365,10 @@ function numAttr(
 /**
  * Variable-price / weighable: prefer attributes + variance (no family === meat).
  * When unsure → do not flag quantity anomaly.
+ *
+ * Broad name lexicon (after orthographic bridge) is a weak hint — same class as
+ * pre-Receipt063: 牛/豚/切/ブロック/… may appear on fixed-price goods (牛乳…).
+ * Strong random-weight meat-cut morphology is gated separately.
  */
 export function looksLikeVariableUnitPriceProduct(input: {
   attributes?: ProductAttributes | null;
@@ -393,13 +402,54 @@ export function looksLikeVariableUnitPriceProduct(input: {
     }
   }
 
-  const name = (input.rawName || '').toLowerCase();
+  const name = normalizeVariableWeightMeatNameHints(input.rawName || '');
   if (!hasMass && !hasVolume && !hasCount && !hasRoll && !hasLength) {
     if (/(肉|豚|牛|鶏|魚|刺身|切|ブロック|ステーキ|ミンチ)/.test(name)) {
       return true;
     }
   }
   return false;
+}
+
+/**
+ * Orthographic bridge into the existing meat/cut lexicon.
+ * Maps only established equivalents of 牛/豚/鶏/切り落とし — not bare カタ/キリ.
+ */
+function normalizeVariableWeightMeatNameHints(raw: string): string {
+  let s = String(raw || '').normalize('NFKC');
+  s = s.replace(/ギュウ|ビーフ/gi, '牛');
+  s = s.replace(/ブタ|ポーク/gi, '豚');
+  s = s.replace(/チキン/gi, '鶏');
+  s = s.replace(/キリオトシ/gi, '切り落とし');
+  return s.toLowerCase();
+}
+
+/**
+ * Broad lexical hint (weak): animal/cut vocabulary after orthographic bridge.
+ * Alone must NOT force unconditional purchase-unit caution (牛乳, 切り餅, …).
+ */
+export function nameLooksLikeVariableWeightMeatOrCut(
+  rawName: string | null | undefined
+): boolean {
+  const name = normalizeVariableWeightMeatNameHints(rawName || '');
+  if (!name) return false;
+  return /(肉|豚|牛|鶏|魚|刺身|切|ブロック|ステーキ|ミンチ)/.test(name);
+}
+
+/**
+ * Strong random-weight meat-cut morphology: animal/meat identity AND a
+ * cutdown/block form associated with variable-weight packs.
+ * Isolated 牛/切/ブロック tokens are not sufficient.
+ * ステーキ / ミンチ are intentionally NOT strong (prepared foods: 弁当, カツ, …).
+ */
+export function looksLikeStrongVariableWeightMeatCut(
+  rawName: string | null | undefined
+): boolean {
+  const name = normalizeVariableWeightMeatNameHints(rawName || '');
+  if (!name) return false;
+  const hasAnimalOrMeat = /(肉|豚|牛|鶏|魚|刺身)/.test(name);
+  const hasStrongCutOrBlock = /切り落とし|切落し|ブロック/.test(name);
+  return hasAnimalOrMeat && hasStrongCutOrBlock;
 }
 
 export function evaluatePriceObservationQuality(
@@ -474,17 +524,32 @@ export function evaluatePriceObservationQuality(
   let quantityConfidence: number | null = 0.9;
   let potentialOutlier = false;
 
-  if (peerCount < MIN_PEERS_FOR_ANOMALY) {
+  const forPurchaseUnitComparison = input.forPurchaseUnitComparison !== false;
+  const strongVariableWeightMeatCut =
+    forPurchaseUnitComparison &&
+    looksLikeStrongVariableWeightMeatCut(input.rawName);
+
+  const variableProduct = looksLikeVariableUnitPriceProduct({
+    attributes: input.attributes,
+    rawName: input.rawName,
+    peerPurchaseUnitPrices: peers ?? undefined,
+    preparedPeerCount: prepared?.count,
+    preparedPeerCv: prepared?.coeffOfVariation,
+  });
+
+  if (strongVariableWeightMeatCut) {
+    // Independent purchase-unit fail-closed for random-weight meat-cut packs.
+    if (peerCount < MIN_PEERS_FOR_ANOMALY) {
+      reasons.push('insufficient_history_for_anomaly_check');
+    }
+    reasons.push('high_variance_variable_price');
+    potentialOutlier = true;
+    quality = 'usable_with_caution';
+    quantityConfidence = 0.55;
+  } else if (peerCount < MIN_PEERS_FOR_ANOMALY) {
     reasons.push('insufficient_history_for_anomaly_check');
-  } else if (
-    looksLikeVariableUnitPriceProduct({
-      attributes: input.attributes,
-      rawName: input.rawName,
-      peerPurchaseUnitPrices: peers ?? undefined,
-      preparedPeerCount: prepared?.count,
-      preparedPeerCv: prepared?.coeffOfVariation,
-    })
-  ) {
+  } else if (variableProduct) {
+    // Broad lexicon / mass / peer-CV: restore pre-patch median policy.
     reasons.push('high_variance_variable_price');
     const med = peerMed;
     if (med > 0 && Math.abs(rawPurchaseUnitPrice - med) / med >= 0.5) {

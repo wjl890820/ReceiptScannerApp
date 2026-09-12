@@ -334,7 +334,18 @@ describe('coupon / discount allocation', () => {
     });
 
     it('ordinary adjacent label matrix: printed orders and percent extraction', () => {
-      const accepted = ['10%割引', '割引 10%', '50%割引', '割引 50%', '値引', '割引', '20％割引', '割引１０％'];
+      const accepted = [
+        '10%割引',
+        '割引 10%',
+        '50%割引',
+        '割引 50%',
+        '値引',
+        '割引',
+        '20％割引',
+        '割引１０％',
+        '値下(元 651)',
+        '値下（元 ¥651）',
+      ];
       for (const label of accepted) {
         expect(isOrdinaryAdjacentProductDiscountLabel(label)).toBe(true);
       }

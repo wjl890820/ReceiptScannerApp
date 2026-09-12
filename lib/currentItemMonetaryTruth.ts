@@ -8,6 +8,9 @@
  * persisted item fields were never allocated, this derives corrected
  * discountAllocated / effectiveLineTotal observationally.
  *
+ * Also recovers collapsed charged-as-gross lines when structured discounts[]
+ * carry deterministic inline original-price evidence (値下(元 N)).
+ *
  * Never writes SQLite. Never mutates analysis_json / receipt_items on disk.
  */
 
@@ -94,11 +97,19 @@ function monetaryFieldsEqual(
   const rightDisc = Number(right.discountAllocated);
   const leftEff = Number(left.effectiveLineTotal);
   const rightEff = Number(right.effectiveLineTotal);
+  const leftGross = Number(left.lineTotal);
+  const rightGross = Number(right.lineTotal);
   const leftDiscNorm = Number.isFinite(leftDisc) ? leftDisc : 0;
   const rightDiscNorm = Number.isFinite(rightDisc) ? rightDisc : 0;
   const leftEffNorm = Number.isFinite(leftEff) ? leftEff : null;
   const rightEffNorm = Number.isFinite(rightEff) ? rightEff : null;
-  return leftDiscNorm === rightDiscNorm && leftEffNorm === rightEffNorm;
+  const leftGrossNorm = Number.isFinite(leftGross) ? leftGross : null;
+  const rightGrossNorm = Number.isFinite(rightGross) ? rightGross : null;
+  return (
+    leftDiscNorm === rightDiscNorm &&
+    leftEffNorm === rightEffNorm &&
+    leftGrossNorm === rightGrossNorm
+  );
 }
 
 /**
@@ -184,30 +195,37 @@ export function applyCurrentItemMonetaryTruthToAnalysisItems(
     const base = raw as Record<string, unknown>;
     const discountAllocated = Number(recovered.discountAllocated);
     const effectiveLineTotal = Number(recovered.effectiveLineTotal);
+    const recoveredGross = Number(recovered.lineTotal);
     if (!Number.isFinite(discountAllocated) || !Number.isFinite(effectiveLineTotal)) {
       return raw;
     }
     const priorDisc = Number(base.discountAllocated);
     const priorEff = Number(base.effectiveLineTotal);
+    const priorGross = Number(base.lineTotal);
+    const grossUnchanged =
+      !Number.isFinite(recoveredGross) ||
+      (Number.isFinite(priorGross) && priorGross === recoveredGross);
     if (
       Number.isFinite(priorDisc) &&
       priorDisc === discountAllocated &&
       Number.isFinite(priorEff) &&
-      priorEff === effectiveLineTotal
+      priorEff === effectiveLineTotal &&
+      grossUnchanged
     ) {
       return raw;
     }
+    const nextGross = Number.isFinite(recoveredGross)
+      ? recoveredGross
+      : Number.isFinite(priorGross)
+        ? priorGross
+        : base.lineTotal;
     return {
       ...base,
       discountAllocated,
       effectiveLineTotal,
-      // Keep gross aliases stable; lineTotal remains the gross merchandise amount.
-      lineTotal:
-        Number.isFinite(Number(base.lineTotal))
-          ? Number(base.lineTotal)
-          : Number.isFinite(Number(recovered.lineTotal))
-            ? Number(recovered.lineTotal)
-            : base.lineTotal,
+      // Gross may be lifted from inline-original evidence; otherwise stable.
+      lineTotal: nextGross,
+      line_total: nextGross,
     };
   });
 }
@@ -273,10 +291,12 @@ export function enrichProductRowsWithCurrentItemMonetaryTruth<
         out.push(row);
         continue;
       }
-      const gross =
-        row.grossLineAmount != null && Number.isFinite(row.grossLineAmount)
+      const recoveredGross = Number(recovered.lineTotal);
+      const gross = Number.isFinite(recoveredGross)
+        ? recoveredGross
+        : row.grossLineAmount != null && Number.isFinite(row.grossLineAmount)
           ? row.grossLineAmount
-          : Number(recovered.lineTotal);
+          : Number.NaN;
       if (!Number.isFinite(gross) || gross < 0) {
         out.push(row);
         continue;
@@ -288,15 +308,16 @@ export function enrichProductRowsWithCurrentItemMonetaryTruth<
       }
       if (
         row.discountAllocated === discountAllocated &&
-        row.effectiveLineAmount === effectiveLineTotal
+        row.effectiveLineAmount === effectiveLineTotal &&
+        row.grossLineAmount === gross
       ) {
         out.push(row);
         continue;
       }
       out.push({
         ...row,
-        // Gross comparison surface stays on the original gross.
-        grossLineAmount: row.grossLineAmount ?? gross,
+        // Canonical gross may be lifted from inline-original structured evidence.
+        grossLineAmount: gross,
         discountAllocated,
         effectiveLineAmount: effectiveLineTotal,
       });

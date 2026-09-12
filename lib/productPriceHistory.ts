@@ -1331,6 +1331,7 @@ function evaluateNormalizedGrossQuality(
     peerPurchaseUnitPrices: peerPriceValues ?? undefined,
     preparedPeerStats: preparedPeerStats ?? null,
     attributes: normalizeProductForIdentity(row.displayName).attributes,
+    forPurchaseUnitComparison: isPurchaseUnit,
   });
   return quality.quality;
 }
