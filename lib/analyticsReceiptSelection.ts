@@ -112,6 +112,7 @@ export function selectAnalyticsReceipts(
       contentExactDuplicateExtras += extras;
     } else if (
       g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' ||
+      g.confidence === 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE' ||
       g.confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
     ) {
       reconciledStructuralExactDuplicateExtras += extras;

@@ -19,6 +19,15 @@
  *     exactly explain overage (>0), and when both taxes are known & differ,
  *     abs(taxA-taxB)===overage. Trailing-prefix only (no arbitrary deletion).
  *     No header-only dedupe. No product-name / fuzzy / AI matching.
+ *   RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE — additive high-confidence
+ *     path for one allocated item-owned discount vs the same magnitude
+ *     accidentally materialized as exactly one middle/extra positive product
+ *     row: same merchant + exact clock + exact total + both taxes known &
+ *     equal + itemCount differs by 1 + unique ordered gross alignment after
+ *     deleting that one positive row + exactly one matching negative
+ *     discountAllocated with gross+discount=effective on the discounted side
+ *     and collapsed gross=effective/discount=0 on the paired product.
+ *     No arbitrary one-extra-row ignore. No fuzzy amounts.
  *   RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE — additive high-confidence
  *     path after strict STRUCTURAL_EXACT fails: same merchant + exact clock
  *     transaction_at + exact total + compatible tax + same item count +
@@ -81,12 +90,13 @@ import { pickBestRepresentativeReceiptId } from './receiptRepresentativeQuality'
 import { deriveRetailerIdentity } from './retailerIdentity';
 
 export const ANALYSIS_D_DUPLICATE_AUDIT_VERSION =
-  'meruno-analysis-d-duplicate-audit-v8' as const;
+  'meruno-analysis-d-duplicate-audit-v10' as const;
 
 export type AnalysisDDuplicateConfidence =
   | 'CONTENT_EXACT_DUPLICATE'
   | 'STRUCTURAL_EXACT_DUPLICATE'
   | 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+  | 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE'
   | 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
   | 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
   | 'PROBABLE_DUPLICATE'
@@ -96,11 +106,22 @@ export type AnalysisDDuplicateItemEvidence = {
   nameCanonical: string;
   quantity: number;
   lineAmount: number;
+  grossLineAmount: number;
+  discountAllocated: number;
+  effectiveLineAmount: number;
 };
 
 export type AnalysisDQtyAmountRow = {
   quantity: number;
   lineAmount: number;
+};
+
+/** Strict per-item monetary tuple for discount-shape equivalence (no qty defaults). */
+export type AnalysisDDiscountShapeStrictItemRow = {
+  quantity: number;
+  gross: number;
+  discount: number;
+  effective: number;
 };
 
 export type AnalysisDDuplicateReceiptSummary = {
@@ -112,6 +133,8 @@ export type AnalysisDDuplicateReceiptSummary = {
   /** False for date-only midnight — not exact-time evidence. */
   hasExactTransactionTime: boolean;
   total: number;
+  /** True when raw receipt.total is finite and > 0 (not sanitized zero). */
+  hasValidPositiveTotal: boolean;
   tax: number | null;
   taxKnown: boolean;
   itemCount: number;
@@ -123,6 +146,17 @@ export type AnalysisDDuplicateReceiptSummary = {
   structuralFingerprint: string | null;
   /** Ordered (qty, effective/line amount) vector — structural/reconciled evidence. */
   orderedQtyAmountVector: AnalysisDQtyAmountRow[];
+  /** Ordered (qty, gross lineTotal) — discount-shape / structural gross evidence. */
+  orderedGrossQtyAmountVector: AnalysisDQtyAmountRow[];
+  /** Ordered discountAllocated (negative or 0) aligned with product rows. */
+  orderedDiscountAllocated: number[];
+  /** Ordered effective line amounts aligned with product rows. */
+  orderedEffectiveLineAmounts: number[];
+  /**
+   * Strict qty/gross/discount/effective rows for discount-shape only.
+   * null when any row lacks valid explicit quantity or JPY-integer money.
+   */
+  discountShapeStrictRows: AnalysisDDiscountShapeStrictItemRow[] | null;
   /** Ordered canonical item names (SEMANTIC_RESCAN name compatibility). */
   orderedNameCanonicals: string[];
   /** Sum of orderedQtyAmountVector line amounts. */
@@ -189,12 +223,24 @@ export type AnalysisDDuplicateRelationEvidence = {
     | 'CONTENT_EXACT_DUPLICATE'
     | 'STRUCTURAL_EXACT_DUPLICATE'
     | 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
+    | 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE'
     | 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
     | 'SEMANTIC_RESCAN_EXACT_DUPLICATE'
   >;
   evidence: string[];
   semanticRescanEvidence?: AnalysisDSemanticRescanRelationEvidence;
   reconciledEvidence?: AnalysisDReconciledStructuralEvidence;
+  discountShapeEvidence?: AnalysisDDiscountShapeEquivalentEvidence;
+};
+
+export type AnalysisDDiscountShapeEquivalentEvidence = {
+  discountedReceiptId: string;
+  inflatedReceiptId: string;
+  removedInflatedItemIndex: number;
+  unmatchedPositiveAmount: number;
+  discountedItemIndex: number;
+  productGrossAmount: number;
+  representativeReceiptId: string;
 };
 
 export type AnalysisDDuplicateGroup = {
@@ -487,12 +533,88 @@ export function extractDuplicateItemEvidence(
 ): AnalysisDDuplicateItemEvidence[] {
   return getReceiptItems(receipt).map((raw) => {
     const item = asItemRecord(raw);
+    const gross =
+      readRawItemLineAmount(item) ??
+      (Number.isFinite(Number(item.lineTotal)) ? Number(item.lineTotal) : 0);
+    const discRaw = Number(item.discountAllocated);
+    const discountAllocated = Number.isFinite(discRaw) ? discRaw : 0;
+    const effRaw = Number(item.effectiveLineTotal);
+    const analytics = itemAmountForAnalytics(item as never);
+    const effectiveLineAmount = Number.isFinite(effRaw) ? effRaw : analytics;
     return {
       nameCanonical: canonicalizeReceiptItemName(readItemName(item)),
       quantity: readItemQuantity(item),
-      lineAmount: itemAmountForAnalytics(item as never),
+      lineAmount: analytics,
+      grossLineAmount: gross > 0 ? gross : analytics,
+      discountAllocated,
+      effectiveLineAmount,
     };
   });
+}
+
+function isStrictJpyMoneyInteger(n: number): boolean {
+  return Number.isFinite(n) && Number.isSafeInteger(n);
+}
+
+/**
+ * Discount-shape-only strict item rows: no quantity defaulting, no money rounding.
+ * Returns null if any row lacks explicit valid quantity or JPY-safe-integer money.
+ */
+export function extractStrictDiscountShapeItemRows(
+  receipt: ReceiptRow
+): AnalysisDDiscountShapeStrictItemRow[] | null {
+  const items = getReceiptItems(receipt);
+  if (items.length === 0) return null;
+  const rows: AnalysisDDiscountShapeStrictItemRow[] = [];
+  for (const raw of items) {
+    const item = asItemRecord(raw);
+    const quantity = readRawItemQuantity(item);
+    if (quantity == null || !isStrictJpyMoneyInteger(quantity) || quantity <= 0) {
+      return null;
+    }
+    const gross = readRawItemLineAmount(item);
+    if (gross == null || !isStrictJpyMoneyInteger(gross) || !(gross > 0)) {
+      return null;
+    }
+    let discount: number;
+    if (item.discountAllocated == null) {
+      discount = 0;
+    } else {
+      const d = Number(item.discountAllocated);
+      if (!isStrictJpyMoneyInteger(d)) return null;
+      discount = d;
+    }
+    let effective: number;
+    if (item.effectiveLineTotal == null) {
+      if (discount !== 0) return null;
+      effective = gross;
+    } else {
+      const e = Number(item.effectiveLineTotal);
+      if (!isStrictJpyMoneyInteger(e)) return null;
+      effective = e;
+    }
+    rows.push({ quantity, gross, discount, effective });
+  }
+  return rows;
+}
+
+function jpyMoneyExact(a: number, b: number): boolean {
+  return isStrictJpyMoneyInteger(a) && isStrictJpyMoneyInteger(b) && a === b;
+}
+
+/**
+ * Discount-shape-only trusted tax: known, finite SafeInteger, non-negative.
+ * Negatives are invalid monetary evidence (repo policy); zero remains allowed.
+ * Intentionally stricter than jpyMoneyExact (which must stay signed-safe for discounts).
+ */
+function isStrictNonNegativeKnownJpyTax(
+  taxKnown: boolean,
+  tax: number | null | undefined
+): boolean {
+  if (!taxKnown) return false;
+  if (tax == null) return false;
+  if (!Number.isFinite(tax) || !Number.isSafeInteger(tax)) return false;
+  return tax >= 0;
 }
 
 /**
@@ -570,6 +692,12 @@ export function summarizeReceiptForDuplicateAudit(
     quantity: it.quantity,
     lineAmount: it.lineAmount,
   }));
+  const orderedGrossQtyAmountVector = items.map((it) => ({
+    quantity: it.quantity,
+    lineAmount: it.grossLineAmount,
+  }));
+  const orderedDiscountAllocated = items.map((it) => it.discountAllocated);
+  const orderedEffectiveLineAmounts = items.map((it) => it.effectiveLineAmount);
   const merchandiseSum = orderedQtyAmountVector.reduce(
     (sum, row) => sum + row.lineAmount,
     0
@@ -587,6 +715,7 @@ export function summarizeReceiptForDuplicateAudit(
     hasValidTransactionAt: hasValidTransactionAt(receipt),
     hasExactTransactionTime: hasExactTransactionTime(receipt),
     total: Number(receipt.total) || 0,
+    hasValidPositiveTotal: isValidStructuralDuplicateTotal(receipt.total),
     tax: tax.value,
     taxKnown: tax.known,
     itemCount: items.length,
@@ -595,6 +724,10 @@ export function summarizeReceiptForDuplicateAudit(
     exactFingerprint: contentFingerprint,
     structuralFingerprint: buildStructuralReceiptFingerprint(receipt),
     orderedQtyAmountVector,
+    orderedGrossQtyAmountVector,
+    orderedDiscountAllocated,
+    orderedEffectiveLineAmounts,
+    discountShapeStrictRows: extractStrictDiscountShapeItemRows(receipt),
     orderedNameCanonicals: items.map((it) => it.nameCanonical),
     merchandiseSum,
     currency: structuralEligibility.currency,
@@ -954,6 +1087,114 @@ export function evaluateReconciledStructuralExactPair(
 }
 
 /**
+ * RECONCILED_DISCOUNT_SHAPE_EQUIVALENT — exact local transform only:
+ * short owner G/E/-D vs long collapsed G/G/0 immediately followed by +D/+D/0.
+ * Requires structuralDuplicateEligible, known equal currency, strict qty/money.
+ */
+export function evaluateDiscountShapeEquivalentPair(
+  a: AnalysisDDuplicateReceiptSummary,
+  b: AnalysisDDuplicateReceiptSummary
+): {
+  discounted: AnalysisDDuplicateReceiptSummary;
+  inflated: AnalysisDDuplicateReceiptSummary;
+  removedInflatedItemIndex: number;
+  unmatchedPositiveAmount: number;
+  discountedItemIndex: number;
+  productGrossAmount: number;
+} | null {
+  if (!a.structuralDuplicateEligible || !b.structuralDuplicateEligible) {
+    return null;
+  }
+  if (!a.currency || !b.currency || a.currency !== b.currency) return null;
+  if (a.currency !== 'JPY') return null;
+  if (!a.hasExactTransactionTime || !b.hasExactTransactionTime) return null;
+  if (!a.merchantKey || a.merchantKey !== b.merchantKey) return null;
+  if (a.transactionAt == null || a.transactionAt !== b.transactionAt) {
+    return null;
+  }
+  if (!a.hasValidPositiveTotal || !b.hasValidPositiveTotal) return null;
+  if (!jpyMoneyExact(a.total, b.total)) return null;
+  if (
+    !isStrictNonNegativeKnownJpyTax(a.taxKnown, a.tax) ||
+    !isStrictNonNegativeKnownJpyTax(b.taxKnown, b.tax)
+  ) {
+    return null;
+  }
+  if (!jpyMoneyExact(a.tax!, b.tax!)) return null;
+  if (Math.abs(a.itemCount - b.itemCount) !== 1) return null;
+
+  const discounted = a.itemCount < b.itemCount ? a : b;
+  const inflated = a.itemCount < b.itemCount ? b : a;
+  if (inflated.itemCount !== discounted.itemCount + 1) return null;
+
+  const shortRows = discounted.discountShapeStrictRows;
+  const longRows = inflated.discountShapeStrictRows;
+  if (
+    shortRows == null ||
+    longRows == null ||
+    shortRows.length !== discounted.itemCount ||
+    longRows.length !== inflated.itemCount
+  ) {
+    return null;
+  }
+
+  // Exactly one item-owned negative discount on the short/correct side.
+  const ownerIndexes: number[] = [];
+  for (let i = 0; i < shortRows.length; i += 1) {
+    if (shortRows[i]!.discount < 0) ownerIndexes.push(i);
+  }
+  if (ownerIndexes.length !== 1) return null;
+  const ownerIdx = ownerIndexes[0]!;
+  const owner = shortRows[ownerIdx]!;
+  const D = -owner.discount;
+  if (!(D > 0) || !isStrictJpyMoneyInteger(D)) return null;
+  if (!jpyMoneyExact(owner.gross + owner.discount, owner.effective)) return null;
+  if (!jpyMoneyExact(owner.gross - D, owner.effective)) return null;
+
+  // Longer side must not carry any negative item-owned discount.
+  if (longRows.some((row) => row.discount < 0)) return null;
+
+  // Local adjacency: L[ownerIdx] collapsed owner, L[ownerIdx+1] = +D coupon row.
+  if (ownerIdx + 1 >= longRows.length) return null;
+  const longOwner = longRows[ownerIdx]!;
+  const coupon = longRows[ownerIdx + 1]!;
+  if (!jpyMoneyExact(longOwner.quantity, owner.quantity)) return null;
+  if (!jpyMoneyExact(longOwner.gross, owner.gross)) return null;
+  if (!jpyMoneyExact(longOwner.discount, 0)) return null;
+  if (!jpyMoneyExact(longOwner.effective, owner.gross)) return null;
+  if (!jpyMoneyExact(coupon.quantity, 1)) return null;
+  if (!jpyMoneyExact(coupon.gross, D)) return null;
+  if (!jpyMoneyExact(coupon.effective, D)) return null;
+  if (!jpyMoneyExact(coupon.discount, 0)) return null;
+
+  // After removing L[ownerIdx+1], every position aligns; only owner may differ
+  // in discount/effective representation.
+  for (let j = 0; j < shortRows.length; j += 1) {
+    const longIdx = j <= ownerIdx ? j : j + 1;
+    const s = shortRows[j]!;
+    const l = longRows[longIdx]!;
+    if (!jpyMoneyExact(s.quantity, l.quantity)) return null;
+    if (!jpyMoneyExact(s.gross, l.gross)) return null;
+    if (j === ownerIdx) {
+      if (!jpyMoneyExact(l.discount, 0)) return null;
+      if (!jpyMoneyExact(l.effective, s.gross)) return null;
+      continue;
+    }
+    if (!jpyMoneyExact(s.discount, l.discount)) return null;
+    if (!jpyMoneyExact(s.effective, l.effective)) return null;
+  }
+
+  return {
+    discounted,
+    inflated,
+    removedInflatedItemIndex: ownerIdx + 1,
+    unmatchedPositiveAmount: D,
+    discountedItemIndex: ownerIdx,
+    productGrossAmount: owner.gross,
+  };
+}
+
+/**
  * Strip trailing pack/count structural tokens for conservative name base compare.
  * Does NOT fuzzy-match product names — only structural quantity/spec suffixes.
  */
@@ -1181,6 +1422,29 @@ function pickRepresentative(
   return pickBestRepresentativeReceiptId(members, receiptById);
 }
 
+/**
+ * Discount-shape groups: prefer the side with coherent item-owned discount
+ * (proven by the equivalence), not the coupon-as-positive-row inflation.
+ * Scoped only to this relation — does not globally prefer discounts.
+ */
+function pickDiscountShapeRepresentative(
+  members: AnalysisDDuplicateReceiptSummary[],
+  relations: InternalPairRelation[],
+  receiptById: ReadonlyMap<string, ReceiptRow>
+): string {
+  const discountedIds = new Set<string>();
+  for (const r of relations) {
+    if (r.path !== 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE') continue;
+    const id = r.discountShapeEvidence?.discountedReceiptId;
+    if (id) discountedIds.add(id);
+  }
+  const preferred = members.filter((m) => discountedIds.has(m.receiptId));
+  if (preferred.length >= 1) {
+    return pickBestRepresentativeReceiptId(preferred, receiptById);
+  }
+  return pickBestRepresentativeReceiptId(members, receiptById);
+}
+
 function pairKey(a: string, b: string): string {
   return a <= b ? `${a}\u001f${b}` : `${b}\u001f${a}`;
 }
@@ -1192,8 +1456,9 @@ const PATH_RANK: Record<
   CONTENT_EXACT_DUPLICATE: 0,
   STRUCTURAL_EXACT_DUPLICATE: 1,
   RECONCILED_STRUCTURAL_EXACT_DUPLICATE: 2,
-  SEMANTIC_RESCAN_EXACT_DUPLICATE: 3,
-  RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE: 4,
+  RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE: 3,
+  SEMANTIC_RESCAN_EXACT_DUPLICATE: 4,
+  RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE: 5,
 };
 
 function sortRelationEvidence(
@@ -1358,6 +1623,38 @@ function buildPairRelation(
     };
   }
 
+  const discountShape = evaluateDiscountShapeEquivalentPair(L, R);
+  if (discountShape) {
+    return {
+      leftReceiptId: leftId,
+      rightReceiptId: rightId,
+      path: 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE',
+      evidence: [
+        'reconciled_discount_shape_equivalent_duplicate',
+        'same_merchant_analytics_key',
+        'exact_transaction_at',
+        'exact_total',
+        'exact_tax_both_known',
+        'structural_duplicate_eligible_both',
+        'known_equal_currency_jpy',
+        'item_count_differs_by_one',
+        'exact_local_owner_then_adjacent_positive_transform',
+        'exactly_one_item_owned_negative_discount',
+        'item_owned_discount_monetary_closure',
+        'collapsed_counterpart_product_no_discount',
+      ],
+      discountShapeEvidence: {
+        discountedReceiptId: discountShape.discounted.receiptId,
+        inflatedReceiptId: discountShape.inflated.receiptId,
+        removedInflatedItemIndex: discountShape.removedInflatedItemIndex,
+        unmatchedPositiveAmount: discountShape.unmatchedPositiveAmount,
+        discountedItemIndex: discountShape.discountedItemIndex,
+        productGrossAmount: discountShape.productGrossAmount,
+        representativeReceiptId: '',
+      },
+    };
+  }
+
   const semantic = evaluateSemanticRescanExactPair(L, R);
   if (semantic) {
     return {
@@ -1474,6 +1771,9 @@ export function buildHighConfidenceDuplicateGroups(
     const hasReconciled = relations.some(
       (r) => r.path === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE'
     );
+    const hasDiscountShape = relations.some(
+      (r) => r.path === 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE'
+    );
     const hasQuantityNoise = relations.some(
       (r) => r.path === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
     );
@@ -1484,6 +1784,8 @@ export function buildHighConfidenceDuplicateGroups(
     let confidence: AnalysisDDuplicateConfidence;
     if (hasReconciled) {
       confidence = 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE';
+    } else if (hasDiscountShape) {
+      confidence = 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE';
     } else if (hasQuantityNoise) {
       confidence = 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE';
     } else if (hasSemantic) {
@@ -1497,7 +1799,10 @@ export function buildHighConfidenceDuplicateGroups(
         : 'STRUCTURAL_EXACT_DUPLICATE';
     }
 
-    const representativeReceiptId = pickRepresentative(members, receiptById);
+    const representativeReceiptId =
+      hasDiscountShape && !hasReconciled
+        ? pickDiscountShapeRepresentative(members, relations, receiptById)
+        : pickRepresentative(members, receiptById);
     const rep = members.find((m) => m.receiptId === representativeReceiptId)!;
 
     const relationEvidence: AnalysisDDuplicateRelationEvidence[] =
@@ -1517,6 +1822,12 @@ export function buildHighConfidenceDuplicateGroups(
         if (r.reconciledEvidence) {
           base.reconciledEvidence = {
             ...r.reconciledEvidence,
+            representativeReceiptId,
+          };
+        }
+        if (r.discountShapeEvidence) {
+          base.discountShapeEvidence = {
+            ...r.discountShapeEvidence,
             representativeReceiptId,
           };
         }
@@ -1639,6 +1950,50 @@ export function buildHighConfidenceDuplicateGroups(
           (c) =>
             `observation_quantity_conflict;left_receipt_id=${c.leftReceiptId};right_receipt_id=${c.rightReceiptId};item_index=${c.itemIndex};left_quantity=${c.leftQuantity};right_quantity=${c.rightQuantity};line_amount=${roundMoney(c.lineAmount)}`
         ) ?? []),
+      ];
+    } else if (confidence === 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE') {
+      const shapeRel = relations.find(
+        (r) => r.path === 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE'
+      );
+      const shape = shapeRel?.discountShapeEvidence;
+      const discounted =
+        members.find((m) => m.receiptId === shape?.discountedReceiptId) ?? rep;
+      fingerprint = [
+        'discount-shape-v1',
+        discounted.merchantKey,
+        String(discounted.transactionAt),
+        roundMoney(discounted.total),
+        `grossN:${discounted.orderedGrossQtyAmountVector.length}`,
+        `grossAmt:${discounted.orderedGrossQtyAmountVector
+          .map((r) => `${r.quantity}\u001f${roundMoney(r.lineAmount)}`)
+          .join('\u001e')}`,
+      ].join('|');
+      matchingEvidence = [
+        'reconciled_discount_shape_equivalent_duplicate',
+        'same_merchant_analytics_key',
+        'exact_transaction_at',
+        'exact_total',
+        'exact_tax_both_known',
+        'structural_duplicate_eligible_both',
+        'known_equal_currency_jpy',
+        'item_count_differs_by_one',
+        'exact_local_owner_then_adjacent_positive_transform',
+        'exactly_one_item_owned_negative_discount',
+        'item_owned_discount_monetary_closure',
+        'collapsed_counterpart_product_no_discount',
+      ];
+      differenceEvidence = [
+        `discounted_receipt_id=${shape?.discountedReceiptId ?? ''}`,
+        `inflated_receipt_id=${shape?.inflatedReceiptId ?? ''}`,
+        `removed_inflated_item_index=${shape?.removedInflatedItemIndex ?? ''}`,
+        `unmatched_positive_amount=${
+          shape ? roundMoney(shape.unmatchedPositiveAmount) : ''
+        }`,
+        `discounted_item_index=${shape?.discountedItemIndex ?? ''}`,
+        `product_gross_amount=${
+          shape ? roundMoney(shape.productGrossAmount) : ''
+        }`,
+        `representative_receipt_id=${representativeReceiptId}`,
       ];
     } else if (confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE') {
       const lineAmtKey = canonicalStructuralLineAmountMultiset(
@@ -2131,6 +2486,7 @@ export function buildAnalysisDDuplicateScanAudit(
       contentExactDuplicateExtras += extras;
     } else if (
       g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' ||
+      g.confidence === 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE' ||
       g.confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
     ) {
       reconciledStructuralExactDuplicateExtras += extras;

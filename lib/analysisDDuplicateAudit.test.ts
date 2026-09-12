@@ -25,6 +25,7 @@ import {
   areStructuralExactMerchantKeysCompatible,
   areStructuralExactDuplicateSummaries,
   evaluateReconciledStructuralQuantityNoisePair,
+  evaluateDiscountShapeEquivalentPair,
   hasExactTransactionTime,
   hasValidTransactionAt,
   selectExactDedupedReceipts,
@@ -45,7 +46,9 @@ type FixtureItem = {
   name: string;
   category: string;
   lineTotal: number;
-  quantity: number;
+  quantity?: number;
+  discountAllocated?: number;
+  effectiveLineTotal?: number;
   merchant_product_id?: string;
   canonical_product_id?: string;
   identity_source?: string;
@@ -66,6 +69,7 @@ function makeReceipt(args: {
   taxIsKnown?: number;
   userEdited?: number;
   note?: string | null;
+  currency?: string | null;
 }): ReceiptRow {
   const itemSum = args.items.reduce((sum, item) => sum + (item.lineTotal || 0), 0);
   return {
@@ -77,7 +81,7 @@ function makeReceipt(args: {
     total: args.total ?? itemSum,
     tax: args.tax ?? 0,
     tax_is_known: args.taxIsKnown ?? 0,
-    currency: 'JPY',
+    currency: args.currency === undefined ? 'JPY' : (args.currency as string),
     analysis_json: JSON.stringify({ items: args.items }),
     merchant_raw: args.merchantNormalized ?? 'イオン',
     merchant_normalized: args.merchantNormalized ?? 'イオン',
@@ -2644,7 +2648,7 @@ describe('Receipt052 STRUCTURAL_EXACT generic/store merchant bridge', () => {
     }));
     const qtyNoiseItems: FixtureItem[] = baseItems.map((row, idx) =>
       idx === 0
-        ? { ...row, name: `noise-${idx}`, quantity: row.quantity + 1 }
+        ? { ...row, name: `noise-${idx}`, quantity: (row.quantity ?? 1) + 1 }
         : { ...row, name: `noise-${idx}` }
     );
 
@@ -2696,5 +2700,494 @@ describe('Receipt052 STRUCTURAL_EXACT generic/store merchant bridge', () => {
     expect(evaluateReconciledStructuralQuantityNoisePair(a, b)).toBeNull();
     expect(areStructuralExactDuplicateSummaries(a, b)).toBe(false);
     expect(groupsFor(crossMerchant)).toHaveLength(0);
+  });
+});
+
+describe('RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE (Receipt064)', () => {
+  const txAt = Date.parse('2026-05-25T12:03:28+09:00');
+  const TOTAL = 9280;
+  const TAX = 698;
+
+  function product(
+    name: string,
+    gross: number,
+    discount = 0,
+    effective?: number,
+    quantity = 1
+  ): FixtureItem {
+    const eff = effective !== undefined ? effective : gross + discount;
+    return {
+      name,
+      category: 'other',
+      lineTotal: gross,
+      quantity,
+      discountAllocated: discount,
+      effectiveLineTotal: eff,
+    };
+  }
+
+  /** 10-row correct-discount twin (heVnr-shaped). */
+  const correctItems: FixtureItem[] = [
+    product('A', 500),
+    product('B', 600),
+    product('JOY ORANGE 1810', 798, -160, 638),
+    product('C', 700),
+    product('D', 800),
+    product('E', 900),
+    product('F', 1000),
+    product('G', 594),
+    product('H', 800),
+    product('オーストラリア ラム肩切落', 2748),
+  ];
+
+  /** 11-row coupon-as-product twin (Rs5-shaped): JOY then adjacent +160. */
+  const inflatedItems: FixtureItem[] = [
+    product('A', 500),
+    product('B', 600),
+    product('JOY ORANGE 1810', 798, 0, 798),
+    product('CPN160', 160, 0, 160),
+    product('C', 700),
+    product('D', 800),
+    product('E', 900),
+    product('F', 1000),
+    product('G', 594),
+    product('H', 800),
+    product('オーストラリア ラム肩切落', 2748),
+  ];
+
+  function makeTwin(
+    id: string,
+    items: FixtureItem[],
+    createdAt = 1000,
+    extra: Partial<{
+      total: number;
+      tax: number;
+      taxIsKnown: number;
+      currency: string | null;
+      transactionAt: number | null;
+    }> = {}
+  ) {
+    return makeReceipt({
+      id,
+      at: txAt,
+      createdAt,
+      merchantType: 'supermarket',
+      merchantNormalized: 'コストコ',
+      transactionAt:
+        extra.transactionAt === undefined ? txAt : extra.transactionAt,
+      total: extra.total ?? TOTAL,
+      tax: extra.tax ?? TAX,
+      taxIsKnown: extra.taxIsKnown ?? 1,
+      currency: extra.currency === undefined ? 'JPY' : extra.currency,
+      items,
+    });
+  }
+
+  test('A1-1 — Receipt064 adjacent local transform forms discount-shape group', () => {
+    const correct = makeTwin('heVnrI-QEfeq8Ydre5q_Z', correctItems, 2000);
+    const inflated = makeTwin('Rs5-_jH4dlSmRD_RCps7O', inflatedItems, 1000);
+    const shape = evaluateDiscountShapeEquivalentPair(
+      summarizeReceiptForDuplicateAudit(correct),
+      summarizeReceiptForDuplicateAudit(inflated)
+    );
+    expect(shape).not.toBeNull();
+    expect(shape!.unmatchedPositiveAmount).toBe(160);
+    expect(shape!.productGrossAmount).toBe(798);
+    expect(shape!.discountedItemIndex).toBe(2);
+    expect(shape!.removedInflatedItemIndex).toBe(3);
+    expect(shape!.discounted.receiptId).toBe('heVnrI-QEfeq8Ydre5q_Z');
+    expect(shape!.inflated.receiptId).toBe('Rs5-_jH4dlSmRD_RCps7O');
+
+    const groups = buildHighConfidenceDuplicateGroups(
+      [correct, inflated].map(summarizeReceiptForDuplicateAudit),
+      [correct, inflated]
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.confidence).toBe(
+      'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE'
+    );
+  });
+
+  test('A1-2 — relation is order-symmetric', () => {
+    const correct = makeTwin('correct', correctItems);
+    const inflated = makeTwin('inflated', inflatedItems);
+    const ab = evaluateDiscountShapeEquivalentPair(
+      summarizeReceiptForDuplicateAudit(correct),
+      summarizeReceiptForDuplicateAudit(inflated)
+    );
+    const ba = evaluateDiscountShapeEquivalentPair(
+      summarizeReceiptForDuplicateAudit(inflated),
+      summarizeReceiptForDuplicateAudit(correct)
+    );
+    expect(ab).not.toBeNull();
+    expect(ba).not.toBeNull();
+    expect(ab!.discounted.receiptId).toBe(ba!.discounted.receiptId);
+    expect(ab!.removedInflatedItemIndex).toBe(ba!.removedInflatedItemIndex);
+  });
+
+  test('A1-3 / A1-4 — representative is correct-discount; analytics keeps one', () => {
+    const correct = makeTwin('heVnrI-QEfeq8Ydre5q_Z', correctItems, 9000);
+    const inflated = makeTwin('Rs5-_jH4dlSmRD_RCps7O', inflatedItems, 1000);
+    const groups = buildHighConfidenceDuplicateGroups(
+      [correct, inflated].map(summarizeReceiptForDuplicateAudit),
+      [correct, inflated]
+    );
+    expect(groups[0]!.representativeReceiptId).toBe('heVnrI-QEfeq8Ydre5q_Z');
+
+    const selection = selectAnalyticsReceipts([correct, inflated]);
+    expect(selection.analyticsPurchaseCandidateCount).toBe(1);
+    expect(selection.analyticsReceipts[0]!.id).toBe('heVnrI-QEfeq8Ydre5q_Z');
+    expect(selection.excludedDuplicateReceiptIds.has('Rs5-_jH4dlSmRD_RCps7O')).toBe(
+      true
+    );
+  });
+
+  test('Codex false-bridge — unrelated +160 elsewhere does not group', () => {
+    const short = makeTwin('false-short', [
+      product('A', 500, -160, 340),
+      product('B', 700),
+    ], 1000, { total: 1040, tax: 80 });
+    const longElsewhere = makeTwin('false-long', [
+      product('A', 500, 0, 500),
+      product('B', 700),
+      product('GENUINE EXTRA', 160),
+    ], 2000, { total: 1040, tax: 80 });
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(short),
+        summarizeReceiptForDuplicateAudit(longElsewhere)
+      )
+    ).toBeNull();
+
+    const discountOnB = makeTwin('false-b-owner', [
+      product('A', 500),
+      product('B', 700, -160, 540),
+    ], 1000, { total: 1040, tax: 80 });
+    const plusAfterA = makeTwin('false-plus-a', [
+      product('A', 500, 0, 500),
+      product('CPN160', 160),
+      product('B', 700, 0, 700),
+    ], 2000, { total: 1040, tax: 80 });
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(discountOnB),
+        summarizeReceiptForDuplicateAudit(plusAfterA)
+      )
+    ).toBeNull();
+  });
+
+  test('A1 strict — +N before owner / elsewhere / two removable fail', () => {
+    const correct = makeTwin('c-pos', correctItems);
+    const beforeOwner = [
+      product('A', 500),
+      product('B', 600),
+      product('CPN160', 160),
+      product('JOY ORANGE 1810', 798, 0, 798),
+      product('C', 700),
+      product('D', 800),
+      product('E', 900),
+      product('F', 1000),
+      product('G', 594),
+      product('H', 800),
+      product('オーストラリア ラム肩切落', 2748),
+    ];
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(correct),
+        summarizeReceiptForDuplicateAudit(makeTwin('before', beforeOwner))
+      )
+    ).toBeNull();
+
+    const twoLater = [
+      product('A', 500),
+      product('B', 600),
+      product('JOY ORANGE 1810', 798, 0, 798),
+      product('C', 700),
+      product('CPN160', 160),
+      product('D', 800),
+      product('E', 900),
+      product('F', 1000),
+      product('G', 594),
+      product('H', 800),
+      product('オーストラリア ラム肩切落', 2748),
+    ];
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(correct),
+        summarizeReceiptForDuplicateAudit(makeTwin('later', twoLater))
+      )
+    ).toBeNull();
+
+    const twoExtra = [
+      ...inflatedItems.slice(0, 4),
+      product('EXTRA2', 50),
+      ...inflatedItems.slice(4),
+    ];
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(correct),
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('two-extra', twoExtra, 1000, { total: TOTAL })
+        )
+      )
+    ).toBeNull();
+  });
+
+  test('A1 strict — two negative discounts / extra monetary diff fail', () => {
+    const twoNeg = makeTwin('two-neg', [
+      product('A', 500, -10, 490),
+      product('B', 600),
+      product('JOY ORANGE 1810', 798, -160, 638),
+      product('C', 700),
+      product('D', 800),
+      product('E', 900),
+      product('F', 1000),
+      product('G', 594),
+      product('H', 800),
+      product('オーストラリア ラム肩切落', 2748),
+    ]);
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(twoNeg),
+        summarizeReceiptForDuplicateAudit(makeTwin('inf', inflatedItems))
+      )
+    ).toBeNull();
+
+    const longExtraDisc = makeTwin('long-disc', [
+      product('A', 500),
+      product('B', 600, -5, 595),
+      product('JOY ORANGE 1810', 798, 0, 798),
+      product('CPN160', 160, 0, 160),
+      product('C', 700),
+      product('D', 800),
+      product('E', 900),
+      product('F', 1000),
+      product('G', 594),
+      product('H', 800),
+      product('オーストラリア ラム肩切落', 2748),
+    ]);
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(makeTwin('c', correctItems)),
+        summarizeReceiptForDuplicateAudit(longExtraDisc)
+      )
+    ).toBeNull();
+
+    const moneyDiff = makeTwin('money-diff', [
+      product('A', 500),
+      product('B', 600),
+      product('JOY ORANGE 1810', 798, 0, 798),
+      product('CPN160', 160, 0, 160),
+      product('C', 701),
+      product('D', 800),
+      product('E', 900),
+      product('F', 1000),
+      product('G', 594),
+      product('H', 800),
+      product('オーストラリア ラム肩切落', 2748),
+    ]);
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(makeTwin('c2', correctItems)),
+        summarizeReceiptForDuplicateAudit(moneyDiff)
+      )
+    ).toBeNull();
+  });
+
+  test('A2 strict evidence — currency / qty / money / total / tax', () => {
+    const correct = makeTwin('c-ev', correctItems);
+    const inflated = makeTwin('i-ev', inflatedItems);
+
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('unk-jpy', correctItems, 1, { currency: null })
+        ),
+        summarizeReceiptForDuplicateAudit(inflated)
+      )
+    ).toBeNull();
+
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('unk-a', correctItems, 1, { currency: null })
+        ),
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('unk-b', inflatedItems, 2, { currency: null })
+        )
+      )
+    ).toBeNull();
+
+    const missingQtyItems = correctItems.map((it, idx) =>
+      idx === 0 ? { ...it, quantity: undefined } : { ...it }
+    );
+    expect(
+      summarizeReceiptForDuplicateAudit(
+        makeTwin('miss-qty', missingQtyItems)
+      ).discountShapeStrictRows
+    ).toBeNull();
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(makeTwin('miss-qty', missingQtyItems)),
+        summarizeReceiptForDuplicateAudit(inflated)
+      )
+    ).toBeNull();
+
+    const badQty = correctItems.map((it, idx) =>
+      idx === 0 ? { ...it, quantity: 0 } : { ...it }
+    );
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(makeTwin('bad-qty', badQty)),
+        summarizeReceiptForDuplicateAudit(inflated)
+      )
+    ).toBeNull();
+
+    const fracLong = inflatedItems.map((it, idx) =>
+      idx === 3 ? product('CPN160', 159.999 as unknown as number, 0, 159.999 as unknown as number) : { ...it }
+    );
+    // Force fractional via JSON mutation after make — lineTotal must be non-integer.
+    const fracReceipt = makeTwin('frac', inflatedItems);
+    const parsed = JSON.parse(fracReceipt.analysis_json);
+    parsed.items[3].lineTotal = 159.999;
+    parsed.items[3].effectiveLineTotal = 159.999;
+    (fracReceipt as { analysis_json: string }).analysis_json = JSON.stringify(parsed);
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(correct),
+        summarizeReceiptForDuplicateAudit(fracReceipt)
+      )
+    ).toBeNull();
+    void fracLong;
+
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('bad-total', correctItems, 1, { total: 0 })
+        ),
+        summarizeReceiptForDuplicateAudit(inflated)
+      )
+    ).toBeNull();
+
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('unk-tax', correctItems, 1, { taxIsKnown: 0 })
+        ),
+        summarizeReceiptForDuplicateAudit(inflated)
+      )
+    ).toBeNull();
+
+    const sa = summarizeReceiptForDuplicateAudit(correct);
+    const sb = summarizeReceiptForDuplicateAudit(inflated);
+    expect(sa.structuralDuplicateEligible).toBe(true);
+    expect(sb.structuralDuplicateEligible).toBe(true);
+    expect(sa.hasValidPositiveTotal).toBe(true);
+  });
+
+  test('A2 — known equal negative tax must fail-closed', () => {
+    const correct = makeTwin('neg-tax-c', correctItems, 2000, { tax: -1 });
+    const inflated = makeTwin('neg-tax-i', inflatedItems, 1000, { tax: -1 });
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(correct),
+        summarizeReceiptForDuplicateAudit(inflated)
+      )
+    ).toBeNull();
+    expect(
+      buildHighConfidenceDuplicateGroups(
+        [correct, inflated].map(summarizeReceiptForDuplicateAudit),
+        [correct, inflated]
+      )
+    ).toHaveLength(0);
+
+    // Positive control: known tax 0 / 0 remains valid for this bridge.
+    const zeroC = makeTwin('zero-tax-c', correctItems, 2000, { tax: 0 });
+    const zeroI = makeTwin('zero-tax-i', inflatedItems, 1000, { tax: 0 });
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(zeroC),
+        summarizeReceiptForDuplicateAudit(zeroI)
+      )
+    ).not.toBeNull();
+  });
+
+  test('A1-11/12 — different timestamp / total still fail', () => {
+    const correct = makeTwin('c-ts', correctItems);
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(correct),
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('i-ts', inflatedItems, 1, { transactionAt: txAt + 60_000 })
+        )
+      )
+    ).toBeNull();
+    expect(
+      evaluateDiscountShapeEquivalentPair(
+        summarizeReceiptForDuplicateAudit(correct),
+        summarizeReceiptForDuplicateAudit(
+          makeTwin('i-tot', inflatedItems, 1, { total: TOTAL + 1 })
+        )
+      )
+    ).toBeNull();
+  });
+
+  test('B1 — 3-member complete-link with discount-shape; transitive-only fails', () => {
+    const a = makeTwin('heVnr-a', correctItems, 2000);
+    const b = makeTwin('Rs5-b', inflatedItems, 1000);
+    const c = makeTwin('heVnr-c', correctItems, 3000);
+    const groups = buildHighConfidenceDuplicateGroups(
+      [a, b, c].map(summarizeReceiptForDuplicateAudit),
+      [a, b, c]
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.receiptIds.sort()).toEqual(
+      ['Rs5-b', 'heVnr-a', 'heVnr-c'].sort()
+    );
+    expect(groups[0]!.confidence).toBe(
+      'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE'
+    );
+    // Discounted preference: inflated Rs5 must not win.
+    expect(groups[0]!.representativeReceiptId).not.toBe('Rs5-b');
+    expect(['heVnr-a', 'heVnr-c']).toContain(
+      groups[0]!.representativeReceiptId
+    );
+
+    const selection = selectAnalyticsReceipts([a, b, c]);
+    expect(selection.analyticsPurchaseCandidateCount).toBe(1);
+    expect(selection.excludedDuplicateReceiptIds.size).toBe(2);
+
+    // Transitive-only: A~B discount-shape, C unrelated basket → no 3-clique.
+    const unrelated = makeTwin(
+      'unrelated',
+      [product('X', 1000), product('Y', 2000)],
+      4000,
+      { total: TOTAL, tax: TAX }
+    );
+    const loose = buildHighConfidenceDuplicateGroups(
+      [a, b, unrelated].map(summarizeReceiptForDuplicateAudit),
+      [a, b, unrelated]
+    );
+    expect(loose.every((g) => g.receiptIds.length < 3)).toBe(true);
+    const abGroup = loose.find(
+      (g) => g.receiptIds.includes('heVnr-a') && g.receiptIds.includes('Rs5-b')
+    );
+    expect(abGroup).toBeTruthy();
+    expect(abGroup!.receiptIds).not.toContain('unrelated');
+  });
+
+  test('A1-integration — JOY truth + single analytics event', () => {
+    const correct = makeTwin('heVnrI-QEfeq8Ydre5q_Z', correctItems, 2000);
+    const inflated = makeTwin('Rs5-_jH4dlSmRD_RCps7O', inflatedItems, 1000);
+    const selection = selectAnalyticsReceipts([correct, inflated]);
+    expect(selection.analyticsReceipts).toHaveLength(1);
+    const rep = selection.analyticsReceipts[0]!;
+    expect(rep.id).toBe('heVnrI-QEfeq8Ydre5q_Z');
+    const joy = JSON.parse(rep.analysis_json).items.find((it: FixtureItem) =>
+      String(it.name).includes('JOY')
+    );
+    expect(joy.lineTotal).toBe(798);
+    expect(joy.discountAllocated).toBe(-160);
+    expect(joy.effectiveLineTotal).toBe(638);
   });
 });

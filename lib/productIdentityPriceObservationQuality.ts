@@ -421,7 +421,45 @@ function normalizeVariableWeightMeatNameHints(raw: string): string {
   s = s.replace(/ブタ|ポーク/gi, '豚');
   s = s.replace(/チキン/gi, '鶏');
   s = s.replace(/キリオトシ/gi, '切り落とし');
+  // Abbreviated cutdown: 切落 → 切落し (not bare 切).
+  s = s.replace(/切落(?!し)/g, '切落し');
   return s.toLowerCase();
+}
+
+function isKatakanaChar(ch: string): boolean {
+  const cp = ch.codePointAt(0);
+  if (cp == null) return false;
+  // Katakana block + halfwidth katakana (no lookbehind required).
+  return (
+    (cp >= 0x30a0 && cp <= 0x30ff) || (cp >= 0xff66 && cp <= 0xff9d)
+  );
+}
+
+/**
+ * Bounded lamb animal token for the strong conjunction only.
+ * Rejects ラム embedded inside another katakana word (プラム/ドラム/グラム)
+ * and candy compounds (ラムネ / ラムレーズン).
+ */
+export function hasStrongLambToken(rawName: string | null | undefined): boolean {
+  const s = String(rawName || '').normalize('NFKC');
+  if (!s) return false;
+  let from = 0;
+  while (from < s.length) {
+    const at = s.indexOf('ラム', from);
+    if (at < 0) break;
+    const prev = at > 0 ? s[at - 1]! : '';
+    if (prev && isKatakanaChar(prev)) {
+      from = at + 2;
+      continue;
+    }
+    const rest = s.slice(at);
+    if (rest.startsWith('ラムネ') || rest.startsWith('ラムレーズン')) {
+      from = at + 2;
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -433,7 +471,10 @@ export function nameLooksLikeVariableWeightMeatOrCut(
 ): boolean {
   const name = normalizeVariableWeightMeatNameHints(rawName || '');
   if (!name) return false;
-  return /(肉|豚|牛|鶏|魚|刺身|切|ブロック|ステーキ|ミンチ)/.test(name);
+  return (
+    /(肉|豚|牛|鶏|魚|刺身|切|ブロック|ステーキ|ミンチ)/.test(name) ||
+    hasStrongLambToken(rawName)
+  );
 }
 
 /**
@@ -441,13 +482,15 @@ export function nameLooksLikeVariableWeightMeatOrCut(
  * cutdown/block form associated with variable-weight packs.
  * Isolated 牛/切/ブロック tokens are not sufficient.
  * ステーキ / ミンチ are intentionally NOT strong (prepared foods: 弁当, カツ, …).
+ * ラム is detected via bounded token (not substring rewrite to 肉).
  */
 export function looksLikeStrongVariableWeightMeatCut(
   rawName: string | null | undefined
 ): boolean {
   const name = normalizeVariableWeightMeatNameHints(rawName || '');
   if (!name) return false;
-  const hasAnimalOrMeat = /(肉|豚|牛|鶏|魚|刺身)/.test(name);
+  const hasAnimalOrMeat =
+    /(肉|豚|牛|鶏|魚|刺身)/.test(name) || hasStrongLambToken(rawName);
   const hasStrongCutOrBlock = /切り落とし|切落し|ブロック/.test(name);
   return hasAnimalOrMeat && hasStrongCutOrBlock;
 }

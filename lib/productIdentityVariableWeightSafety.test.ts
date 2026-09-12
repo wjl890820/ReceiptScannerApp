@@ -298,6 +298,54 @@ describe('Strong variable-weight meat-cut gate (Receipt063 PPH safety v2)', () =
     }
   });
 
+  it('CASE A2 — ラム肩切落 strong morphology + production caution', () => {
+    const positives = [
+      'オーストラリア ラム肩切落',
+      'ラム肩切落',
+      'ラム肩切落し',
+      'ラム肩切り落とし',
+    ];
+    for (const name of positives) {
+      expect(looksLikeStrongVariableWeightMeatCut(name)).toBe(true);
+      const q = evaluatePriceObservationQuality({
+        lineTotal: 2748,
+        quantity: 1,
+        rawName: name,
+        attributes: normalizeProductForIdentity(name).attributes,
+        peerPurchaseUnitPrices: [],
+      });
+      expect(q.quality).toBe('usable_with_caution');
+      expect(q.reasons).toContain('high_variance_variable_price');
+      expect(q.includeInTrend).toBe(false);
+    }
+
+    for (const name of [
+      'ラムネ',
+      'ラムレーズン',
+      'ラムレーズンアイス',
+      '切落',
+      '切落チーズ',
+      '切落風',
+      'プラムブロック',
+      'ドラム切落',
+      '切落チーズ 100グラム',
+      '100グラム切落チーズ',
+      'グラムブロック',
+    ]) {
+      expect(looksLikeStrongVariableWeightMeatCut(name)).toBe(false);
+    }
+
+    // Production path: false lamb embedding must not force caution alone.
+    const gramCheese = evaluatePriceObservationQuality({
+      lineTotal: 198,
+      quantity: 1,
+      rawName: '切落チーズ 100グラム',
+      peerPurchaseUnitPrices: [],
+    });
+    expect(gramCheese.quality).toBe('trusted');
+    expect(gramCheese.reasons).not.toContain('high_variance_variable_price');
+  });
+
   it('CASE G/H/I — milk retains pre-patch trusted behavior (not forced caution)', () => {
     const milks = ['牛乳', '成分無調整牛乳', '明治おいしい牛乳'];
     for (const name of milks) {
