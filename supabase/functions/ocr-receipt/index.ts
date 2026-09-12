@@ -30,7 +30,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 11;
+const OCR_CACHE_VERSION = 12;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -455,8 +455,29 @@ function buildOcrPrompt(): string {
     '  Costco の CPN 等、どの商品に付くか不明なレシート全体クーポンは discounts[] のみ（items に商品として入れない）。',
     '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
     '  ただし Costco の「御買上げ点数」行は items に残してよい（合計金額ではない）。',
-    '- quantity は「購入点数」のみ。商品名中の包装数（例: 4個 / 10PC / 3PK）は quantity に入れない（購入証拠が無い限り 1）。',
-    '  明示的な購入数量（例: (¥108 × 3個) や数量欄）があるときだけその N を quantity にする。',
+    '- quantity は「購入点数」のみ。unitPrice は印刷された単価。lineTotal は当該商品行の合計金額。',
+    '  例: 2 × 108 = 216 → quantity=2, unitPrice=108, lineTotal=216。',
+    '  明示的な購入乗数があるとき、quantity=1 / unitPrice=216 / lineTotal=216 に畳み込まないこと。',
+    '',
+    '  【購入点数（PURCHASE COUNT）— quantity/unitPrice に使う】',
+    '  例: 2個 × 単108 / 2点 × 単108 / 2本 × 単108 / 2コ × @108 / 2 × ¥108 / 3個 @108円 / (¥108 × 3個)。',
+    '  「単」「単価」はこの文脈で単価マーカー。円 / ¥ / ￥ / @ も単価を示す。',
+    '  乗算記号: × / x / X / * / ＊ / @。',
+    '  購入カウンタ例: 個 / コ / 点 / 本 / 枚 / 袋 / パック / 箱。',
+    '  数量欄や上記の明示乗数があるときだけその N を quantity にし、単価を unitPrice に入れる。',
+    '',
+    '  【商品直下の購入乗数行 — 別商品にしない】',
+    '  印刷が次のようなとき:',
+    '    世界TEAチャイラテ',
+    '    2個 × 単108',
+    '    216',
+    '  は1商品として出力する: name="世界TEAチャイラテ", quantity=2, unitPrice=108, lineTotal=216。',
+    '  「2個 × 単108」行を独立の merchandise item にしてはならない（値引行の kind=discount とは別規則）。',
+    '',
+    '  【包装数（PACKAGE / CONTENT）— quantity にしない】',
+    '  商品名中の包装・内容数だけでは購入点数にしない（購入証拠が無い限り quantity=1）。',
+    '  例: 10個入 / 4個パック / 12PC / 2個セット / 20本入り / 3本組 / 卵 10個入 / ヨーグルト 4個パック /',
+    '  電池 4個 / 水 12PC / 商品 2個セット / 飲料 3本組。',
     '',
     '【total / tax の厳守ルール】',
     '- total は、レシート上に明確に印刷された最終支払合計行を優先してそのまま転記すること。',

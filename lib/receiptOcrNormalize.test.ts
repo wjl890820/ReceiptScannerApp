@@ -207,6 +207,64 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     expect(out.items[0].quantity).toBe(4);
   });
 
+  it('Receipt061-like: 2個 × 単108 in name overrides OCR qty=1; keeps unitPrice/lineTotal', () => {
+    const outQty1 = normalizeOcrAnalysis({
+      merchant: 'イオン',
+      items: [
+        {
+          name: '世界TEAチャイラテ 2個 × 単108',
+          quantity: 1,
+          unitPrice: 108,
+          lineTotal: 216,
+        },
+      ],
+      total: 216,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(outQty1.items[0].quantity).toBe(2);
+    expect(outQty1.items[0].unitPrice).toBe(108);
+    expect(outQty1.items[0].lineTotal).toBe(216);
+
+    const outQty2 = normalizeOcrAnalysis({
+      merchant: 'イオン',
+      items: [
+        {
+          name: '世界TEAチャイラテ 2個 × 単108',
+          quantity: 2,
+          unitPrice: 108,
+          lineTotal: 216,
+        },
+      ],
+      total: 216,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(outQty2.items[0].quantity).toBe(2);
+    expect(outQty2.items[0].unitPrice).toBe(108);
+    expect(outQty2.items[0].lineTotal).toBe(216);
+  });
+
+  it('Receipt061-like clean structured item qty=2/unit108/total216 passes through', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'イオン',
+      items: [
+        {
+          name: '世界TEAチャイラテ',
+          quantity: 2,
+          unitPrice: 108,
+          lineTotal: 216,
+        },
+      ],
+      total: 216,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.items[0].quantity).toBe(2);
+    expect(out.items[0].unitPrice).toBe(108);
+    expect(out.items[0].lineTotal).toBe(216);
+  });
+
   it('Sample 081: Costco Connection lines are not merchandise items', () => {
     expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション')).toBe(true);
     expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション ムリョウ')).toBe(true);

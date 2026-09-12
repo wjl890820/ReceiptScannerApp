@@ -3,7 +3,8 @@
  *
  * Package markers in the product name (4個 / 10PC / 3PK) must NOT become
  * purchase quantity unless there is explicit purchase evidence such as
- * (¥108 × 3個) or a structured qty that does not merely echo the package count.
+ * (¥108 × 3個), 2個 × 単108, or a structured qty that does not merely echo
+ * the package count.
  */
 
 import { normalizeIdentityText } from './productSpecification';
@@ -11,11 +12,45 @@ import { normalizeIdentityText } from './productSpecification';
 const PACKAGE_COUNT_RE =
   /(\d+)\s*(?:個|本|枚|袋|パック|pc|pcs|pk|pack)\s*(?:入)?/gi;
 
-/** Explicit purchase qty: (¥108 × 3個) / @439 × 4 / 4個 × @439 / 数量4 × 単価439 */
+/** Purchase counters allowed in explicit multiplier evidence. */
+const PURCHASE_COUNTER =
+  '(?:個|コ|点|本|枚|袋|パック|箱|pc|pcs|pk|pack)';
+
+/**
+ * Price-shaped RHS for qty-first multipliers.
+ * Requires 単 / 単価 / @ / ¥ / ￥ / 円 — not bare numbers (avoids 2 × 500ml).
+ */
+const PRICE_RHS =
+  '(?:単価\\s*\\d[\\d,]*|単\\s*\\d[\\d,]*|[@¥￥]\\s*\\d[\\d,]*|\\d[\\d,]*\\s*円)';
+
+/** Multiplication operators (NFKC maps ＊ → *). */
+const MULT_OP = '[×xX*]';
+
+/**
+ * Explicit purchase qty evidence (first match wins):
+ * - qty-first: 2個 × 単108 / 2 × ¥108 / 3点×108円 / 2本＊単価150
+ * - qty @ price: 3個 @108円
+ * - price-first: (¥108 × 3個) / @439 × 4
+ * - 数量 N × 単価 N
+ */
 const EXPLICIT_PURCHASE_RES: RegExp[] = [
-  /(\d+)\s*(?:個|本|枚|袋|パック|pc|pcs|pk|pack)\s*[×xX*]\s*[@¥￥]?\s*\d[\d,]*/i,
-  /[(（]?\s*[@¥￥]?\s*\d[\d,]*\s*[×xX*]\s*(\d+)\s*(?:個|本|枚|袋|パック|pc|pcs|pk|pack)?/i,
-  /数量\s*(\d+)\s*[×xX*]\s*単価\s*\d[\d,]*/i,
+  // N [counter]? ×|* price-shaped
+  new RegExp(
+    `(\\d+)\\s*(?:${PURCHASE_COUNTER})?\\s*${MULT_OP}\\s*${PRICE_RHS}`,
+    'i'
+  ),
+  // N counter @ price (3個 @108円) — @ as operator; counter required
+  new RegExp(
+    `(\\d+)\\s*${PURCHASE_COUNTER}\\s*@\\s*(?:単価\\s*)?\\d[\\d,]*(?:\\s*円)?`,
+    'i'
+  ),
+  // price-first: require currency/単 marker on the price side
+  new RegExp(
+    `[(（]?\\s*(?:[@¥￥]|単価\\s*|単\\s*)\\d[\\d,]*\\s*${MULT_OP}\\s*(\\d+)\\s*(?:${PURCHASE_COUNTER})?`,
+    'i'
+  ),
+  // 数量 N × 単価 N
+  new RegExp(`数量\\s*(\\d+)\\s*${MULT_OP}\\s*単価\\s*\\d[\\d,]*`, 'i'),
 ];
 
 export function extractPackageCountFromName(rawName: string): number | null {

@@ -108,9 +108,20 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
     expect(edgeSource).not.toMatch(/top_p|top_k/);
   });
 
+  it('Case 5b — prompt teaches Japanese explicit purchase multiplier vs package count', () => {
+    expect(edgeSource).toContain('2個 × 単108');
+    expect(edgeSource).toContain('世界TEAチャイラテ');
+    expect(edgeSource).toContain('quantity=2, unitPrice=108, lineTotal=216');
+    expect(edgeSource).toMatch(/単「|「単」|単価マーカー/);
+    expect(edgeSource).toContain('10個入');
+    expect(edgeSource).toContain('4個パック');
+    expect(edgeSource).toContain('2個セット');
+    expect(edgeSource).toMatch(/独立の merchandise item にしてはならない/);
+  });
+
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*11/);
-    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*10[^\d]/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*12/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*11[^\d]/);
     expect(edgeSource).toContain("gemini-3.5-flash-lite");
     expect(edgeSource).not.toContain('gemini-3-flash-preview');
     expect(edgeSource).toContain('OCR_DATE_VERIFY_MODEL');
