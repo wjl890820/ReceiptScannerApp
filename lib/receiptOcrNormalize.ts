@@ -27,10 +27,18 @@ import { detectCostcoReceiptSignals } from './groceryDetector';
 import {
   applyReceiptDiscountsToItems,
   isBundleSummaryDiscountLabel,
+  isLoyaltyPointMetadataLabel,
+  isReceiptLevelLoyaltyRedemptionLabel,
 } from './receiptDiscountAllocation';
 import { resolvePurchaseQuantity } from './purchaseQuantity';
 
 export type OcrLineKind = 'item' | 'discount' | 'tax' | 'subtotal' | 'payment' | 'unknown';
+
+export {
+  isLoyaltyPointMetadataLabel,
+  isLoyaltyRedemptionLabel,
+  isReceiptLevelLoyaltyRedemptionLabel,
+} from './receiptDiscountAllocation';
 
 export type ReceiptDiscount = {
   label: string;
@@ -131,9 +139,12 @@ export function pushUniqueReceiptDiscount(
     });
   if (existing) {
     // Prefer adjacency captured from OCR item order when discounts[] arrived first.
+    // Never attach product adjacency onto loyalty / receipt-level point redemption.
     if (
       existing.adjacentPrecedingItemIndex == null &&
-      typeof row.adjacentPrecedingItemIndex === 'number'
+      typeof row.adjacentPrecedingItemIndex === 'number' &&
+      !isReceiptLevelLoyaltyRedemptionLabel(existing.label) &&
+      !isReceiptLevelLoyaltyRedemptionLabel(row.label)
     ) {
       existing.adjacentPrecedingItemIndex = row.adjacentPrecedingItemIndex;
     }
@@ -217,6 +228,52 @@ export function isActualTaxAmountLabel(name: string): boolean {
     /\(\s*内\s*消費\s*税/.test(n) ||
     /（\s*内\s*消費\s*税/.test(n)
   );
+}
+
+/**
+ * Explicit post-adjustment actual-tax evidence (e.g. 消費税額(値引後)).
+ * Narrow marker only — do not broaden to bare 「後」 matching.
+ */
+export function isPostAdjustmentActualTaxLabel(name: string): boolean {
+  if (!isActualTaxAmountLabel(name)) return false;
+  const n = toHalfWidthLower(name);
+  return n.includes('値引後');
+}
+
+export type PartitionedActualTaxHarvest = {
+  postAdjustment: number | null;
+  ordinary: number | null;
+};
+
+function sumActualTaxRows(
+  items: Array<{ name?: string | null; lineTotal?: number | null }> | null | undefined,
+  pick: (name: string) => boolean
+): number | null {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  let sum = 0;
+  let any = false;
+  for (const it of items) {
+    const name = typeof it?.name === 'string' ? it.name : '';
+    if (!pick(name)) continue;
+    if (isTaxableBaseLabel(name)) continue;
+    const amt = Number(it?.lineTotal);
+    if (!Number.isFinite(amt) || amt <= 0) continue;
+    sum += Math.round(amt);
+    any = true;
+  }
+  return any ? sum : null;
+}
+
+/** Split item-derived tax by settlement state before resolving precedence. */
+export function harvestActualTaxFromItemsPartitioned(
+  items: Array<{ name?: string | null; lineTotal?: number | null }> | null | undefined
+): PartitionedActualTaxHarvest {
+  const postAdjustment = sumActualTaxRows(items, isPostAdjustmentActualTaxLabel);
+  const ordinary = sumActualTaxRows(
+    items,
+    (name) => isActualTaxAmountLabel(name) && !isPostAdjustmentActualTaxLabel(name)
+  );
+  return { postAdjustment, ordinary };
 }
 
 function toHalfWidthLower(s: string): string {
@@ -317,11 +374,19 @@ export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
   const n = toHalfWidthLower(name);
   const amt = Number.isFinite(lineTotal) ? lineTotal : 0;
 
-  // 折扣优先：负金额或折扣关键字
-  if (amt < 0 || includesAny(n, DISCOUNT_KEYWORDS)) return 'discount';
+  // 1. Confirmed loyalty redemption (before tax / generic discount keywords).
+  if (isReceiptLevelLoyaltyRedemptionLabel(name)) return 'discount';
+  // 2. Point metadata — strip as non-merchandise; never fall through to
+  //    DISCOUNT_KEYWORDS substring matches (e.g. 楽天ポイント利用可能 ⊃ ポイント利用).
+  //    Label semantics win over a malformed negative OCR amount.
+  if (isLoyaltyPointMetadataLabel(name)) return 'subtotal';
+  // 3. Negative amounts are discounts even when the label mentions 税.
+  if (amt < 0) return 'discount';
   // Taxable base before generic TAX_KEYWORDS (「税率10%対象」contains 税率).
   if (isTaxableBaseLabel(name)) return 'subtotal';
+  // Actual tax labels before DISCOUNT_KEYWORDS — 「消費税額(値引後)」contains 値引.
   if (includesAny(n, TAX_KEYWORDS) || isActualTaxAmountLabel(name)) return 'tax';
+  if (includesAny(n, DISCOUNT_KEYWORDS)) return 'discount';
   if (isNonMerchandiseMetaLabel(name) || isPurchaseCountMetaLabel(name)) return 'subtotal';
   // Tender / payment allocation — before bare 合計 subtotal matching.
   if (isPaymentAllocationLabel(name)) return 'payment';
@@ -362,21 +427,53 @@ export type ResolvedReceiptTax = {
   taxIsKnown: boolean;
 };
 
+function resolveTopLevelTaxWithBreakdownGuard(
+  analysis: ReceiptAnalysis & Record<string, unknown>,
+  top: number
+): number {
+  const topRounded = Math.round(top);
+  const fromBreakdown = sumExplicitTaxBreakdown(analysis);
+  // When Edge summed taxable bases into tax, sanitized breakdown is smaller and
+  // the gap equals skipped base-like amounts (Sample 061: 75 = 72 + 3).
+  if (
+    fromBreakdown != null &&
+    topRounded > fromBreakdown &&
+    topRounded - fromBreakdown === skippedTaxableBaseAmounts(analysis)
+  ) {
+    return fromBreakdown;
+  }
+  return topRounded;
+}
+
 export function resolveReceiptTax(
   analysis: ReceiptAnalysis & Record<string, unknown>
 ): ResolvedReceiptTax {
   const top = analysis.tax;
   const priorKnown = (analysis as any).tax_is_known ?? (analysis as any).taxIsKnown;
-  const harvested =
+  const { postAdjustment, ordinary } = harvestActualTaxFromItemsPartitioned(analysis.items);
+  const legacyHarvested =
     typeof (analysis as any)._harvestedActualTax === 'number' &&
     Number.isFinite((analysis as any)._harvestedActualTax)
       ? Math.round((analysis as any)._harvestedActualTax)
-      : harvestActualTaxFromItems(analysis.items);
+      : null;
+  const ordinaryHarvest =
+    ordinary != null && ordinary > 0
+      ? ordinary
+      : legacyHarvested != null && legacyHarvested > 0
+        ? legacyHarvested
+        : null;
+  const combinedHarvest =
+    postAdjustment != null && postAdjustment > 0
+      ? postAdjustment
+      : ordinaryHarvest;
 
   // Respect an explicit unknown marker from upstream (e.g. review empty tax field).
   if (priorKnown === false || priorKnown === 0) {
-    if (harvested != null && harvested > 0) {
-      return { tax: harvested, taxIsKnown: true };
+    if (postAdjustment != null && postAdjustment > 0) {
+      return { tax: postAdjustment, taxIsKnown: true };
+    }
+    if (ordinaryHarvest != null) {
+      return { tax: ordinaryHarvest, taxIsKnown: true };
     }
     const breakdownUnknown = sumExplicitTaxBreakdown(analysis);
     if (breakdownUnknown != null) {
@@ -393,8 +490,8 @@ export function resolveReceiptTax(
     if (typeof top === 'number' && Number.isFinite(top)) {
       return { tax: Math.round(top), taxIsKnown: true };
     }
-    if (harvested != null && harvested > 0) {
-      return { tax: harvested, taxIsKnown: true };
+    if (combinedHarvest != null) {
+      return { tax: combinedHarvest, taxIsKnown: true };
     }
     const fromBreakdownKnown = sumExplicitTaxBreakdown(analysis);
     if (fromBreakdownKnown != null) {
@@ -403,26 +500,23 @@ export function resolveReceiptTax(
     return { tax: 0, taxIsKnown: true };
   }
 
-  // Printed actual tax line(s) win over Edge top-level / breakdown that may include taxable bases.
-  if (harvested != null && harvested > 0) {
-    return { tax: harvested, taxIsKnown: true };
+  // Fresh OCR path — settlement-state precedence (no prior known marker).
+  if (postAdjustment != null && postAdjustment > 0) {
+    return { tax: postAdjustment, taxIsKnown: true };
+  }
+
+  if (typeof top === 'number' && Number.isFinite(top) && top > 0) {
+    return {
+      tax: resolveTopLevelTaxWithBreakdownGuard(analysis, top),
+      taxIsKnown: true,
+    };
+  }
+
+  if (ordinaryHarvest != null) {
+    return { tax: ordinaryHarvest, taxIsKnown: true };
   }
 
   const fromBreakdown = sumExplicitTaxBreakdown(analysis);
-  if (typeof top === 'number' && Number.isFinite(top) && top > 0) {
-    const topRounded = Math.round(top);
-    // When Edge summed taxable bases into tax, sanitized breakdown is smaller and
-    // the gap equals skipped base-like amounts (Sample 061: 75 = 72 + 3).
-    if (
-      fromBreakdown != null &&
-      topRounded > fromBreakdown &&
-      topRounded - fromBreakdown === skippedTaxableBaseAmounts(analysis)
-    ) {
-      return { tax: fromBreakdown, taxIsKnown: true };
-    }
-    return { tax: topRounded, taxIsKnown: true };
-  }
-
   if (fromBreakdown != null) {
     return { tax: fromBreakdown, taxIsKnown: true };
   }
@@ -435,19 +529,9 @@ export function resolveReceiptTax(
 export function harvestActualTaxFromItems(
   items: Array<{ name?: string | null; lineTotal?: number | null }> | null | undefined
 ): number | null {
-  if (!Array.isArray(items) || items.length === 0) return null;
-  let sum = 0;
-  let any = false;
-  for (const it of items) {
-    const name = typeof it?.name === 'string' ? it.name : '';
-    if (!isActualTaxAmountLabel(name)) continue;
-    if (isTaxableBaseLabel(name)) continue;
-    const amt = Number(it?.lineTotal);
-    if (!Number.isFinite(amt) || amt <= 0) continue;
-    sum += Math.round(amt);
-    any = true;
-  }
-  return any ? sum : null;
+  const { postAdjustment, ordinary } = harvestActualTaxFromItemsPartitioned(items);
+  if (postAdjustment != null && postAdjustment > 0) return postAdjustment;
+  return ordinary;
 }
 
 function isBreakdownAmountLikelyTaxableBase(rate: number, amount: number): boolean {
@@ -645,10 +729,16 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
     if (kind === 'discount') {
       // Negative coupon lines often duplicate an entry already in discounts[].
       // Capture OCR adjacency from printed order (ordinary 値引/割引 and まとめ売り).
+      // Loyalty redemption is receipt-level — never bind to the preceding product.
+      const adjacentPrecedingItemIndex = isReceiptLevelLoyaltyRedemptionLabel(name)
+        ? null
+        : keptItems.length > 0
+          ? keptItems.length - 1
+          : null;
       pushUniqueReceiptDiscount(discounts, {
         label: name || '値引',
         amount: lineTotal <= 0 ? lineTotal : -Math.abs(lineTotal),
-        adjacentPrecedingItemIndex: keptItems.length > 0 ? keptItems.length - 1 : null,
+        adjacentPrecedingItemIndex,
       });
       continue;
     }

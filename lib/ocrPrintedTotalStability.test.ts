@@ -119,9 +119,36 @@ describe('OCR printed-total extraction contracts (Edge prompt + client passthrou
     expect(edgeSource).toMatch(/独立の merchandise item にしてはならない/);
   });
 
+  it('Case 5c — Receipt065 merchant printed-evidence + loyalty redemption contract', () => {
+    expect(edgeSource).toMatch(/印刷された店名|ロゴから転記/);
+    expect(edgeSource).toMatch(/推測しない|推測で埋めない/);
+    expect(edgeSource).toContain('SEIYU');
+    expect(edgeSource).toContain('西友');
+    expect(edgeSource).toContain('ローソン');
+    expect(edgeSource).toContain('LAWSON');
+    expect(edgeSource).toMatch(/SEIYU↔ローソン|互いに変換しない/);
+    expect(edgeSource).toContain('楽天ポイント(税込)');
+    expect(edgeSource).toContain('amount:-13');
+    expect(edgeSource).toContain('利用可能ポイント');
+    expect(edgeSource).toContain('獲得予定ポイント');
+    expect(edgeSource).toContain('ポイント残高');
+    expect(edgeSource).toMatch(/「ポイント」という語だけでは割引証拠にならない/);
+  });
+
+  it('Case 5d — prompt teaches final settlement tax vs pre/post states', () => {
+    expect(edgeSource).toMatch(/最終決済|FINAL SETTLEMENT TAX/);
+    expect(edgeSource).toMatch(/値引前|pre-adjustment|post-adjustment|値引後/);
+    expect(edgeSource).toMatch(/114 \+ 113 = 227|227 は禁止/);
+    expect(edgeSource).toContain('消費税額(値引後) 113');
+    expect(edgeSource).toContain('tax=113');
+    expect(edgeSource).toMatch(/taxBreakdown.*最終決済|最終決済状態/);
+    expect(edgeSource).toMatch(/8% 79 \+ 10% 20 → tax=99|tax=99/);
+    expect(edgeSource).toMatch(/推算|再構成してはならない/);
+  });
+
   it('Case 6 — cache version prevents collision with legacy image-hash-only keys', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*12/);
-    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*11[^\d]/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*14/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*13[^\d]/);
     expect(edgeSource).toContain("gemini-3.5-flash-lite");
     expect(edgeSource).not.toContain('gemini-3-flash-preview');
     expect(edgeSource).toContain('OCR_DATE_VERIFY_MODEL');

@@ -556,4 +556,87 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
     expect(authoritativeReceiptTotal({ total: 8351, tax: 619 })).toBe(8351);
     expect(authoritativeReceiptTotal({ total: 2637, tax: 195 })).toBe(2637);
   });
+
+  it('Receipt065 A2: loyalty redemption never binds via unique product token collision', () => {
+    const items = [
+      { name: '牛乳', lineTotal: 189, quantity: 1 },
+      { name: 'パン', lineTotal: 119, quantity: 1 },
+      { name: '楽天ポイント対象お菓子', lineTotal: 299, quantity: 1 },
+      { name: 'お茶', lineTotal: 109, quantity: 1 },
+    ];
+    const discounts = [{ label: '楽天ポイント(税込)', amount: -13 }];
+    const result = applyReceiptDiscountsToItems(items, discounts);
+    expect(result.boundCount).toBe(0);
+    expect(result.unboundDiscounts).toEqual([
+      { label: '楽天ポイント(税込)', amount: -13 },
+    ]);
+    for (const it of result.items) {
+      expect(Number((it as { discountAllocated?: number }).discountAllocated) || 0).toBe(0);
+      expect(Number((it as { effectiveLineTotal?: number }).effectiveLineTotal)).toBe(
+        Number(it.lineTotal)
+      );
+    }
+    expect(receiptLevelUnallocatedDiscountSum(result.items, discounts)).toBe(-13);
+  });
+
+  it('Receipt065 A2: stale adjacentPrecedingItemIndex cannot bind loyalty redemption', () => {
+    const items = [
+      { name: 'item-0', lineTotal: 100, quantity: 1 },
+      { name: 'item-1', lineTotal: 200, quantity: 1 },
+      { name: 'item-2', lineTotal: 300, quantity: 1 },
+    ];
+    const discounts = [
+      {
+        label: '楽天ポイント(税込)',
+        amount: -13,
+        adjacentPrecedingItemIndex: 2,
+      },
+    ];
+    const result = applyReceiptDiscountsToItems(items, discounts);
+    expect(result.boundCount).toBe(0);
+    expect(result.unboundDiscounts).toEqual([
+      { label: '楽天ポイント(税込)', amount: -13 },
+    ]);
+    for (const it of result.items) {
+      expect(Number((it as { discountAllocated?: number }).discountAllocated) || 0).toBe(0);
+      expect(Number((it as { effectiveLineTotal?: number }).effectiveLineTotal)).toBe(
+        Number(it.lineTotal)
+      );
+    }
+  });
+
+  it('ordinary product coupon token binding still works (control)', () => {
+    const result = applyReceiptDiscountsToItems(
+      [
+        { name: 'OTHER', lineTotal: 500, quantity: 1 },
+        { name: 'FERRERO ROCHER ORIGINS', lineTotal: 2988, quantity: 1 },
+      ],
+      [{ label: 'ROCHER ORIGINS CPN', amount: -600 }]
+    );
+    expect(result.boundCount).toBe(1);
+    expect(result.unboundDiscounts).toEqual([]);
+    const rocher = result.items.find((i) => String(i.name).includes('ROCHER'))!;
+    expect(Number((rocher as { discountAllocated?: number }).discountAllocated)).toBe(-600);
+    expect(Number((rocher as { effectiveLineTotal?: number }).effectiveLineTotal)).toBe(2388);
+  });
+
+  it('ordinary adjacent 値引 still binds (control)', () => {
+    const result = applyReceiptDiscountsToItems(
+      [
+        { name: '鶏肉', lineTotal: 372, quantity: 1 },
+        { name: '卵', lineTotal: 200, quantity: 1 },
+      ],
+      [{ label: '値引', amount: -38, adjacentPrecedingItemIndex: 0 }]
+    );
+    expect(result.boundCount).toBe(1);
+    expect(Number((result.items[0] as { discountAllocated?: number }).discountAllocated)).toBe(
+      -38
+    );
+    expect(Number((result.items[0] as { effectiveLineTotal?: number }).effectiveLineTotal)).toBe(
+      334
+    );
+    expect(Number((result.items[1] as { discountAllocated?: number }).discountAllocated) || 0).toBe(
+      0
+    );
+  });
 });

@@ -12,14 +12,20 @@ import {
   normalizeMerchant,
   canonicalizeMerchantChain,
   classifyLineKind,
+  isLoyaltyRedemptionLabel,
   sanitizeOcrCategoryKey,
   reconcileReceiptTotals,
   normalizeOcrAnalysis,
   resolveReceiptTax,
   persistReceiptTaxFields,
   isCostcoConnectionNonMerchandiseLine,
+  isPostAdjustmentActualTaxLabel,
+  harvestActualTaxFromItems,
+  harvestActualTaxFromItemsPartitioned,
 } from './receiptOcrNormalize';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
+import { receiptLevelUnallocatedDiscountSum } from './receiptDiscountAllocation';
+import { assessReceiptAmountBasis } from './analysisFoundation/amountBasis';
 
 describe('sanitizeOcrCategoryKey: 店铺类型词不能成为商品分类', () => {
   it('合法枚举原样保留', () => {
@@ -56,6 +62,56 @@ describe('classifyLineKind: 折扣 / 税 / 小计行识别', () => {
   it('普通商品为 item', () => {
     expect(classifyLineKind('おにぎり 鮭', 150)).toBe('item');
     expect(classifyLineKind('コーヒー', 120)).toBe('item');
+  });
+});
+
+describe('Receipt065 loyalty redemption classification', () => {
+  it.each([
+    '楽天ポイント(税込)',
+    '楽天ポイント（税込）',
+    'ポイント利用',
+    '利用ポイント',
+    'ポイント支払',
+    'ポイント値引',
+    'ポイント割',
+  ])('%s → discount for +13 and -13', (label) => {
+    expect(isLoyaltyRedemptionLabel(label)).toBe(true);
+    expect(classifyLineKind(label, 13)).toBe('discount');
+    expect(classifyLineKind(label, -13)).toBe('discount');
+  });
+
+  it.each([
+    '利用可能ポイント',
+    'ポイント対象金額',
+    '獲得予定ポイント',
+    '獲得予定ポイント数',
+    'ポイント残高',
+    '楽天ポイント明細',
+    'ポイントカード',
+    '楽天ポイント利用可能',
+    '楽天ポイント対象金額',
+    '楽天ポイント残高',
+    '利用可能楽天ポイント',
+    '獲得予定楽天ポイント',
+    '楽天ポイントカード',
+  ])('%s is metadata — NOT discount (incl. DISCOUNT_KEYWORDS substring traps)', (label) => {
+    expect(isLoyaltyRedemptionLabel(label)).toBe(false);
+    expect(classifyLineKind(label, 13)).toBe('subtotal');
+    expect(classifyLineKind(label, 13)).not.toBe('discount');
+  });
+
+  it('negative OCR amount cannot turn metadata into redemption', () => {
+    expect(classifyLineKind('楽天ポイント利用可能', -13)).toBe('subtotal');
+    expect(classifyLineKind('利用可能ポイント', -13)).toBe('subtotal');
+    expect(classifyLineKind('ポイント残高', -13)).toBe('subtotal');
+  });
+
+  it('genuine tax labels remain tax despite 税 markers', () => {
+    expect(classifyLineKind('消費税', 113)).toBe('tax');
+    expect(classifyLineKind('消費税額', 113)).toBe('tax');
+    expect(classifyLineKind('消費税額(値引後)', 113)).toBe('tax');
+    expect(classifyLineKind('内消費税', 113)).toBe('tax');
+    expect(classifyLineKind('税込消費税', 113)).toBe('tax');
   });
 });
 
@@ -265,6 +321,146 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     expect(out.items[0].lineTotal).toBe(216);
   });
 
+  it('Receipt065: 楽天ポイント(税込)+13 → receipt-level -13; reconcile ok; unallocated', () => {
+    const amounts = [189, 119, 239, 299, 119, 109, 109, 99, 149];
+    const merchandise = amounts.map((lineTotal, i) => ({
+      name: `item-${i}`,
+      quantity: 1,
+      unitPrice: lineTotal,
+      lineTotal,
+    }));
+    const out = normalizeOcrAnalysis({
+      merchant: 'SEIYU',
+      items: [
+        ...merchandise,
+        {
+          name: '楽天ポイント(税込)',
+          quantity: 1,
+          unitPrice: 13,
+          lineTotal: 13,
+        },
+      ],
+      total: 1532,
+      tax: 113,
+      currency: 'JPY',
+    });
+
+    expect(out.items).toHaveLength(9);
+    expect(out.items.reduce((s, it) => s + it.lineTotal, 0)).toBe(1431);
+    expect(out.items.every((it) => !String(it.name).includes('ポイント'))).toBe(true);
+    expect(out.items.every((it) => (it as any).discountAllocated == null || it.discountAllocated === 0)).toBe(
+      true
+    );
+
+    const loyalty = (out.discounts ?? []).filter((d) =>
+      String(d.label).includes('楽天ポイント')
+    );
+    expect(loyalty).toHaveLength(1);
+    expect(loyalty[0]?.amount).toBe(-13);
+    expect(
+      (loyalty[0] as { adjacentPrecedingItemIndex?: number | null })
+        ?.adjacentPrecedingItemIndex == null
+    ).toBe(true);
+    expect(receiptLevelUnallocatedDiscountSum(out.items as any, out.discounts as any)).toBe(
+      -13
+    );
+
+    expect(out.tax).toBe(113);
+    expect(out.total).toBe(1532);
+    expect(out.reconciliation?.ok).toBe(true);
+    expect(out.amount_mismatch).toBe(false);
+
+    // Amount-basis shape mirrors existing unallocated-discount fixtures.
+    const analysisJson = JSON.stringify({
+      items: out.items,
+      discounts: out.discounts,
+      tax: out.tax,
+      total: out.total,
+      tax_is_known: true,
+    });
+    const basis = assessReceiptAmountBasis({
+      id: 'receipt065-fixture',
+      total: out.total,
+      tax: out.tax,
+      tax_is_known: 1,
+      analysis_json: analysisJson,
+      items: out.items,
+      discounts: out.discounts,
+    } as any);
+    expect(basis.basis).toBe('tax_excluded');
+    expect(basis.confidence).toBe('medium');
+    expect(basis.analyticsItemSum).toBe(1431);
+    expect(basis.unallocatedDiscountTotal).toBe(-13);
+    expect(basis.receiptTotal).toBe(1532);
+    expect(basis.expectedTotalIfTaxExcluded).toBe(1531);
+    expect(basis.evidence).toEqual(
+      expect.arrayContaining(['unallocated_discount_present'])
+    );
+  });
+
+  it('Receipt065: dual discounts[] + item row does not double to -26', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'SEIYU',
+      items: [
+        { name: 'A', quantity: 1, unitPrice: 1431, lineTotal: 1431 },
+        {
+          name: '楽天ポイント(税込)',
+          quantity: 1,
+          unitPrice: 13,
+          lineTotal: 13,
+        },
+      ],
+      discounts: [{ label: '楽天ポイント(税込)', amount: -13 }],
+      total: 1532,
+      tax: 113,
+      currency: 'JPY',
+    });
+    const loyaltyAmounts = (out.discounts ?? [])
+      .filter((d) => String(d.label).includes('楽天ポイント'))
+      .map((d) => d.amount);
+    expect(loyaltyAmounts).toEqual([-13]);
+    expect(
+      (out.discounts ?? []).reduce(
+        (s, d) => s + (d.amount < 0 ? d.amount : -Math.abs(d.amount)),
+        0
+      )
+    ).toBe(-13);
+    for (const d of out.discounts ?? []) {
+      if (String(d.label).includes('楽天ポイント')) {
+        expect(
+          (d as { adjacentPrecedingItemIndex?: number | null })
+            .adjacentPrecedingItemIndex == null
+        ).toBe(true);
+      }
+    }
+    for (const it of out.items) {
+      expect(Number((it as any).discountAllocated) || 0).toBe(0);
+    }
+    expect(receiptLevelUnallocatedDiscountSum(out.items as any, out.discounts as any)).toBe(
+      -13
+    );
+  });
+
+  it('Receipt065: metadata 楽天ポイント利用可能 is not a phantom discount', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'SEIYU',
+      items: [
+        { name: 'A', quantity: 1, unitPrice: 100, lineTotal: 100 },
+        {
+          name: '楽天ポイント利用可能',
+          quantity: 1,
+          unitPrice: 13,
+          lineTotal: 13,
+        },
+      ],
+      total: 100,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.items).toHaveLength(1);
+    expect(out.discounts ?? []).toEqual([]);
+  });
+
   it('Sample 081: Costco Connection lines are not merchandise items', () => {
     expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション')).toBe(true);
     expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクション ムリョウ')).toBe(true);
@@ -387,5 +583,220 @@ describe('resolveReceiptTax', () => {
     });
     expect(unknown.tax).toBe(0);
     expect(unknown.tax_is_known).toBe(false);
+  });
+
+  const jpy = { currency: 'JPY' as const, total: 1532 };
+
+  it('Case A — top=114, no item tax rows → 114/known', () => {
+    expect(resolveReceiptTax({ tax: 114, items: [], ...jpy })).toEqual({
+      tax: 114,
+      taxIsKnown: true,
+    });
+  });
+
+  it('Case B — top=113 beats unlabeled pre-state item 114 → 113/known', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 113,
+        items: [{ name: '消費税額', lineTotal: 114 }],
+        ...jpy,
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 113, taxIsKnown: true });
+  });
+
+  it('Case C — post-adjustment item 113 beats stale top=114 → 113/known', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 114,
+        items: [{ name: '消費税額(値引後)', lineTotal: 113 }],
+        ...jpy,
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 113, taxIsKnown: true });
+  });
+
+  it('Case D — post-adjustment 113 wins over pre 114 when top=113', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 113,
+        items: [
+          { name: '消費税額', lineTotal: 114 },
+          { name: '消費税額(値引後)', lineTotal: 113 },
+        ],
+        ...jpy,
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 113, taxIsKnown: true });
+  });
+
+  it('Case E — post-adjustment 113 wins over pre 114 when top=114', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 114,
+        items: [
+          { name: '消費税額', lineTotal: 114 },
+          { name: '消費税額(値引後)', lineTotal: 113 },
+        ],
+        ...jpy,
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 113, taxIsKnown: true });
+  });
+
+  it('Case F — post-adjustment 113 when top=null and both tax rows present', () => {
+    expect(
+      resolveReceiptTax({
+        tax: null as any,
+        items: [
+          { name: '消費税額', lineTotal: 114 },
+          { name: '消費税額(値引後)', lineTotal: 113 },
+        ],
+        ...jpy,
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 113, taxIsKnown: true });
+  });
+
+  it('ordinary multi-rate fallback when no post state and top missing → 100/known', () => {
+    expect(
+      resolveReceiptTax({
+        tax: null as any,
+        items: [
+          { name: '8% 消費税額', lineTotal: 80 },
+          { name: '10% 消費税額', lineTotal: 20 },
+        ],
+        total: 1000,
+        currency: 'JPY',
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 100, taxIsKnown: true });
+  });
+
+  it('post-state multi-rate harvest sums final rates only → 99/known', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 100,
+        items: [
+          { name: '8% 消費税額', lineTotal: 80 },
+          { name: '10% 消費税額', lineTotal: 20 },
+          { name: '8% 消費税額(値引後)', lineTotal: 79 },
+          { name: '10% 消費税額(値引後)', lineTotal: 20 },
+        ],
+        total: 999,
+        currency: 'JPY',
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 99, taxIsKnown: true });
+  });
+
+  it('top-final 99 beats stale pre-state item rows 80+20', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 99,
+        items: [
+          { name: '8% 消費税額', lineTotal: 80 },
+          { name: '10% 消費税額', lineTotal: 20 },
+        ],
+        total: 999,
+        currency: 'JPY',
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 99, taxIsKnown: true });
+  });
+
+  it('stale top=100 loses to explicit post-state multi-rate items → 99/known', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 100,
+        items: [
+          { name: '8% 消費税額', lineTotal: 80 },
+          { name: '10% 消費税額', lineTotal: 20 },
+          { name: '8% 消費税額(値引後)', lineTotal: 79 },
+          { name: '10% 消費税額(値引後)', lineTotal: 20 },
+        ],
+        total: 999,
+        currency: 'JPY',
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 99, taxIsKnown: true });
+  });
+
+  it('taxable-base contamination guard still resolves Sample 061 → 72/known', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 75,
+        taxBreakdown: [
+          { rate: 8, amount: 72 },
+          { rate: 10, amount: 3 },
+        ],
+        total: 985,
+        items: [{ name: '消費税等 8%', lineTotal: 72 }],
+        currency: 'JPY',
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 72, taxIsKnown: true });
+  });
+
+  it('priorKnown=true keeps top tax even when post-adjustment item exists', () => {
+    expect(
+      resolveReceiptTax({
+        tax: 114,
+        tax_is_known: true,
+        items: [{ name: '消費税額(値引後)', lineTotal: 113 }],
+        ...jpy,
+      } as ReceiptAnalysis)
+    ).toEqual({ tax: 114, taxIsKnown: true });
+  });
+
+  it('isPostAdjustmentActualTaxLabel recognizes 値引後 on actual tax rows only', () => {
+    expect(isPostAdjustmentActualTaxLabel('消費税額(値引後)')).toBe(true);
+    expect(isPostAdjustmentActualTaxLabel('消費税額')).toBe(false);
+    expect(isPostAdjustmentActualTaxLabel('税抜金額対象(値引後)')).toBe(false);
+  });
+
+  it('harvestActualTaxFromItemsPartitioned separates settlement states', () => {
+    expect(
+      harvestActualTaxFromItemsPartitioned([
+        { name: '消費税額', lineTotal: 114 },
+        { name: '消費税額(値引後)', lineTotal: 113 },
+      ])
+    ).toEqual({ postAdjustment: 113, ordinary: 114 });
+    expect(harvestActualTaxFromItems([{ name: '消費税額(値引後)', lineTotal: 113 }])).toBe(113);
+  });
+});
+
+describe('Receipt065 final tax normalization', () => {
+  const amounts = [189, 119, 239, 299, 119, 109, 109, 99, 149];
+  const merchandise = amounts.map((lineTotal, i) => ({
+    name: `item-${i}`,
+    quantity: 1,
+    unitPrice: lineTotal,
+    lineTotal,
+  }));
+
+  it.each([114, 113])('top tax=%i with dual tax rows → normalized tax=113', (topTax) => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'SEIYU',
+      items: [
+        ...merchandise,
+        { name: '消費税額', quantity: 1, unitPrice: 114, lineTotal: 114 },
+        { name: '消費税額(値引後)', quantity: 1, unitPrice: 113, lineTotal: 113 },
+        {
+          name: '楽天ポイント(税込)',
+          quantity: 1,
+          unitPrice: 13,
+          lineTotal: 13,
+        },
+      ],
+      tax: topTax,
+      total: 1532,
+      currency: 'JPY',
+    });
+
+    expect(out.items).toHaveLength(9);
+    expect(out.items.reduce((s, it) => s + it.lineTotal, 0)).toBe(1431);
+    expect(out.tax).toBe(113);
+    expect(out.tax_is_known).toBe(true);
+    expect(out.total).toBe(1532);
+    expect(out.reconciliation?.ok).toBe(true);
+    expect(out.amount_mismatch).toBe(false);
+    expect(
+      (out.discounts ?? []).filter((d) => String(d.label).includes('楽天ポイント'))
+    ).toEqual([expect.objectContaining({ amount: -13 })]);
+    expect(out.items.every((it) => (it as any).discountAllocated == null || (it as any).discountAllocated === 0)).toBe(
+      true
+    );
+    expect(receiptLevelUnallocatedDiscountSum(out.items as any, out.discounts as any)).toBe(-13);
   });
 });

@@ -76,6 +76,61 @@ function couponSearchTokens(label: string): string[] {
     .filter((t) => t.length >= 2);
 }
 
+function toLoyaltyLabelKey(name: string): string {
+  return (name || '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Informational point / loyalty metadata — NEVER a receipt discount.
+ * Must be checked before generic DISCOUNT_KEYWORDS so
+ * 「楽天ポイント利用可能」 cannot match substring 「ポイント利用」.
+ */
+export function isLoyaltyPointMetadataLabel(name: string): boolean {
+  const n = toLoyaltyLabelKey(name);
+  if (!n) return false;
+  if (!n.includes('ポイント') && !n.includes('point')) return false;
+  return (
+    n.includes('利用可能') ||
+    n.includes('対象金額') ||
+    n.includes('獲得予定') ||
+    n.includes('ポイント残高') ||
+    n.includes('ポイント明細') ||
+    n.includes('楽天ポイント明細') ||
+    n.includes('ポイントカード') ||
+    (n.includes('残高') && n.includes('ポイント')) ||
+    (n.includes('明細') && n.includes('ポイント')) ||
+    (n.includes('カード') && n.includes('ポイント'))
+  );
+}
+
+/**
+ * Actual loyalty redemption that reduces the receipt total (receipt-level).
+ * Shared by OCR classifyLineKind and applyReceiptDiscountsToItems.
+ * Do NOT treat bare 「ポイント」 as redemption.
+ */
+export function isReceiptLevelLoyaltyRedemptionLabel(name: string): boolean {
+  const n = toLoyaltyLabelKey(name);
+  if (!n) return false;
+  if (!n.includes('ポイント') && !n.includes('point')) return false;
+  if (isLoyaltyPointMetadataLabel(name)) return false;
+  if (/ポイント\s*[（(]\s*税込\s*[）)]/.test(n)) return true;
+  if (n.includes('ポイント利用') || n.includes('利用ポイント')) return true;
+  if (
+    n.includes('ポイント支払') ||
+    n.includes('ポイント値引') ||
+    n.includes('ポイント割')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Alias used by OCR normalize / existing tests. */
+export const isLoyaltyRedemptionLabel = isReceiptLevelLoyaltyRedemptionLabel;
+
 /**
  * Bundle / まとめ売り値引 labels that may safely attach to the preceding item
  * when token binding fails. Do NOT broaden to arbitrary receipt-level coupons.
@@ -432,6 +487,16 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
     if (!Number.isFinite(amount) || amount === 0) continue;
     const delta = amount < 0 ? amount : -Math.abs(amount);
     const absDisc = Math.abs(delta);
+
+    // Receipt-level loyalty redemption: never product / bundle / adjacency bind.
+    if (isReceiptLevelLoyaltyRedemptionLabel(discount.label)) {
+      unboundDiscounts.push({
+        label: discount.label,
+        amount: delta,
+      });
+      continue;
+    }
+
     let idx = findDiscountItemIndex(next, discount);
     if (idx < 0 && isBundleSummaryDiscountLabel(discount.label)) {
       idx = findBundleDiscountItemIndex(next, discount, evidenceTexts);

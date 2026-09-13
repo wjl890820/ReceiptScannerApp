@@ -30,7 +30,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 12;
+const OCR_CACHE_VERSION = 14;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -453,6 +453,19 @@ function buildOcrPrompt(): string {
     '  まとめ売り値引 / まとめ値引 は従来どおり discounts に入れるだけでなく、items にも kind="discount" の負数行として残す',
     '  （直前商品への割当に必要）。組価格（例: 2個¥203）が印刷されていれば label か隣接行名に残す。',
     '  Costco の CPN 等、どの商品に付くか不明なレシート全体クーポンは discounts[] のみ（items に商品として入れない）。',
+    '',
+    '  【レシート全体のポイント還元（LOYALTY REDEMPTION）】',
+    '  支払合計を実際に減額するポイント利用・ポイント支払・ポイント値引は kind="discount"、amount は負数。',
+    '  レシート全体（receipt-level）であり、直前商品への隣接値引ではない。items の商品や tax・支払 tender にしない。',
+    '  例: 中間合計 1545・楽天ポイント(税込) 13・支払合計 1532 のとき:',
+    '    discounts: [{ label:"楽天ポイント(税込)", amount:-13 }]',
+    '  商品行・税行・交通系などの支払手段にしない。',
+    '',
+    '  【ポイント情報行（METADATA — 割引にしない）】',
+    '  利用可能ポイント / ポイント対象金額 / 獲得予定ポイント / 獲得予定ポイント数 / ポイント残高 /',
+    '  楽天ポイント明細 などは情報・残高・明細であり、割引でも商品でもない（items / discounts に入れない）。',
+    '  「ポイント」という語だけでは割引証拠にならない。',
+    '',
     '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
     '  ただし Costco の「御買上げ点数」行は items に残してよい（合計金額ではない）。',
     '- quantity は「購入点数」のみ。unitPrice は印刷された単価。lineTotal は当該商品行の合計金額。',
@@ -492,6 +505,20 @@ function buildOcrPrompt(): string {
     '- ヘッダーが欠けて WHOLESALE / BIZ/GOLD だけ読める Costco レシートは、merchant を',
     '  「コストコ」または "WHOLESALE BIZ/GOLD" の両方を含む文字列にしてよい（WHOLESALE 単独不可）。',
     '- tax は印刷された消費税額を転記する。total に税を足し直してはならない。',
+    '- 【最終決済に対応する tax（FINAL SETTLEMENT TAX）】',
+    '  値引・ポイント利用などの前後で税額が複数印刷されている場合、',
+    '  top-level tax は最終支払合計（支払合計 / 合計）に対応する決済状態の税額のみを入れる。',
+    '  値引前（pre-adjustment）と値引後（post-adjustment）の税は別の決済状態であり、',
+    '  両方を tax に入れたり合算してはならない（114 + 113 = 227 は禁止）。',
+    '  最終決済状態の税が明示印刷されている場合（例: 消費税額(値引後) 113）、それを tax に使う。',
+    '  例（Receipt065 型）:',
+    '    消費税額 114 / 合計 1545 / 楽天ポイント(税込) 13 /',
+    '    税抜金額対象(値引後) 1419 / 消費税額(値引後) 113 / 支払合計 1532',
+    '    → total=1532, tax=113（114 ではない）, discounts=[{label:"楽天ポイント(税込)",amount:-13}]',
+    '  taxBreakdown も選択した最終決済状態の内訳のみ。値引前後の両状態を混在させない。',
+    '  最終決済状態に 8% と 10% の税額が別々に印刷されていれば、その税額だけを taxBreakdown に入れ、',
+    '  tax にはその合計を入れてよい（例: 8% 79 + 10% 20 → tax=99）。',
+    '  印刷された税額の転記のみ。total−税抜対象 などから税を推算・再構成してはならない。',
     '- 税率から税額を推算しない。tax が読めない場合は null（0 で埋めない）。',
     '- 【重要】課税対象額 / 対象額 / 税抜対象額 / 「税率10%対象 ¥N」は税額ではない。',
     '  これらを tax や taxBreakdown[].amount に入れない（N は taxable base）。',
@@ -528,6 +555,12 @@ function buildOcrPrompt(): string {
     '',
     '- 日本のコンビニ（セブン-イレブン / ファミリーマート / ローソン / ミニストップ）のレシートは、',
     '  「商品行 → 小計 → 値引 → 消費税(軽減税率含む) → 合計」の構造を優先して解釈する。',
+    '- merchant は印刷された店名・チェーン表記・明確に見えるロゴから転記する。',
+    '  レシート版式・商品構成・支払手段・書体・他チェーンとの類似・プロンプト内の例から推測しない。',
+    '  読めない場合は null（推測で埋めない）。',
+    '  SEIYU / 西友 の印刷証拠があるときだけ SEIYU または 西友。',
+    '  LAWSON / ローソン の印刷証拠があるときだけ ローソン。',
+    '  印刷証拠なしに SEIYU↔ローソン を互いに変換しない。',
     '- 店名が 7-Eleven / セブンイレブン / セブンーイレブン の場合は merchant を "セブン-イレブン" に正規化してよい。',
     '- イオンは店名を短くしない（例: イオン古川店 はそのまま）。',
     '- レシート上に日時があれば transactionDate に原文の形式のまま入れる。',
