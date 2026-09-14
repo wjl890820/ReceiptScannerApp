@@ -13,6 +13,7 @@ import {
   selectAnalyticsReceipts,
   type AnalyticsReceiptSelection,
 } from './analyticsReceiptSelection';
+import { selectAnalyticsReceiptsCached } from './analyticsReceiptSelectionCache';
 import type { ReceiptListRow, ReceiptRow } from './db';
 
 /** Load enough stored rows so same-purchase duplicate groups stay intact. */
@@ -37,8 +38,34 @@ export function receiptRowToListRow(row: ReceiptRow): ReceiptListRow {
  */
 export function buildHistoryPurchaseTruthView(
   storedReceipts: readonly ReceiptRow[]
-): HistoryPurchaseTruthView {
-  const selection = selectAnalyticsReceipts([...storedReceipts]);
+): HistoryPurchaseTruthView;
+export function buildHistoryPurchaseTruthView(
+  storedReceipts: readonly ReceiptRow[],
+  options: {
+    ownerKey?: string;
+    shouldSkipExpensiveBuild?: () => boolean;
+  }
+): HistoryPurchaseTruthView | null;
+export function buildHistoryPurchaseTruthView(
+  storedReceipts: readonly ReceiptRow[],
+  options?: {
+    ownerKey?: string;
+    shouldSkipExpensiveBuild?: () => boolean;
+  }
+): HistoryPurchaseTruthView | null {
+  const ownerKey = options?.ownerKey?.trim() || '';
+  let selection: AnalyticsReceiptSelection;
+  if (ownerKey) {
+    const cached = selectAnalyticsReceiptsCached({
+      ownerKey,
+      receipts: [...storedReceipts],
+      shouldSkipExpensiveBuild: options?.shouldSkipExpensiveBuild,
+    });
+    if (!cached) return null;
+    selection = cached;
+  } else {
+    selection = selectAnalyticsReceipts([...storedReceipts]);
+  }
   return {
     visibleRows: selection.analyticsReceipts.map(receiptRowToListRow),
     storedCount: storedReceipts.length,

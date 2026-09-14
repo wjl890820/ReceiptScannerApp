@@ -23,11 +23,11 @@ export const PRODUCT_IDENTITY_CONTRACT_VERSION =
   'meruno-product-identity-contract-v1' as const;
 
 /**
- * Resolver stamp. Batch 3 shadow resolver uses v1.
- * Live Analysis enrichment still does not consume these links.
+ * Resolver stamp. Bumped when persisted link semantics change so stale
+ * in-memory / stored links (e.g. pre-fix generic rematch laundry) miss cache.
  */
 export const PRODUCT_IDENTITY_RESOLVER_VERSION =
-  'meruno-product-identity-resolver-v1' as const;
+  'meruno-product-identity-resolver-v2' as const;
 
 /**
  * Identity strength ladder. Lower rows do not imply higher ones.

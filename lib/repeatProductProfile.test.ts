@@ -324,10 +324,10 @@ describe('repeatProductProfile production identity path', () => {
     expect(withSecond[0]!.purchaseOccurrenceCount).toBe(2);
   });
 
-  it('B. 牛乳 1L and 牛乳 500ml remain separate (no family merge into one Repeat)', () => {
-    // First observation of each generic milk label is family_spec; subsequent
-    // same-comparison-key rows become merchant_product while reusing MP id.
-    // Use three receipts per spec so each has ≥2 merchant_product-qualified rows.
+  it('B. 牛乳 1L and 牛乳 500ml stay separate MP buckets; generic rematch no longer launders into Repeat', () => {
+    // Exact rematch must NOT promote family_spec → merchant_product.
+    // Repeat V1 still requires identityLevel === merchant_product, so these
+    // remain non-Repeat (fail-closed) while keeping distinct comparison keys.
     const receipts = [1, 2, 3, 4, 5, 6].map((n) =>
       receipt(`r${n}`, { transaction_at: n * DAY_MS, created_at: n * DAY_MS })
     );
@@ -339,14 +339,27 @@ describe('repeatProductProfile production identity path', () => {
       productRow('r5', 'b2', { displayName: '牛乳 500ml', occurredAt: 5 * DAY_MS, productFamilyKey: 'milk' }),
       productRow('r6', 'b3', { displayName: '牛乳 500ml', occurredAt: 6 * DAY_MS, productFamilyKey: 'milk' }),
     ];
-    const profiles = buildRepeatProductProfiles(receipts, rows);
-    expect(profiles).toHaveLength(2);
-    expect(profiles.every((p) => p.identityKind === 'merchant_product')).toBe(true);
-    expect(profiles.every((p) => p.purchaseOccurrenceCount === 2)).toBe(true);
-    expect(profiles[0]!.identityKey).not.toBe(profiles[1]!.identityKey);
-    const labels = profiles.map((p) => p.displayName).join(' ');
-    expect(labels.includes('1L') || labels.includes('1l')).toBe(true);
-    expect(labels.includes('500')).toBe(true);
+    const {
+      resolveIdentityConsumerObservations,
+    } = require('./productIdentityConsumer') as typeof import('./productIdentityConsumer');
+    const { createMemoryProductIdentityStore } =
+      require('./productIdentityStore') as typeof import('./productIdentityStore');
+    const { qualified } = resolveIdentityConsumerObservations(
+      rows.map((row) => ({
+        receiptId: row.receiptId,
+        itemSourceIndex: row.sourceIndex,
+        rawName: row.displayName,
+        merchantKey: row.merchantNormalized || 'イオン',
+        occurredAt: row.occurredAt,
+        lineTotal: row.lineTotal,
+        quantity: row.purchaseQuantity,
+        displayName: row.displayName,
+      })),
+      createMemoryProductIdentityStore()
+    );
+    expect(qualified.every((q) => q.identityLevel === 'family_spec')).toBe(true);
+    expect(new Set(qualified.map((q) => q.merchantProductId)).size).toBe(2);
+    expect(buildRepeatProductProfiles(receipts, rows)).toHaveLength(0);
   });
 
   it('C. legacy family-only grouping is not a Repeat V1 authority', () => {
@@ -371,8 +384,7 @@ describe('repeatProductProfile production identity path', () => {
   });
 
   it('strict: family_only sharing merchantProductId cannot inflate Repeat', () => {
-    // Production path: first generic '牛乳' → family_only + MP M;
-    // second same comparison key → merchant_product reusing M.
+    // Rematch must keep family_only — no laundering into merchant_product.
     const receipts = [
       receipt('rA', { transaction_at: DAY_MS }),
       receipt('rB', { transaction_at: 2 * DAY_MS }),
@@ -404,23 +416,17 @@ describe('repeatProductProfile production identity path', () => {
     );
     expect(qualified.map((q) => q.identityLevel)).toEqual([
       'family_only',
-      'merchant_product',
-      'merchant_product',
+      'family_only',
+      'family_only',
     ]);
     expect(
       new Set(qualified.map((q) => q.merchantProductId)).size
     ).toBe(1);
 
-    // With only family_only + one merchant_product → no Repeat.
-    const twoOnly = buildRepeatProductProfiles(receipts.slice(0, 2), rows.slice(0, 2));
-    expect(twoOnly).toHaveLength(0);
-
-    // Two merchant_product-qualified → Repeat with occurrence 2 (family_only excluded).
-    const profiles = buildRepeatProductProfiles(receipts, rows);
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]!.identityKind).toBe('merchant_product');
-    expect(profiles[0]!.purchaseOccurrenceCount).toBe(2);
-    expect(profiles[0]!.purchaseEventDates).toEqual([2 * DAY_MS, 3 * DAY_MS]);
+    expect(buildRepeatProductProfiles(receipts.slice(0, 2), rows.slice(0, 2))).toHaveLength(
+      0
+    );
+    expect(buildRepeatProductProfiles(receipts, rows)).toHaveLength(0);
   });
 
   it('strict: family_spec sharing merchantProductId cannot inflate Repeat', () => {
@@ -454,8 +460,8 @@ describe('repeatProductProfile production identity path', () => {
     );
     expect(qualified.map((q) => q.identityLevel)).toEqual([
       'family_spec',
-      'merchant_product',
-      'merchant_product',
+      'family_spec',
+      'family_spec',
     ]);
     expect(new Set(qualified.map((q) => q.merchantProductId)).size).toBe(1);
 
@@ -463,10 +469,7 @@ describe('repeatProductProfile production identity path', () => {
       buildRepeatProductProfiles(receipts.slice(0, 2), rows.slice(0, 2))
     ).toHaveLength(0);
 
-    const profiles = buildRepeatProductProfiles(receipts, rows);
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]!.purchaseOccurrenceCount).toBe(2);
-    expect(profiles[0]!.purchaseEventDates).toEqual([2 * DAY_MS, 3 * DAY_MS]);
+    expect(buildRepeatProductProfiles(receipts, rows)).toHaveLength(0);
   });
 
   it('D. same receipt duplicate lines → occurrence 1; quantity may accumulate', () => {

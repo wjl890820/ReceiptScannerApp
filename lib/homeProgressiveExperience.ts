@@ -79,7 +79,8 @@ export function filterHomeIdentityProductRows<
 }
 
 function buildHomeRepeatSurfaces(args: {
-  analyticsReceipts: ReceiptRow[];
+  /** Full-history (or long-term) analytics receipt universe for Repeat eligibility. */
+  longTermAnalyticsReceipts: ReceiptRow[];
   productRows: readonly EngagementProductRow[];
   personalInventory: PersonalProductEndpointInventory | null;
   now: number;
@@ -99,8 +100,10 @@ function buildHomeRepeatSurfaces(args: {
 
   try {
     // Uncapped Repeat SSOT — Home frequent cap must NOT truncate Next Purchase input.
+    // Receipt-ID eligibility MUST use the long-term analytics universe, not the
+    // newest-200 Home display slice.
     const allProfiles = buildRepeatProductProfiles(
-      args.analyticsReceipts,
+      args.longTermAnalyticsReceipts,
       args.productRows,
       { personalInventory: args.personalInventory }
     );
@@ -118,14 +121,18 @@ function buildHomeRepeatSurfaces(args: {
 }
 
 /**
- * @param receipts Already analytics-selected purchase candidates (Home passes
- *   selectAnalyticsReceipts(...).analyticsReceipts).
+ * @param receipts Display/presentation analytics slice (Home newest-200 selection).
+ *   Used for latestPurchase / recentInsight presentation only.
+ * @param evaluation Engagement evaluation (full-history status when Home preloads).
  * @param productRows Analytics-filtered engagement product rows (optional).
  *   When omitted / empty and stage is unlocked, frequent list is empty rather
  *   than falling back to milestone recent-window frequentProducts.
  * @param personalInventory Owner-scoped G4-2A inventory for Home personal
  *   frequent overlay (optional). When null, identity Home grouping is unchanged.
  * @param now Reference timestamp for Next Purchase V0 (injected once per build).
+ * @param longTermAnalyticsReceipts Full-history analytics receipts for Repeat /
+ *   Next Purchase eligibility. When omitted, falls back to `receipts` (tests /
+ *   callers without a separate long-term universe).
  */
 export function buildHomeProgressiveExperience(
   receipts: ReceiptRow[],
@@ -133,7 +140,8 @@ export function buildHomeProgressiveExperience(
   analyticsUnavailable = false,
   productRows: readonly EngagementProductRow[] = [],
   personalInventory: PersonalProductEndpointInventory | null = null,
-  now: number = 0
+  now: number = 0,
+  longTermAnalyticsReceipts?: readonly ReceiptRow[] | null
 ): HomeProgressiveExperience {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const localCount = countSupportedReceipts(receipts);
@@ -157,9 +165,13 @@ export function buildHomeProgressiveExperience(
   const frequentUnlocked = stage === 'frequent' || stage === 'profile';
   const referenceNow =
     typeof now === 'number' && Number.isFinite(now) && now > 0 ? now : 0;
+  const repeatReceiptUniverse =
+    longTermAnalyticsReceipts != null
+      ? ([...longTermAnalyticsReceipts] as ReceiptRow[])
+      : receipts;
   const repeatSurfaces = frequentUnlocked
     ? buildHomeRepeatSurfaces({
-        analyticsReceipts: receipts,
+        longTermAnalyticsReceipts: repeatReceiptUniverse,
         productRows,
         personalInventory,
         now: referenceNow,

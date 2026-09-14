@@ -44,7 +44,7 @@ describe('Product Identity Batch 6 — lifecycle', () => {
 
     const first = resolveReceiptItemIdentity(
       {
-        rawName: 'テスト牛乳1L',
+        rawName: '横浜家系',
         merchantKey: '店',
         receiptId: 'r1',
         itemSourceIndex: 0,
@@ -58,7 +58,7 @@ describe('Product Identity Batch 6 — lifecycle', () => {
     const rows1 = [
       obs({
         receiptId: 'r1',
-        rawName: 'テスト牛乳1L',
+        rawName: '横浜家系',
         merchantKey: '店',
         occurredAt: Date.parse('2026-01-01'),
         lineTotal: 200,
@@ -73,7 +73,7 @@ describe('Product Identity Batch 6 — lifecycle', () => {
 
     const second = resolveReceiptItemIdentity(
       {
-        rawName: 'テスト牛乳1L',
+        rawName: '横浜家系',
         merchantKey: '店',
         receiptId: 'r2',
         itemSourceIndex: 0,
@@ -89,7 +89,7 @@ describe('Product Identity Batch 6 — lifecycle', () => {
       ...rows1,
       obs({
         receiptId: 'r2',
-        rawName: 'テスト牛乳1L',
+        rawName: '横浜家系',
         merchantKey: '店',
         occurredAt: Date.parse('2026-02-01'),
         lineTotal: 210,

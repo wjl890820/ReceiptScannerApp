@@ -39,6 +39,8 @@ import {
 } from './syncOutbox';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
 import { assertLogicalPurchaseEditPartition } from './logicalPurchaseEditPartition';
+import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
+import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
 
 type DbMutationTestHooks = {
   afterUpdateAuthorizedBeforeMutation?: () => void | Promise<void>;
@@ -809,6 +811,8 @@ export async function runReceiptItemIndexMaintenanceBatch(
     void import('./analysisPriceSessionCache')
       .then((m) => m.notifyAnalysisPriceTruthInvalidated())
       .catch(() => undefined);
+    invalidatePersonalProductEndpointInventory('receipt_item_index');
+    invalidateAnalyticsReceiptSelection('receipt_item_index');
   }
   return result;
 }
@@ -1136,6 +1140,8 @@ export async function saveReceipt(
   void import('./analysisPriceSessionCache')
     .then((m) => m.notifyAnalysisPriceTruthInvalidated())
     .catch(() => undefined);
+  invalidatePersonalProductEndpointInventory('receipt_saved');
+  invalidateAnalyticsReceiptSelection('receipt_saved');
   return id;
 }
 
@@ -1451,6 +1457,8 @@ export async function deleteReceipts(ids: string[]): Promise<void> {
     void import('./analysisPriceSessionCache')
       .then((m) => m.notifyAnalysisPriceTruthInvalidated())
       .catch(() => undefined);
+    invalidatePersonalProductEndpointInventory('receipt_deleted');
+    invalidateAnalyticsReceiptSelection('receipt_deleted');
   }
 }
 
@@ -1481,6 +1489,8 @@ export async function clearReceipts(options: {
   const db = await getDb();
   await db.runAsync(`DELETE FROM receipts`);
   await bestEffortClearReceiptItemIndex(db);
+  invalidatePersonalProductEndpointInventory('receipts_cleared');
+  invalidateAnalyticsReceiptSelection('receipts_cleared');
 }
 
 /**
@@ -1755,6 +1765,8 @@ export async function updateReceipt(params: UpdateReceiptParams): Promise<void> 
   void import('./analysisPriceSessionCache')
     .then((m) => m.notifyAnalysisPriceTruthInvalidated())
     .catch(() => undefined);
+  invalidatePersonalProductEndpointInventory('receipt_updated');
+  invalidateAnalyticsReceiptSelection('receipt_updated');
 }
 
 async function readOwnerScopedReceiptRowsForPurchaseTruth(
@@ -1931,6 +1943,8 @@ export async function updateLogicalPurchaseItemEdit(
     void import('./analysisPriceSessionCache')
       .then((m) => m.notifyAnalysisPriceTruthInvalidated())
       .catch(() => undefined);
+    invalidatePersonalProductEndpointInventory('receipt_updated');
+    invalidateAnalyticsReceiptSelection('receipt_updated');
   }
 
   return { updatedReceiptIds };

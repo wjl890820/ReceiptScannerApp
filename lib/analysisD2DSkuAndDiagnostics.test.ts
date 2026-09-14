@@ -287,8 +287,9 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
       path.resolve(__dirname, '../app/(tabs)/analysis.tsx'),
       'utf8'
     );
+    expect(source).toContain('selectAnalyticsReceiptsCached');
     expect(source).toMatch(
-      /selectAnalyticsReceipts\(allReceipts\)\.analyticsReceipts/
+      /analyticsReceipts\s*=\s*selection\.analyticsReceipts/
     );
     expect(source).toMatch(/receipts:\s*analyticsReceipts/);
     expect(source).toMatch(

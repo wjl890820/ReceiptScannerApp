@@ -12,6 +12,7 @@ import {
 import {
   evaluateMerchantProductHistoryEligibility,
   evaluatePriceObservationQuality,
+  isMerchantProductIdentityPriceComparable,
   leaveOneOutPeerStats,
   preparePeerPriceBucket,
   resolveQuantityOcrCorroboration,
@@ -379,11 +380,27 @@ export function buildIdentityMerchantProductHistoryView(
     observations: rows.map((o) => ({
       occurredAt: o.occurredAt,
       quality: o.quality,
+      rawName: o.rawName,
+      nameForIdentityTrust: o.rawName,
+      identityLevel: o.identityLevel,
+      identitySource: o.identitySource,
+      receiptId: o.receiptId,
+      itemSourceIndex: o.itemSourceIndex,
+      purchaseUnitPrice: o.purchaseUnitPrice,
     })),
   });
 
   const historyRows = rows
-    .filter((o) => o.includeInHistory && o.purchaseUnitPrice != null)
+    .filter(
+      (o) =>
+        o.includeInHistory &&
+        o.purchaseUnitPrice != null &&
+        isMerchantProductIdentityPriceComparable({
+          nameForIdentityTrust: o.rawName,
+          identityLevel: o.identityLevel,
+          identitySource: o.identitySource,
+        })
+    )
     .sort(
       (a, b) =>
         a.occurredAt - b.occurredAt ||
@@ -391,7 +408,16 @@ export function buildIdentityMerchantProductHistoryView(
         a.itemSourceIndex - b.itemSourceIndex
     );
   const trendRows = rows
-    .filter((o) => o.includeInTrend && o.purchaseUnitPrice != null)
+    .filter(
+      (o) =>
+        o.includeInTrend &&
+        o.purchaseUnitPrice != null &&
+        isMerchantProductIdentityPriceComparable({
+          nameForIdentityTrust: o.rawName,
+          identityLevel: o.identityLevel,
+          identitySource: o.identitySource,
+        })
+    )
     .sort(
       (a, b) =>
         a.occurredAt - b.occurredAt ||

@@ -18,8 +18,9 @@ import { CategoryRatioRow } from '@/components/CategoryRatioRow';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
-import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
+import { selectAnalyticsReceiptsCached } from '@/lib/analyticsReceiptSelectionCache';
 import { listReceiptsForAnalysis } from '@/lib/db';
+import { resolveCurrentLocalReceiptOwnerScope } from '@/lib/receiptOwnershipScope';
 import {
   buildAnalysisReleaseViewModel,
 } from '@/lib/analysisPresentation';
@@ -125,9 +126,34 @@ export default function AnalysisScreen() {
         'listReceiptsForAnalysis',
         () => listReceiptsForAnalysis()
       );
+      if (loadCycleRef.current !== cycleId) {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'refresh_superseded',
+          screen: 'analysis',
+          meta: { cycleId, mode, stage: 'after_list' },
+        });
+        return;
+      }
+      const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+      const ownerKey =
+        ownerScope.status === 'ready' ? ownerScope.ownerKey : 'anonymous';
       const selectStarted = Date.now();
-      analyticsReceipts =
-        selectAnalyticsReceipts(allReceipts).analyticsReceipts;
+      const selection = selectAnalyticsReceiptsCached({
+        ownerKey,
+        receipts: allReceipts,
+        shouldSkipExpensiveBuild: () => loadCycleRef.current !== cycleId,
+      });
+      if (!selection || loadCycleRef.current !== cycleId) {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'refresh_superseded',
+          screen: 'analysis',
+          meta: { cycleId, mode, stage: 'after_select' },
+        });
+        return;
+      }
+      analyticsReceipts = selection.analyticsReceipts;
       recordAnalysisRefreshTiming({
         stage: 'selectAnalyticsReceipts',
         durationMs: Date.now() - selectStarted,
@@ -215,6 +241,9 @@ export default function AnalysisScreen() {
         });
         focusTokenRef.current += 1;
         priceGenerationRef.current += 1;
+        // Invalidate the base-load cycle so hidden Analysis cannot continue
+        // list → selection → truth apply after blur.
+        loadCycleRef.current += 1;
         cancelScheduledPriceRef.current?.();
         cancelScheduledPriceRef.current = null;
       };

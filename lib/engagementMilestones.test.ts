@@ -39,6 +39,7 @@ import {
   type EngagementProductRow,
   type EngagementReceipt,
 } from './engagementMilestones';
+import { __resetAnalyticsReceiptSelectionCacheForTests } from './analyticsReceiptSelectionCache';
 import { shouldTriggerByCount } from './analysisTriggers';
 import {
   buildProductPriceHistory,
@@ -187,6 +188,7 @@ function productRow(
 }
 
 beforeEach(() => {
+  __resetAnalyticsReceiptSelectionCacheForTests();
   mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue({
     status: 'ready',
     ownerKey: 'user:engagement-test-user',

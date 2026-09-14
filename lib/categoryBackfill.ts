@@ -26,6 +26,8 @@ import {
   type ReceiptItemIndexReceipt,
 } from './receiptItemIndex';
 import { logger } from './logger';
+import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
+import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -178,6 +180,9 @@ export async function backfillReceiptItemCategories(): Promise<BackfillResult> {
     } catch {
       // Invalidation must never fail the backfill result.
     }
+    // Sync inventory invalidation (already after durable fixes + rebuild attempts).
+    invalidatePersonalProductEndpointInventory('category_backfill');
+    invalidateAnalyticsReceiptSelection('category_backfill');
   }
 
   return result;

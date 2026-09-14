@@ -37,6 +37,14 @@ import {
   ensureOwnershipAdoptionSettledForOwnerRead,
   startOwnershipAdoptionOrchestrator,
 } from './ownershipAdoptionOrchestrator';
+import {
+  getPersonalProductInventoryDataGeneration,
+  readPersonalProductEndpointInventoryCache,
+  writePersonalProductEndpointInventoryCache,
+  buildPersonalProductInventoryCacheKey,
+  currentPersonalProductInventoryCacheKeyParts,
+  __resetPersonalProductEndpointInventoryCacheForTests,
+} from './personalProductEndpointInventoryCache';
 
 const mockGetAuthState = getAuthState as jest.MockedFunction<typeof getAuthState>;
 const mockSubscribeAuthState = subscribeAuthState as jest.MockedFunction<
@@ -68,6 +76,7 @@ describe('ownershipAdoptionOrchestrator', () => {
 
   afterEach(() => {
     __resetOwnershipAdoptionOrchestratorForTests();
+    __resetPersonalProductEndpointInventoryCacheForTests();
     mockEnqueue.mockClear();
     mockAdoptWithDefaults.mockReset();
   });
@@ -220,5 +229,69 @@ describe('ownershipAdoptionOrchestrator', () => {
     });
     // Already settled for this user — no second adoption pass.
     expect(mockAdoptWithDefaults).not.toHaveBeenCalled();
+  });
+
+  it('T10 inventory cache: adoption resolve implies sync invalidation already applied', async () => {
+    __resetPersonalProductEndpointInventoryCacheForTests();
+    const ownerKey = 'user:anon-u-inv';
+    const parts = currentPersonalProductInventoryCacheKeyParts(ownerKey);
+    const key = buildPersonalProductInventoryCacheKey(parts);
+    writePersonalProductEndpointInventoryCache({
+      key,
+      ownerKey,
+      dataGeneration: parts.dataGeneration,
+      resolverVersion: parts.resolverVersion,
+      pipelineVersion: parts.pipelineVersion,
+      result: {
+        status: 'ready',
+        inventory: {
+          ownerKey,
+          snapshot: new Map(),
+          endpointsById: new Map(),
+          merchantProductsById: new Map(),
+          itemsByRowKey: new Map(),
+          itemKeysByMerchantProductId: new Map(),
+          receiptsById: new Map(),
+          excludedDuplicateReceiptIds: new Set(),
+          highConfidenceDuplicateGroupByReceiptId: new Map(),
+          decisionRows: [],
+        },
+      },
+      rowCount: 0,
+      resolveCount: 0,
+    });
+    const genBefore = getPersonalProductInventoryDataGeneration();
+
+    mockAdoptWithDefaults.mockResolvedValue({
+      adopted: 1,
+      adopted_receipt_ids: ['adopted-r1'],
+      already_owned_by_current_user: 0,
+      owned_by_other_user: 0,
+      eligible_current_install_unowned: 0,
+      remaining_eligible_current_install_unowned: 0,
+      ambiguous_double_null: 0,
+      other_install_unowned: 0,
+      remaining_unowned: 0,
+    });
+    mockGetAuthState.mockImplementation(() =>
+      authState({
+        status: 'authenticated',
+        userId: 'anon-u-inv',
+        isAnonymous: true,
+      })
+    );
+
+    startOwnershipAdoptionOrchestrator(async () => ({}) as any);
+    const listener = mockSubscribeAuthState.mock.calls[0][0];
+    await listener(
+      authState({
+        status: 'authenticated',
+        userId: 'anon-u-inv',
+        isAnonymous: true,
+      })
+    );
+
+    expect(getPersonalProductInventoryDataGeneration()).toBe(genBefore + 1);
+    expect(readPersonalProductEndpointInventoryCache(key)).toBeNull();
   });
 });

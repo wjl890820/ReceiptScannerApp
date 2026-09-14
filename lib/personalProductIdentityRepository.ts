@@ -38,6 +38,7 @@ import {
   PERSONAL_PRODUCT_IDENTITY_SCHEMA_SQL,
 } from './personalProductIdentitySchema';
 import type { LocalOwnershipStamp } from './receiptOwnershipContext';
+import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
 
 const DB_NAME = 'receipts_v2.db';
 
@@ -417,6 +418,7 @@ export async function recordPersonalProductIdentityDecisionWithDb(
     void import('./analysisPriceSessionCache')
       .then((m) => m.bumpAnalysisPriceIdentityRevision())
       .catch(() => undefined);
+    invalidatePersonalProductEndpointInventory('identity_decision');
   }
 
   return result;

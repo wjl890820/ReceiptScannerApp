@@ -36,7 +36,7 @@ import {
 import { getScanErrorMessage } from '@/lib/scanError';
 import { logger } from '@/lib/logger';
 
-import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
+import { selectAnalyticsReceiptsCached } from '@/lib/analyticsReceiptSelectionCache';
 import {
   listReceipts,
   getReceiptsDatabase,
@@ -46,7 +46,10 @@ import {
 } from '@/lib/db';
 import {
   evaluateCurrentEngagementMilestone,
+  loadEngagementOwnerReceiptsWithDb,
   loadEngagementProductInsightContext,
+  loadEngagementProductInsightContextWithDb,
+  type EngagementPreloadedAnalyticsContext,
   type MilestoneFrequentProduct,
 } from '@/lib/engagementMilestones';
 import {
@@ -54,6 +57,7 @@ import {
   type HomeProgressiveExperience,
 } from '@/lib/homeProgressiveExperience';
 import { loadPersonalProductEndpointInventoryWithDb } from '@/lib/personalProductEndpointInventory';
+import { resolveCurrentLocalReceiptOwnerScope } from '@/lib/receiptOwnershipScope';
 import {
   beginHomeRefresh,
   completeHomeRefresh,
@@ -145,25 +149,134 @@ export default function HomeScreen() {
         const allReceipts = await measureHomeRefreshStage('listReceipts', () =>
           listReceipts()
         );
-        const selectStarted = Date.now();
-        const analyticsSelection = selectAnalyticsReceipts(allReceipts);
-        const analyticsReceipts = analyticsSelection.analyticsReceipts;
+        if (
+          !isLatestHomeRefresh(
+            requestGeneration,
+            refreshGenerationRef.current
+          ) ||
+          !canApplyHomeUi(options)
+        ) {
+          recordHomeRefreshTiming({
+            stage: 'total',
+            durationMs: Date.now() - totalStarted,
+          });
+          return;
+        }
+
+        const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+        const ownerKey =
+          ownerScope.status === 'ready' ? ownerScope.ownerKey : '';
+
+        // Display slice (newest 200) selection — independent of engagement universe.
+        const displaySelectStarted = Date.now();
+        const displaySelection = selectAnalyticsReceiptsCached({
+          ownerKey: ownerKey || 'anonymous',
+          receipts: allReceipts,
+          shouldSkipExpensiveBuild: () =>
+            !isLatestHomeRefresh(
+              requestGeneration,
+              refreshGenerationRef.current
+            ) || !canApplyHomeUi(options),
+        });
+        if (!displaySelection) {
+          recordHomeRefreshTiming({
+            stage: 'total',
+            durationMs: Date.now() - totalStarted,
+          });
+          return;
+        }
+        const analyticsReceipts = displaySelection.analyticsReceipts;
         recordHomeRefreshTiming({
           stage: 'selectAnalyticsReceipts',
-          durationMs: Date.now() - selectStarted,
+          durationMs: Date.now() - displaySelectStarted,
           receiptCount: allReceipts.length,
           analyticsReceiptCount: analyticsReceipts.length,
         });
+        if (
+          !isLatestHomeRefresh(
+            requestGeneration,
+            refreshGenerationRef.current
+          ) ||
+          !canApplyHomeUi(options)
+        ) {
+          return;
+        }
+
+        // Full-history engagement universe (one load + one decision + shared JOIN).
+        let preloaded: EngagementPreloadedAnalyticsContext | undefined;
+        /** Full-history analytics receipts for Repeat / Next Purchase (not display-200). */
+        let longTermAnalyticsReceipts: ReceiptRow[] | undefined;
+        if (ownerScope.status === 'ready') {
+          const db = await getReceiptsDatabase();
+          const engagementReceipts = await measureHomeRefreshStage(
+            'engagementReceiptLoad',
+            () => loadEngagementOwnerReceiptsWithDb(db, ownerScope)
+          );
+          if (
+            !isLatestHomeRefresh(
+              requestGeneration,
+              refreshGenerationRef.current
+            ) ||
+            !canApplyHomeUi(options)
+          ) {
+            return;
+          }
+          const engagementSelectStarted = Date.now();
+          const engagementSelection = selectAnalyticsReceiptsCached({
+            ownerKey: ownerScope.ownerKey,
+            receipts: engagementReceipts as ReceiptRow[],
+            shouldSkipExpensiveBuild: () =>
+              !isLatestHomeRefresh(
+                requestGeneration,
+                refreshGenerationRef.current
+              ) || !canApplyHomeUi(options),
+          });
+          if (!engagementSelection) {
+            return;
+          }
+          recordHomeRefreshTiming({
+            stage: 'selectAnalyticsReceipts',
+            durationMs: Date.now() - engagementSelectStarted,
+            receiptCount: engagementReceipts.length,
+            analyticsReceiptCount: engagementSelection.analyticsReceipts.length,
+          });
+          longTermAnalyticsReceipts =
+            engagementSelection.analyticsReceipts as ReceiptRow[];
+          preloaded = {
+            ownerKey: ownerScope.ownerKey,
+            receipts: engagementReceipts,
+            analyticsReceipts:
+              engagementSelection.analyticsReceipts as EngagementPreloadedAnalyticsContext['analyticsReceipts'],
+            excludedDuplicateReceiptIds:
+              engagementSelection.excludedDuplicateReceiptIds,
+            precomputedSelection: true,
+          };
+          logger.info(
+            'HomePerf',
+            `engagement precomputedSelection=true fullHistoryCount=${engagementReceipts.length} displayCount=${allReceipts.length} analyticsCount=${engagementSelection.analyticsReceipts.length}`
+          );
+          const sharedProductInsight = (async () => {
+            return loadEngagementProductInsightContextWithDb(db, {
+              preloaded: {
+                ...preloaded!,
+                sharedProductInsight: undefined,
+              },
+            });
+          })();
+          preloaded.sharedProductInsight = sharedProductInsight;
+        }
+
         const homeReferenceNow = Date.now();
+
         let finalCompleteExperience: HomeProgressiveExperience;
         try {
           const [evaluation, productContext, personalInventory] =
             await Promise.all([
               measureHomeRefreshStage('engagementMilestone', () =>
-                evaluateCurrentEngagementMilestone()
+                evaluateCurrentEngagementMilestone({ preloaded })
               ),
               measureHomeRefreshStage('productContext', () =>
-                loadEngagementProductInsightContext()
+                loadEngagementProductInsightContext({ preloaded })
               ),
               measureHomeRefreshStage('personalInventory', async () => {
                 try {
@@ -181,6 +294,15 @@ export default function HomeScreen() {
                 }
               }),
             ]);
+          if (
+            !isLatestHomeRefresh(
+              requestGeneration,
+              refreshGenerationRef.current
+            ) ||
+            !canApplyHomeUi(options)
+          ) {
+            return;
+          }
           finalCompleteExperience = await measureHomeRefreshStage(
             'buildHomeProgressiveExperience',
             () =>
@@ -190,7 +312,8 @@ export default function HomeScreen() {
                 false,
                 productContext.rows,
                 personalInventory,
-                homeReferenceNow
+                homeReferenceNow,
+                longTermAnalyticsReceipts
               ),
             {
               receiptCount: allReceipts.length,

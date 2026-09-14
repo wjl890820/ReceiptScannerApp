@@ -20,6 +20,7 @@ jest.mock('./receiptOwnershipScope', () => {
 
 import * as ExpoSQLite from 'expo-sqlite';
 import * as analyticsReceiptSelection from './analyticsReceiptSelection';
+import { __resetAnalyticsReceiptSelectionCacheForTests } from './analyticsReceiptSelectionCache';
 
 import {
   evaluateCurrentEngagementMilestoneWithDb,
@@ -218,6 +219,7 @@ function installationOwnerScope(installationId: string) {
 }
 
 beforeEach(() => {
+  __resetAnalyticsReceiptSelectionCacheForTests();
   mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue(
     userOwnerScope('user-a')
   );
@@ -338,7 +340,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
 
     const selectSpy = jest.spyOn(
       analyticsReceiptSelection,
-      'selectAnalyticsReceipts'
+      'buildAnalyticsReceiptSelectionDecision'
     );
 
     const evaluation = await evaluateCurrentEngagementMilestoneWithDb(db);

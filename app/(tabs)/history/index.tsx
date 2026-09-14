@@ -75,6 +75,8 @@ import {
   loadPersonalProductEndpointInventoryWithDb,
   type PersonalProductEndpointInventory,
 } from '@/lib/personalProductEndpointInventory';
+import { resolveCurrentLocalReceiptOwnerScope } from '@/lib/receiptOwnershipScope';
+import { logger } from '@/lib/logger';
 
 /** Matches Home tab content clearance so rows clear the bottom tab bar. */
 const TAB_BAR_CONTENT_CLEARANCE = UI_LAYOUT.tabContentClearance;
@@ -108,6 +110,7 @@ export default function HistoryScreen() {
     typeof buildHistoryPurchaseTruthView
   > | null>(null);
   const personalInventoryGenerationRef = useRef(0);
+  const historyLoadGenerationRef = useRef(0);
 
   const loadPersonalInventory = useCallback(async () => {
     const generation = beginAsyncRequestGeneration(personalInventoryGenerationRef);
@@ -140,6 +143,7 @@ export default function HistoryScreen() {
   }, []);
 
   const load = useCallback(async () => {
+    const loadGeneration = beginAsyncRequestGeneration(historyLoadGenerationRef);
     const started = Date.now();
     recordDiagnosticEvent({
       category: 'lifecycle',
@@ -147,8 +151,39 @@ export default function HistoryScreen() {
       screen: 'history',
     });
     try {
+      const listStarted = Date.now();
       const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
-      const truth = buildHistoryPurchaseTruthView(stored);
+      const receiptLoadMs = Date.now() - listStarted;
+      if (
+        !shouldApplyAsyncRequestGeneration(
+          loadGeneration,
+          historyLoadGenerationRef.current
+        )
+      ) {
+        return;
+      }
+      const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
+      const ownerKey =
+        ownerScope.status === 'ready' ? ownerScope.ownerKey : '';
+      const selectStarted = Date.now();
+      const truth = buildHistoryPurchaseTruthView(stored, {
+        ownerKey: ownerKey || undefined,
+        shouldSkipExpensiveBuild: () =>
+          !shouldApplyAsyncRequestGeneration(
+            loadGeneration,
+            historyLoadGenerationRef.current
+          ),
+      });
+      const analyticsSelectionMs = Date.now() - selectStarted;
+      if (
+        !truth ||
+        !shouldApplyAsyncRequestGeneration(
+          loadGeneration,
+          historyLoadGenerationRef.current
+        )
+      ) {
+        return;
+      }
       purchaseTruthRef.current = truth;
       setRows(truth.visibleRows);
       const durationMs = Date.now() - started;
@@ -157,6 +192,8 @@ export default function HistoryScreen() {
         console.log('[HistoryFocusTiming]', {
           stage: 'total',
           durationMs,
+          receiptLoadMs,
+          analyticsSelectionMs,
           receiptCount: stored.length,
         });
       }
@@ -164,6 +201,10 @@ export default function HistoryScreen() {
         receiptCount: stored.length,
         success: true,
       });
+      logger.info(
+        'HistoryPerf',
+        `receiptLoadMs=${receiptLoadMs} analyticsSelectionMs=${analyticsSelectionMs} projectionMs=${Math.max(0, durationMs - receiptLoadMs - analyticsSelectionMs)} receiptCount=${stored.length}`
+      );
     } catch (e: any) {
       console.error(e);
       recordDiagnosticError('history', 'load_failed', e);
@@ -270,6 +311,7 @@ export default function HistoryScreen() {
           screen: 'history',
         });
         invalidateAsyncRequestGeneration(personalInventoryGenerationRef);
+        invalidateAsyncRequestGeneration(historyLoadGenerationRef);
       };
     }, [executeSearch, load, loadPersonalInventory])
   );

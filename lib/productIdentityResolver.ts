@@ -25,10 +25,16 @@ import {
 import { combinedNameSimilarityAtOrAbovePotential } from './productIdentitySimilarity';
 import { buildIdentityNameStem } from './productIdentityNameStem';
 import { resolveProductIdentity } from './productIdentity';
+import {
+  classifyGenericWeakIdentity,
+  isGenericFamilyLabel,
+} from './productIdentityGenericLabel';
 import type {
   MerchantProductRecord,
   ProductIdentityStore,
 } from './productIdentityStore';
+
+export { isGenericFamilyLabel } from './productIdentityGenericLabel';
 
 /** Same-merchant fuzzy auto-match (intentionally very high). */
 export const FUZZY_AUTO_MATCH_THRESHOLD = 0.98;
@@ -82,7 +88,7 @@ function makeLink(
   return {
     merchantProductId: partial.merchantProductId ?? null,
     canonicalProductId: partial.canonicalProductId ?? null,
-    skuId: null,
+    skuId: partial.skuId ?? null,
     identityLevel: partial.identityLevel,
     identityConfidence: partial.identityConfidence,
     identitySource: partial.identitySource,
@@ -96,27 +102,6 @@ function pickDisplayName(
   strongName: string | null
 ): string {
   return strongName?.trim() || normalizedName || rawName;
-}
-
-function isGenericFamilyLabel(
-  normalizedName: string,
-  familyKey: string | null
-): boolean {
-  const stripped = normalizedName
-    .replace(
-      /\d+(?:\.\d+)?\s*(?:ml|l|g|kg|個|本|枚|袋|箱|缶|ロール|m|cm|mm)/gi,
-      ''
-    )
-    .replace(/\s+/g, '')
-    .trim();
-  if (!stripped) return false;
-  // Pure commodity labels (with or without familyKey from legacy resolver).
-  if (/^(牛乳|ミルク|低脂肪乳|成分無調整牛乳|卵|たまご|米|水|お茶|パン|豆腐)$/.test(stripped)) {
-    return true;
-  }
-  if (!familyKey) return false;
-  if (stripped.length > 10) return false;
-  return /(牛乳|ミルク|卵|たまご|米|水|お茶|パン|豆腐)/.test(stripped);
 }
 
 function persistOptionalLink(
@@ -244,6 +229,35 @@ export function resolveReceiptItemIdentity(
       cached.merchantKey === merchantKey &&
       cached.resolverVersion === PRODUCT_IDENTITY_RESOLVER_VERSION
     ) {
+      const legacyFamily = resolveProductIdentity({ rawName }).productFamilyKey;
+      const weak = classifyGenericWeakIdentity(
+        norm.normalizedName,
+        legacyFamily,
+        attributes
+      );
+      // A3: never trust a stale strong cache over current generic weakness.
+      if (weak) {
+        const link = makeLink({
+          merchantProductId: cached.merchantProductId,
+          canonicalProductId: cached.canonicalProductId,
+          skuId: cached.skuId,
+          identityLevel: weak.level,
+          identityConfidence: weak.confidence,
+          identitySource: weak.source,
+        });
+        persistOptionalLink(store, input, fingerprint, merchantKey, link);
+        return {
+          link,
+          fingerprint,
+          normalizedName: norm.normalizedName,
+          comparisonKey: norm.comparisonKey,
+          attributes,
+          createdMerchantProduct: false,
+          fuzzyCandidates,
+          conflictsRejected,
+          reason: 'cache_hit_reclassified_generic',
+        };
+      }
       return {
         link: {
           merchantProductId: cached.merchantProductId,
@@ -294,6 +308,12 @@ export function resolveReceiptItemIdentity(
         `${exact.canonicalDisplayName ?? ''} ${exact.normalizedName ?? ''}`
       );
       if (compat.ok) {
+        const legacyFamily = resolveProductIdentity({ rawName }).productFamilyKey;
+        const weak = classifyGenericWeakIdentity(
+          norm.normalizedName,
+          legacyFamily,
+          attributes
+        );
         return finishMatch({
           store,
           input,
@@ -303,11 +323,11 @@ export function resolveReceiptItemIdentity(
           attributes,
           merchant: exact,
           created: false,
-          level: 'merchant_product',
-          confidence: 0.97,
-          source: 'normalized_exact',
+          level: weak?.level ?? 'merchant_product',
+          confidence: weak?.confidence ?? 0.97,
+          source: weak?.source ?? 'normalized_exact',
           canonicalProductId: trustedCanonical,
-          reason: 'same_merchant_comparison_key',
+          reason: weak?.reason ?? 'same_merchant_comparison_key',
           fuzzyCandidates,
           conflictsRejected,
         });
@@ -350,6 +370,12 @@ export function resolveReceiptItemIdentity(
         conflictsRejected.push(...compat.conflicts);
         continue;
       }
+      const legacyFamily = resolveProductIdentity({ rawName }).productFamilyKey;
+      const weak = classifyGenericWeakIdentity(
+        norm.normalizedName,
+        legacyFamily,
+        attributes
+      );
       return finishMatch({
         store,
         input,
@@ -359,11 +385,11 @@ export function resolveReceiptItemIdentity(
         attributes,
         merchant: candidate,
         created: false,
-        level: 'merchant_product',
-        confidence: 0.96,
-        source: 'normalized_exact',
+        level: weak?.level ?? 'merchant_product',
+        confidence: weak?.confidence ?? 0.96,
+        source: weak?.source ?? 'normalized_exact',
         canonicalProductId: trustedCanonical,
-        reason: 'same_merchant_identity_stem',
+        reason: weak?.reason ?? 'same_merchant_identity_stem',
         fuzzyCandidates,
         conflictsRejected,
       });
@@ -460,6 +486,12 @@ export function resolveReceiptItemIdentity(
   }
 
   if (bestAuto) {
+    const legacyFamily = resolveProductIdentity({ rawName }).productFamilyKey;
+    const weak = classifyGenericWeakIdentity(
+      norm.normalizedName,
+      legacyFamily,
+      attributes
+    );
     return finishMatch({
       store,
       input,
@@ -469,14 +501,16 @@ export function resolveReceiptItemIdentity(
       attributes,
       merchant: bestAuto.merchant,
       created: false,
-      level: 'merchant_product',
-      confidence: Math.min(
-        0.96,
-        0.9 + (bestAuto.score - FUZZY_AUTO_MATCH_THRESHOLD) * 2
-      ),
-      source: 'fuzzy_exact',
+      level: weak?.level ?? 'merchant_product',
+      confidence:
+        weak?.confidence ??
+        Math.min(
+          0.96,
+          0.9 + (bestAuto.score - FUZZY_AUTO_MATCH_THRESHOLD) * 2
+        ),
+      source: weak?.source ?? 'fuzzy_exact',
       canonicalProductId: trustedCanonical,
-      reason: 'same_merchant_fuzzy_auto',
+      reason: weak?.reason ?? 'same_merchant_fuzzy_auto',
       fuzzyCandidates,
       conflictsRejected,
     });
@@ -498,24 +532,22 @@ export function resolveReceiptItemIdentity(
     });
 
     const legacy = resolveProductIdentity({ rawName });
-    const familyKey = legacy.productFamilyKey;
-    const hasSpec = attributes.entries.some((e) =>
-      ['volume', 'mass', 'count', 'length', 'roll_count'].includes(
-        String(e.dimension)
-      )
+    const weak = classifyGenericWeakIdentity(
+      norm.normalizedName,
+      legacy.productFamilyKey,
+      attributes
     );
-    const generic = isGenericFamilyLabel(norm.normalizedName, familyKey);
 
     let level: ProductIdentityLevel = 'merchant_product';
     let source: ProductIdentitySourceV1 | string = 'merchant_exact';
     let confidence = 0.93;
     let reason = 'new_merchant_product';
 
-    if (generic) {
-      level = hasSpec ? 'family_spec' : 'family_only';
-      source = hasSpec ? 'family_spec' : 'family_only';
-      confidence = hasSpec ? 0.55 : 0.35;
-      reason = hasSpec ? 'family_spec_generic' : 'family_only_generic';
+    if (weak) {
+      level = weak.level;
+      source = weak.source;
+      confidence = weak.confidence;
+      reason = weak.reason;
     }
 
     return finishMatch({

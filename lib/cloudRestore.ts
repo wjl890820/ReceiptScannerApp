@@ -18,6 +18,8 @@ import {
   rebuildReceiptItemIndex,
 } from './receiptItemIndex';
 import { getSupabaseClient } from './supabaseClient';
+import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
+import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
 
 export const CLOUD_RESTORE_PAGE_SIZE = 200;
 
@@ -332,6 +334,8 @@ export async function restoreCloudReceiptsForCurrentUser(
   void import('./analysisPriceSessionCache')
     .then((m) => m.notifyAnalysisPriceTruthInvalidated())
     .catch(() => undefined);
+  invalidatePersonalProductEndpointInventory('cloud_restore');
+  invalidateAnalyticsReceiptSelection('cloud_restore');
 
   return { status: 'ok', restored: mapped.length };
 }

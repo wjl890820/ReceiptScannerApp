@@ -17,6 +17,32 @@ jest.mock('./analyticsReceiptSelection', () => ({
     highConfidenceDuplicateGroups: [],
     analyticsReceipts: receipts,
     storedReceipts: receipts,
+    analyticsPurchaseCandidateCount: receipts.length,
+    contentExactDuplicateExtras: 0,
+    structuralExactDuplicateExtras: 0,
+    reconciledStructuralExactDuplicateExtras: 0,
+    probableDuplicateExtras: 0,
+    highConfidenceDuplicateExtras: 0,
+    keepSeparateReceiptIds: new Set<string>(),
+  }),
+  buildAnalyticsReceiptSelectionDecision: () => ({
+    excludedDuplicateReceiptIds: new Set<string>(),
+    highConfidenceDuplicateGroups: [],
+    contentExactDuplicateExtras: 0,
+    structuralExactDuplicateExtras: 0,
+    reconciledStructuralExactDuplicateExtras: 0,
+    probableDuplicateExtras: 0,
+    highConfidenceDuplicateExtras: 0,
+    keepSeparateReceiptIds: new Set<string>(),
+  }),
+  materializeAnalyticsReceiptSelection: (
+    receipts: unknown[],
+    decision: Record<string, unknown>
+  ) => ({
+    ...decision,
+    storedReceipts: receipts,
+    analyticsReceipts: receipts,
+    analyticsPurchaseCandidateCount: receipts.length,
   }),
   indexHighConfidenceDuplicateGroupsByReceiptId: () => new Map(),
 }));
@@ -27,6 +53,7 @@ import {
   buildPersonalProductInventoryRowKey,
   hasMeaningfulPersonalIdentityStructuralEvidence,
   loadPersonalProductEndpointInventoryWithDb,
+  __resetPersonalProductEndpointInventoryCacheForTests,
   type PersonalProductEndpointInventorySourceRow,
 } from './personalProductEndpointInventory';
 import {
@@ -42,6 +69,10 @@ import type { ReceiptRow } from './db';
 const OWNER = 'user:inventory-owner';
 const OTHER_OWNER = 'user:other-owner';
 const INSTALL_OWNER = 'installation:install-a';
+
+beforeEach(() => {
+  __resetPersonalProductEndpointInventoryCacheForTests();
+});
 
 function receipt(
   id: string,

@@ -11,6 +11,7 @@ import { isInternalDiagnosticsEnabled } from './internalDiagnosticsGate';
 
 export type HomeRefreshTimingStage =
   | 'listReceipts'
+  | 'engagementReceiptLoad'
   | 'selectAnalyticsReceipts'
   | 'engagementMilestone'
   | 'productContext'

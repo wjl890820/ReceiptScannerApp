@@ -15,6 +15,8 @@ import {
   type AdoptionAuthEligibility,
 } from './legacyReceiptAdoption';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
+import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
+import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
 
 type GetDbFn = () => Promise<import('expo-sqlite').SQLiteDatabase>;
 
@@ -103,6 +105,9 @@ async function runAdoptionForSnapshot(
       void import('./analysisPriceSessionCache')
         .then((m) => m.notifyAnalysisPriceTruthInvalidated())
         .catch(() => undefined);
+      // Synchronously observable before any further await / return.
+      invalidatePersonalProductEndpointInventory('ownership_adoption');
+      invalidateAnalyticsReceiptSelection('ownership_adoption');
       try {
         const db = await getDb();
         await enqueueUpsertIntentsForReceiptIds(

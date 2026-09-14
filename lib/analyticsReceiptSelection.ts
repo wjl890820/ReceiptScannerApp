@@ -21,9 +21,11 @@ export type AnalyticsReceiptSelectionOpts = {
   keepSeparateReceiptIds?: ReadonlySet<string>;
 };
 
-export type AnalyticsReceiptSelection = {
-  storedReceipts: ReceiptRow[];
-  analyticsReceipts: ReceiptRow[];
+/**
+ * Caller-independent duplicate / selection decision.
+ * Does NOT retain caller receipt arrays or object references.
+ */
+export type AnalyticsReceiptSelectionDecision = {
   excludedDuplicateReceiptIds: ReadonlySet<string>;
   contentExactDuplicateExtras: number;
   structuralExactDuplicateExtras: number;
@@ -36,8 +38,13 @@ export type AnalyticsReceiptSelection = {
    */
   highConfidenceDuplicateExtras: number;
   highConfidenceDuplicateGroups: AnalysisDDuplicateGroup[];
-  analyticsPurchaseCandidateCount: number;
   keepSeparateReceiptIds: ReadonlySet<string>;
+};
+
+export type AnalyticsReceiptSelection = AnalyticsReceiptSelectionDecision & {
+  storedReceipts: ReceiptRow[];
+  analyticsReceipts: ReceiptRow[];
+  analyticsPurchaseCandidateCount: number;
 };
 
 export type HighConfidenceDuplicateReceiptGroupMembership = {
@@ -89,13 +96,12 @@ export function indexHighConfidenceDuplicateGroupsByReceiptId(
 }
 
 /**
- * Select receipts for purchase-occurrence analytics.
- * High-confidence duplicate extras are excluded; PROBABLE is not.
+ * Build caller-independent analytics selection decision (expensive O(n²) work).
  */
-export function selectAnalyticsReceipts(
+export function buildAnalyticsReceiptSelectionDecision(
   receipts: ReceiptRow[],
   opts?: AnalyticsReceiptSelectionOpts
-): AnalyticsReceiptSelection {
+): AnalyticsReceiptSelectionDecision {
   const keepSeparateReceiptIds = opts?.keepSeparateReceiptIds ?? new Set<string>();
   const summaries = receipts.map(summarizeReceiptForDuplicateAudit);
   const highConfidenceDuplicateGroups =
@@ -126,25 +132,49 @@ export function selectAnalyticsReceipts(
     }
   }
 
-  // keepSeparate may re-include extras; recount candidates from final set
-  const analyticsReceipts = receipts.filter((r) => !excluded.has(r.id));
-
-  // Single source of truth: actual excluded receipt set size (includes reconciled).
-  const highConfidenceDuplicateExtras = excluded.size;
-
   return {
-    storedReceipts: receipts,
-    analyticsReceipts,
     excludedDuplicateReceiptIds: excluded,
     contentExactDuplicateExtras,
     structuralExactDuplicateExtras,
     reconciledStructuralExactDuplicateExtras,
     probableDuplicateExtras: 0,
-    highConfidenceDuplicateExtras,
+    highConfidenceDuplicateExtras: excluded.size,
     highConfidenceDuplicateGroups,
-    analyticsPurchaseCandidateCount: analyticsReceipts.length,
     keepSeparateReceiptIds,
   };
+}
+
+/**
+ * Reconstruct a caller-specific AnalyticsReceiptSelection from a shared decision.
+ * Preserves caller input order and object references.
+ */
+export function materializeAnalyticsReceiptSelection(
+  receipts: ReceiptRow[],
+  decision: AnalyticsReceiptSelectionDecision
+): AnalyticsReceiptSelection {
+  const analyticsReceipts = receipts.filter(
+    (r) => !decision.excludedDuplicateReceiptIds.has(r.id)
+  );
+  return {
+    ...decision,
+    storedReceipts: receipts,
+    analyticsReceipts,
+    analyticsPurchaseCandidateCount: analyticsReceipts.length,
+  };
+}
+
+/**
+ * Select receipts for purchase-occurrence analytics.
+ * High-confidence duplicate extras are excluded; PROBABLE is not.
+ */
+export function selectAnalyticsReceipts(
+  receipts: ReceiptRow[],
+  opts?: AnalyticsReceiptSelectionOpts
+): AnalyticsReceiptSelection {
+  return materializeAnalyticsReceiptSelection(
+    receipts,
+    buildAnalyticsReceiptSelectionDecision(receipts, opts)
+  );
 }
 
 /** Filter productRows (or any { receiptId }) by excluded duplicate receipt ids. */

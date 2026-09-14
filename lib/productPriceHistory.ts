@@ -20,6 +20,7 @@ import {
 } from './receiptOwnershipScope';
 import type { ResolvedPersonalProductTarget } from './personalProductTargetResolver';
 import type { ProductIdentityLevel } from './productIdentityContract';
+import { isMerchantProductIdentityPriceComparable } from './productIdentityGenericLabel';
 import { normalizeProductForIdentity } from './normalizeProductForIdentity';
 import {
   resolveReceiptItemIdentity,
@@ -2137,7 +2138,36 @@ function applyIdentityG3Gates(
   for (const row of filtered) {
     rowByKey.set(rowObservationKey(row), row);
   }
-  const identityRows = identityView.historyPoints.flatMap((point) => {
+  const identityComparablePoints = identityView.historyPoints.filter((point) => {
+    const meta = identityByRowKey.get(
+      `${point.receiptId}:${point.itemSourceIndex}`
+    );
+    return isMerchantProductIdentityPriceComparable({
+      nameForIdentityTrust: point.rawName,
+      identityLevel: meta?.identityLevel ?? null,
+      identitySource: meta?.identitySource ?? null,
+    });
+  });
+  if (identityComparablePoints.length < 2) {
+    const { observations } = buildObservationsForRows(targetScopedRows, cache);
+    return {
+      target,
+      status: 'not_enough_points',
+      priceKind: 'purchase_unit',
+      currency: null,
+      totalOccurrenceCount: countDistinctPurchaseEventOccurrences(targetScopedRows),
+      comparableOccurrenceCount: 0,
+      excludedOccurrenceCount: countDistinctPurchaseEventOccurrences(targetScopedRows),
+      points: [],
+      observations,
+      seriesKind: null,
+      amountBasis: null,
+      canonicalDuplicateSelectionApplied,
+      identityPresentation: null,
+    };
+  }
+
+  const identityRows = identityComparablePoints.flatMap((point) => {
     const src =
       rowByKey.get(`${point.receiptId}:${point.itemSourceIndex}`) ?? null;
     return src ? [src] : [];

@@ -37,8 +37,24 @@ import type { LocalOwnershipStamp } from './receiptOwnershipContext';
 import {
   buildOwnerScopedInventoryPredicates,
 } from './receiptOwnershipScope';
+import {
+  buildPersonalProductInventoryCacheKey,
+  clearPersonalProductInventoryInFlight,
+  currentPersonalProductInventoryCacheKeyParts,
+  getPersonalProductInventoryInFlight,
+  logPersonalProductInventoryPerf,
+  readPersonalProductEndpointInventoryCache,
+  setPersonalProductInventoryInFlight,
+  writePersonalProductEndpointInventoryCache,
+} from './personalProductEndpointInventoryCache';
 
 export { buildOwnerScopedInventoryPredicates } from './receiptOwnershipScope';
+export {
+  invalidatePersonalProductEndpointInventory,
+  __resetPersonalProductEndpointInventoryCacheForTests,
+  getPersonalProductInventoryDataGeneration,
+  getPersonalProductInventoryFullBuildCount,
+} from './personalProductEndpointInventoryCache';
 
 const PERSONAL_IDENTITY_STRUCTURAL_DIMENSIONS = [
   'volume',
@@ -243,6 +259,8 @@ export type BuildPersonalProductEndpointInventoryInput = {
     string,
     HighConfidenceDuplicateReceiptGroupMembership
   >;
+  /** Called once per row that runs resolveReceiptItemIdentity (perf / tests). */
+  onIdentityResolve?: () => void;
 };
 
 export function buildPersonalProductEndpointInventory(
@@ -282,6 +300,7 @@ export function buildPersonalProductEndpointInventory(
       },
       store
     );
+    input.onIdentityResolve?.();
 
     const merchantProductId = resolved.link.merchantProductId;
     if (!merchantProductId) continue;
@@ -383,29 +402,29 @@ export type LoadPersonalProductEndpointInventoryDeps = {
   buildInventory?: (
     input: BuildPersonalProductEndpointInventoryInput
   ) => PersonalProductEndpointInventoryLoadResult;
+  /**
+   * Session cache is ON by default for production Home/History focus reuse.
+   * Set false for isolated unit paths that must always hit DB/build.
+   */
+  useSessionCache?: boolean;
 };
 
-export async function loadPersonalProductEndpointInventoryWithDb(
+async function loadPersonalProductEndpointInventoryUncached(
   db: PersonalProductEndpointInventoryDatabase,
-  stamp?: LocalOwnershipStamp,
-  deps: LoadPersonalProductEndpointInventoryDeps = {}
-): Promise<PersonalProductEndpointInventoryLoadResult> {
-  const ownership = stamp
-    ? stamp
-    : deps.resolveStamp
-      ? await deps.resolveStamp()
-      : await (async () => {
-          const { resolveOwnershipStamp } = await import('./receiptOwnershipContext');
-          return resolveOwnershipStamp();
-        })();
-  const ownerKey = resolvePersonalProductIdentityOwnerKey(ownership);
-  if (!ownerKey) {
-    return { status: 'owner_unavailable' };
-  }
-
+  ownerKey: string,
+  deps: LoadPersonalProductEndpointInventoryDeps
+): Promise<{
+  result: PersonalProductEndpointInventoryLoadResult;
+  rowCount: number;
+  resolveCount: number;
+}> {
   const predicates = buildOwnerScopedInventoryPredicates(ownerKey);
   if (!predicates) {
-    return { status: 'owner_unavailable' };
+    return {
+      result: { status: 'owner_unavailable' },
+      rowCount: 0,
+      resolveCount: 0,
+    };
   }
 
   let sourceRows: PersonalProductEndpointInventorySourceRow[];
@@ -428,8 +447,12 @@ export async function loadPersonalProductEndpointInventoryWithDb(
     );
   } catch {
     return {
-      status: 'current_endpoint_context_incomplete',
-      reason: 'owner_inventory_query_failed',
+      result: {
+        status: 'current_endpoint_context_incomplete',
+        reason: 'owner_inventory_query_failed',
+      },
+      rowCount: 0,
+      resolveCount: 0,
     };
   }
 
@@ -449,8 +472,12 @@ export async function loadPersonalProductEndpointInventoryWithDb(
     decisionRows = await listDecisions(db, ownerKey);
   } catch {
     return {
-      status: 'current_endpoint_context_incomplete',
-      reason: 'personal_decision_query_failed',
+      result: {
+        status: 'current_endpoint_context_incomplete',
+        reason: 'personal_decision_query_failed',
+      },
+      rowCount: sourceRows.length,
+      resolveCount: 0,
     };
   }
 
@@ -460,11 +487,20 @@ export async function loadPersonalProductEndpointInventoryWithDb(
     HighConfidenceDuplicateReceiptGroupMembership
   > = new Map();
   try {
-    const {
-      indexHighConfidenceDuplicateGroupsByReceiptId,
-      selectAnalyticsReceipts,
-    } = await import('./analyticsReceiptSelection');
-    const selection = selectAnalyticsReceipts([...receipts]);
+    const { indexHighConfidenceDuplicateGroupsByReceiptId } = await import(
+      './analyticsReceiptSelection'
+    );
+    const { selectAnalyticsReceiptsCached } = await import(
+      './analyticsReceiptSelectionCache'
+    );
+    const selection =
+      selectAnalyticsReceiptsCached({
+        ownerKey,
+        receipts: [...receipts],
+      }) ??
+      (
+        await import('./analyticsReceiptSelection')
+      ).selectAnalyticsReceipts([...receipts]);
     excludedDuplicateReceiptIds = selection.excludedDuplicateReceiptIds;
     highConfidenceDuplicateGroupByReceiptId =
       indexHighConfidenceDuplicateGroupsByReceiptId(
@@ -472,15 +508,20 @@ export async function loadPersonalProductEndpointInventoryWithDb(
       );
   } catch {
     return {
-      status: 'current_endpoint_context_incomplete',
-      reason: 'analytics_duplicate_selection_failed',
+      result: {
+        status: 'current_endpoint_context_incomplete',
+        reason: 'analytics_duplicate_selection_failed',
+      },
+      rowCount: sourceRows.length,
+      resolveCount: 0,
     };
   }
 
+  let resolveCount = 0;
   try {
     const buildInventory =
       deps.buildInventory ?? buildPersonalProductEndpointInventory;
-    return buildInventory({
+    const result = buildInventory({
       ownerKey,
       sourceRows,
       receipts,
@@ -488,13 +529,113 @@ export async function loadPersonalProductEndpointInventoryWithDb(
       store: deps.createStore?.(),
       excludedDuplicateReceiptIds,
       highConfidenceDuplicateGroupByReceiptId,
+      onIdentityResolve: () => {
+        resolveCount += 1;
+      },
     });
+    return { result, rowCount: sourceRows.length, resolveCount };
   } catch {
     return {
-      status: 'current_endpoint_context_incomplete',
-      reason: 'inventory_construction_failed',
+      result: {
+        status: 'current_endpoint_context_incomplete',
+        reason: 'inventory_construction_failed',
+      },
+      rowCount: sourceRows.length,
+      resolveCount,
     };
   }
+}
+
+export async function loadPersonalProductEndpointInventoryWithDb(
+  db: PersonalProductEndpointInventoryDatabase,
+  stamp?: LocalOwnershipStamp,
+  deps: LoadPersonalProductEndpointInventoryDeps = {}
+): Promise<PersonalProductEndpointInventoryLoadResult> {
+  const ownership = stamp
+    ? stamp
+    : deps.resolveStamp
+      ? await deps.resolveStamp()
+      : await (async () => {
+          const { resolveOwnershipStamp } = await import('./receiptOwnershipContext');
+          return resolveOwnershipStamp();
+        })();
+  const ownerKey = resolvePersonalProductIdentityOwnerKey(ownership);
+  if (!ownerKey) {
+    return { status: 'owner_unavailable' };
+  }
+
+  const useSessionCache = deps.useSessionCache !== false;
+  if (!useSessionCache) {
+    const { result } = await loadPersonalProductEndpointInventoryUncached(
+      db,
+      ownerKey,
+      deps
+    );
+    return result;
+  }
+
+  const keyParts = currentPersonalProductInventoryCacheKeyParts(ownerKey);
+  const cacheKey = buildPersonalProductInventoryCacheKey(keyParts);
+  const started = Date.now();
+
+  const cached = readPersonalProductEndpointInventoryCache(cacheKey);
+  if (cached) {
+    logPersonalProductInventoryPerf({
+      cache: 'HIT',
+      durationMs: Date.now() - started,
+      generation: keyParts.dataGeneration,
+    });
+    return cached;
+  }
+
+  const existingInFlight = getPersonalProductInventoryInFlight(cacheKey);
+  if (existingInFlight) {
+    const joined = await existingInFlight;
+    logPersonalProductInventoryPerf({
+      cache: 'JOIN',
+      durationMs: Date.now() - started,
+      generation: keyParts.dataGeneration,
+    });
+    return joined;
+  }
+
+  const buildPromise = (async (): Promise<PersonalProductEndpointInventoryLoadResult> => {
+    try {
+      const { result, rowCount, resolveCount } =
+        await loadPersonalProductEndpointInventoryUncached(db, ownerKey, deps);
+      // Only cache successful ready inventories. Failures must not poison.
+      if (result.status === 'ready') {
+        // Re-read generation: invalidate during build must not write stale entry.
+        const postParts = currentPersonalProductInventoryCacheKeyParts(ownerKey);
+        const postKey = buildPersonalProductInventoryCacheKey(postParts);
+        if (postKey === cacheKey) {
+          writePersonalProductEndpointInventoryCache({
+            key: postKey,
+            ownerKey,
+            dataGeneration: postParts.dataGeneration,
+            resolverVersion: postParts.resolverVersion,
+            pipelineVersion: postParts.pipelineVersion,
+            result,
+            rowCount,
+            resolveCount,
+          });
+        }
+      }
+      logPersonalProductInventoryPerf({
+        cache: 'MISS',
+        durationMs: Date.now() - started,
+        rows: rowCount,
+        resolves: resolveCount,
+        generation: keyParts.dataGeneration,
+      });
+      return result;
+    } finally {
+      clearPersonalProductInventoryInFlight(cacheKey);
+    }
+  })();
+
+  setPersonalProductInventoryInFlight(cacheKey, buildPromise);
+  return buildPromise;
 }
 
 export function inventoryItemHasUsableMerchantEndpoint(

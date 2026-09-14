@@ -8,6 +8,11 @@
 import type { ProductAttributes } from './productIdentityContract';
 import { getAttributeValue } from './universalProductSpecParser';
 import { computePurchaseUnitPrice } from './productIdentityPriceComparison';
+import { isMerchantProductIdentityPriceComparable } from './productIdentityGenericLabel';
+
+export {
+  isMerchantProductIdentityPriceComparable,
+} from './productIdentityGenericLabel';
 
 export const PRODUCT_IDENTITY_PRICE_QUALITY_VERSION =
   'meruno-product-identity-price-quality-v1' as const;
@@ -682,21 +687,80 @@ function dayKey(ms: number): string {
 
 /**
  * identityCapability ≠ priceHistoryEligibility.
- * same_merchant_product alone does not imply showable history.
+ * same_merchant_product / Boolean(merchantProductId) alone does not imply
+ * showable same-product history — identity must also be price-comparable.
  */
+export type MerchantProductHistoryObservationInput = {
+  occurredAt: number;
+  quality: PriceObservationQualityLevel;
+  /** Morphology text (display/normalized or OCR); prefer nameForIdentityTrust. */
+  rawName?: string | null;
+  nameForIdentityTrust?: string | null;
+  identityLevel?: string | null;
+  identitySource?: string | null;
+  receiptId?: string | null;
+  itemSourceIndex?: number | null;
+  purchaseUnitPrice?: number | null;
+};
+
+function observationIdentityComparable(
+  o: MerchantProductHistoryObservationInput
+): boolean {
+  return isMerchantProductIdentityPriceComparable({
+    nameForIdentityTrust: o.nameForIdentityTrust ?? o.rawName,
+    identityLevel: o.identityLevel,
+    identitySource: o.identitySource,
+  });
+}
+
+/**
+ * Ambiguous generic MP: multiple same-receipt rows without distinguishing
+ * evidence and incompatible unit prices → quarantine bucket history.
+ * Strong/specific duplicate SKUs are not caught by this rule.
+ */
+export function hasAmbiguousGenericSameReceiptMpCollision(
+  observations: readonly MerchantProductHistoryObservationInput[]
+): boolean {
+  const byReceipt = new Map<string, MerchantProductHistoryObservationInput[]>();
+  for (const o of observations) {
+    const rid = typeof o.receiptId === 'string' ? o.receiptId.trim() : '';
+    if (!rid) continue;
+    if (observationIdentityComparable(o)) continue;
+    const list = byReceipt.get(rid) ?? [];
+    list.push(o);
+    byReceipt.set(rid, list);
+  }
+  for (const group of byReceipt.values()) {
+    if (group.length < 2) continue;
+    const prices = group
+      .map((g) => g.purchaseUnitPrice)
+      .filter((p): p is number => typeof p === 'number' && Number.isFinite(p) && p > 0);
+    if (prices.length < 2) continue;
+    const first = prices[0]!;
+    if (prices.some((p) => Math.abs(p - first) > 0.005)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function evaluateMerchantProductHistoryEligibility(input: {
   merchantProductId: string | null | undefined;
-  observations: Array<{
-    occurredAt: number;
-    quality: PriceObservationQualityLevel;
-  }>;
+  observations: MerchantProductHistoryObservationInput[];
 }): MerchantProductHistoryEligibility {
   const hasMerchantProductIdentity = Boolean(input.merchantProductId);
   const observationCount = input.observations.length;
-  const historyUsable = input.observations.filter(
-    (o) => o.quality === 'trusted' || o.quality === 'usable_with_caution'
+  const identityAmbiguousCollision = hasAmbiguousGenericSameReceiptMpCollision(
+    input.observations
   );
-  const trendTrusted = input.observations.filter((o) => o.quality === 'trusted');
+  const historyUsable = input.observations.filter(
+    (o) =>
+      (o.quality === 'trusted' || o.quality === 'usable_with_caution') &&
+      observationIdentityComparable(o)
+  );
+  const trendTrusted = input.observations.filter(
+    (o) => o.quality === 'trusted' && observationIdentityComparable(o)
+  );
   const suspectedAnomalyCount = input.observations.filter(
     (o) => o.quality === 'suspected_anomaly'
   ).length;
@@ -709,18 +773,25 @@ export function evaluateMerchantProductHistoryEligibility(input: {
       .map((o) => dayKey(o.occurredAt))
   );
 
+  const identityOk =
+    hasMerchantProductIdentity &&
+    !identityAmbiguousCollision &&
+    historyUsable.length >= 2;
+
   return {
     hasMerchantProductIdentity,
     observationCount,
     historyUsableCount: historyUsable.length,
     trendTrustedCount: trendTrusted.length,
     distinctPurchaseDates: dates.size,
-    priceHistoryEligible:
-      hasMerchantProductIdentity && historyUsable.length >= 2,
+    priceHistoryEligible: identityOk,
     simpleDeltaEligible:
-      hasMerchantProductIdentity && trendTrusted.length >= 2,
+      hasMerchantProductIdentity &&
+      !identityAmbiguousCollision &&
+      trendTrusted.length >= 2,
     trendInsightEligible:
       hasMerchantProductIdentity &&
+      !identityAmbiguousCollision &&
       trendTrusted.length >= 3 &&
       dates.size >= 2,
     qualityExcludedCount,

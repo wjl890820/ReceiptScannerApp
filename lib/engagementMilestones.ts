@@ -204,6 +204,10 @@ export type EngagementReceipt = V1SupportedReceiptSource & {
   currency: string;
   final_total: number | null;
   user_items_json: string | null;
+  /** Duplicate representative scoring evidence (optional on older callers). */
+  user_edited?: number | null;
+  note?: string | null;
+  analysis_json?: string | null;
 };
 
 export type EngagementProductRow = ProductPriceHistoryRow &
@@ -231,6 +235,28 @@ export type MilestoneProductInsightContext = {
       | { type: 'sku'; key: string },
     rows: ProductPriceHistoryRow[]
   ) => ProductPriceHistoryResult;
+};
+
+/**
+ * Home (and similar) may inject already-loaded full-history receipts + analytics
+ * selection so milestone/productContext skip a second readAllReceipts + select.
+ *
+ * ownerKey binds the context; callers must match the current resolved owner.
+ */
+export type EngagementPreloadedAnalyticsContext = {
+  /** Owner key that produced this context; required for reuse. */
+  ownerKey: string;
+  /** Full owner-scoped receipt universe (not Home's display slice). */
+  receipts: readonly EngagementReceipt[];
+  analyticsReceipts: readonly EngagementReceipt[];
+  excludedDuplicateReceiptIds: ReadonlySet<string>;
+  /**
+   * Optional shared product-insight Promise for one Home refresh so milestone
+   * and productContext share a single receipt_items JOIN.
+   */
+  sharedProductInsight?: Promise<MilestoneProductInsightContext>;
+  /** When true, diagnostics may record precomputedSelection=true. */
+  precomputedSelection?: boolean;
 };
 
 type MutableCategoryAggregate = {
@@ -972,7 +998,12 @@ function emptyOwnerProductInsightContext(): MilestoneProductInsightContext {
   return { rows: [], queryFailed: false };
 }
 
-async function readAllReceipts(
+/**
+ * Full owner-scoped engagement receipt universe.
+ * Includes duplicate-evidence fields required for representative scoring
+ * (user_edited / note / final_total) so decisions match Analysis/History.
+ */
+export async function loadEngagementOwnerReceiptsWithDb(
   db: EngagementMilestoneDatabase,
   ownerScope: LocalReceiptOwnerScopeReady
 ): Promise<EngagementReceipt[]> {
@@ -990,7 +1021,9 @@ async function readAllReceipts(
        currency,
        analysis_json,
        final_total,
-       user_items_json
+       user_items_json,
+       COALESCE(user_edited, 0) AS user_edited,
+       note
      FROM receipts
      WHERE ${ownerScope.receiptWhereSql}
      ORDER BY COALESCE(transaction_at, created_at) ASC, id ASC`,
@@ -998,16 +1031,49 @@ async function readAllReceipts(
   );
 }
 
+async function readAllReceipts(
+  db: EngagementMilestoneDatabase,
+  ownerScope: LocalReceiptOwnerScopeReady
+): Promise<EngagementReceipt[]> {
+  return loadEngagementOwnerReceiptsWithDb(db, ownerScope);
+}
+
+function preloadedMatchesOwner(
+  preloaded: EngagementPreloadedAnalyticsContext | undefined,
+  ownerKey: string
+): preloaded is EngagementPreloadedAnalyticsContext {
+  if (!preloaded) return false;
+  return (
+    typeof preloaded.ownerKey === 'string' &&
+    preloaded.ownerKey.trim() !== '' &&
+    preloaded.ownerKey === ownerKey
+  );
+}
+
 /** Apply D2-A3 analytics selection; returns purchase-candidate receipts + excluded ids. */
 async function selectEngagementAnalyticsReceipts(
-  receipts: EngagementReceipt[]
+  receipts: EngagementReceipt[],
+  ownerKey: string
 ): Promise<{
   analyticsReceipts: EngagementReceipt[];
   excludedDuplicateReceiptIds: ReadonlySet<string>;
 }> {
   // Dynamic import keeps engagement module graph free of analysisDReport → expo-sqlite.
-  const { selectAnalyticsReceipts } = await import('./analyticsReceiptSelection');
-  const selection = selectAnalyticsReceipts(receipts as ReceiptRow[]);
+  const { selectAnalyticsReceiptsCached } = await import(
+    './analyticsReceiptSelectionCache'
+  );
+  const selection = selectAnalyticsReceiptsCached({
+    ownerKey,
+    receipts: receipts as ReceiptRow[],
+  });
+  if (!selection) {
+    const { selectAnalyticsReceipts } = await import('./analyticsReceiptSelection');
+    const fallback = selectAnalyticsReceipts(receipts as ReceiptRow[]);
+    return {
+      analyticsReceipts: fallback.analyticsReceipts as EngagementReceipt[],
+      excludedDuplicateReceiptIds: fallback.excludedDuplicateReceiptIds,
+    };
+  }
   return {
     analyticsReceipts: selection.analyticsReceipts as EngagementReceipt[],
     excludedDuplicateReceiptIds: selection.excludedDuplicateReceiptIds,
@@ -1212,7 +1278,7 @@ export async function evaluateEngagementMilestonesWithDb(
   }
   const receipts = await readAllReceipts(db, ownerScope);
   const { analyticsReceipts, excludedDuplicateReceiptIds } =
-    await selectEngagementAnalyticsReceipts(receipts);
+    await selectEngagementAnalyticsReceipts(receipts, ownerScope.ownerKey);
   return evaluateReceiptSetWithDb(
     db,
     analyticsReceipts,
@@ -1238,7 +1304,7 @@ export async function evaluateSavedReceiptMilestoneWithDb(
   }
   const receipts = await readAllReceipts(db, ownerScope);
   const { analyticsReceipts, excludedDuplicateReceiptIds } =
-    await selectEngagementAnalyticsReceipts(receipts);
+    await selectEngagementAnalyticsReceipts(receipts, ownerScope.ownerKey);
   const supportedCount = countSupportedReceipts(analyticsReceipts);
   const savedReceipt = analyticsReceipts.find(
     (receipt) => receipt.id === savedReceiptId
@@ -1260,15 +1326,29 @@ export async function evaluateSavedReceiptMilestoneWithDb(
 
 export async function evaluateCurrentEngagementMilestoneWithDb(
   db: EngagementMilestoneDatabase,
-  options: { generatedAt?: number } = {}
+  options: {
+    generatedAt?: number;
+    preloaded?: EngagementPreloadedAnalyticsContext;
+  } = {}
 ): Promise<CurrentEngagementMilestoneEvaluation> {
   const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
   if (ownerScope.status !== 'ready') {
     return emptyOwnerCurrentMilestoneEvaluation();
   }
-  const receipts = await readAllReceipts(db, ownerScope);
-  const { analyticsReceipts, excludedDuplicateReceiptIds } =
-    await selectEngagementAnalyticsReceipts(receipts);
+  let analyticsReceipts: EngagementReceipt[];
+  let excludedDuplicateReceiptIds: ReadonlySet<string>;
+  if (preloadedMatchesOwner(options.preloaded, ownerScope.ownerKey)) {
+    analyticsReceipts = [...options.preloaded.analyticsReceipts];
+    excludedDuplicateReceiptIds = options.preloaded.excludedDuplicateReceiptIds;
+  } else {
+    const receipts = await readAllReceipts(db, ownerScope);
+    const selected = await selectEngagementAnalyticsReceipts(
+      receipts,
+      ownerScope.ownerKey
+    );
+    analyticsReceipts = selected.analyticsReceipts;
+    excludedDuplicateReceiptIds = selected.excludedDuplicateReceiptIds;
+  }
   const supportedReceipts = filterV1SupportedReceipts(analyticsReceipts);
   const status = getEngagementMilestoneStatus(supportedReceipts.length);
   const generatedAt = options.generatedAt ?? Date.now();
@@ -1293,11 +1373,19 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
       ),
     };
   }
-  const productContext = await readProductInsightContext(
-    db,
-    ownerScope,
-    excludedDuplicateReceiptIds
-  );
+  const trustedPreloaded = preloadedMatchesOwner(
+    options.preloaded,
+    ownerScope.ownerKey
+  )
+    ? options.preloaded
+    : undefined;
+  const productContext = trustedPreloaded?.sharedProductInsight
+    ? await trustedPreloaded.sharedProductInsight
+    : await readProductInsightContext(
+        db,
+        ownerScope,
+        excludedDuplicateReceiptIds
+      );
   return {
     status,
     currentResult:
@@ -1361,15 +1449,30 @@ export async function loadEngagementProductInsightContextWithDb(
   db: EngagementMilestoneDatabase,
   options?: {
     includeRecognitionSnapshot?: boolean;
+    preloaded?: EngagementPreloadedAnalyticsContext;
   }
 ): Promise<MilestoneProductInsightContext> {
   const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
   if (ownerScope.status !== 'ready') {
     return emptyOwnerProductInsightContext();
   }
-  const receipts = await readAllReceipts(db, ownerScope);
-  const { excludedDuplicateReceiptIds } =
-    await selectEngagementAnalyticsReceipts(receipts);
+  if (preloadedMatchesOwner(options?.preloaded, ownerScope.ownerKey)) {
+    if (options.preloaded.sharedProductInsight) {
+      return options.preloaded.sharedProductInsight;
+    }
+  }
+  let excludedDuplicateReceiptIds: ReadonlySet<string>;
+  if (preloadedMatchesOwner(options?.preloaded, ownerScope.ownerKey)) {
+    excludedDuplicateReceiptIds =
+      options.preloaded.excludedDuplicateReceiptIds;
+  } else {
+    const receipts = await readAllReceipts(db, ownerScope);
+    const selected = await selectEngagementAnalyticsReceipts(
+      receipts,
+      ownerScope.ownerKey
+    );
+    excludedDuplicateReceiptIds = selected.excludedDuplicateReceiptIds;
+  }
   return readProductInsightContext(
     db,
     ownerScope,
@@ -1380,19 +1483,35 @@ export async function loadEngagementProductInsightContextWithDb(
 
 export async function loadEngagementProductInsightContext(options?: {
   includeRecognitionSnapshot?: boolean;
+  preloaded?: EngagementPreloadedAnalyticsContext;
 }): Promise<MilestoneProductInsightContext> {
   // Keep production short-circuit before DB open/init (owner-unavailable → empty).
   const ownerScope = await resolveCurrentLocalReceiptOwnerScope();
   if (ownerScope.status !== 'ready') {
     return emptyOwnerProductInsightContext();
   }
+  if (preloadedMatchesOwner(options?.preloaded, ownerScope.ownerKey)) {
+    if (options.preloaded.sharedProductInsight) {
+      return options.preloaded.sharedProductInsight;
+    }
+  }
   const db = await getEngagementMilestoneDb();
   return loadEngagementProductInsightContextWithDb(db, options);
 }
 
 export async function evaluateCurrentEngagementMilestone(
-  options: { generatedAt?: number } = {}
+  options: {
+    generatedAt?: number;
+    preloaded?: EngagementPreloadedAnalyticsContext;
+  } = {}
 ): Promise<CurrentEngagementMilestoneEvaluation> {
+  if (
+    options.preloaded &&
+    options.preloaded.sharedProductInsight == null &&
+    typeof options.preloaded.ownerKey === 'string'
+  ) {
+    // Milestone ≥5 needs product insight; without shared promise open db path.
+  }
   const db = await getEngagementMilestoneDb();
   return evaluateCurrentEngagementMilestoneWithDb(db, options);
 }
