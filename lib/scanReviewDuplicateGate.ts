@@ -142,7 +142,15 @@ function compareCollisionDestinations(
   return left.destination.id.localeCompare(right.destination.id);
 }
 
-/** O(n) comparison of one transient review against an already-loaded context. */
+/**
+ * O(n) comparison of one transient review against an already-loaded context.
+ *
+ * Branch-hint ambiguity fail-closed when multiple non-null stored storeHints
+ * collide — EXCEPT when the draft itself has no storeHint and at least one
+ * colliding stored observation is also generic (storeHint=null). That generic
+ * match already aligns at the draft's merchant-identity granularity, so more
+ * specific historical branch rescans must not veto it (Receipt078).
+ */
 export function evaluateScanReviewDuplicateGate(
   transientReceipt: ReceiptRow,
   context: ScanReviewDuplicateGateContext
@@ -151,24 +159,45 @@ export function evaluateScanReviewDuplicateGate(
 
   const matches: CollisionDestination[] = [];
   const observedStoreHints = new Set<string>();
+  let draftStoreHint: string | null | undefined;
   for (const stored of context.storedReceipts) {
     const collision = evaluateExactTransactionReceiptCollision(
       transientReceipt,
       stored
     );
     if (!collision.collided) continue;
-    if (collision.storeHintRight) observedStoreHints.add(collision.storeHintRight);
+    if (draftStoreHint === undefined) {
+      draftStoreHint = collision.storeHintLeft;
+    }
+    if (collision.storeHintRight) {
+      observedStoreHints.add(collision.storeHintRight);
+    }
     const destination = resolveStoredDestination(stored, context);
     if (!destination || destination.id === transientReceipt.id) continue;
     matches.push({ destination, collision });
   }
 
-  // Multiple positive stored branch observations that conflict make even this
-  // advisory result ambiguous. Missing branch evidence does not conflict.
-  if (matches.length === 0 || observedStoreHints.size > 1) return null;
+  if (matches.length === 0) return null;
 
-  matches.sort(compareCollisionDestinations);
-  const selected = matches[0]!;
+  const branchAmbiguous = observedStoreHints.size > 1;
+  const draftHasNoStoreHint = !draftStoreHint;
+  const genericMatches = matches.filter(
+    (match) => match.collision.storeHintRight == null
+  );
+
+  let candidates = matches;
+  if (branchAmbiguous) {
+    // Receipt078: generic draft + generic stored collision survives conflicting
+    // branch rescans. Without a generic stored match, keep fail-closed.
+    if (draftHasNoStoreHint && genericMatches.length > 0) {
+      candidates = genericMatches;
+    } else {
+      return null;
+    }
+  }
+
+  candidates.sort(compareCollisionDestinations);
+  const selected = candidates[0]!;
   const merchantDisplay =
     selected.destination.merchant_raw?.trim() ||
     selected.destination.merchant_normalized?.trim() ||

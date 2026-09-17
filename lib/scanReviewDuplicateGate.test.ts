@@ -91,7 +91,8 @@ describe('scanReviewDuplicateGate', () => {
     expect(result?.existingReceiptId).toBe(a.id);
   });
 
-  it('fails closed when multiple matching stored observations have conflicting branch hints', () => {
+  it('fails closed when conflicting branch hints match and NO generic stored match exists', () => {
+    // Receipt078 negative control shape: generic draft, two branches, no generic stored.
     const otherBranch = cloneCollisionReceipt(makeYorkCollisionReceiptB(), {
       id: 'york-other-branch',
       merchant_raw: 'ヨークベニマル 泉店',
@@ -106,6 +107,30 @@ describe('scanReviewDuplicateGate', () => {
         context([makeYorkCollisionReceiptB(), otherBranch])
       )
     ).toBeNull();
+  });
+
+  it('generic York draft + generic stored + two conflicting branches → MATCH', () => {
+    const generic = cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
+      created_at: 1,
+    });
+    const branchA = cloneCollisionReceipt(makeYorkCollisionReceiptB(), {
+      id: 'york-branch-a',
+      created_at: 2,
+    });
+    const branchB = cloneCollisionReceipt(makeYorkCollisionReceiptB(), {
+      id: 'york-branch-b',
+      created_at: 3,
+      merchant_raw: 'ヨークベニマル 泉店',
+      merchant_normalized: 'ヨークベニマル 泉店',
+    });
+    const transientWithoutHint = cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
+      id: 'scan-review:draft-generic',
+    });
+    const result = evaluateScanReviewDuplicateGate(
+      transientWithoutHint,
+      context([generic, branchA, branchB])
+    );
+    expect(result?.existingReceiptId).toBe(generic.id);
   });
 
   it('loads exhaustive owner receipts once and constructs selection context once', async () => {
