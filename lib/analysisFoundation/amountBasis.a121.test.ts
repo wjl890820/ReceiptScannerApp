@@ -472,11 +472,11 @@ describe('A1.2.1 discounts', () => {
       id: 'multi-bound',
       items: [
         { name: 'ROCHER ORIGINS', lineTotal: 1000 },
-        { name: 'シーフードピザ', lineTotal: 800 },
+        { name: 'シーフード ピザ', lineTotal: 800 },
       ],
       discounts: [
         { label: 'ROCHER ORIGINS CPN', amount: -600 },
-        { label: 'シーフード CPN', amount: -340 },
+        { label: 'シーフード ピザ CPN', amount: -340 },
         { label: '店舗クーポン共通', amount: -50 },
       ],
       tax: 65,

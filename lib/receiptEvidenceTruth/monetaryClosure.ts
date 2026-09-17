@@ -59,6 +59,14 @@ function readAnalysisDiscounts(analysis: Record<string, unknown> | null): Discou
         typeof row.adjacentPrecedingItemIndex === 'number'
           ? row.adjacentPrecedingItemIndex
           : null,
+      ownershipStatus:
+        row.ownershipStatus === 'bound' || row.ownershipStatus === 'unbound'
+          ? row.ownershipStatus
+          : null,
+      boundItemIndex:
+        typeof row.boundItemIndex === 'number' ? row.boundItemIndex : null,
+      ownershipReason:
+        typeof row.ownershipReason === 'string' ? row.ownershipReason : null,
     });
   }
   return out;

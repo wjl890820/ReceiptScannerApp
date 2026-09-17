@@ -67,8 +67,8 @@ describe('Phase B P0-A — user-edited amount vs discounts', () => {
 
   it('2 — unedited discounted line still prefers effectiveLineTotal', () => {
     const result = applyReceiptDiscountsToItems(
-      [{ name: 'FERRERO ROCHER', lineTotal: 2988, quantity: 1 }],
-      [{ label: 'ROCHER CPN', amount: -600 }]
+      [{ name: 'ROCHER ORIGINS', lineTotal: 2988, quantity: 1 }],
+      [{ label: 'ROCHER ORIGINS CPN', amount: -600 }]
     );
     const item = result.items[0] as {
       lineTotal?: number;

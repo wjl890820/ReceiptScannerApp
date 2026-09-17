@@ -438,7 +438,7 @@ describe('A1.2.2 discount ownership preservation', () => {
           discountAllocated: -600,
         },
         {
-          name: 'シーフードピザ',
+          name: 'シーフード ピザ',
           lineTotal: 800,
           effectiveLineTotal: 460,
           discountAllocated: -340,
@@ -446,7 +446,7 @@ describe('A1.2.2 discount ownership preservation', () => {
       ],
       discounts: [
         { label: 'ROCHER ORIGINS CPN', amount: -600 },
-        { label: 'シーフード CPN', amount: -340 },
+        { label: 'シーフード ピザ CPN', amount: -340 },
         { label: '店舗クーポン共通', amount: -50 },
       ],
       tax: 65,

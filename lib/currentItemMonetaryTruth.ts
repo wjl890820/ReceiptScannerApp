@@ -84,6 +84,14 @@ function readAnalysisDiscounts(analysis: AnalysisObject): DiscountLine[] {
       amount: amount < 0 ? amount : -Math.abs(amount),
       adjacentPrecedingItemIndex:
         typeof adj === 'number' && Number.isInteger(adj) ? adj : null,
+      ownershipStatus:
+        d.ownershipStatus === 'bound' || d.ownershipStatus === 'unbound'
+          ? d.ownershipStatus
+          : null,
+      boundItemIndex:
+        typeof d.boundItemIndex === 'number' ? d.boundItemIndex : null,
+      ownershipReason:
+        typeof d.ownershipReason === 'string' ? d.ownershipReason : null,
     });
   }
   return out;

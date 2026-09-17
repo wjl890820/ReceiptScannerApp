@@ -45,6 +45,10 @@ export type ReceiptDiscount = {
   amount: number;
   /** OCR order: preceding kept item index for safe まとめ売り allocation. */
   adjacentPrecedingItemIndex?: number | null;
+  /** Per-discount ownership (Receipt074 Round 2; analysis_json only). */
+  ownershipStatus?: 'bound' | 'unbound' | null;
+  boundItemIndex?: number | null;
+  ownershipReason?: string | null;
 };
 
 export type ReceiptReconciliation = {
@@ -769,7 +773,23 @@ export function normalizeOcrAnalysis(analysis: ReceiptAnalysis): NormalizedOcrAn
   if (rawText) evidenceTexts.push(rawText);
 
   // Allocation runs only after discount representations are collapsed.
-  const allocated = applyReceiptDiscountsToItems(keptItems, discounts, { evidenceTexts });
+  // Receipt074 Round 2: no Costco cross-script adjacency ownership.
+  const allocated = applyReceiptDiscountsToItems(keptItems, discounts, {
+    evidenceTexts,
+  });
+  // Stamp per-discount ownership onto discounts[] for downstream proof.
+  for (const binding of allocated.bindings) {
+    const match = discounts.find(
+      (d) =>
+        d.label === binding.label &&
+        Math.abs(Number(d.amount)) === Math.abs(binding.amount) &&
+        d.ownershipStatus == null
+    );
+    if (!match) continue;
+    match.ownershipStatus = binding.status;
+    match.boundItemIndex = binding.itemIndex;
+    match.ownershipReason = binding.reason;
+  }
   const itemsPositiveSum = allocated.items.reduce(
     (s, it) => s + (it.lineTotal > 0 ? it.lineTotal : 0),
     0

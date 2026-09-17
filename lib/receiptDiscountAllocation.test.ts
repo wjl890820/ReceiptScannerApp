@@ -1,11 +1,13 @@
 import {
   applyReceiptDiscountsToItems,
   findDiscountItemIndex,
+  hasUnresolvedProductAffectingCoupons,
   isOrdinaryAdjacentProductDiscountLabel,
   itemAmountForAnalytics,
   parseDiscountPercentFromLabel,
   receiptLevelUnallocatedDiscountSum,
 } from './receiptDiscountAllocation';
+import { resolveDiscountOwnership } from './analysisFoundation/discountOwnership';
 import { normalizeOcrAnalysis, type ReceiptDiscount } from './receiptOcrNormalize';
 import { buildReceiptAnalysisV1 } from './growthAnalysisEngineV1';
 import { authoritativeReceiptTotal } from './scanReviewPresentation';
@@ -18,14 +20,14 @@ function signalValue(
 }
 
 describe('coupon / discount allocation', () => {
-  it('Case 1: binds Ferrero ROCHER CPN -600 to gross 2988 → effective 2388', () => {
+  it('Case 1: binds Ferrero ROCHER ORIGINS CPN -600 to gross 2988 → effective 2388', () => {
     const items = [
       { name: 'ITEM A', lineTotal: 1128, quantity: 1 },
       { name: 'ITEM B', lineTotal: 1128, quantity: 1 },
       { name: 'ITEM C', lineTotal: 1680, quantity: 1 },
       { name: 'ITEM D', lineTotal: 899, quantity: 1 },
       { name: 'ITEM E', lineTotal: 1128, quantity: 1 },
-      { name: 'FERRERO ROCHER ORIGINS', lineTotal: 2988, quantity: 1 },
+      { name: 'ROCHER ORIGINS', lineTotal: 2988, quantity: 1 },
     ];
     const discounts = [{ label: 'ROCHER ORIGINS CPN', amount: -600 }];
     const result = applyReceiptDiscountsToItems(items, discounts);
@@ -39,7 +41,7 @@ describe('coupon / discount allocation', () => {
     expect(analyticsSum).toBe(8351);
   });
 
-  it('Case 2: binds シーフード CPN -340 and keeps receipt discounts', () => {
+  it('Case 2: single-token シーフード CPN remains unbound (Round 4 A2)', () => {
     const normalized = normalizeOcrAnalysis({
       items: [
         { name: 'シーフードミックス', quantity: 1, unitPrice: 1980, lineTotal: 1980 },
@@ -55,9 +57,15 @@ describe('coupon / discount allocation', () => {
       String(i.name).includes('シーフードミックス')
     )!;
     expect(seafood.lineTotal).toBe(1980);
-    expect(seafood.effectiveLineTotal).toBe(1640);
-    const analyticsSum = normalized.items.reduce((s, i) => s + itemAmountForAnalytics(i), 0);
-    expect(analyticsSum).toBe(25693);
+    expect(seafood.discountAllocated).toBe(0);
+    expect(seafood.effectiveLineTotal).toBe(1980);
+    expect(normalized.discounts![0].ownershipStatus).toBe('unbound');
+    expect(
+      hasUnresolvedProductAffectingCoupons(
+        normalized.items,
+        normalized.discounts ?? []
+      )
+    ).toBe(true);
   });
 
   it('Case 3: external tax is not treated as discount mismatch force-fit', () => {
@@ -157,7 +165,15 @@ describe('coupon / discount allocation', () => {
       [{ label: 'メーカークーポン', amount: -100, adjacentPrecedingItemIndex: 1 }]
     );
     expect(result.boundCount).toBe(0);
-    expect(result.unboundDiscounts).toEqual([{ label: 'メーカークーポン', amount: -100 }]);
+    expect(result.unboundDiscounts).toEqual([
+      {
+        label: 'メーカークーポン',
+        amount: -100,
+        ownershipStatus: 'unbound',
+        boundItemIndex: null,
+        ownershipReason: 'no_deterministic_ownership',
+      },
+    ]);
     expect(itemAmountForAnalytics(result.items[1])).toBe(2000);
   });
 
@@ -328,7 +344,15 @@ describe('coupon / discount allocation', () => {
         [{ label: '値引合計', amount: -100 }]
       );
       expect(result.boundCount).toBe(0);
-      expect(result.unboundDiscounts).toEqual([{ label: '値引合計', amount: -100 }]);
+      expect(result.unboundDiscounts).toEqual([
+        {
+          label: '値引合計',
+          amount: -100,
+          ownershipStatus: 'unbound',
+          boundItemIndex: null,
+          ownershipReason: 'no_deterministic_ownership',
+        },
+      ]);
       expect(itemAmountForAnalytics(result.items[0])).toBe(500);
       expect(itemAmountForAnalytics(result.items[1])).toBe(700);
     });
@@ -379,7 +403,7 @@ describe('coupon / discount allocation', () => {
   });
 });
 
-describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
+describe('Sample 007 Costco: cross-script CPN is unresolved (Receipt074 Round 2)', () => {
   const sample007Jp = {
     merchant: 'コストコ',
     currency: 'JPY',
@@ -423,7 +447,8 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
         categoryKey: 'food_ingredients' as const,
       },
       {
-        // Real Costco JP OCR name — Latin coupon tokens do not bind (A4).
+        // Real Costco JP OCR name — Latin coupon tokens do not bind lexically.
+        // Receipt074 Round 2: cross-script adjacency is insufficient ownership evidence.
         name: 'フェレロロシェオリジンズ*36コ',
         quantity: 1,
         unitPrice: 2988,
@@ -462,13 +487,23 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
     expect(out.discounts).toHaveLength(2);
   });
 
-  it('leaves JP Ferrero coupon receipt-level; categories stay gross; total_amount uses receipt.total', () => {
+  it('leaves JP Ferrero coupon unallocated; product-affecting ownership unresolved', () => {
     const out = normalizeOcrAnalysis(sample007Jp);
     const ferrero = out.items.find((i) => String(i.name).includes('フェレロ'))!;
     expect(ferrero.lineTotal).toBe(2988);
     expect(ferrero.discountAllocated).toBe(0);
     expect(ferrero.effectiveLineTotal).toBe(2988);
     expect(receiptLevelUnallocatedDiscountSum(out.items, out.discounts)).toBe(-600);
+    expect(out.discounts![0].ownershipStatus).toBe('unbound');
+
+    // Not genuine receipt-level remainder for trust — product-affecting unresolved.
+    const ownership = resolveDiscountOwnership({
+      ocrItems: out.items,
+      ocrDiscounts: out.discounts ?? [],
+      analysis: { merchant: 'コストコ', items: out.items, discounts: out.discounts },
+    });
+    expect(ownership.status).toBe('unresolved');
+    expect(ownership.genuineReceiptLevelRemainder).toBe(0);
 
     const analyticItems = out.items.map((it) => ({ ...it, category: it.categoryKey }));
     const analysis = buildReceiptAnalysisV1({
@@ -478,6 +513,8 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
     });
 
     expect(signalValue(analysis, 'total_amount')).toBe(8351);
+    // Signal layer still sees gross merchandise + unallocated discount magnitude;
+    // ownership layer above rejects trust / PPH.
     expect(signalValue(analysis, 'merchandise_amount')).toBe(8951);
     expect(signalValue(analysis, 'receipt_level_discount')).toBe(-600);
 
@@ -488,18 +525,14 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
     expect(byCat.food_ingredients).toBe(2808);
     expect(byCat.ready_to_eat).toBe(899);
 
-    // Category % must use merchandise denominator 8951, not net 8351.
     const snacks = analysis.top_categories.find((c) => c.category_main === 'snacks_drinks')!;
     expect(snacks.pct).toBeCloseTo((5244 / 8951) * 100, 5);
-    expect(snacks.pct).not.toBeCloseTo((5244 / 8351) * 100, 5);
-
-    // Unallocated discount is not assigned into any category bucket.
     expect(Object.values(byCat).reduce((a, b) => a + b, 0)).toBe(8951);
   });
 
   it('product-level allocated discount still reduces analytics item amount', () => {
     const result = applyReceiptDiscountsToItems(
-      [{ name: 'FERRERO ROCHER ORIGINS', lineTotal: 2988, category: 'snacks_drinks' }],
+      [{ name: 'ROCHER ORIGINS', lineTotal: 2988, category: 'snacks_drinks' }],
       [{ label: 'ROCHER ORIGINS CPN', amount: -600 }]
     );
     expect(itemAmountForAnalytics(result.items[0])).toBe(2388);
@@ -568,7 +601,13 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
     const result = applyReceiptDiscountsToItems(items, discounts);
     expect(result.boundCount).toBe(0);
     expect(result.unboundDiscounts).toEqual([
-      { label: '楽天ポイント(税込)', amount: -13 },
+      {
+        label: '楽天ポイント(税込)',
+        amount: -13,
+        ownershipStatus: 'unbound',
+        boundItemIndex: null,
+        ownershipReason: 'loyalty_redemption_receipt_level',
+      },
     ]);
     for (const it of result.items) {
       expect(Number((it as { discountAllocated?: number }).discountAllocated) || 0).toBe(0);
@@ -595,7 +634,13 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
     const result = applyReceiptDiscountsToItems(items, discounts);
     expect(result.boundCount).toBe(0);
     expect(result.unboundDiscounts).toEqual([
-      { label: '楽天ポイント(税込)', amount: -13 },
+      {
+        label: '楽天ポイント(税込)',
+        amount: -13,
+        ownershipStatus: 'unbound',
+        boundItemIndex: null,
+        ownershipReason: 'loyalty_redemption_receipt_level',
+      },
     ]);
     for (const it of result.items) {
       expect(Number((it as { discountAllocated?: number }).discountAllocated) || 0).toBe(0);
@@ -609,7 +654,7 @@ describe('Sample 007 Costco: receipt-level discount semantics (A4)', () => {
     const result = applyReceiptDiscountsToItems(
       [
         { name: 'OTHER', lineTotal: 500, quantity: 1 },
-        { name: 'FERRERO ROCHER ORIGINS', lineTotal: 2988, quantity: 1 },
+        { name: 'ROCHER ORIGINS', lineTotal: 2988, quantity: 1 },
       ],
       [{ label: 'ROCHER ORIGINS CPN', amount: -600 }]
     );

@@ -228,8 +228,8 @@ describe('Phase C1 — price history amounts / quantity / dates', () => {
 
   it('6 — unedited discounted item keeps effective discounted amount', () => {
     const result = applyReceiptDiscountsToItems(
-      [{ name: 'FERRERO ROCHER', lineTotal: 2988, quantity: 1 }],
-      [{ label: 'ROCHER CPN', amount: -600 }]
+      [{ name: 'ROCHER ORIGINS', lineTotal: 2988, quantity: 1 }],
+      [{ label: 'ROCHER ORIGINS CPN', amount: -600 }]
     );
     const item = result.items[0];
     expect(itemAmountForAnalytics(item)).toBe(2388);

@@ -10,6 +10,7 @@ import type {
 } from './analysisFoundation/types';
 import { initIfNeeded } from './db';
 import type { ReceiptRow } from './db';
+import { normalizeReceiptCurrency } from './receiptCurrency';
 import {
   buildOwnerScopedInventoryPredicates,
   buildPersonalProductInventoryRowKey,
@@ -735,10 +736,7 @@ function hasValidOccurredAt(value: unknown): value is number {
 }
 
 function knownCurrency(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const currency = value.trim();
-  if (!currency || currency.toLowerCase() === 'unknown') return null;
-  return currency;
+  return normalizeReceiptCurrency(value);
 }
 
 function usesG3ObservationTruth(row: ProductPriceHistoryRow): boolean {

@@ -112,6 +112,7 @@ function item(
     category: 'food_ingredients',
     purchaseQuantity: 1,
     lineTotal: 300,
+    currency: 'JPY',
     ...overrides,
   };
 }

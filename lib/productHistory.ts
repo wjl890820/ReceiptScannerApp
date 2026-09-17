@@ -19,6 +19,11 @@ import type {
   ProductDetailTarget,
 } from './productDetailTarget';
 import type { Locale } from './i18n';
+import {
+  aggregateTrustedProductSpend,
+  CONSUMER_MONETARY_RECEIPT_SELECT_SQL,
+  projectTrustedConsumerItemAmounts,
+} from './consumerItemMonetaryTruth';
 
 export type ProductSpecificationVariant = {
   sizeValue: number | null;
@@ -450,10 +455,10 @@ async function loadPersonalProductHistorySummaryWithDb(
        receipt_items.category AS category,
        receipt_items.purchase_quantity AS purchaseQuantity,
        receipt_items.line_total AS lineTotal,
-       receipts.currency AS currency,
        COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt,
        receipts.merchant_raw AS merchantRaw,
        receipts.merchant_normalized AS merchantNormalized,
+       ${CONSUMER_MONETARY_RECEIPT_SELECT_SQL},
        receipt_items.raw_name AS rawName,
        receipt_items.spec_size_value AS specSizeValue,
        receipt_items.spec_size_unit AS specSizeUnit,
@@ -470,7 +475,9 @@ async function loadPersonalProductHistorySummaryWithDb(
     predicates.params
   );
 
-  const matchedRows = selectAuthorizedPersonalProductHistoryRows(resolved, rows);
+  const matchedRows = projectTrustedConsumerItemAmounts(
+    selectAuthorizedPersonalProductHistoryRows(resolved, rows)
+  );
   if (!matchedRows.length) {
     return null;
   }
@@ -484,17 +491,7 @@ async function loadPersonalProductHistorySummaryWithDb(
   const title =
     (titleRow.displayName || titleRow.rawName || '').trim() || null;
 
-  const currencyBuckets = new Map<string, number>();
-  for (const row of matchedRows) {
-    const currency = typeof row.currency === 'string' ? row.currency.trim() : '';
-    if (!currency || currency.toLowerCase() === 'unknown') continue;
-    const spend = row.lineTotal == null ? 0 : finiteNumber(row.lineTotal);
-    currencyBuckets.set(currency, (currencyBuckets.get(currency) ?? 0) + spend);
-  }
-  const currencyTotals = [...currencyBuckets.entries()].map(
-    ([currency, totalSpend]) => ({ currency, totalSpend })
-  );
-  const singleCurrency = currencyTotals.length === 1 ? currencyTotals[0]! : null;
+  const spendAgg = aggregateTrustedProductSpend(matchedRows);
 
   const purchasedAts = matchedRows
     .map((row) => Number(row.purchasedAt))
@@ -546,9 +543,9 @@ async function loadPersonalProductHistorySummaryWithDb(
       const quantity = finiteNumber(row.purchaseQuantity);
       return sum + (quantity > 0 ? quantity : 0);
     }, 0),
-    totalSpend: singleCurrency ? singleCurrency.totalSpend : null,
-    currency: singleCurrency?.currency ?? null,
-    currencyTotals,
+    totalSpend: spendAgg.totalSpend,
+    currency: spendAgg.currency,
+    currencyTotals: spendAgg.currencyTotals,
     firstPurchasedAt: purchasedAts.length ? Math.min(...purchasedAts) : null,
     lastPurchasedAt: purchasedAts.length ? Math.max(...purchasedAts) : null,
     merchantCount: merchants.length,
@@ -640,10 +637,10 @@ async function loadMerchantProductHistorySummaryWithDb(
        receipt_items.category AS category,
        receipt_items.purchase_quantity AS purchaseQuantity,
        receipt_items.line_total AS lineTotal,
-       receipts.currency AS currency,
        COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt,
        receipts.merchant_raw AS merchantRaw,
        receipts.merchant_normalized AS merchantNormalized,
+       ${CONSUMER_MONETARY_RECEIPT_SELECT_SQL},
        receipt_items.raw_name AS rawName
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
@@ -656,7 +653,8 @@ async function loadMerchantProductHistorySummaryWithDb(
   const { resolveIdentityConsumerObservations } = await import(
     './productIdentityConsumer'
   );
-  const observations = rows.map((r) => ({
+  const projectedRows = projectTrustedConsumerItemAmounts(rows);
+  const observations = projectedRows.map((r) => ({
     receiptId: r.receiptId,
     itemSourceIndex: r.sourceIndex,
     rawName: (r.rawName || r.displayName || '').trim(),
@@ -672,7 +670,7 @@ async function loadMerchantProductHistorySummaryWithDb(
   const keySet = new Set(
     matched.map((q) => `${q.receiptId}::${q.itemSourceIndex}`)
   );
-  const matchedRows = rows.filter((r) =>
+  const matchedRows = projectedRows.filter((r) =>
     keySet.has(`${r.receiptId}::${r.sourceIndex}`)
   );
   if (!matchedRows.length) return null;
@@ -682,17 +680,7 @@ async function loadMerchantProductHistorySummaryWithDb(
     matchedRows[0]?.displayName ??
     null;
 
-  const currencyBuckets = new Map<string, number>();
-  for (const r of matchedRows) {
-    const c = typeof r.currency === 'string' ? r.currency.trim() : '';
-    if (!c || c.toLowerCase() === 'unknown') continue;
-    const spend = r.lineTotal == null ? 0 : finiteNumber(r.lineTotal);
-    currencyBuckets.set(c, (currencyBuckets.get(c) ?? 0) + spend);
-  }
-  const currencyTotals = [...currencyBuckets.entries()].map(
-    ([currency, totalSpend]) => ({ currency, totalSpend })
-  );
-  const singleCurrency = currencyTotals.length === 1 ? currencyTotals[0]! : null;
+  const spendAgg = aggregateTrustedProductSpend(matchedRows);
 
   const purchasedAts = matchedRows
     .map((r) => Number(r.purchasedAt))
@@ -716,9 +704,9 @@ async function loadMerchantProductHistorySummaryWithDb(
       const q = finiteNumber(r.purchaseQuantity);
       return sum + (q > 0 ? q : 0);
     }, 0),
-    totalSpend: singleCurrency ? singleCurrency.totalSpend : null,
-    currency: singleCurrency?.currency ?? null,
-    currencyTotals,
+    totalSpend: spendAgg.totalSpend,
+    currency: spendAgg.currency,
+    currencyTotals: spendAgg.currencyTotals,
     firstPurchasedAt: purchasedAts.length ? Math.min(...purchasedAts) : null,
     lastPurchasedAt: purchasedAts.length ? Math.max(...purchasedAts) : null,
     merchantCount: merchants.length,
@@ -831,23 +819,36 @@ export async function loadProductHistoryWithDb(
     whereParams
   );
 
-  const currencyTotals = await db.getAllAsync<ProductCurrencyTotal>(
+  const spendRows = await db.getAllAsync<{
+    receiptId: string;
+    sourceIndex: number;
+    lineTotal: number | null;
+    currency: string | null;
+    receiptAnalysisJson: string | null;
+    receiptUserItemsJson: string | null;
+    receiptTotal: number | null;
+    receiptTax: number | null;
+    receiptTaxIsKnown: number | null;
+    receiptFinalTotal: number | null;
+    receiptUserEdited: number | null;
+  }>(
     `SELECT
-       receipts.currency AS currency,
-       COALESCE(SUM(
-         CASE
-           WHEN typeof(receipt_items.line_total) IN ('integer', 'real')
-             THEN receipt_items.line_total
-           ELSE 0
-         END
-       ), 0) AS totalSpend
+       receipt_items.receipt_id AS receiptId,
+       receipt_items.source_index AS sourceIndex,
+       receipt_items.line_total AS lineTotal,
+       ${CONSUMER_MONETARY_RECEIPT_SELECT_SQL}
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
-     WHERE ${whereSql}
-     GROUP BY receipts.currency
-     ORDER BY receipts.currency ASC`,
+     WHERE ${whereSql}`,
     whereParams
   );
+  const projectedSpend = projectTrustedConsumerItemAmounts(spendRows);
+  const spendAgg = aggregateTrustedProductSpend(projectedSpend);
+  const currencyTotals: ProductCurrencyTotal[] = spendAgg.monetaryCoverageComplete
+    ? [...spendAgg.currencyTotals].sort((a, b) =>
+        a.currency.localeCompare(b.currency)
+      )
+    : [];
 
   // R1-B3c: read merchant evidence, group by merchantAnalyticsKey in app layer
   // (SQL cannot safely replicate normalizeMerchantName). Display stays raw||normalized.
@@ -910,10 +911,10 @@ export async function loadProductHistoryWithDb(
        receipt_items.category AS category,
        receipt_items.purchase_quantity AS purchaseQuantity,
        receipt_items.line_total AS lineTotal,
-       receipts.currency AS currency,
        COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt,
        receipts.merchant_raw AS merchantRaw,
        receipts.merchant_normalized AS merchantNormalized,
+       ${CONSUMER_MONETARY_RECEIPT_SELECT_SQL},
        receipt_items.spec_size_value AS specSizeValue,
        receipt_items.spec_size_unit AS specSizeUnit,
        receipt_items.spec_pack_count AS specPackCount,
@@ -930,7 +931,8 @@ export async function loadProductHistoryWithDb(
     [...whereParams, recentLimit]
   );
 
-  const normalizedPurchases = recentPurchases.map((purchase) => {
+  const normalizedPurchases = projectTrustedConsumerItemAmounts(recentPurchases).map(
+    (purchase) => {
     const row = purchase as ProductPurchaseOccurrence & {
       specSizeValue?: number | null;
       specSizeUnit?: string | null;
@@ -965,14 +967,13 @@ export async function loadProductHistoryWithDb(
     };
   });
 
-  const singleCurrency = currencyTotals.length === 1 ? currencyTotals[0] : null;
   return {
     target,
     title: resolveTitle(target, representative, options.locale ?? 'en'),
     purchaseOccurrenceCount: occurrenceCount,
     totalPurchaseQuantity: finiteNumber(aggregate?.totalPurchaseQuantity),
-    totalSpend: singleCurrency ? finiteNumber(singleCurrency.totalSpend) : null,
-    currency: singleCurrency?.currency ?? null,
+    totalSpend: spendAgg.monetaryCoverageComplete ? spendAgg.totalSpend : null,
+    currency: spendAgg.monetaryCoverageComplete ? spendAgg.currency : null,
     currencyTotals: currencyTotals.map((row) => ({
       currency: (typeof row.currency === 'string' && row.currency.trim()) ? row.currency.trim() : 'UNKNOWN',
       totalSpend: finiteNumber(row.totalSpend),

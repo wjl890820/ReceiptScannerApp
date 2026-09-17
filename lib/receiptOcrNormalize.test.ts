@@ -203,7 +203,14 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     // 店铺类型词被清洗为 undefined
     expect(out.items[1].categoryKey).toBeUndefined();
     expect(out.discounts).toEqual([
-      { label: '値引', amount: -50, adjacentPrecedingItemIndex: 1 },
+      {
+        label: '値引',
+        amount: -50,
+        adjacentPrecedingItemIndex: 1,
+        ownershipStatus: 'bound',
+        boundItemIndex: 1,
+        ownershipReason: 'ordinary_adjacent_product_discount',
+      },
     ]);
     expect(out.merchant_normalized).toBe('セブン-イレブン');
     // items 270 + discount -50 + tax 20 = 240 == total

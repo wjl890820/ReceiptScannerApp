@@ -4,6 +4,7 @@ import type {
   ProductPriceHistoryStatus,
   ProductPriceKind,
 } from './productPriceHistory';
+import { normalizeReceiptCurrency } from './receiptCurrency';
 
 export type ProductPriceChangePresentation = {
   change:
@@ -45,14 +46,21 @@ export function resolveProductPriceVisualMode(
   return 'chart';
 }
 
+/**
+ * Currency-aware amount formatting shared by Product Detail / History / PPH UI.
+ * Malformed / unsupported currency never falls back to JPY formatting.
+ */
 export function formatProductPriceAmount(
   value: number,
-  currency: string
+  currency: string | null | undefined
 ): string {
+  const code = normalizeReceiptCurrency(currency);
+  if (!code) return '—';
   const number = Number.isInteger(value)
     ? value.toLocaleString()
     : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  return currency === 'JPY' ? `¥${number}` : `${currency} ${number}`;
+  // Keep half-width ¥ for JPY display consistency with Product Detail / History.
+  return code === 'JPY' ? `¥${number}` : `${code} ${number}`;
 }
 
 export function resolveProductPriceKindLabel(

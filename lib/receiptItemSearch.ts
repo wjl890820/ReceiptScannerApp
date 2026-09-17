@@ -8,6 +8,10 @@ import {
   resolveCurrentLocalReceiptOwnerScope,
   type LocalReceiptOwnerScope,
 } from './receiptOwnershipScope';
+import {
+  CONSUMER_MONETARY_RECEIPT_SELECT_SQL,
+  projectTrustedConsumerItemAmounts,
+} from './consumerItemMonetaryTruth';
 
 export { normalizeReceiptItemSearchQuery } from './receiptItemSearchNormalize';
 
@@ -26,6 +30,11 @@ export type ReceiptItemSearchResult = {
   category: string | null;
   purchaseQuantity: number;
   lineTotal: number | null;
+  /** Canonical receipt currency when known; null when unavailable. */
+  currency: string | null;
+  /** False when receipt monetary ownership/provenance is insufficient. */
+  monetaryTrusted?: boolean;
+  monetaryTrustReason?: string;
   transactionAt: number;
   merchantRaw: string | null;
   merchantNormalized: string | null;
@@ -127,7 +136,8 @@ export async function searchHistoryPurchasesWithDb(
        COALESCE(receipts.transaction_at, receipts.created_at) AS transactionAt,
        receipts.merchant_raw AS merchantRaw,
        receipts.merchant_normalized AS merchantNormalized,
-       receipts.merchant_type AS merchantType
+       receipts.merchant_type AS merchantType,
+       ${CONSUMER_MONETARY_RECEIPT_SELECT_SQL}
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
      WHERE (${ownerNamed.itemWhereSql})
@@ -157,6 +167,47 @@ export async function searchHistoryPurchasesWithDb(
      LIMIT $itemLimit`,
     binds
   );
+
+  const trustedItemResults = projectTrustedConsumerItemAmounts(
+    itemResults as Array<
+      ReceiptItemSearchResult & {
+        receiptAnalysisJson?: string | null;
+        receiptUserItemsJson?: string | null;
+        receiptTotal?: number | null;
+        receiptTax?: number | null;
+        receiptTaxIsKnown?: number | null;
+        receiptFinalTotal?: number | null;
+        receiptUserEdited?: number | null;
+        currency?: string | null;
+      }
+    >
+  ).map((row) => {
+    const {
+      receiptAnalysisJson: _a,
+      receiptUserItemsJson: _u,
+      receiptTotal: _t,
+      receiptTax: _x,
+      receiptTaxIsKnown: _k,
+      receiptFinalTotal: _f,
+      receiptUserEdited: _e,
+      ...rest
+    } = row as typeof row & {
+      receiptAnalysisJson?: string | null;
+      receiptUserItemsJson?: string | null;
+      receiptTotal?: number | null;
+      receiptTax?: number | null;
+      receiptTaxIsKnown?: number | null;
+      receiptFinalTotal?: number | null;
+      receiptUserEdited?: number | null;
+    };
+    return {
+      ...(rest as ReceiptItemSearchResult),
+      currency:
+        typeof (rest as { currency?: unknown }).currency === 'string'
+          ? ((rest as { currency: string }).currency as string)
+          : null,
+    };
+  });
 
   const receiptRows = await db.getAllAsync<ReceiptOnlySearchResult>(
     `SELECT
@@ -192,10 +243,10 @@ export async function searchHistoryPurchasesWithDb(
   );
 
   const itemMatchedReceiptIds = new Set(
-    itemResults.map((result) => result.receiptId)
+    trustedItemResults.map((result) => result.receiptId)
   );
   return {
-    itemResults,
+    itemResults: trustedItemResults,
     receiptResults: receiptRows.filter(
       (receipt) => !itemMatchedReceiptIds.has(receipt.id)
     ),

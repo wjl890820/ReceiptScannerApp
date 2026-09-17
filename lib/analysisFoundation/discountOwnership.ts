@@ -9,7 +9,9 @@
 import {
   applyReceiptDiscountsToItems,
   discountsHaveAggregateSummaryAmbiguity,
+  hasUnresolvedProductAffectingCoupons,
   isBundleSummaryDiscountLabel,
+  isProductAffectingCouponLabel,
   itemAmountForAnalytics,
   receiptLevelUnallocatedDiscountSum,
   type DiscountableItem,
@@ -142,6 +144,29 @@ function sumAllocated(items: DiscountableItem[]): number {
   );
 }
 
+function unresolvedProductCouponOwnership(
+  items: DiscountableItem[],
+  evidence: string[],
+  reasonCodes: string[]
+): DiscountOwnershipResolution {
+  return {
+    status: 'unresolved',
+    items,
+    analyticsItemSum: sumAnalytics(items),
+    genuineReceiptLevelRemainder: 0,
+    boundDiscountTotal: sumAllocated(items),
+    evidence: [
+      ...evidence,
+      'product_affecting_coupon_ownership_unresolved',
+    ],
+    reasonCodes: [
+      ...reasonCodes,
+      'discount_ownership_unresolved',
+      'product_affecting_coupon_unallocated',
+    ],
+  };
+}
+
 /**
  * Reconstruct evidenceTexts-like input from analysis_json when available.
  * Mirrors normalizeOcrAnalysis sources: ocr_raw_text/rawText + まとめ/個¥ names.
@@ -246,6 +271,18 @@ export function resolveDiscountOwnership(input: {
         receiptLevelUnallocatedDiscountSum(ocrItems, ocrDiscounts)
       );
       evidence.push('discount_ownership=persisted_resolved');
+      // Fail closed per product-affecting coupon (never aggregate magnitude).
+      const evidenceTexts = extractDiscountEvidenceTexts(
+        input.analysis ?? null,
+        ocrItems
+      );
+      if (
+        hasUnresolvedProductAffectingCoupons(ocrItems, ocrDiscounts, {
+          evidenceTexts,
+        })
+      ) {
+        return unresolvedProductCouponOwnership(ocrItems, evidence, reasonCodes);
+      }
     } else {
       evidence.push(
         hasPersisted
@@ -304,17 +341,72 @@ export function resolveDiscountOwnership(input: {
     const analyticsItemSum = roundMoney(
       allocation.items.reduce((s, it) => s + itemAmountForAnalytics(it), 0)
     );
+    const boundDiscountTotal = roundMoney(
+      allocation.items.reduce((s, it) => {
+        const a = Number(it.discountAllocated);
+        return Number.isFinite(a) ? s + a : s;
+      }, 0)
+    );
+
+    // Per-discount: any unbound product-affecting coupon → unresolved.
+    // Prefer bindings from this allocation over aggregate allocated totals.
+    const discountsWithBindings: DiscountLine[] = ocrDiscounts.map((d) => {
+      const amount = Number(d.amount);
+      const delta = Number.isFinite(amount)
+        ? amount < 0
+          ? amount
+          : -Math.abs(amount)
+        : 0;
+      const binding = allocation.bindings.find(
+        (b) =>
+          b.label === d.label && Math.abs(b.amount) === Math.abs(delta)
+      );
+      if (!binding) return d;
+      return {
+        ...d,
+        ownershipStatus: binding.status,
+        boundItemIndex: binding.itemIndex,
+        ownershipReason: binding.reason,
+      };
+    });
+
+    if (
+      hasUnresolvedProductAffectingCoupons(
+        allocation.items,
+        discountsWithBindings,
+        { evidenceTexts }
+      ) ||
+      allocation.unboundDiscounts.some((d) =>
+        isProductAffectingCouponLabel(d.label)
+      )
+    ) {
+      return {
+        status: 'unresolved',
+        items: allocation.items,
+        analyticsItemSum,
+        genuineReceiptLevelRemainder: 0,
+        boundDiscountTotal,
+        evidence: [
+          `discount_ownership=reallocated_with_evidence`,
+          `evidence_texts_count=${evidenceTexts.length}`,
+          `bound_count=${allocation.boundCount}`,
+          `unbound_count=${allocation.unboundDiscounts.length}`,
+          'product_affecting_coupon_ownership_unresolved',
+        ],
+        reasonCodes: [
+          ...reasonCodes,
+          'discount_ownership_unresolved',
+          'product_affecting_coupon_unallocated',
+        ],
+      };
+    }
+
     return {
       status: 'reallocated_with_evidence',
       items: allocation.items,
       analyticsItemSum,
       genuineReceiptLevelRemainder: remainder,
-      boundDiscountTotal: roundMoney(
-        allocation.items.reduce((s, it) => {
-          const a = Number(it.discountAllocated);
-          return Number.isFinite(a) ? s + a : s;
-        }, 0)
-      ),
+      boundDiscountTotal,
       evidence: [
         `discount_ownership=reallocated_with_evidence`,
         `evidence_texts_count=${evidenceTexts.length}`,

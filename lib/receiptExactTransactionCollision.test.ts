@@ -406,21 +406,64 @@ describe('exact-transaction receipt collision (Level 1/2 only)', () => {
     expect(result).toEqual({ collided: false, reason: 'basket_invalid' });
   });
 
-  it('incoherent monetary evidence fails closed', () => {
+  it('matching raw baskets still collide when item-sum ≠ receipt total (identity ≠ attribution)', () => {
+    // Same physical-transaction identity with identical raw baskets; arithmetic
+    // closure against receipt total is a product-monetary concern, not collision.
     const a = makeYorkCollisionReceiptA();
     const b = makeYorkCollisionReceiptB();
-    const incoherentA = collisionItems(a).map((item) => ({ ...item }));
-    const incoherentB = collisionItems(b).map((item) => ({ ...item }));
-    incoherentA[0] = { ...incoherentA[0], lineTotal: 500 };
-    incoherentB[0] = { ...incoherentB[0], lineTotal: 500 };
+    const patchedA = collisionItems(a).map((item) => ({ ...item }));
+    const patchedB = collisionItems(b).map((item) => ({ ...item }));
+    patchedA[0] = { ...patchedA[0], lineTotal: 500 };
+    patchedB[0] = { ...patchedB[0], lineTotal: 500 };
     const result = evaluateExactTransactionReceiptCollision(
-      cloneCollisionReceipt(a, { items: incoherentA }),
-      cloneCollisionReceipt(b, { items: incoherentB })
+      cloneCollisionReceipt(a, { items: patchedA }),
+      cloneCollisionReceipt(b, { items: patchedB })
     );
-    expect(result).toEqual({
-      collided: false,
-      reason: 'monetary_evidence_not_coherent',
-    });
+    expect(result.collided).toBe(true);
+    if (result.collided) {
+      expect(result.evidence).toContain(
+        'product_monetary_provenance_not_required'
+      );
+    }
+  });
+
+  it('resolved coupon gross≠effective does not invalidate raw basket (Proof F)', () => {
+    const a = makeYorkCollisionReceiptA();
+    const b = makeYorkCollisionReceiptB();
+    const withEffective = collisionItems(a).map((item, index) =>
+      index === 0
+        ? {
+            ...item,
+            lineTotal: 758,
+            effectiveLineTotal: 598,
+            discountAllocated: -160,
+          }
+        : item
+    );
+    const withEffectiveB = collisionItems(b).map((item, index) =>
+      index === 0
+        ? {
+            ...item,
+            lineTotal: 758,
+            effectiveLineTotal: 598,
+            discountAllocated: -160,
+          }
+        : item
+    );
+    // Totals must still match for collision; keep fixture totals.
+    const result = evaluateExactTransactionReceiptCollision(
+      cloneCollisionReceipt(a, {
+        items: withEffective,
+        total: 4102,
+        analysisPatch: { total: 4102 },
+      }),
+      cloneCollisionReceipt(b, {
+        items: withEffectiveB,
+        total: 4102,
+        analysisPatch: { total: 4102 },
+      })
+    );
+    expect(result.collided).toBe(true);
   });
 
   it('Level 3 analytics bridges generic vs store-specific York structural rescans', () => {

@@ -140,6 +140,44 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
     return receipt.transactionAt ?? receipt.createdAt;
   }
 
+  /** Coherent no-discount analysis so Round 5 consumer spend can resolve. */
+  coherentReceiptProjection(receiptId: string): {
+    receiptAnalysisJson: string;
+    receiptTotal: number;
+    receiptTax: number;
+    receiptTaxIsKnown: number;
+    receiptFinalTotal: number | null;
+    receiptUserEdited: number;
+    currency: string;
+  } {
+    const items = this.items.filter((item) => item.receiptId === receiptId);
+    const itemSum = items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const receipt = this.receipts.get(receiptId)!;
+    return {
+      receiptAnalysisJson: JSON.stringify({
+        items: items.map((item) => ({
+          name: item.rawName,
+          lineTotal: item.lineTotal,
+          quantity: item.quantity,
+          effectiveLineTotal: item.lineTotal,
+          discountAllocated: 0,
+        })),
+        discounts: [],
+        tax: 0,
+        total: itemSum,
+        tax_is_known: true,
+        reconciliation: { ok: true },
+        amount_mismatch: false,
+      }),
+      receiptTotal: itemSum,
+      receiptTax: 0,
+      receiptTaxIsKnown: 1,
+      receiptFinalTotal: null,
+      receiptUserEdited: 0,
+      currency: receipt.currency,
+    };
+  }
+
   async getFirstAsync<T>(
     source: string,
     params: SQLite.SQLiteBindParams
@@ -218,6 +256,23 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([currency, totalSpend]) => ({ currency, totalSpend })) as T[];
     }
+    // Receipt074 Round 5: trusted spend projection rows (full evidence join).
+    if (
+      /AS receiptAnalysisJson/i.test(source) &&
+      /AS lineTotal/i.test(source) &&
+      !/AS displayName/i.test(source)
+    ) {
+      return matching.map((item) => {
+        const monetary = this.coherentReceiptProjection(item.receiptId);
+        return {
+          receiptId: item.receiptId,
+          sourceIndex: item.sourceIndex,
+          lineTotal: item.lineTotal,
+          ...monetary,
+          receiptUserItemsJson: null,
+        };
+      }) as T[];
+    }
     if (
       /AS merchantRaw/i.test(source) &&
       /AS purchasedAt/i.test(source) &&
@@ -288,6 +343,7 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
         )
         .map((item) => {
           const receipt = this.receipts.get(item.receiptId)!;
+          const monetary = this.coherentReceiptProjection(item.receiptId);
           return {
             receiptId: item.receiptId,
             itemId: item.id,
@@ -296,11 +352,12 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
             category: item.category,
             purchaseQuantity: item.quantity,
             lineTotal: item.lineTotal,
-            currency: receipt.currency,
             purchasedAt: this.purchasedAt(item),
             merchantRaw: receipt.merchantRaw,
             merchantNormalized: receipt.merchantNormalized,
             rawName: item.rawName,
+            ...monetary,
+            receiptUserItemsJson: null,
           };
         }) as T[];
     }
@@ -315,6 +372,7 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
       .slice(0, limit)
       .map((item) => {
         const receipt = this.receipts.get(item.receiptId)!;
+        const monetary = this.coherentReceiptProjection(item.receiptId);
         return {
           receiptId: item.receiptId,
           itemId: item.id,
@@ -323,7 +381,6 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
           category: item.category,
           purchaseQuantity: item.quantity,
           lineTotal: item.lineTotal,
-          currency: receipt.currency,
           purchasedAt: this.purchasedAt(item),
           merchantRaw: receipt.merchantRaw,
           merchantNormalized: receipt.merchantNormalized,
@@ -334,6 +391,8 @@ class MemoryProductHistoryDb implements ProductHistoryDatabase {
           weightBaseG: item.weightBaseG,
           countBase: item.countBase,
           specSourceText: item.specSourceText,
+          ...monetary,
+          receiptUserItemsJson: null,
         };
       }) as T[];
   }
@@ -602,9 +661,7 @@ describe('Product History grouping', () => {
     expect(summary.totalSpend).toBe(714);
     expect(db.queries).not.toHaveLength(0);
     expect(db.queries.every((sql) => /INNER JOIN receipts/i.test(sql))).toBe(true);
-    expect(db.queries.join('\n')).toMatch(
-      /typeof\(receipt_items\.line_total\) IN \('integer', 'real'\)/i
-    );
+    expect(db.queries.join('\n')).toMatch(/AS receiptAnalysisJson/i);
     expect(db.queries.join('\n')).not.toMatch(/purchase_unit_price/i);
   });
 

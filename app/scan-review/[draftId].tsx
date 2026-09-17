@@ -36,7 +36,7 @@ import {
   receiptFieldCorrectionInput,
   applyItemFieldCorrections,
 } from '@/lib/userCorrections';
-import { applyUserLineAmountEdit } from '@/lib/receiptDiscountAllocation';
+import { applyUserLineAmountEdit, invalidateProductCouponOwnershipMetadata } from '@/lib/receiptDiscountAllocation';
 import { mergeReviewSnapshotPreservingEvidence } from '@/lib/receiptPrintedEvidence';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
 import { getCategoryLabel } from '@/lib/categoryPalette';
@@ -955,6 +955,32 @@ export default function ScanReviewScreen() {
       const editedMerchant = merchant.trim();
       const merchantObservationChanged = snapshotMerchant !== editedMerchant;
 
+      const snapshotDiscounts = Array.isArray(
+        (snapshot as { discounts?: unknown }).discounts
+      )
+        ? ((snapshot as { discounts: unknown[] }).discounts as Array<
+            Record<string, unknown>
+          >)
+        : [];
+      const safeDiscounts = invalidateProductCouponOwnershipMetadata(
+        snapshotDiscounts.map((d) => ({
+          label: typeof d.label === 'string' ? d.label : '値引',
+          amount: Number(d.amount) || 0,
+          adjacentPrecedingItemIndex:
+            typeof d.adjacentPrecedingItemIndex === 'number'
+              ? d.adjacentPrecedingItemIndex
+              : null,
+          ownershipStatus:
+            d.ownershipStatus === 'bound' || d.ownershipStatus === 'unbound'
+              ? d.ownershipStatus
+              : null,
+          boundItemIndex:
+            typeof d.boundItemIndex === 'number' ? d.boundItemIndex : null,
+          ownershipReason:
+            typeof d.ownershipReason === 'string' ? d.ownershipReason : null,
+        }))
+      );
+
       const finalAnalysis = appendUserCorrections(
         mergeReviewSnapshotPreservingEvidence(snapshot as Record<string, unknown>, {
           merchant: editedMerchant || undefined,
@@ -968,6 +994,9 @@ export default function ScanReviewScreen() {
           tax_is_known: taxIsKnown,
           currency: currency.trim() || 'JPY',
           items: finalItemsForSave,
+          // Receipt074 Round 3 A1: Review mutations invalidate product-coupon
+          // ownership stamps so save/reload recomputes deterministically.
+          discounts: safeDiscounts,
           review_meta,
         }),
         receiptCorrectionEvents
@@ -979,6 +1008,7 @@ export default function ScanReviewScreen() {
         tax_is_known?: boolean;
         currency?: string;
         items?: unknown[];
+        discounts?: unknown[];
         review_meta?: unknown;
         user_corrections?: unknown;
       };

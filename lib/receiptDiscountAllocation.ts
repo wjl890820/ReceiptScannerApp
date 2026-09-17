@@ -11,6 +11,22 @@ export type DiscountLine = {
    * (OCR order). Used only for safe bundle/まとめ売り allocation.
    */
   adjacentPrecedingItemIndex?: number | null;
+  /**
+   * Optional per-discount ownership attribution (analysis_json only; no SQL).
+   * When present, product-affecting coupons must be proven individually —
+   * never via aggregate allocated magnitude.
+   */
+  ownershipStatus?: 'bound' | 'unbound' | null;
+  boundItemIndex?: number | null;
+  ownershipReason?: string | null;
+};
+
+export type DiscountBinding = {
+  label: string;
+  amount: number;
+  status: 'bound' | 'unbound';
+  itemIndex: number | null;
+  reason: string;
 };
 
 export type DiscountableItem = {
@@ -35,6 +51,8 @@ export type DiscountAllocationResult<T extends DiscountableItem> = {
   /** Discounts that could not be bound to a single item (receipt-level). */
   unboundDiscounts: DiscountLine[];
   boundCount: number;
+  /** Per-discount ownership outcomes (same order as processed discounts). */
+  bindings: DiscountBinding[];
 };
 
 function grossOf(item: DiscountableItem): number {
@@ -65,15 +83,310 @@ const COUPON_NOISE = [
   'off',
 ];
 
-function couponSearchTokens(label: string): string[] {
-  let s = normalizeToken(label);
-  for (const noise of COUPON_NOISE) {
-    s = s.replace(new RegExp(noise, 'gi'), ' ');
+/** Complete tokens that are coupon syntax only (never Latin substring-deleted). */
+const COUPON_SYNTAX_TOKEN_SET = new Set(
+  COUPON_NOISE.map((t) => normalizeToken(t)).filter(Boolean)
+);
+
+/**
+ * CJK coupon markers may appear inside unspaced compounds (店舗クーポン共通).
+ * Substring removal is safe here; Latin markers like "off" must stay token-only
+ * so "coffee" is never corrupted.
+ */
+const CJK_COUPON_SUBSTRING_MARKERS = ['クーポン'] as const;
+
+function splitCjkCouponSubstrings(normalized: string): string {
+  let s = normalized;
+  for (const marker of CJK_COUPON_SUBSTRING_MARKERS) {
+    s = s.split(marker).join(' ');
   }
-  return s
+  return s;
+}
+/** Tokens that alone never justify named-product coupon ownership. */
+const GENERIC_COUPON_OWNER_TOKENS = new Set([
+  'メーカー',
+  'maker',
+  'manufacturer',
+  'store',
+  '店舗',
+  'shop',
+]);
+
+/** Store-wide / non-product coupon descriptors (genuine receipt-level OK). */
+const STORE_WIDE_COUPON_TOKENS = new Set([
+  '店舗',
+  'store',
+  'shop',
+  '共通',
+  'common',
+  '全体',
+  'receipt',
+  'レシート',
+]);
+
+const MANUFACTURER_COUPON_TOKENS = new Set([
+  'メーカー',
+  'maker',
+  'manufacturer',
+]);
+
+function couponSearchTokens(label: string): string[] {
+  // Latin coupon syntax: whole-token only (never unanchored "off"→coffee corruption).
+  // CJK クーポン: allow compound substring split for unspaced labels.
+  return splitCjkCouponSubstrings(normalizeToken(label))
     .split(/\s+/)
     .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
+    .filter((t) => t.length >= 2)
+    .filter((t) => !COUPON_SYNTAX_TOKEN_SET.has(t));
+}
+
+function labelHasCouponMarker(label: string): boolean {
+  const n = normalizeToken(label);
+  if (!n) return false;
+  return (
+    n.includes('cpn') ||
+    n.includes('coupon') ||
+    n.includes('クーポン')
+  );
+}
+
+/**
+ * Count Latin letters (incl. full-width) vs CJK/kana letters in a label.
+ * Exported for tests / diagnostics; not used as ownership evidence.
+ */
+export function couponLabelScriptCounts(label: string): {
+  latinLetters: number;
+  cjkLetters: number;
+} {
+  const raw = String(label || '');
+  let latinLetters = 0;
+  let cjkLetters = 0;
+  for (const ch of raw) {
+    if (/[A-Za-z\uFF21-\uFF3A\uFF41-\uFF5A]/.test(ch)) latinLetters += 1;
+    else if (/[\u3040-\u30FF\u3400-\u9FFF\uFF66-\uFF9D]/.test(ch)) cjkLetters += 1;
+  }
+  return { latinLetters, cjkLetters };
+}
+
+function isStoreWideCouponResidual(tokens: string[]): boolean {
+  if (tokens.length === 0) return false;
+  return tokens.every(
+    (t) => STORE_WIDE_COUPON_TOKENS.has(t) || GENERIC_COUPON_OWNER_TOKENS.has(t)
+  ) && !tokens.every((t) => MANUFACTURER_COUPON_TOKENS.has(t));
+}
+
+/**
+ * Named product coupon: coupon marker + residual product tokens.
+ * Excludes bare クーポン/CPN, manufacturer-generic, and store-wide coupons.
+ */
+export function isNamedProductCouponLabel(label: string): boolean {
+  if (!labelHasCouponMarker(label)) return false;
+  if (isReceiptLevelDiscountSummaryLabel(label)) return false;
+  if (isBundleSummaryDiscountLabel(label)) return false;
+  if (isReceiptLevelLoyaltyRedemptionLabel(label)) return false;
+  const tokens = couponSearchTokens(label);
+  if (tokens.length === 0) return false;
+  if (tokens.every((t) => GENERIC_COUPON_OWNER_TOKENS.has(t))) return false;
+  if (isStoreWideCouponResidual(tokens)) return false;
+  // At least one token must look product-descriptive (not store-wide / generic).
+  const hasProductToken = tokens.some(
+    (t) => !STORE_WIDE_COUPON_TOKENS.has(t) && !GENERIC_COUPON_OWNER_TOKENS.has(t)
+  );
+  return hasProductToken;
+}
+
+/**
+ * Unallocated coupon that must fail closed for merchandise price trust.
+ * Narrow: named product CPN, bare coupon, manufacturer coupon.
+ * Does NOT include genuine store-wide coupons (店舗クーポン共通) or loyalty.
+ */
+export function isProductAffectingCouponLabel(label: string): boolean {
+  if (!labelHasCouponMarker(label)) return false;
+  if (isReceiptLevelLoyaltyRedemptionLabel(label)) return false;
+  if (isBundleSummaryDiscountLabel(label)) return false;
+  if (isReceiptLevelDiscountSummaryLabel(label)) return false;
+  if (isNamedProductCouponLabel(label)) return true;
+  const tokens = couponSearchTokens(label);
+  if (tokens.length === 0) return true; // bare クーポン / CPN
+  if (tokens.every((t) => MANUFACTURER_COUPON_TOKENS.has(t))) return true;
+  return false;
+}
+
+/**
+ * Ownership allocation agreement uses exact canonical money equality.
+ * Do NOT reuse receipt-reconciliation ±2 tolerance here (Receipt074 Round 5).
+ */
+function ownershipAmountsEqual(a: number, b: number): boolean {
+  return Number.isFinite(a) && Number.isFinite(b) && a === b;
+}
+
+/**
+ * Receipt074 Round 5 — per-discount product-coupon unresolved check.
+ *
+ * Persisted coupon-specific allocation must exactly equal current
+ * recomputation at the canonical stored money representation.
+ */
+export function hasUnresolvedProductAffectingCoupons(
+  items: DiscountableItem[],
+  discounts: DiscountLine[],
+  options?: { evidenceTexts?: string[] }
+): boolean {
+  const productCoupons = discounts.filter((d) =>
+    isProductAffectingCouponLabel(d.label)
+  );
+  if (productCoupons.length === 0) return false;
+
+  const probe = applyReceiptDiscountsToItems(items, discounts, {
+    evidenceTexts: options?.evidenceTexts ?? [],
+  });
+
+  for (const d of productCoupons) {
+    const amount = Number(d.amount);
+    if (!Number.isFinite(amount) || amount === 0) continue;
+    const delta = amount < 0 ? amount : -Math.abs(amount);
+    const binding = probe.bindings.find(
+      (b) =>
+        b.label === d.label && Math.abs(b.amount) === Math.abs(delta)
+    );
+
+    // Current resolver cannot prove ownership → unresolved.
+    if (!binding || binding.status !== 'bound' || binding.itemIndex == null) {
+      return true;
+    }
+
+    if (!isValidBoundItemIndex(binding.itemIndex, items.length)) {
+      return true;
+    }
+
+    if (
+      !isAcceptedDeterministicOwnershipReason(binding.reason) &&
+      binding.reason !== 'duplicate_same_magnitude_skipped'
+    ) {
+      return true;
+    }
+
+    const idx = binding.itemIndex;
+    const persistedItem = items[idx];
+    const probeItem = probe.items[idx];
+    const persistedAlloc = Number(persistedItem?.discountAllocated);
+    const probeAlloc = Number(probeItem?.discountAllocated);
+    const gross = grossOf(persistedItem ?? {});
+    const effective = Number(persistedItem?.effectiveLineTotal);
+
+    const claimingPersistedBound = d.ownershipStatus === 'bound';
+    const hasPersistedAllocField = Number.isFinite(persistedAlloc);
+    const hasEffectiveField = Number.isFinite(effective);
+    const needsPersistedAllocationAgreement =
+      claimingPersistedBound ||
+      (hasPersistedAllocField && persistedAlloc !== 0) ||
+      (hasEffectiveField &&
+        Number.isFinite(gross) &&
+        !ownershipAmountsEqual(effective, gross));
+
+    if (claimingPersistedBound) {
+      if (!isValidBoundItemIndex(d.boundItemIndex, items.length)) {
+        return true;
+      }
+      if (d.boundItemIndex !== binding.itemIndex) {
+        return true;
+      }
+      if (
+        d.ownershipReason != null &&
+        d.ownershipReason !== '' &&
+        !isAcceptedDeterministicOwnershipReason(d.ownershipReason)
+      ) {
+        return true;
+      }
+      if (
+        binding.reason != null &&
+        binding.reason !== '' &&
+        !isAcceptedDeterministicOwnershipReason(binding.reason) &&
+        binding.reason !== 'duplicate_same_magnitude_skipped'
+      ) {
+        return true;
+      }
+    }
+
+    if (!needsPersistedAllocationAgreement) {
+      continue;
+    }
+
+    // Exact persisted ↔ recomputed item allocation agreement.
+    if (!Number.isFinite(probeAlloc) || !Number.isFinite(persistedAlloc)) {
+      return true;
+    }
+    if (!ownershipAmountsEqual(persistedAlloc, probeAlloc)) {
+      return true;
+    }
+
+    // Effective must agree with gross + allocated discount (exact).
+    if (!Number.isFinite(gross) || !Number.isFinite(effective)) {
+      return true;
+    }
+    if (!ownershipAmountsEqual(effective, gross + persistedAlloc)) {
+      return true;
+    }
+
+    // Coupon-specific attribution: count product-affecting bindings on this item.
+    const productBindingsOnItem = probe.bindings.filter(
+      (b) =>
+        b.status === 'bound' &&
+        b.itemIndex === idx &&
+        isProductAffectingCouponLabel(b.label)
+    );
+
+    if (productBindingsOnItem.length > 1) {
+      // No per-discount persisted amount field — refuse aggregate absorption.
+      return true;
+    }
+
+    // Single product-affecting coupon on the item: coupon delta must equal the
+    // product-coupon portion when no other discounts share the item.
+    if (productBindingsOnItem.length === 1) {
+      const otherBoundOnItem = probe.bindings.filter(
+        (b) =>
+          b.status === 'bound' &&
+          b.itemIndex === idx &&
+          !(
+            b.label === d.label && Math.abs(b.amount) === Math.abs(delta)
+          )
+      );
+      if (otherBoundOnItem.length === 0) {
+        if (!ownershipAmountsEqual(persistedAlloc, delta)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Clear product-affecting coupon ownership stamps so reload recomputes.
+ * Used after Review mutations that can invalidate boundItemIndex / lexical proof.
+ */
+export function invalidateProductCouponOwnershipMetadata(
+  discounts: DiscountLine[] | null | undefined
+): DiscountLine[] {
+  if (!Array.isArray(discounts) || discounts.length === 0) return [];
+  return discounts.map((d) => {
+    if (!isProductAffectingCouponLabel(d.label)) return { ...d };
+    return {
+      ...d,
+      ownershipStatus: null,
+      boundItemIndex: null,
+      ownershipReason: null,
+    };
+  });
+}
+
+/** @deprecated Use hasUnresolvedProductAffectingCoupons (per-discount). */
+export function hasUnallocatedProductAffectingCoupon(
+  items: DiscountableItem[],
+  discounts: DiscountLine[],
+  _toleranceJpy = 2
+): boolean {
+  return hasUnresolvedProductAffectingCoupons(items, discounts);
 }
 
 function toLoyaltyLabelKey(name: string): string {
@@ -273,25 +586,202 @@ export function findAdjacentProductDiscountItemIndex(
   return adj;
 }
 
+/** Tokens that never independently prove coupon→item ownership. */
+const GENERIC_LEXICAL_OWNERSHIP_TOKENS = new Set([
+  'free',
+  'new',
+  'original',
+  'regular',
+  'large',
+  'small',
+  'organic',
+  'natural',
+  'fresh',
+  'special',
+  'sale',
+  'pack',
+  'set',
+  'size',
+  'value',
+  'select',
+  'premium',
+  'classic',
+  'style',
+]);
+
+function isCjkToken(token: string): boolean {
+  return /[\u3040-\u30FF\u3400-\u9FFF\uFF66-\uFF9D]/.test(token);
+}
+
 /**
- * Bind a discount to an item when the coupon label strongly references it.
- * Example: "ROCHER ORIGINS CPN" → item containing "ROCHER".
- * Never guesses when ambiguous — leaves receipt-level.
+ * Informative coupon tokens after noise + generic ownership stop-words.
+ */
+export function informativeCouponOwnershipTokens(label: string): string[] {
+  return couponSearchTokens(label).filter(
+    (t) => !GENERIC_LEXICAL_OWNERSHIP_TOKENS.has(t)
+  );
+}
+
+function singularizeOwnershipToken(token: string): string {
+  if (!token || isCjkToken(token)) return token;
+  if (token.length >= 4 && token.endsWith('ies')) {
+    return `${token.slice(0, -3)}y`;
+  }
+  if (token.length >= 3 && token.endsWith('s') && !token.endsWith('ss')) {
+    return token.slice(0, -1);
+  }
+  return token;
+}
+
+/** Explicit packaging / count / measure tokens (not base product identity). */
+function isOwnershipPackageToken(token: string): boolean {
+  if (!token) return false;
+  if (/^\d+[a-z]*$/i.test(token)) return true;
+  if (/^x\d+$/i.test(token)) return true;
+  if (/^\d+x\d+$/i.test(token)) return true;
+  return false;
+}
+
+function normalizeOwnershipPackageKey(token: string): string {
+  const lower = token.toLowerCase();
+  let m: RegExpMatchArray | null;
+  if ((m = lower.match(/^(\d+)(?:p|ct|pcs|pc|pk)$/))) return `count:${m[1]}`;
+  if ((m = lower.match(/^x(\d+)$/))) return `mult:${m[1]}`;
+  if ((m = lower.match(/^(\d+)x(\d+)$/))) return `grid:${m[1]}x${m[2]}`;
+  if ((m = lower.match(/^(\d+(?:\.\d+)?)(ml|l|g|kg)$/))) {
+    return `meas:${m[1]}${m[2]}`;
+  }
+  if (/^\d+$/.test(lower)) return `count:${lower}`;
+  return lower;
+}
+
+function tokenizeForOwnership(label: string): string[] {
+  return splitCjkCouponSubstrings(normalizeToken(label))
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+}
+
+function stripCouponSyntaxOwnershipTokens(tokens: string[]): string[] {
+  return tokens.filter((t) => !COUPON_SYNTAX_TOKEN_SET.has(t));
+}
+
+/**
+ * Base product-identity tokens for coupon ownership.
+ * Preserves variant-bearing descriptors (large/organic/original/free/…).
+ * Removes only coupon syntax tokens and packaging/count tokens.
+ */
+export function ownershipBaseIdentityTokens(label: string): string[] {
+  return stripCouponSyntaxOwnershipTokens(tokenizeForOwnership(label))
+    .filter((t) => !isOwnershipPackageToken(t))
+    .map(singularizeOwnershipToken)
+    .filter((t) => t.length >= 2 || isCjkToken(t));
+}
+
+export function ownershipBaseIdentityKey(label: string): string {
+  return [...ownershipBaseIdentityTokens(label)].sort().join(' ');
+}
+
+/**
+ * Explicit packaging/count evidence extracted for ownership compatibility.
+ * Coupon omission is allowed; coupon assertion without merchandise proof is not.
+ */
+export function ownershipPackageEvidenceKeys(label: string): string[] {
+  const fromTokens = stripCouponSyntaxOwnershipTokens(tokenizeForOwnership(label))
+    .filter(isOwnershipPackageToken)
+    .map(normalizeOwnershipPackageKey);
+  return [...new Set(fromTokens)].sort();
+}
+
+function packageEvidenceCompatible(
+  couponKeys: readonly string[],
+  itemKeys: readonly string[]
+): boolean {
+  if (couponKeys.length === 0) return true;
+  if (itemKeys.length === 0) return false;
+  return couponKeys.every((key) => itemKeys.includes(key));
+}
+
+/** @deprecated Prefer ownershipBaseIdentityTokens (Round 6). */
+export function productCoreOwnershipTokens(label: string): string[] {
+  return ownershipBaseIdentityTokens(label);
+}
+
+/** @deprecated Prefer ownershipBaseIdentityKey (Round 6). */
+export function productCoreOwnershipKey(label: string): string {
+  return ownershipBaseIdentityKey(label);
+}
+
+export const ACCEPTED_DETERMINISTIC_OWNERSHIP_REASONS = new Set([
+  'strong_lexical_token_coverage',
+  'lexical_token_unique', // legacy synonym accepted on revalidation
+  'ordinary_adjacent_product_discount',
+  'bundle_summary_evidence',
+]);
+
+export function isAcceptedDeterministicOwnershipReason(
+  reason: string | null | undefined
+): boolean {
+  if (reason == null || reason === '') return false;
+  return ACCEPTED_DETERMINISTIC_OWNERSHIP_REASONS.has(reason);
+}
+
+export function isValidBoundItemIndex(
+  index: unknown,
+  itemCount: number
+): index is number {
+  return (
+    typeof index === 'number' &&
+    Number.isInteger(index) &&
+    Number.isFinite(index) &&
+    index >= 0 &&
+    index < itemCount
+  );
+}
+
+/**
+ * Bind a discount when coupon and merchandise base identity match exactly,
+ * and explicit packaging/count evidence is compatible (Receipt074 Round 6).
+ *
+ * - Coupon syntax removed as whole tokens only
+ * - Variant descriptors retained (LARGE / ORGANIC / ORIGINAL / FREE / …)
+ * - Base identity equality (not subset)
+ * - Coupon pack/count assertion must be compatible with merchandise evidence
+ * - Coupon pack omission alone does not block
  */
 export function findDiscountItemIndex(
   items: DiscountableItem[],
   discount: DiscountLine
 ): number {
-  const tokens = couponSearchTokens(discount.label);
-  if (tokens.length === 0) return -1;
+  const couponBase = ownershipBaseIdentityTokens(discount.label);
+  if (couponBase.length < 2) return -1;
+  const couponKey = [...couponBase].sort().join(' ');
+  if (!couponKey) return -1;
+  const couponPack = ownershipPackageEvidenceKeys(discount.label);
 
   const matches: number[] = [];
   for (let i = 0; i < items.length; i++) {
-    const name = normalizeToken(String(items[i]?.name ?? ''));
-    if (!name) continue;
-    if (grossOf(items[i]) <= 0) continue;
-    const hit = tokens.some((token) => name.includes(token));
-    if (hit) matches.push(i);
+    const itemName = String(items[i]?.name ?? '');
+    const itemBase = ownershipBaseIdentityTokens(itemName);
+    const itemKey = [...itemBase].sort().join(' ');
+    if (!itemKey || itemKey !== couponKey) continue;
+    if (
+      !packageEvidenceCompatible(
+        couponPack,
+        ownershipPackageEvidenceKeys(itemName)
+      )
+    ) {
+      continue;
+    }
+
+    const gross = grossOf(items[i]);
+    if (gross <= 0) continue;
+    const amount = Number(discount.amount);
+    if (Number.isFinite(amount) && amount !== 0) {
+      const absDisc = Math.abs(amount < 0 ? amount : -Math.abs(amount));
+      if (absDisc > gross) continue;
+    }
+    matches.push(i);
   }
   return matches.length === 1 ? matches[0] : -1;
 }
@@ -458,6 +948,8 @@ export function liftCollapsedGrossUsingInlineOriginalPriceEvidence<
  *
  * Structured inline-original discounts (値下(元 N)) first lift collapsed
  * charged-as-gross lineTotals when exact yen evidence closes, then bind.
+ *
+ * Receipt074 Round 2: no cross-script named-adjacent CPN guessing.
  */
 export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
   items: T[],
@@ -479,6 +971,7 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
   });
 
   const unboundDiscounts: DiscountLine[] = [];
+  const bindings: DiscountBinding[] = [];
   let boundCount = 0;
   const evidenceTexts = options?.evidenceTexts ?? [];
 
@@ -493,21 +986,44 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
       unboundDiscounts.push({
         label: discount.label,
         amount: delta,
+        ownershipStatus: 'unbound',
+        boundItemIndex: null,
+        ownershipReason: 'loyalty_redemption_receipt_level',
+      });
+      bindings.push({
+        label: discount.label,
+        amount: delta,
+        status: 'unbound',
+        itemIndex: null,
+        reason: 'loyalty_redemption_receipt_level',
       });
       continue;
     }
 
     let idx = findDiscountItemIndex(next, discount);
+    let reason = 'strong_lexical_token_coverage';
     if (idx < 0 && isBundleSummaryDiscountLabel(discount.label)) {
       idx = findBundleDiscountItemIndex(next, discount, evidenceTexts);
+      reason = 'bundle_summary_evidence';
     }
     if (idx < 0) {
       idx = findAdjacentProductDiscountItemIndex(next, discount);
+      reason = 'ordinary_adjacent_product_discount';
     }
     if (idx < 0) {
       unboundDiscounts.push({
         label: discount.label,
         amount: delta,
+        ownershipStatus: 'unbound',
+        boundItemIndex: null,
+        ownershipReason: 'no_deterministic_ownership',
+      });
+      bindings.push({
+        label: discount.label,
+        amount: delta,
+        status: 'unbound',
+        itemIndex: null,
+        reason: 'no_deterministic_ownership',
       });
       continue;
     }
@@ -516,10 +1032,18 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
     // onto one line (Build 27 Sample 058: 210→196).
     if (
       isBundleSummaryDiscountLabel(discount.label) ||
-      isOrdinaryAdjacentProductDiscountLabel(discount.label)
+      isOrdinaryAdjacentProductDiscountLabel(discount.label) ||
+      isNamedProductCouponLabel(discount.label)
     ) {
       const prevAbs = Math.abs(Number(item.discountAllocated) || 0);
       if (prevAbs > 0 && prevAbs === absDisc) {
+        bindings.push({
+          label: discount.label,
+          amount: delta,
+          status: 'bound',
+          itemIndex: idx,
+          reason: 'duplicate_same_magnitude_skipped',
+        });
         continue;
       }
     }
@@ -534,9 +1058,16 @@ export function applyReceiptDiscountsToItems<T extends DiscountableItem>(
       effectiveLineTotal: effective,
     };
     boundCount += 1;
+    bindings.push({
+      label: discount.label,
+      amount: delta,
+      status: 'bound',
+      itemIndex: idx,
+      reason,
+    });
   }
 
-  return { items: next, unboundDiscounts, boundCount };
+  return { items: next, unboundDiscounts, boundCount, bindings };
 }
 
 /**

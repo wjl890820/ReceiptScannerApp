@@ -27,7 +27,7 @@ import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart'
 import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
 import { listReceipts } from '@/lib/db';
 import { formatDate } from '@/lib/formatDate';
-import { formatJPY } from '@/lib/formatJPY';
+import { formatProductPriceAmount } from '@/lib/productPricePresentation';
 import { getCurrentLocale, t } from '@/lib/i18n';
 import {
   formatProductSpecification,
@@ -50,8 +50,7 @@ import {
 } from '@/lib/productPriceHistory';
 
 function formatCurrency(amount: number, currency: string): string {
-  if (currency === 'JPY') return formatJPY(amount);
-  return `${currency} ${amount.toLocaleString()}`;
+  return formatProductPriceAmount(amount, currency);
 }
 
 export default function ProductDetailScreen() {
@@ -379,7 +378,7 @@ export default function ProductDetailScreen() {
                 <Text style={styles.summaryValue}>
                   {formatCurrency(summary.totalSpend, summary.currency)}
                 </Text>
-              ) : (
+              ) : summary.currencyTotals.length > 0 ? (
                 summary.currencyTotals.map((currencyTotal) => (
                   <Text
                     key={currencyTotal.currency}
@@ -391,6 +390,8 @@ export default function ProductDetailScreen() {
                     )}
                   </Text>
                 ))
+              ) : (
+                <Text style={styles.summaryValue}>—</Text>
               )}
             </View>
             </View>

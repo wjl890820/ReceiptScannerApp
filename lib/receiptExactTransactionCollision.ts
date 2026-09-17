@@ -4,12 +4,15 @@
  * This is intentionally NOT canonical analytics duplicate truth. It may only
  * authorize low-consequence suppression and the non-destructive Scan Review
  * "may already be saved" surface.
+ *
+ * Transaction identity (same physical purchase) is deliberately separate from
+ * product-level monetary attribution (trusted spend / PPH). Unresolved product
+ * coupon ownership must not block duplicate detection.
  */
 
 import type { ReceiptRow } from './db';
 import { AMOUNT_BASIS_TOLERANCE_JPY } from './analysisFoundation/amountBasis';
 import { hasExactTransactionTime } from './receiptExactTransactionTime';
-import { buildReceiptMonetaryCoherenceEvidence } from './receiptEvidenceTruth/monetaryCoherenceEvidence';
 import {
   isShadowAuthorizingCurrency,
   normalizeShadowCurrency,
@@ -17,7 +20,7 @@ import {
 import { deriveRetailerIdentity } from './retailerIdentity';
 
 export const EXACT_TRANSACTION_COLLISION_VERSION =
-  'meruno-exact-transaction-collision-v1' as const;
+  'meruno-exact-transaction-collision-v2' as const;
 
 export type ExactTransactionCollisionReason =
   | 'same_receipt'
@@ -35,8 +38,7 @@ export type ExactTransactionCollisionReason =
   | 'tax_invalid'
   | 'tax_mismatch'
   | 'basket_invalid'
-  | 'basket_mismatch'
-  | 'monetary_evidence_not_coherent';
+  | 'basket_mismatch';
 
 export type ExactTransactionReceiptCollision = {
   collided: true;
@@ -80,11 +82,11 @@ type CollisionMonetaryBasketRow = {
   lineAmount: number;
 };
 
-const COLLISION_AMOUNT_KEYS = [
+/** Raw/gross merchandise amount aliases only — never effective/attributable. */
+const COLLISION_GROSS_AMOUNT_KEYS = [
   'lineTotal',
   'line_total',
   'amount',
-  'effectiveLineTotal',
 ] as const;
 
 function parseCollisionBasketItems(
@@ -114,12 +116,17 @@ function collisionQuantity(row: Record<string, unknown>): number | null {
     : null;
 }
 
-function collisionLineAmount(row: Record<string, unknown>): number | null {
+/**
+ * Duplicate-identity amount: raw/gross merchandise only.
+ * Ignores effectiveLineTotal so resolved coupons (gross≠effective) do not
+ * invalidate the basket. Conflicting gross aliases still fail closed.
+ */
+function collisionGrossLineAmount(row: Record<string, unknown>): number | null {
   const values: number[] = [];
-  for (const key of COLLISION_AMOUNT_KEYS) {
+  for (const key of COLLISION_GROSS_AMOUNT_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
     const value = row[key];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
       return null;
     }
     values.push(value);
@@ -136,7 +143,11 @@ function collisionLineAmount(row: Record<string, unknown>): number | null {
   return first;
 }
 
-function validateEffectiveBasket(
+/**
+ * Ordered raw merchandise basket for transaction identity.
+ * Skips non-positive rows (coupon/adjustment lines preserved elsewhere).
+ */
+function validateRawMerchandiseBasket(
   receipt: ReceiptRow
 ): readonly CollisionMonetaryBasketRow[] | null {
   const items = parseCollisionBasketItems(receipt);
@@ -145,12 +156,14 @@ function validateEffectiveBasket(
   for (const raw of items) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const row = raw as Record<string, unknown>;
+    const gross = collisionGrossLineAmount(row);
+    // Coupon / adjustment lines are not merchandise identity rows.
+    if (gross != null && gross <= 0) continue;
     const quantity = collisionQuantity(row);
-    const lineAmount = collisionLineAmount(row);
-    if (quantity == null || lineAmount == null) return null;
-    rows.push({ quantity, lineAmount });
+    if (quantity == null || gross == null) return null;
+    rows.push({ quantity, lineAmount: gross });
   }
-  return rows;
+  return rows.length > 0 ? rows : null;
 }
 
 function collisionBasketVectorsEqual(
@@ -215,6 +228,7 @@ function buildEvidenceKey(input: {
 /**
  * Prove a low-consequence exact-transaction collision.
  * Product OCR names are deliberately not compared and never enter evidenceKey.
+ * Product coupon ownership / monetaryProvenanceSufficient are not required.
  */
 export function evaluateExactTransactionReceiptCollision(
   left: ReceiptRow,
@@ -305,24 +319,13 @@ export function evaluateExactTransactionReceiptCollision(
     return { collided: false, reason: 'tax_mismatch' };
   }
 
-  const leftBasket = validateEffectiveBasket(left);
-  const rightBasket = validateEffectiveBasket(right);
+  const leftBasket = validateRawMerchandiseBasket(left);
+  const rightBasket = validateRawMerchandiseBasket(right);
   if (!leftBasket || !rightBasket || leftBasket.length === 0 || rightBasket.length === 0) {
     return { collided: false, reason: 'basket_invalid' };
   }
   if (!collisionBasketVectorsEqual(leftBasket, rightBasket)) {
     return { collided: false, reason: 'basket_mismatch' };
-  }
-
-  const leftMonetary = buildReceiptMonetaryCoherenceEvidence(left);
-  const rightMonetary = buildReceiptMonetaryCoherenceEvidence(right);
-  if (
-    leftMonetary.state !== 'known_coherent' ||
-    rightMonetary.state !== 'known_coherent' ||
-    !leftMonetary.monetaryProvenanceSufficient ||
-    !rightMonetary.monetaryProvenanceSufficient
-  ) {
-    return { collided: false, reason: 'monetary_evidence_not_coherent' };
   }
 
   const transactionAt = left.transaction_at as number;
@@ -359,8 +362,8 @@ export function evaluateExactTransactionReceiptCollision(
       'currency=JPY',
       'exact_positive_total',
       'both_tax_known_equal',
-      'exact_ordered_quantity_line_amount_vector',
-      'monetary_provenance_coherent',
+      'exact_ordered_raw_merchandise_basket',
+      'product_monetary_provenance_not_required',
       'product_names_not_used',
     ],
   };

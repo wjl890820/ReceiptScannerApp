@@ -855,7 +855,7 @@ describe('A1.4A Receipt Evidence Truth Layer (v3 hardening)', () => {
         analysis: {
           discounts: [
             {
-              label: 'CPN A',
+              label: '店舗クーポン共通',
               amount: -10,
               adjacentPrecedingItemIndex: 0,
             },
@@ -895,7 +895,7 @@ describe('A1.4A Receipt Evidence Truth Layer (v3 hardening)', () => {
         ],
         analysis: {
           discounts: [
-            { label: 'CPN A', amount: -10, adjacentPrecedingItemIndex: 0 },
+            { label: '店舗クーポン共通', amount: -10, adjacentPrecedingItemIndex: 0 },
           ],
         },
       });
@@ -995,7 +995,7 @@ describe('A1.4A Receipt Evidence Truth Layer (v3 hardening)', () => {
         analysis: {
           discounts: [
             {
-              label: 'CPN A',
+              label: '店舗クーポン共通',
               amount: -10,
               adjacentPrecedingItemIndex: 0,
             },

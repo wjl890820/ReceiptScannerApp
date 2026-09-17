@@ -26,6 +26,7 @@ import {
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { deleteReceipts, getReceiptsDatabase, listAllReceiptsForCurrentOwnerPurchaseTruth, listReceipts, type ReceiptListRow } from '@/lib/db';
 import { formatJPY } from '@/lib/formatJPY';
+import { formatProductPriceAmount } from '@/lib/productPricePresentation';
 import { getCurrentLocale, t } from '@/lib/i18n';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import {
@@ -647,7 +648,12 @@ export default function HistoryScreen() {
                   : null,
               ].filter((value): value is string => Boolean(value));
               const totalLabel =
-                result.lineTotal == null ? '—' : formatJPY(result.lineTotal);
+                result.lineTotal == null
+                  ? '—'
+                  : formatProductPriceAmount(
+                      result.lineTotal,
+                      result.currency
+                    );
               return (
                 <MerunoGroupedRow
                   onPress={() => onProductSearchResultPress(result)}
