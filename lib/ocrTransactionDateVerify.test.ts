@@ -12,7 +12,7 @@ import {
 const NOW_MS = Date.parse('2026-08-20T12:00:00+09:00');
 
 describe('B3 transactionDate verification', () => {
-  it('A — Sample 081 abstraction: Costco primary plausible wrong year corrected by verifier', async () => {
+  it('A — Sample 081: year conflict preserves valid primary (no silent verifier year replace)', async () => {
     const verifyFn = jest.fn().mockResolvedValue({
       transactionDate: '07/06/2023 11:44:46',
     });
@@ -28,8 +28,8 @@ describe('B3 transactionDate verification', () => {
     expect(out.verificationRequired).toBe(true);
     expect(out.verifierCalled).toBe(true);
     expect(verifyFn).toHaveBeenCalledTimes(1);
-    expect(out.finalTransactionDate).toBe('07/06/2023 11:44:46');
-    expect(out.shouldCache).toBe(true);
+    expect(out.finalTransactionDate).toBe('07/06/2026 11:44:46');
+    expect(out.shouldCache).toBe(false);
   });
 
   it('B — Costco correct primary: verifier confirms same printed date', async () => {
@@ -47,6 +47,90 @@ describe('B3 transactionDate verification', () => {
     expect(verifyFn).toHaveBeenCalledTimes(1);
     expect(out.finalTransactionDate).toBe('06/10/2026 10:50:58');
     expect(out.shouldCache).toBe(true);
+  });
+
+  it('Receipt080 D2 — verifier conflicting calendar day cannot silently replace valid primary', () => {
+    const out = resolveFinalTransactionDate({
+      verificationRequired: true,
+      primaryDate: '07/05/2023 11:44:46',
+      verifierDate: '07/06/2023 11:44:46',
+      verifierCallSucceeded: true,
+      merchant: 'コストコ',
+      nowMs: NOW_MS,
+    });
+    expect(out.finalTransactionDate).toBe('07/05/2023 11:44:46');
+    expect(out.acceptOutcome).toBe('primary_verifier_calendar_conflict');
+    expect(out.shouldCache).toBe(false);
+  });
+
+  it('Receipt080 D1 — same calendar day accepted', () => {
+    const out = resolveFinalTransactionDate({
+      verificationRequired: true,
+      primaryDate: '07/05/2023 11:44:46',
+      verifierDate: '07/05/2023 11:44:46',
+      verifierCallSucceeded: true,
+      merchant: 'コストコ',
+      nowMs: NOW_MS,
+    });
+    expect(out.finalTransactionDate).toBe('07/05/2023 11:44:46');
+    expect(out.acceptOutcome).toBe('accepted');
+    expect(out.shouldCache).toBe(true);
+  });
+
+  it('Receipt080 D3 — missing primary uses valid verifier', () => {
+    const out = resolveFinalTransactionDate({
+      verificationRequired: true,
+      primaryDate: null,
+      verifierDate: '07/05/2023 11:44:46',
+      verifierCallSucceeded: true,
+      merchant: 'コストコ',
+      nowMs: NOW_MS,
+    });
+    expect(out.finalTransactionDate).toBe('07/05/2023 11:44:46');
+    expect(out.acceptOutcome).toBe('accepted');
+    expect(out.shouldCache).toBe(true);
+  });
+
+  it('Receipt080 D4 — verifier may reformat same calendar day', () => {
+    const out = resolveFinalTransactionDate({
+      verificationRequired: true,
+      primaryDate: '07/05/2023 11:44:46',
+      verifierDate: '2023-07-05 11:44:46',
+      verifierCallSucceeded: true,
+      merchant: 'コストコ',
+      nowMs: NOW_MS,
+    });
+    expect(out.finalTransactionDate).toBe('2023-07-05 11:44:46');
+    expect(out.acceptOutcome).toBe('accepted');
+    expect(out.shouldCache).toBe(true);
+  });
+
+  it('Receipt080 D5 — year conflict preserves primary 2023, no cache', () => {
+    const out = resolveFinalTransactionDate({
+      verificationRequired: true,
+      primaryDate: '07/05/2023 11:44:46',
+      verifierDate: '07/05/2024 11:44:46',
+      verifierCallSucceeded: true,
+      merchant: 'コストコ',
+      nowMs: NOW_MS,
+    });
+    expect(out.finalTransactionDate).toBe('07/05/2023 11:44:46');
+    expect(out.acceptOutcome).toBe('primary_verifier_calendar_conflict');
+    expect(out.shouldCache).toBe(false);
+  });
+
+  it('Receipt080 D6 — year conflict preserves primary 2024, no cache', () => {
+    const out = resolveFinalTransactionDate({
+      verificationRequired: true,
+      primaryDate: '07/05/2024 11:44:46',
+      verifierDate: '07/05/2023 11:44:46',
+      verifierCallSucceeded: true,
+      merchant: 'コストコ',
+      nowMs: NOW_MS,
+    });
+    expect(out.finalTransactionDate).toBe('07/05/2024 11:44:46');
+    expect(out.acceptOutcome).toBe('primary_verifier_calendar_conflict');
+    expect(out.shouldCache).toBe(false);
   });
 
   it('C — Costco primary plausible, verifier null => final null, do not cache', async () => {
@@ -190,8 +274,8 @@ describe('B3 Edge contract (source)', () => {
   );
 
   it('I — cache v14 stores post-verification analysis; date verify model configured', () => {
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*14/);
-    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*13[^\d]/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*15/);
+    expect(edgeSource).not.toMatch(/OCR_CACHE_VERSION\s*=\s*14[^\d]/);
     expect(edgeSource).toContain('OCR_DATE_VERIFY_MODEL');
     expect(edgeSource).toContain("gemini-3.5-flash'");
     expect(edgeSource).toContain('buildDateVerifyPrompt');

@@ -51,7 +51,9 @@ describe('DS-4 Scan Review presentation contracts', () => {
   });
 
   it('preserves amountMismatch and dateNeedsConfirm trust signals', () => {
-    expect(screen).toContain('amountMismatch={Boolean(snapshot?.amount_mismatch)}');
+    expect(screen).toContain('amountMismatch={');
+    expect(screen).toContain('snapshot?.amount_mismatch');
+    expect(screen).toContain('saveBlockedByOverage');
     expect(screen).toContain('dateNeedsConfirm={reviewDateNeedsConfirm(dateStr, merchant)}');
     expect(summary).toContain('amountMismatch');
     expect(summary).toContain('dateNeedsConfirm');

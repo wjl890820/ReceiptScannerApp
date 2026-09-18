@@ -198,7 +198,7 @@ describe('Gate 1.1 edge contract + regression freeze', () => {
     expect(diagFn).not.toContain('identityToken');
   });
 
-  it('12 — Sample 081 Costco accepted date still caches', async () => {
+  it('12 — Sample 081 Costco year conflict preserves primary and does not cache', async () => {
     const out = await applyTransactionDateVerification({
       merchant: 'COSTCO WHOLESALE',
       primaryDate: '07/06/2026 11:44:46',
@@ -206,14 +206,15 @@ describe('Gate 1.1 edge contract + regression freeze', () => {
       nowMs: NOW_MS,
       verifyFn: async () => ({ transactionDate: '07/06/2023 11:44:46' }),
     });
-    expect(out.finalTransactionDate).toBe('07/06/2023 11:44:46');
-    expect(out.shouldCache).toBe(true);
+    // Receipt080 A2: Y/M/D conflict → keep primary, shouldCache=false
+    expect(out.finalTransactionDate).toBe('07/06/2026 11:44:46');
+    expect(out.shouldCache).toBe(false);
   });
 
   it('13 — Sample 007 Costco still requires verification (no hardcode)', () => {
     expect(edgeSource).not.toContain('Sample 077');
     expect(edgeSource).not.toContain('06/10/2026');
-    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*14/);
+    expect(edgeSource).toMatch(/OCR_CACHE_VERSION\s*=\s*15/);
   });
 
   it('14 — Sample 029 AEON still skips verifier when date plausible', async () => {

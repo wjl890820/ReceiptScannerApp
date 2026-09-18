@@ -116,7 +116,8 @@ describe('OCR provenance — buildFreshRunProvenance', () => {
     expect(p.dateVerification.model).toBe('gemini-3.5-flash');
     expect(p.dateVerification.primaryTransactionDate).toBe('07/06/2026 11:44:46');
     expect(p.dateVerification.verifiedTransactionDate).toBe('07/06/2023 11:44:46');
-    expect(p.dateVerification.finalTransactionDate).toBe('07/06/2023 11:44:46');
+    // Receipt080 A2: calendar Y/M/D conflict preserves valid primary (no silent year replace).
+    expect(p.dateVerification.finalTransactionDate).toBe('07/06/2026 11:44:46');
     expect(p.dateVerification.verifierSucceeded).toBe(true);
   });
 });
@@ -375,7 +376,9 @@ describe('Build 34 semantic regression (analysis unchanged by provenance layer)'
       nowMs: NOW_MS,
       verifyFn,
     });
-    expect(out.finalTransactionDate).toBe('07/06/2023 11:44:46');
+    // Receipt080 A2: year/day conflict keeps primary; verifier must not silently win.
+    expect(out.finalTransactionDate).toBe('07/06/2026 11:44:46');
+    expect(out.shouldCache).toBe(false);
   });
 });
 

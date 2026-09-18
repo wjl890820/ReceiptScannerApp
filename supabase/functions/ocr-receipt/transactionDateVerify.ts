@@ -236,7 +236,9 @@ export type VerifierAcceptOutcome =
   | 'missing_four_digit_year'
   | 'unparseable'
   | 'out_of_window'
-  | 'api_failure';
+  | 'api_failure'
+  /** Valid primary kept because verifier differed on year/month/day. */
+  | 'primary_verifier_calendar_conflict';
 
 export type ClassifyVerifierAcceptResult = {
   accepted: string | null;
@@ -292,16 +294,31 @@ export type ResolveFinalTransactionDateResult = {
   acceptOutcome: VerifierAcceptOutcome;
 };
 
+function tokyoYmd(ts: number): { y: number; m: number; d: number } | null {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ts));
+  const y = Number(parts.find((p) => p.type === 'year')?.value);
+  const m = Number(parts.find((p) => p.type === 'month')?.value);
+  const d = Number(parts.find((p) => p.type === 'day')?.value);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  return { y, m, d };
+}
+
 /**
- * When verification is required, verifier is authoritative if valid; else null.
- * Never fall back to suspicious primary.
- * Transient verifier API failure => no cache.
- * Verifier API success but no accepted date => no cache (avoid durable negative cache).
+ * When verification is required:
+ * - same calendar day (reformat OK): verifier may confirm; cache allowed
+ * - any Y/M/D disagreement with valid primary: preserve primary, no durable cache
+ * - missing/invalid primary: verifier may supply; cache allowed
  */
 export function resolveFinalTransactionDate(
   params: ResolveFinalTransactionDateParams
 ): ResolveFinalTransactionDateResult {
   const nowMs = params.nowMs ?? Date.now();
+  const merchant = params.merchant;
 
   if (!params.verificationRequired) {
     const primary =
@@ -325,14 +342,77 @@ export function resolveFinalTransactionDate(
 
   const classified = classifyVerifierAcceptOutcome(
     params.verifierDate,
-    params.merchant,
+    merchant,
     nowMs
   );
+
+  const primaryTrimmed =
+    typeof params.primaryDate === 'string' && params.primaryDate.trim()
+      ? params.primaryDate.trim()
+      : '';
+  const primaryTs = primaryTrimmed
+    ? parseReceiptDateTimeForVerify(primaryTrimmed, merchant, nowMs)
+    : null;
+
+  if (classified.accepted == null) {
+    return {
+      finalTransactionDate: null,
+      shouldCache: false,
+      acceptOutcome: classified.outcome,
+    };
+  }
+
+  const verifierTs = parseReceiptDateTimeForVerify(
+    classified.accepted,
+    merchant,
+    nowMs
+  );
+  if (verifierTs == null) {
+    return {
+      finalTransactionDate: null,
+      shouldCache: false,
+      acceptOutcome: 'out_of_window',
+    };
+  }
+
+  // D3: no usable primary → verifier supplies the date.
+  if (primaryTs == null) {
+    return {
+      finalTransactionDate: classified.accepted,
+      shouldCache: true,
+      acceptOutcome: 'accepted',
+    };
+  }
+
+  const primaryYmd = tokyoYmd(primaryTs);
+  const verifierYmd = tokyoYmd(verifierTs);
+  if (!primaryYmd || !verifierYmd) {
+    return {
+      finalTransactionDate: classified.accepted,
+      shouldCache: true,
+      acceptOutcome: 'accepted',
+    };
+  }
+
+  // D1 / D4: same calendar day (possibly reformatted) → accept verifier form.
+  if (
+    primaryYmd.y === verifierYmd.y &&
+    primaryYmd.m === verifierYmd.m &&
+    primaryYmd.d === verifierYmd.d
+  ) {
+    return {
+      finalTransactionDate: classified.accepted,
+      shouldCache: true,
+      acceptOutcome: 'accepted',
+    };
+  }
+
+  // Any Y/M/D disagreement with a valid primary: preserve primary and do not
+  // durable-cache (conflict provenance is not stored in the cache payload).
   return {
-    finalTransactionDate: classified.accepted,
-    // Do not durable-cache uncertain/rejected verifier success (negative cache).
-    shouldCache: classified.accepted != null,
-    acceptOutcome: classified.outcome,
+    finalTransactionDate: primaryTrimmed,
+    shouldCache: false,
+    acceptOutcome: 'primary_verifier_calendar_conflict',
   };
 }
 

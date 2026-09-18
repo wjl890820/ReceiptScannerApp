@@ -356,16 +356,41 @@ function isNonMerchandiseMetaLabel(name: string): boolean {
   );
 }
 
+/**
+ * Strip leading Costco register/dept/control noise before Connection detection.
+ * Examples: MR/MP, 1-Z, 1 - Z, 1Z, full-width digits/hyphens.
+ */
+export function stripCostcoInformationalPrefixNoise(name: string): string {
+  let n = toHalfWidthLower(name).replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < 4; i += 1) {
+    const before = n;
+    n = n.replace(/^(?:mr|mp)(?:\s+|(?=コストコ|costco))/, '').trim();
+    // "1-Z " / "1 - Z " / "12-A " style control tokens before the label.
+    n = n
+      .replace(/^\d{1,4}\s*[-－—–−ー]?\s*[a-zA-Z]?\s+/, '')
+      .trim();
+    // Compact "1Z " without separator.
+    n = n.replace(/^\d{1,4}[a-zA-Z]\s+/, '').trim();
+    if (n === before) break;
+  }
+  return n;
+}
+
 /** Costco Connection publication / membership lines — not purchased merchandise. */
 export function isCostcoConnectionNonMerchandiseLine(name: string): boolean {
-  const n = toHalfWidthLower(name).replace(/\s+/g, ' ').trim();
-  // Register/dept codes OCR'd as MR/MP immediately before the magazine line.
-  const core = n.replace(/^(?:mr|mp)(?:\s+|(?=コストコ|costco))/, '').trim();
-  if (core === 'コストコ コネクション' || core === 'コストココネクション') return true;
+  const core = stripCostcoInformationalPrefixNoise(name);
+  const compact = core.replace(/\s+/g, '');
+  if (
+    compact === 'コストココネクション' ||
+    compact === 'コストココネクションムリョウ'
+  ) {
+    return true;
+  }
+  // Latin OCR variants of the same informational magazine line.
   return (
-    core === 'コストコ コネクション ムリョウ' ||
-    core === 'コストココネクション ムリョウ' ||
-    core === 'コストココネクションムリョウ'
+    compact === 'costcoconnection' ||
+    compact === 'costcoconnectionmuryou' ||
+    compact === 'costcoconnectionfree'
   );
 }
 
@@ -634,6 +659,10 @@ export function persistReceiptTaxFields(analysis: ReceiptAnalysis & Record<strin
 /**
  * 金额对账：分别按"外税(items+discount+tax)"与"内税(items+discount)"两种口径与 total 比较，
  * 任一口径在容差内即视为一致；都不一致则给出 warning，不修改结构。
+ *
+ * Receipt080: unexplained POSITIVE merchandise overage (items+discounts > total)
+ * must not become safe solely because |diff| ≤ tolerance. Rounding tolerance
+ * still applies when merchandise net is at/under total.
  */
 export function reconcileReceiptTotals(
   itemsPositiveSum: number,
@@ -653,11 +682,30 @@ export function reconcileReceiptTotals(
     return { ok: true, itemsPositiveSum: items, discountsSum: disc, tax: t, total: tot, diff: 0, warnings };
   }
 
-  const expectedExclTax = items + disc + t; // 外税
-  const expectedInclTax = items + disc; // 内税（商品价已含税）
+  const merchandiseNet = items + disc;
+  const expectedExclTax = merchandiseNet + t; // 外税
+  const expectedInclTax = merchandiseNet; // 内税（商品价已含税）
   const diffExcl = Math.abs(expectedExclTax - tot);
   const diffIncl = Math.abs(expectedInclTax - tot);
   const diff = Math.min(diffExcl, diffIncl);
+
+  // Unexplained positive overage: merchandise (after known discounts) exceeds total.
+  // ±1/±2 must not green-light phantom merchandise rows (Receipt080).
+  if (merchandiseNet > tot) {
+    warnings.push(
+      `unexplained_positive_merchandise_overage: items(${items}) + discounts(${disc}) > total(${tot}), overage=${merchandiseNet - tot}`
+    );
+    return {
+      ok: false,
+      itemsPositiveSum: items,
+      discountsSum: disc,
+      tax: t,
+      total: tot,
+      diff: merchandiseNet - tot,
+      warnings,
+    };
+  }
+
   const ok = diff <= toleranceJpy;
   if (!ok) {
     warnings.push(

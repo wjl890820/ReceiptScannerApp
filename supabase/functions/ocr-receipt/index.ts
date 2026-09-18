@@ -30,7 +30,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 14;
+const OCR_CACHE_VERSION = 15;
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -519,6 +519,11 @@ function buildOcrPrompt(): string {
     '  最終決済状態に 8% と 10% の税額が別々に印刷されていれば、その税額だけを taxBreakdown に入れ、',
     '  tax にはその合計を入れてよい（例: 8% 79 + 10% 20 → tax=99）。',
     '  印刷された税額の転記のみ。total−税抜対象 などから税を推算・再構成してはならない。',
+    '  【禁止】内税合計や「8%対象 / 税率8%対象 ¥N」から',
+    '  round(N × 8/108) や round(N × 0.08) などで消費税を計算して tax に入れない。',
+    '  印刷に「消費税 / 内消費税等 / 消費税額」の金額があればその数字をそのまま税として転記する。',
+    '  例: 8%対象 9534・消費税 708 → tax=708（706=round(9534×8/108) は禁止）。',
+    '  印刷税額が読めない場合のみ tax=null（推測値で埋めない）。',
     '- 税率から税額を推算しない。tax が読めない場合は null（0 で埋めない）。',
     '- 【重要】課税対象額 / 対象額 / 税抜対象額 / 「税率10%対象 ¥N」は税額ではない。',
     '  これらを tax や taxBreakdown[].amount に入れない（N は taxable base）。',
@@ -531,6 +536,9 @@ function buildOcrPrompt(): string {
     '- 例（内税・正しい）: 合計 8351・消費税 619 → total=8351, tax=619。total=8970（8351+619）は禁止。',
     '- 例（外税・正しい）: 小計 2442・税 195・合計 2637 → total=2637, tax=195。',
     '- 「買上点数 / お買上点数 / 御買上げ点数」は商品ではない（summary metadata）。items に入れない。',
+    '- Costco の「商品スキャン品目開始」〜「商品スキャン品目終了」の外側・終了後の行は商品ではない。',
+    '  「コストコ コネクション / コストコ コネクション ムリョウ」および MR/MP/1-Z 等の接頭付き同一行は',
+    '  会報・会員情報であり merchandise ではない。items に入れない（金額 1 でも商品化禁止）。',
     '- 直近の商品値引は上述のとおり items(kind=discount) に印刷順で残し、discounts[] へ重複させない。',
     '  まとめ売り値引は discounts と items(kind=discount) の両方。曖昧な全体クーポンは discounts[] のみ。',
     '  印刷された最終合計がある限り、items±discounts+tax で total を上書きしない。',
@@ -570,6 +578,7 @@ function buildOcrPrompt(): string {
     '  形式を YYYY/MM/DD に直さない。読めない・無い場合は null。推測・捏造は禁止。',
     '  スキャン日時・現在日時・ファイル日時で埋めない。DD/MM と MM/DD の解釈はしない（クライアント側）。',
     '  年は4桁を1桁ずつ独立して読む。年の数字を補正・正規化しない。',
+    '  月・日の数字も印刷どおり転記する。隣接する日付への丸め・±1日補正は禁止。',
     '  年の桁が1つでも不確かな場合は transactionDate を null にする（欠けた桁を埋めない）。',
   ].join('\n');
 }
@@ -590,6 +599,7 @@ function buildDateVerifyPrompt(): string {
     '- 印刷された生の日時形式をそのまま保持する（YYYY/MM/DD 等へ正規化しない）。',
     '- 現在日時・スキャン日時・ファイル日時から年を推測しない。',
     '- 年を補正・正規化・修復しない。',
+    '- 月・日も印刷どおり転記する。隣接する日付への ±1 日補正・丸めは禁止。',
     '- 店舗履歴や他のレシート情報から推測しない。',
     '- 必須の日付桁が本当に読めない場合のみ transactionDate を null にする。',
   ].join('\n');

@@ -474,6 +474,10 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     expect(isCostcoConnectionNonMerchandiseLine('MR コストコ コネクション')).toBe(true);
     expect(isCostcoConnectionNonMerchandiseLine('MP コストコ コネクション ムリョウ')).toBe(true);
     expect(isCostcoConnectionNonMerchandiseLine('mrコストコ コネクション')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('1-Z コストコ コネクション ムリョウ')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('1 - Z コストコ コネクション ムリョウ')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('1Z コストコ コネクション ムリョウ')).toBe(true);
+    expect(isCostcoConnectionNonMerchandiseLine('コストコ コネクションムリョウ')).toBe(true);
     // Must not drop ordinary Costco merchandise merely containing コストコ.
     expect(isCostcoConnectionNonMerchandiseLine('コストコ 無料試食')).toBe(false);
     expect(isCostcoConnectionNonMerchandiseLine('コストコホットドッグ')).toBe(false);
@@ -483,7 +487,7 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
       merchant: 'COSTCO WHOLESALE',
       currency: 'JPY',
       total: 9534,
-      tax: 706,
+      tax: 708,
       items: [
         { name: 'ITEM A', quantity: 1, unitPrice: 5000, lineTotal: 5000 },
         { name: 'ITEM B', quantity: 1, unitPrice: 4534, lineTotal: 4534 },
@@ -494,7 +498,52 @@ describe('normalizeOcrAnalysis: 整体后处理', () => {
     expect(out.items.map((i) => i.name)).toEqual(['ITEM A', 'ITEM B']);
     expect(out.items.reduce((s, i) => s + i.lineTotal, 0)).toBe(9534);
     expect(out.total).toBe(9534);
-    expect(out.tax).toBe(706);
+    expect(out.tax).toBe(708);
+  });
+
+  it('Receipt080: 11 merchandise + 1-Z Connection ¥1 → 11 items / tax 708 / mismatch-safe', () => {
+    const merch = [418, 698, 428, 899, 488, 298, 998, 698, 777, 3484, 348].map(
+      (lineTotal, i) => ({
+        name: `MERCH${i + 1}`,
+        quantity: 1,
+        unitPrice: lineTotal,
+        lineTotal,
+      })
+    );
+    const out = normalizeOcrAnalysis({
+      merchant: 'コストコ',
+      currency: 'JPY',
+      total: 9534,
+      tax: 708,
+      transactionDate: '07/05/2023 11:44:46',
+      items: [
+        ...merch,
+        {
+          name: '1-Z コストコ コネクション ムリョウ',
+          quantity: 1,
+          unitPrice: 1,
+          lineTotal: 1,
+        },
+      ],
+    });
+    expect(out.items).toHaveLength(11);
+    expect(out.items.reduce((s, i) => s + i.lineTotal, 0)).toBe(9534);
+    expect(out.tax).toBe(708);
+    expect(out.total).toBe(9534);
+    expect(out.amount_mismatch).toBe(false);
+    expect(out.reconciliation?.ok).toBe(true);
+    expect(out.items.some((i) => String(i.name).includes('コネクション'))).toBe(
+      false
+    );
+  });
+
+  it('Receipt080: unexplained +1 merchandise overage is unsafe (not ±2-safe)', () => {
+    const r = reconcileReceiptTotals(9535, 0, 706, 9534);
+    expect(r.ok).toBe(false);
+    expect(r.diff).toBe(1);
+    expect(r.warnings.some((w) => w.includes('unexplained_positive_merchandise_overage'))).toBe(
+      true
+    );
   });
 
   it('accepts personal_care/pet_care OCR categoryKey as active V1 spending', () => {

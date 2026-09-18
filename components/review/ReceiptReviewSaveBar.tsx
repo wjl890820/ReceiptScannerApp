@@ -16,6 +16,8 @@ type ReceiptReviewSaveBarProps = {
   bottomInset: number;
   onSave: () => void;
   onLayoutHeight?: (height: number) => void;
+  /** When true, Save is disabled (e.g. unexplained positive overage). */
+  saveBlocked?: boolean;
 };
 
 export function ReceiptReviewSaveBar({
@@ -23,7 +25,9 @@ export function ReceiptReviewSaveBar({
   bottomInset,
   onSave,
   onLayoutHeight,
+  saveBlocked = false,
 }: ReceiptReviewSaveBarProps) {
+  const disabled = saving || saveBlocked;
   return (
     <View
       style={[styles.bar, { paddingBottom: Math.max(bottomInset, UI_SPACING.md) }]}
@@ -31,13 +35,20 @@ export function ReceiptReviewSaveBar({
     >
       <Pressable
         onPress={onSave}
-        disabled={saving}
+        disabled={disabled}
         accessibilityRole="button"
-        accessibilityLabel={saving ? t('scanReview.saving') : t('scanReview.save')}
+        accessibilityState={{ disabled }}
+        accessibilityLabel={
+          saving
+            ? t('scanReview.saving')
+            : saveBlocked
+              ? t('scanReview.amountMismatchWarning')
+              : t('scanReview.save')
+        }
         style={({ pressed }) => [
           styles.button,
-          saving && styles.disabled,
-          pressed && !saving && styles.buttonPressed,
+          disabled && styles.disabled,
+          pressed && !disabled && styles.buttonPressed,
         ]}
       >
         {saving ? (

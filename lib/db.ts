@@ -991,6 +991,35 @@ export async function saveReceipt(
   await initIfNeeded();
   const db = await getDb();
 
+  // Defense-in-depth for Scan Review: refuse unexplained positive overage.
+  // Production home path uses Review; this blocks reviewedSave bypasses.
+  if (params.reviewedSave) {
+    const { evaluateScanReviewSaveEligibility, sumPositiveMerchandiseLineTotals, sumReceiptDiscountAmounts } =
+      await import('./scanReviewSaveSafety');
+    const analysis = (params.analysis ?? {}) as {
+      items?: { lineTotal?: unknown; line_total?: unknown }[];
+      discounts?: { amount?: unknown }[];
+      tax?: unknown;
+      total?: unknown;
+    };
+    const taxN = Number(analysis.tax);
+    const gate = evaluateScanReviewSaveEligibility({
+      itemsPositiveSum: sumPositiveMerchandiseLineTotals(
+        Array.isArray(analysis.items) ? analysis.items : []
+      ),
+      discountsSum: sumReceiptDiscountAmounts(
+        Array.isArray(analysis.discounts) ? analysis.discounts : []
+      ),
+      tax: Number.isFinite(taxN) ? taxN : 0,
+      total: Number(analysis.total) || 0,
+    });
+    if (!gate.allowed) {
+      throw new Error(
+        `Cannot save receipt: ${gate.reason ?? 'unexplained_positive_merchandise_overage'}`
+      );
+    }
+  }
+
   const id = nanoid();
   const now = Date.now();
 

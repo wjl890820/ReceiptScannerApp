@@ -74,6 +74,11 @@ import {
   type ScanReviewDuplicateGateMatch,
 } from '@/lib/scanReviewDuplicateGate';
 import {
+  evaluateScanReviewSaveEligibility,
+  sumPositiveMerchandiseLineTotals,
+  sumReceiptDiscountAmounts,
+} from '@/lib/scanReviewSaveSafety';
+import {
   executeDuplicateGateTerminalFlow,
   reduceTerminalDuplicateDestinationId,
   shouldHideDuplicateGateSaveBar,
@@ -799,6 +804,24 @@ export default function ScanReviewScreen() {
     showDuplicateGate,
     terminalDuplicateDestinationId,
   });
+
+  // Live save gate: unexplained positive merchandise overage must not persist.
+  const scanReviewSaveEligibility = useMemo(() => {
+    const snapDiscounts = Array.isArray((snapshot as { discounts?: unknown } | null)?.discounts)
+      ? ((snapshot as { discounts: { amount?: unknown }[] }).discounts)
+      : [];
+    const taxTrimmed = taxStr.trim();
+    const parsedTax = taxTrimmed ? toNum(taxTrimmed, NaN) : NaN;
+    const taxValue = Number.isFinite(parsedTax) ? parsedTax : 0;
+    return evaluateScanReviewSaveEligibility({
+      itemsPositiveSum: sumPositiveMerchandiseLineTotals(finalItemsForSave as any),
+      discountsSum: sumReceiptDiscountAmounts(snapDiscounts),
+      tax: taxValue,
+      total: toNum(totalStr, 0),
+    });
+  }, [snapshot, finalItemsForSave, totalStr, taxStr]);
+  const saveBlockedByOverage = !scanReviewSaveEligibility.allowed;
+
   const FALLBACK_STICKY_HEIGHT = 88;
   const bottomPadding = (stickyHeight || FALLBACK_STICKY_HEIGHT) + 20;
 
@@ -863,6 +886,23 @@ export default function ScanReviewScreen() {
     if (saving || saveInFlightRef.current) return;
     const id = String(draftId || '');
     if (!snapshot || !id) return;
+
+    // Re-evaluate from current editor state (do not trust a stale memo alone).
+    const snapDiscounts = Array.isArray((snapshot as { discounts?: unknown }).discounts)
+      ? ((snapshot as { discounts: { amount?: unknown }[] }).discounts)
+      : [];
+    const taxTrimmedForGate = taxStr.trim();
+    const parsedTaxForGate = taxTrimmedForGate ? toNum(taxTrimmedForGate, NaN) : NaN;
+    const saveGate = evaluateScanReviewSaveEligibility({
+      itemsPositiveSum: sumPositiveMerchandiseLineTotals(finalItemsForSave as any),
+      discountsSum: sumReceiptDiscountAmounts(snapDiscounts),
+      tax: Number.isFinite(parsedTaxForGate) ? parsedTaxForGate : 0,
+      total: toNum(totalStr, 0),
+    });
+    if (!saveGate.allowed) {
+      Alert.alert(t('scanReview.save'), t('scanReview.amountMismatchWarning'));
+      return;
+    }
 
     saveInFlightRef.current = true;
     try {
@@ -1174,7 +1214,9 @@ export default function ScanReviewScreen() {
           taxStr={taxStr}
           currency={currency}
           note={note}
-          amountMismatch={Boolean(snapshot?.amount_mismatch)}
+          amountMismatch={
+            Boolean(snapshot?.amount_mismatch) || saveBlockedByOverage
+          }
           dateNeedsConfirm={reviewDateNeedsConfirm(dateStr, merchant)}
           editable={!saving}
           onMerchantChange={setMerchant}
@@ -1279,6 +1321,7 @@ export default function ScanReviewScreen() {
           bottomInset={insets.bottom}
           onSave={onSave}
           onLayoutHeight={setStickyHeight}
+          saveBlocked={saveBlockedByOverage}
         />
       ) : null}
 
