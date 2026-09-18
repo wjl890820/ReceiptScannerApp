@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 73,
+  "selectors": {
+    "merchant": "イオン古川店",
+    "transactionAt": "2026-06-18T17:44:00+09:00",
+    "total": 1921
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "イオン古川店",
+    "transactionAt": "2026-06-18T17:44:00+09:00",
+    "total": 1921,
+    "tax": 142,
+    "itemRowCount": 8,
+    "completeBasket": false,
+    "confirmedMerchandise": [
+      {
+        "nameContains": "パン",
+        "lineTotal": 280
+      }
+    ],
+    "notes": [
+      "Confirmed monetary example: パン gross 280, 割引 10% = -28, effective 252. Remaining basket not fabricated."
+    ]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt073 — partial truth only"]
+}

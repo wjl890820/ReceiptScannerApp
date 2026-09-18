@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 79,
+  "selectors": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-07-03T11:51:00+09:00",
+    "total": 796
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-07-03T11:51:00+09:00",
+    "total": 796,
+    "tax": 58,
+    "itemRowCount": 4,
+    "quantityTotal": 6,
+    "completeBasket": true,
+    "items": [
+      { "name": "チョコポップ", "quantity": 1, "lineTotal": 149 },
+      { "name": "やきとり惣菜", "quantity": 3, "unitPrice": 106, "lineTotal": 318 },
+      { "name": "チュロス", "quantity": 1, "lineTotal": 116 },
+      { "name": "キーマカレーナン", "quantity": 1, "lineTotal": 213 }
+    ],
+    "notes": ["Tax is included in the 796 total."]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt079 — complete basket"]
+}

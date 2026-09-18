@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 74,
+  "selectors": {
+    "merchant": "コストコ",
+    "transactionAt": "2026-06-22T19:03:30+09:00",
+    "total": 6292
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "コストコ",
+    "transactionAt": "2026-06-22T19:03:30+09:00",
+    "total": 6292,
+    "tax": 466,
+    "itemRowCount": 7,
+    "completeBasket": false,
+    "couponOwnershipUnresolved": true,
+    "confirmedMerchandise": [
+      { "nameContains": "フジサンノデンネンスイ", "lineTotal": 388 },
+      { "nameContains": "ケージフリータマゴ", "lineTotal": 758 },
+      { "nameContains": "ラクノウキュウニュウ", "lineTotal": 418 },
+      { "nameContains": "メニセブプチパン", "lineTotal": 828 },
+      { "nameContains": "きゅうり", "lineTotal": 478 },
+      { "nameContains": "コクサントリデハモト", "lineTotal": 1598 },
+      { "nameContains": "ハイローラー", "lineTotal": 1984 }
+    ],
+    "confirmedCoupon": {
+      "labelContains": "CAGE FREE EGG CPN",
+      "amount": -160
+    },
+    "notes": [
+      "Coupon ownership unresolved. Do not encode egg effective spend as 598."
+    ]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt074 — Costco; merchant may be COSTCO/コストコ compatible"]
+}

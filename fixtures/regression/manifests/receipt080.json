@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 80,
+  "selectors": {
+    "merchant": "コストコ",
+    "transactionAt": "2026-07-06T11:44:46+09:00",
+    "transactionAtMatch": "local_clock_ignore_year",
+    "total": 9534,
+    "orderedLineAmountsFingerprint": [418, 698, 428, 899, 488, 298, 998, 698, 777, 3484, 348]
+  },
+  "sourceReceiptIds": [
+    "2bDvMWs3dkCKagyrYWyxA",
+    "C_aMA69ijcqNLhGI76Y5Q",
+    "n6_vGM5c8X255Psyiup4k",
+    "NEHGZCkqd8MiBCyKO-fWd",
+    "ElhqdUr9SU-xD-1s5JbS3",
+    "4a1-xfRs0jLc9QREdaKcb"
+  ],
+  "truth": {
+    "merchant": "コストコ",
+    "transactionAt": "2026-07-06T11:44:46+09:00",
+    "total": 9534,
+    "tax": 708,
+    "itemRowCount": 11,
+    "quantityTotal": 11,
+    "completeBasket": false,
+    "orderedLineAmounts": [418, 698, 428, 899, 488, 298, 998, 698, 777, 3484, 348],
+    "notes": [
+      "Sum 9534. NO Costco Connection informational row is merchandise. Do not use older historical 706 as truth.",
+      "Matching: merchant+total+local_clock_ignore_year only. orderedLineAmountsFingerprint is diagnostic, not a membership gate."
+    ]
+  },
+  "image": { "available": false },
+  "notes": [
+    "Physical Receipt080 — Costco; membership ignores tax/itemRowCount/Connection.",
+    "sourceReceiptIds observational only; fingerprint status reported per member."
+  ]
+}

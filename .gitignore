@@ -68,6 +68,10 @@ tools/out/
 # Test fixtures (local)
 tools/fixtures/
 
+# Local regression exports / reports (do not commit real receipts dumps)
+.local/regression/
+regression-output/
+
 # Build artifacts
 /artifacts/
 /*.ipa

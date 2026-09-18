@@ -10,7 +10,8 @@
     "lint": "expo lint",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "typecheck": "tsc --noEmit",
-    "replay:receipts": "node tools/replay_receipts.js"
+    "replay:receipts": "node tools/replay_receipts.js",
+    "regression:receipts": "node tools/regression_receipts.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

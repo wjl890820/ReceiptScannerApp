@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 75,
+  "selectors": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-06-22T20:11:00+09:00",
+    "total": 1083
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-06-22T20:11:00+09:00",
+    "total": 1083,
+    "tax": 80,
+    "itemRowCount": 4,
+    "quantityTotal": 4,
+    "completeBasket": true,
+    "items": [
+      { "name": "三ツ矢サイダ50", "quantity": 1, "lineTotal": 95 },
+      { "name": "ペプシゼロ1.5", "quantity": 1, "lineTotal": 181 },
+      { "name": "若鶏砂肝（塩味ガー", "quantity": 1, "lineTotal": 378 },
+      { "name": "熟成湯こね食パン", "quantity": 1, "lineTotal": 429 }
+    ]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt075 — complete basket"]
+}

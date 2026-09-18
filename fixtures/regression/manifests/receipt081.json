@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 81,
+  "selectors": {
+    "merchant": "業務スーパー古川店",
+    "transactionAt": "2026-07-10T12:03:00+09:00",
+    "total": 2121
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "業務スーパー古川店",
+    "transactionAt": "2026-07-10T12:03:00+09:00",
+    "total": 2121,
+    "tax": 157,
+    "currency": "JPY",
+    "itemRowCount": 3,
+    "quantityTotal": 5,
+    "completeBasket": true,
+    "items": [
+      { "name": "練りピーナッツ・ごま", "quantity": 1, "lineTotal": 292 },
+      { "name": "正宗生煎包", "quantity": 3, "unitPrice": 439, "lineTotal": 1317 },
+      { "name": "豆腐皮", "quantity": 1, "lineTotal": 355 }
+    ],
+    "notes": [
+      "Merchandise subtotal 1964 + external tax 157 = 2121."
+    ]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt081 — complete basket; may match multiple historical rows"]
+}

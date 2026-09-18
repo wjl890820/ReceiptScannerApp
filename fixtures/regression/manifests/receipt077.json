@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 77,
+  "selectors": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-06-30T12:55:00+09:00",
+    "total": 4102
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-06-30T12:55:00+09:00",
+    "total": 4102,
+    "tax": 303,
+    "itemRowCount": 19,
+    "quantityTotal": 20,
+    "completeBasket": false,
+    "confirmedMerchandise": [
+      {
+        "nameContains": "ふぞろい小籠包",
+        "quantity": 2,
+        "unitPrice": 116,
+        "lineTotal": 232
+      },
+      { "nameContains": "熟成湯こね食パン" },
+      { "nameContains": "クレープチョコバニ" }
+    ],
+    "notes": ["Spelling examples confirmed; other rows not fabricated."]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt077 — partial truth"]
+}

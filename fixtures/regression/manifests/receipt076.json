@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 76,
+  "selectors": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-06-26T19:49:00+09:00",
+    "total": 3606
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "ヨークベニマル 古川南店",
+    "transactionAt": "2026-06-26T19:49:00+09:00",
+    "total": 3606,
+    "tax": 267,
+    "itemRowCount": 10,
+    "quantityTotal": 12,
+    "completeBasket": false,
+    "confirmedMerchandise": [
+      {
+        "nameContains": "ラム肩",
+        "quantity": 3,
+        "unitPrice": 310,
+        "lineTotal": 930
+      },
+      { "nameContains": "カイノミステーキ用", "lineTotal": 400 },
+      { "nameContains": "カイノミステーキ用", "lineTotal": 440 },
+      { "nameContains": "カイノミステーキ用", "lineTotal": 460 }
+    ],
+    "notes": [
+      "Three separate カイノミステーキ用 rows. Remaining names not fabricated."
+    ]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt076 — partial truth"]
+}

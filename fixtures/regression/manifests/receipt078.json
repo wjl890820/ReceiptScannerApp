@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "receiptNo": 78,
+  "selectors": {
+    "merchant": "業務スーパー 古川店",
+    "transactionAt": "2026-06-30T13:36:00+09:00",
+    "total": 741
+  },
+  "sourceReceiptIds": [],
+  "truth": {
+    "merchant": "業務スーパー 古川店",
+    "transactionAt": "2026-06-30T13:36:00+09:00",
+    "total": 741,
+    "tax": 61,
+    "itemRowCount": 4,
+    "quantityTotal": 4,
+    "completeBasket": true,
+    "items": [
+      { "name": "グリーンカレーペースト", "quantity": 1, "lineTotal": 88 },
+      { "name": "インドネシア風煮込みカレーの素", "quantity": 1, "lineTotal": 103 },
+      { "name": "インドネシア風スープカレーの素", "quantity": 1, "lineTotal": 103 },
+      { "name": "炭化竹箸天削(袋無)", "quantity": 1, "lineTotal": 386 }
+    ],
+    "notes": [
+      "Printed tax-exclusive line amounts. subtotal 680; tax 23@8% + 38@10% = 61. Do not treat lines as tax-included consumer prices."
+    ]
+  },
+  "image": { "available": false },
+  "notes": ["Physical Receipt078 — may match multiple historical DB rows"]
+}
