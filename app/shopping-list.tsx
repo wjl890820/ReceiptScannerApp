@@ -22,6 +22,7 @@ import { t } from '@/lib/i18n';
 import { navigateBackOrHome } from '@/lib/navigationBack';
 import {
   addManualShoppingListItem,
+  buildShoppingListItemProductDetailHref,
   clearCompletedShoppingListItems,
   decrementShoppingListItemQuantity,
   deleteShoppingListItem,
@@ -76,6 +77,15 @@ export default function ShoppingListScreen() {
     [items]
   );
   const canAddManual = draft.trim().length > 0;
+
+  const onOpenProductDetail = useCallback(
+    (item: ShoppingListItem) => {
+      const href = buildShoppingListItemProductDetailHref(item);
+      if (!href) return;
+      router.push(href as any);
+    },
+    [router]
+  );
 
   const onAdd = useCallback(async () => {
     if (busy || draft.trim().length === 0) return;
@@ -177,7 +187,9 @@ export default function ShoppingListScreen() {
     [busy, refresh]
   );
 
-  const renderItem = (item: ShoppingListItem) => (
+  const renderItem = (item: ShoppingListItem) => {
+    const productHref = buildShoppingListItemProductDetailHref(item);
+    return (
     <View key={item.id} style={styles.itemRow}>
       <Pressable
         onPress={() => void onToggle(item.id)}
@@ -198,16 +210,46 @@ export default function ShoppingListScreen() {
           }
         />
       </Pressable>
-      <MerunoText
-        role="bodySmall"
-        tone={item.isCompleted ? 'muted' : 'primary'}
-        style={[
-          styles.itemText,
-          item.isCompleted ? styles.itemTextCompleted : null,
-        ]}
-      >
-        {`${item.text} ×${item.quantity}`}
-      </MerunoText>
+      {productHref ? (
+        <Pressable
+          onPress={() => onOpenProductDetail(item)}
+          accessibilityRole="button"
+          accessibilityLabel={t('shoppingList.openProductDetailA11y', {
+            name: item.text,
+          })}
+          style={({ pressed }) => [
+            styles.itemTextHit,
+            pressed && styles.pressed,
+          ]}
+        >
+          <MerunoText
+            role="bodySmall"
+            tone={item.isCompleted ? 'muted' : 'primary'}
+            style={[
+              styles.itemText,
+              item.isCompleted ? styles.itemTextCompleted : null,
+            ]}
+          >
+            {`${item.text} ×${item.quantity}`}
+          </MerunoText>
+          <MaterialIcons
+            name="chevron-right"
+            size={22}
+            color={UI_COLORS.textSecondary}
+          />
+        </Pressable>
+      ) : (
+        <MerunoText
+          role="bodySmall"
+          tone={item.isCompleted ? 'muted' : 'primary'}
+          style={[
+            styles.itemText,
+            item.isCompleted ? styles.itemTextCompleted : null,
+          ]}
+        >
+          {`${item.text} ×${item.quantity}`}
+        </MerunoText>
+      )}
       {!item.isCompleted ? (
         <View style={styles.qtyControls}>
           <Pressable
@@ -262,7 +304,8 @@ export default function ShoppingListScreen() {
         </MerunoText>
       </Pressable>
     </View>
-  );
+    );
+  };
 
   return (
     <View
@@ -477,6 +520,13 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     lineHeight: 22,
+  },
+  itemTextHit: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
   },
   itemTextCompleted: {
     textDecorationLine: 'line-through',

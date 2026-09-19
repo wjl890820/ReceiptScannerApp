@@ -69,13 +69,28 @@ describe('Shopping List 1.0 UI wiring', () => {
     expect(screen).not.toMatch(/itemText[\s\S]{0,80}numberOfLines=\{1\}/);
   });
 
-  it('14 — Product Detail has one add action', () => {
+  it('14 — Product Detail add/remove shopping list CTA', () => {
     const product = source('app/product/[targetType].tsx');
     expect(product).toContain('addShoppingListItemFromProductDetail');
+    expect(product).toContain('deleteShoppingListItem');
+    expect(product).toContain('deleteActiveShoppingListItemByTrustedIdentity');
     expect(product).toContain("t('productDetail.addToShoppingList')");
-    expect(
-      (product.match(/addToShoppingList/g) || []).length
-    ).toBeGreaterThanOrEqual(1);
+    expect(product).toContain("t('productDetail.removeFromShoppingList')");
+    expect(product).toContain('findActiveShoppingListItemByTrustedIdentity');
+    expect(product).not.toMatch(
+      /trustedShoppingIdentity && alreadyOnShoppingList\)\s*&&\s*styles\.shoppingListCtaDisabled/
+    );
+  });
+
+  it('14b — Shopping List trusted rows navigate to Product Detail', () => {
+    const screen = source('app/shopping-list.tsx');
+    expect(screen).toContain('buildShoppingListItemProductDetailHref');
+    expect(screen).toContain('onOpenProductDetail');
+    expect(screen).toContain("t('shoppingList.openProductDetailA11y'");
+    // Checkbox / qty / delete remain separate press targets.
+    expect(screen).toContain('accessibilityRole="checkbox"');
+    expect(screen).toContain('incrementShoppingListItemQuantity');
+    expect(screen).toContain('deleteShoppingListItem');
   });
 
   it('15 — still exactly four bottom tabs', () => {
@@ -109,6 +124,8 @@ describe('Shopping List 1.0 UI wiring', () => {
       expect(json.home.progressive.shoppingList.title).toBeTruthy();
       expect(json.home.progressive.nextPurchase.added).toBeTruthy();
       expect(json.productDetail.addToShoppingList).toBeTruthy();
+      expect(json.productDetail.removeFromShoppingList).toBeTruthy();
+      expect(json.shoppingList.openProductDetailA11y).toBeTruthy();
     }
   });
 });

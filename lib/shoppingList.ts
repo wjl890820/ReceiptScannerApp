@@ -77,6 +77,10 @@ export type ShoppingListToggleResult =
   | { status: 'already_active_identity'; item: ShoppingListItem }
   | { status: 'not_found' };
 
+export type ShoppingListDeleteByIdentityResult =
+  | { status: 'deleted'; item: ShoppingListItem }
+  | { status: 'not_found' };
+
 export type AddFromProductDetailInput = {
   displayName: string;
   identityKind?: ShoppingListIdentityKind | null;
@@ -209,6 +213,21 @@ export function shoppingListIdentityKey(
   key: string
 ): string {
   return `${kind}:${key.trim()}`;
+}
+
+/**
+ * Product Detail href for a trusted Shopping List identity only.
+ * Manual / untrusted rows return null — never invent a Detail target from text.
+ */
+export function buildShoppingListItemProductDetailHref(
+  item: Pick<ShoppingListItem, 'sourceIdentityKind' | 'sourceIdentityKey'>
+): `/product/${ShoppingListIdentityKind}?key=${string}` | null {
+  const kind = item.sourceIdentityKind;
+  const key = item.sourceIdentityKey;
+  if (!isTrustedShoppingListIdentity(kind, key) || key == null) {
+    return null;
+  }
+  return `/product/${kind}?key=${encodeURIComponent(key.trim())}`;
 }
 
 export function getActiveShoppingListIdentitySetFromItems(
@@ -620,6 +639,68 @@ export async function deleteShoppingListItemWithDb(
 export async function deleteShoppingListItem(id: string): Promise<boolean> {
   const db = await openShoppingListDatabase();
   return deleteShoppingListItemWithDb(db, id);
+}
+
+/**
+ * Resolve the single active trusted Shopping List row for an identity.
+ * SSOT: partial UNIQUE index guarantees at most one active trusted slot.
+ */
+export async function findActiveShoppingListItemByTrustedIdentityWithDb(
+  db: ShoppingIntentDatabase,
+  identityKind: ShoppingListIdentityKind,
+  identityKey: string
+): Promise<ShoppingListItem | null> {
+  if (!isTrustedShoppingListIdentity(identityKind, identityKey)) return null;
+  const row = await findActiveShoppingIntentByTrustedIdentityWithDb(
+    db,
+    identityKind,
+    identityKey
+  );
+  return row ? mapShoppingIntentRowToListItem(row) : null;
+}
+
+export async function findActiveShoppingListItemByTrustedIdentity(
+  identityKind: ShoppingListIdentityKind,
+  identityKey: string
+): Promise<ShoppingListItem | null> {
+  const db = await openShoppingListDatabase();
+  return findActiveShoppingListItemByTrustedIdentityWithDb(
+    db,
+    identityKind,
+    identityKey
+  );
+}
+
+/**
+ * Delete the active trusted Shopping List intent for an identity by resolving
+ * its row id first (UNIQUE active slot), then deleting that id.
+ */
+export async function deleteActiveShoppingListItemByTrustedIdentityWithDb(
+  db: ShoppingIntentDatabase,
+  identityKind: ShoppingListIdentityKind,
+  identityKey: string
+): Promise<ShoppingListDeleteByIdentityResult> {
+  const item = await findActiveShoppingListItemByTrustedIdentityWithDb(
+    db,
+    identityKind,
+    identityKey
+  );
+  if (!item) return { status: 'not_found' };
+  const deleted = await deleteShoppingListItemWithDb(db, item.id);
+  if (!deleted) return { status: 'not_found' };
+  return { status: 'deleted', item };
+}
+
+export async function deleteActiveShoppingListItemByTrustedIdentity(
+  identityKind: ShoppingListIdentityKind,
+  identityKey: string
+): Promise<ShoppingListDeleteByIdentityResult> {
+  const db = await openShoppingListDatabase();
+  return deleteActiveShoppingListItemByTrustedIdentityWithDb(
+    db,
+    identityKind,
+    identityKey
+  );
 }
 
 export async function clearCompletedShoppingListItemsWithDb(

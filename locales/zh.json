@@ -424,6 +424,9 @@
     "addToShoppingList": "加入购物清单",
     "addedToShoppingList": "已添加",
     "addToShoppingListA11y": "加入购物清单",
+    "removeFromShoppingList": "移出购物清单",
+    "removedFromShoppingList": "已移出购物清单",
+    "removeFromShoppingListA11y": "移出购物清单",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品系列",
@@ -933,6 +936,7 @@
     "errorMessage": "无法加载购物清单",
     "alreadyOnList": "该商品已在购物清单中。",
     "increaseQuantityA11y": "增加数量，当前 {quantity}",
-    "decreaseQuantityA11y": "减少数量，当前 {quantity}"
+    "decreaseQuantityA11y": "减少数量，当前 {quantity}",
+    "openProductDetailA11y": "打开 {name} 的商品详情"
   }
 }

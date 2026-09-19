@@ -39,8 +39,9 @@ import { loadPersonalProductDetailDataWithDb } from '@/lib/productDetailPersonal
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
 import {
   addShoppingListItemFromProductDetail,
-  getActiveShoppingListIdentitySet,
-  shoppingListIdentityKey,
+  deleteActiveShoppingListItemByTrustedIdentity,
+  deleteShoppingListItem,
+  findActiveShoppingListItemByTrustedIdentity,
   trustedShoppingIdentityFromProductDetailTarget,
 } from '@/lib/shoppingList';
 import { UI_COLORS, UI_LAYOUT, UI_RADIUS } from '@/lib/uiTokens';
@@ -78,8 +79,11 @@ export default function ProductDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [priceLoadFailed, setPriceLoadFailed] = useState(false);
-  const [alreadyOnShoppingList, setAlreadyOnShoppingList] = useState(false);
-  const [addingToShoppingList, setAddingToShoppingList] = useState(false);
+  const [activeShoppingListItemId, setActiveShoppingListItemId] = useState<
+    string | null
+  >(null);
+  const [shoppingListCtaBusy, setShoppingListCtaBusy] = useState(false);
+  const alreadyOnShoppingList = activeShoppingListItemId != null;
 
   useEffect(() => {
     let active = true;
@@ -159,19 +163,15 @@ export default function ProductDetailScreen() {
 
   const refreshShoppingListCta = useCallback(async () => {
     if (!trustedShoppingIdentity) {
-      setAlreadyOnShoppingList(false);
+      setActiveShoppingListItemId(null);
       return;
     }
     try {
-      const active = await getActiveShoppingListIdentitySet();
-      setAlreadyOnShoppingList(
-        active.has(
-          shoppingListIdentityKey(
-            trustedShoppingIdentity.identityKind,
-            trustedShoppingIdentity.identityKey
-          )
-        )
+      const item = await findActiveShoppingListItemByTrustedIdentity(
+        trustedShoppingIdentity.identityKind,
+        trustedShoppingIdentity.identityKey
       );
+      setActiveShoppingListItemId(item?.id ?? null);
     } catch (error) {
       console.error('[ProductDetail] shopping list CTA refresh failed', error);
     }
@@ -191,36 +191,66 @@ export default function ProductDetailScreen() {
       : summary?.title || target?.key || t('productDetail.title');
 
   const onAddToShoppingList = useCallback(async () => {
-    if (!summary || addingToShoppingList) return;
-    if (trustedShoppingIdentity && alreadyOnShoppingList) return;
+    if (!summary || shoppingListCtaBusy) return;
     const displayName = (summary.title || title).trim();
     if (!displayName) return;
-    setAddingToShoppingList(true);
+    setShoppingListCtaBusy(true);
     try {
       const result = await addShoppingListItemFromProductDetail({
         displayName,
         identityKind: trustedShoppingIdentity?.identityKind ?? null,
         identityKey: trustedShoppingIdentity?.identityKey ?? null,
       });
-      if (result.status === 'already_exists') {
-        setAlreadyOnShoppingList(true);
-        Alert.alert(t('productDetail.addedToShoppingList'));
-        return;
-      }
-      if (result.status === 'created') {
-        if (trustedShoppingIdentity) setAlreadyOnShoppingList(true);
+      if (result.status === 'already_exists' || result.status === 'created') {
+        if (trustedShoppingIdentity) {
+          setActiveShoppingListItemId(result.item.id);
+        }
         Alert.alert(t('productDetail.addedToShoppingList'));
       }
     } catch (error) {
       console.error('[ProductDetail] add to shopping list failed', error);
     } finally {
-      setAddingToShoppingList(false);
+      setShoppingListCtaBusy(false);
+    }
+  }, [shoppingListCtaBusy, summary, title, trustedShoppingIdentity]);
+
+  const onRemoveFromShoppingList = useCallback(async () => {
+    if (!trustedShoppingIdentity || shoppingListCtaBusy) return;
+    setShoppingListCtaBusy(true);
+    try {
+      if (activeShoppingListItemId) {
+        await deleteShoppingListItem(activeShoppingListItemId);
+      } else {
+        await deleteActiveShoppingListItemByTrustedIdentity(
+          trustedShoppingIdentity.identityKind,
+          trustedShoppingIdentity.identityKey
+        );
+      }
+      setActiveShoppingListItemId(null);
+      Alert.alert(t('productDetail.removedFromShoppingList'));
+    } catch (error) {
+      console.error('[ProductDetail] remove from shopping list failed', error);
+      await refreshShoppingListCta();
+    } finally {
+      setShoppingListCtaBusy(false);
     }
   }, [
-    addingToShoppingList,
+    activeShoppingListItemId,
+    refreshShoppingListCta,
+    shoppingListCtaBusy,
+    trustedShoppingIdentity,
+  ]);
+
+  const onShoppingListCtaPress = useCallback(() => {
+    if (trustedShoppingIdentity && alreadyOnShoppingList) {
+      void onRemoveFromShoppingList();
+      return;
+    }
+    void onAddToShoppingList();
+  }, [
     alreadyOnShoppingList,
-    summary,
-    title,
+    onAddToShoppingList,
+    onRemoveFromShoppingList,
     trustedShoppingIdentity,
   ]);
 
@@ -292,28 +322,23 @@ export default function ProductDetailScreen() {
             <Text style={styles.productTitle}>{title}</Text>
           </View>
           <Pressable
-            onPress={() => void onAddToShoppingList()}
-            disabled={
-              addingToShoppingList ||
-              (Boolean(trustedShoppingIdentity) && alreadyOnShoppingList)
-            }
+            onPress={onShoppingListCtaPress}
+            disabled={shoppingListCtaBusy}
             accessibilityRole="button"
             accessibilityLabel={
               trustedShoppingIdentity && alreadyOnShoppingList
-                ? t('productDetail.addedToShoppingList')
+                ? t('productDetail.removeFromShoppingListA11y')
                 : t('productDetail.addToShoppingListA11y')
             }
             style={({ pressed }) => [
               styles.shoppingListCta,
               pressed && { opacity: 0.55 },
-              (addingToShoppingList ||
-                (trustedShoppingIdentity && alreadyOnShoppingList)) &&
-                styles.shoppingListCtaDisabled,
+              shoppingListCtaBusy && styles.shoppingListCtaDisabled,
             ]}
           >
             <Text style={styles.shoppingListCtaText}>
               {trustedShoppingIdentity && alreadyOnShoppingList
-                ? t('productDetail.addedToShoppingList')
+                ? t('productDetail.removeFromShoppingList')
                 : t('productDetail.addToShoppingList')}
             </Text>
           </Pressable>

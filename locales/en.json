@@ -424,6 +424,9 @@
     "addToShoppingList": "Add to Shopping List",
     "addedToShoppingList": "Added",
     "addToShoppingListA11y": "Add to Shopping List",
+    "removeFromShoppingList": "Remove from Shopping List",
+    "removedFromShoppingList": "Removed from Shopping List",
+    "removeFromShoppingListA11y": "Remove from Shopping List",
     "targetType": {
       "sku": "Specific product",
       "canonical": "Product series",
@@ -933,6 +936,7 @@
     "errorMessage": "Unable to load shopping list",
     "alreadyOnList": "This item is already on your shopping list.",
     "increaseQuantityA11y": "Increase quantity, currently {quantity}",
-    "decreaseQuantityA11y": "Decrease quantity, currently {quantity}"
+    "decreaseQuantityA11y": "Decrease quantity, currently {quantity}",
+    "openProductDetailA11y": "Open product details for {name}"
   }
 }

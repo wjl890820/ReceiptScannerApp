@@ -424,6 +424,9 @@
     "addToShoppingList": "買い物リストに追加",
     "addedToShoppingList": "追加済み",
     "addToShoppingListA11y": "買い物リストに追加",
+    "removeFromShoppingList": "買い物リストから削除",
+    "removedFromShoppingList": "買い物リストから削除しました",
+    "removeFromShoppingListA11y": "買い物リストから削除",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品シリーズ",
@@ -933,6 +936,7 @@
     "errorMessage": "買い物リストを読み込めませんでした",
     "alreadyOnList": "この商品はすでに買い物リストにあります。",
     "increaseQuantityA11y": "数量を増やす、現在 {quantity}",
-    "decreaseQuantityA11y": "数量を減らす、現在 {quantity}"
+    "decreaseQuantityA11y": "数量を減らす、現在 {quantity}",
+    "openProductDetailA11y": "{name} の商品詳細を開く"
   }
 }
