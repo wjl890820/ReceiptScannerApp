@@ -23,6 +23,14 @@ import { retainOccurrenceRepresentativeReceipts } from '@/lib/canonicalPurchaseO
 import { listReceiptsForAnalysis } from '@/lib/db';
 import { resolveCurrentLocalReceiptOwnerScope } from '@/lib/receiptOwnershipScope';
 import {
+  commitAnalysisFocusHeavySnapshot,
+  tryReuseAnalysisFocusHeavySnapshot,
+} from '@/lib/analysisFocusHeavySnapshot';
+import {
+  readTabFocusDataGenerations,
+  shouldApplyAnalysisHeavyLoadResult,
+} from '@/lib/tabFocusDataGenerations';
+import {
   buildAnalysisReleaseViewModel,
 } from '@/lib/analysisPresentation';
 import type { AnalysisPriceChangesSurface } from '@/lib/analysisPriceSurfaces';
@@ -123,6 +131,58 @@ export default function AnalysisScreen() {
     const totalStarted = Date.now();
     let analyticsReceipts: AnalysisLoadedTruth['receipts'] | null = null;
     try {
+      const generationCheckStarted = Date.now();
+      const startOwnerScope = await resolveCurrentLocalReceiptOwnerScope();
+      const startOwnerKey =
+        startOwnerScope.status === 'ready'
+          ? startOwnerScope.ownerKey
+          : 'anonymous';
+      const startGenerations = readTabFocusDataGenerations();
+      const reusable = tryReuseAnalysisFocusHeavySnapshot(startOwnerKey);
+      recordAnalysisRefreshTiming({
+        stage: 'focusGenerationCheck',
+        durationMs: Date.now() - generationCheckStarted,
+      });
+      if (reusable) {
+        const reuseStarted = Date.now();
+        analyticsReceipts = reusable.receipts;
+        if (loadCycleRef.current !== cycleId) {
+          return;
+        }
+        // Fresh nowMs keeps 7D/30D correct; owner already matched at hit time.
+        const rangeProjectionStarted = Date.now();
+        setTruthCycle({
+          cycleId,
+          receipts: analyticsReceipts,
+          nowMs: Date.now(),
+        });
+        hasTruthSnapshotRef.current = true;
+        setRefreshUi((state) => completeAnalysisRefresh(state));
+        recordAnalysisRefreshTiming({
+          stage: 'heavyTruthReuse',
+          durationMs: Date.now() - reuseStarted,
+          receiptCount: analyticsReceipts.length,
+          analyticsReceiptCount: analyticsReceipts.length,
+        });
+        recordAnalysisRefreshTiming({
+          stage: 'rangeProjection',
+          durationMs: Date.now() - rangeProjectionStarted,
+          receiptCount: analyticsReceipts.length,
+        });
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'refresh_success',
+          screen: 'analysis',
+          meta: {
+            cycleId,
+            mode,
+            heavyReuse: true,
+            analyticsReceiptCount: analyticsReceipts.length,
+          },
+        });
+        return;
+      }
+
       const allReceipts = await measureAnalysisRefreshStage(
         'listReceiptsForAnalysis',
         () => listReceiptsForAnalysis()
@@ -172,8 +232,29 @@ export default function AnalysisScreen() {
         });
         return;
       }
-      // Commit newer truth without clearing prior AP-3 binding.
-      // Cross-cycle render is fail-closed via resolveBoundPriceChangesSurface.
+      const endOwnerScope = await resolveCurrentLocalReceiptOwnerScope();
+      const endOwnerKey =
+        endOwnerScope.status === 'ready'
+          ? endOwnerScope.ownerKey
+          : 'anonymous';
+      const endGenerations = readTabFocusDataGenerations();
+      if (
+        !shouldApplyAnalysisHeavyLoadResult({
+          startOwnerKey,
+          startGenerations,
+          currentOwnerKey: endOwnerKey,
+          currentGenerations: endGenerations,
+          requestStillCurrent: loadCycleRef.current === cycleId,
+        })
+      ) {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'refresh_superseded',
+          screen: 'analysis',
+          meta: { cycleId, mode, stage: 'generation_drift' },
+        });
+        return;
+      }
       setTruthCycle({
         cycleId,
         receipts: analyticsReceipts,
@@ -181,6 +262,11 @@ export default function AnalysisScreen() {
       });
       hasTruthSnapshotRef.current = true;
       setRefreshUi((state) => completeAnalysisRefresh(state));
+      commitAnalysisFocusHeavySnapshot({
+        ownerKey: endOwnerKey,
+        startGenerations,
+        receipts: analyticsReceipts,
+      });
       recordDiagnosticEvent({
         category: 'lifecycle',
         name: 'refresh_success',

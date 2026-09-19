@@ -40,6 +40,14 @@ import {
   projectHistorySearchToPurchaseTruth,
   resolveHistoryPurchaseDeleteIds,
 } from '@/lib/historyPurchaseTruth';
+import {
+  commitHistoryFocusHeavySnapshot,
+  tryReuseHistoryFocusHeavySnapshot,
+} from '@/lib/historyFocusHeavySnapshot';
+import {
+  readTabFocusDataGenerations,
+  shouldApplyHistoryHeavyLoadResult,
+} from '@/lib/tabFocusDataGenerations';
 import { buildHistoryMonthSections } from '@/lib/historyMonthPresentation';
 import { buildTopCategories, buildHistoryMetaLine } from '@/lib/receiptListHelpers';
 import { formatDate } from '@/lib/formatDate';
@@ -143,7 +151,7 @@ export default function HistoryScreen() {
     }
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { force?: boolean }) => {
     const loadGeneration = beginAsyncRequestGeneration(historyLoadGenerationRef);
     const started = Date.now();
     recordDiagnosticEvent({
@@ -152,6 +160,45 @@ export default function HistoryScreen() {
       screen: 'history',
     });
     try {
+      const startOwnerScope = await resolveCurrentLocalReceiptOwnerScope();
+      const startOwnerKey =
+        startOwnerScope.status === 'ready' ? startOwnerScope.ownerKey : '';
+      const startGenerations = readTabFocusDataGenerations();
+      const reusable = options?.force
+        ? null
+        : tryReuseHistoryFocusHeavySnapshot(startOwnerKey);
+      if (reusable) {
+        if (
+          !shouldApplyAsyncRequestGeneration(
+            loadGeneration,
+            historyLoadGenerationRef.current
+          )
+        ) {
+          return;
+        }
+        purchaseTruthRef.current = reusable.truth;
+        setRows(reusable.visibleRows);
+        const durationMs = Date.now() - started;
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          // eslint-disable-next-line no-console
+          console.log('[HistoryFocusTiming]', {
+            stage: 'heavySnapshotReuse',
+            durationMs,
+            receiptCount: reusable.visibleRows.length,
+          });
+        }
+        recordDiagnosticTiming('history', 'total', durationMs, {
+          receiptCount: reusable.visibleRows.length,
+          success: true,
+          heavyReuse: true,
+        });
+        logger.info(
+          'HistoryPerf',
+          `heavyReuse=true durationMs=${durationMs} receiptCount=${reusable.visibleRows.length}`
+        );
+        return;
+      }
+
       const listStarted = Date.now();
       const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
       const receiptLoadMs = Date.now() - listStarted;
@@ -185,8 +232,41 @@ export default function HistoryScreen() {
       ) {
         return;
       }
+
+      // A2: validate owner + generation BEFORE any UI/truth apply.
+      const liveOwnerScope = await resolveCurrentLocalReceiptOwnerScope();
+      const liveOwnerKey =
+        liveOwnerScope.status === 'ready' ? liveOwnerScope.ownerKey : '';
+      const liveGenerations = readTabFocusDataGenerations();
+      if (
+        !shouldApplyHistoryHeavyLoadResult({
+          startOwnerKey,
+          startAnalyticsGeneration: startGenerations.analyticsGeneration,
+          currentOwnerKey: liveOwnerKey,
+          currentAnalyticsGeneration: liveGenerations.analyticsGeneration,
+          requestStillCurrent: shouldApplyAsyncRequestGeneration(
+            loadGeneration,
+            historyLoadGenerationRef.current
+          ),
+        })
+      ) {
+        recordDiagnosticEvent({
+          category: 'lifecycle',
+          name: 'refresh_superseded',
+          screen: 'history',
+          meta: { stage: 'pre_apply_drift' },
+        });
+        return;
+      }
+
       purchaseTruthRef.current = truth;
       setRows(truth.visibleRows);
+      commitHistoryFocusHeavySnapshot({
+        ownerKey: liveOwnerKey,
+        startGenerations,
+        visibleRows: truth.visibleRows,
+        truth,
+      });
       const durationMs = Date.now() - started;
       if (typeof __DEV__ !== 'undefined' && __DEV__) {
         // eslint-disable-next-line no-console
@@ -320,7 +400,7 @@ export default function HistoryScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([
-      load(),
+      load({ force: true }),
       loadPersonalInventory(),
       normalizeReceiptItemSearchQuery(searchQueryRef.current)
         ? executeSearch(searchQueryRef.current)

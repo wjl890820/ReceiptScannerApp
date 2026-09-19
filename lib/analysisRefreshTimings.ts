@@ -12,6 +12,9 @@ export type AnalysisRefreshTimingStage =
   | 'buildAnalysisTruthSnapshot'
   | 'buildAnalysisAllTimeStats'
   | 'buildAnalysisReleaseViewModel'
+  | 'focusGenerationCheck'
+  | 'heavyTruthReuse'
+  | 'rangeProjection'
   | 'total';
 
 export type AnalysisRefreshTimingSample = {

@@ -109,6 +109,14 @@ async function runAdoptionForSnapshot(
       invalidatePersonalProductEndpointInventory('ownership_adoption');
       invalidateAnalyticsReceiptSelection('ownership_adoption');
       try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { clearTabFocusHeavySnapshots } =
+          require('./tabFocusHeavySnapshots') as typeof import('./tabFocusHeavySnapshots');
+        clearTabFocusHeavySnapshots();
+      } catch {
+        // nonfatal
+      }
+      try {
         const db = await getDb();
         await enqueueUpsertIntentsForReceiptIds(
           db,

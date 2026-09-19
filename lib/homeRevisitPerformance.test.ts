@@ -101,7 +101,7 @@ describe('Home refresh production wiring', () => {
     expect(insightsSource).not.toContain('backgroundRefreshing && (');
   });
 
-  it('still revalidates Home and Pending Review on every focus', () => {
+  it('still refreshes volatile Home state on every focus; heavy work may dirty-skip', () => {
     expect(homeSource).toContain('useFocusEffect(');
     expect(homeSource).toContain('requestVisibleRefresh');
     expect(homeSource).toContain('createHomeRefreshCoordinator');
@@ -109,6 +109,9 @@ describe('Home refresh production wiring', () => {
     expect(homeSource).toContain('isHomeRoutePath(pathname)');
     expect(homeSource).toContain('runHomeShoppingListRefresh');
     expect(homeSource).toContain('shoppingListRefreshGenerationRef');
+    expect(homeSource).toContain('tryReuseHomeFocusHeavySnapshot');
+    expect(homeSource).toContain('refreshHomeNextPurchaseFromProfiles');
+    expect(homeSource).toContain('commitHomeFocusHeavySnapshot');
   });
 
   it('coalesces focus and pathname through one coordinator', () => {

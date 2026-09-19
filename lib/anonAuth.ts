@@ -55,6 +55,13 @@ let _state: AuthState = { ...INITIAL_STATE };
 let _inflight: Promise<AuthState> | null = null;
 let _lastFailureAtMs = 0;
 const RETRY_COOLDOWN_MS = 60_000;
+/**
+ * Session-lifecycle revision for remounting mounted tab UI.
+ * Not an identity authority — receipt ownership still uses
+ * resolveCurrentLocalReceiptOwnerScope(). Bumped on real external-session /
+ * authenticated-userId transitions so previous owners' React state is wiped.
+ */
+let _sessionLifecycleRevision = 0;
 
 type Listener = (state: AuthState) => void;
 const _listeners = new Set<Listener>();
@@ -69,7 +76,40 @@ function emit(): void {
   }
 }
 
+function authUserId(state: AuthState): string | null {
+  return state.status === 'authenticated' ? state.userId : null;
+}
+
+function bumpSessionLifecycleRevision(): void {
+  _sessionLifecycleRevision += 1;
+}
+
+/** Lifecycle epoch for tab remount keys (not owner identity). */
+export function getAuthSessionLifecycleRevision(): number {
+  return _sessionLifecycleRevision;
+}
+
+function clearTabFocusHeavySnapshotsBestEffort(): void {
+  try {
+    // Lazy require avoids pulling tab snapshot graph into every anonAuth import path.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { clearTabFocusHeavySnapshots } =
+      require('./tabFocusHeavySnapshots') as typeof import('./tabFocusHeavySnapshots');
+    clearTabFocusHeavySnapshots();
+  } catch {
+    // Nonfatal — next focus will miss on ownerKey mismatch if clear failed.
+  }
+}
+
 function setState(next: AuthState): AuthState {
+  const prevUserId = authUserId(_state);
+  const nextUserId = authUserId(next);
+  // Authoritative session/owner transitions must drop screen heavy snapshots
+  // and remount mounted tab React state (via sessionLifecycleRevision).
+  if (prevUserId !== nextUserId) {
+    bumpSessionLifecycleRevision();
+    clearTabFocusHeavySnapshotsBestEffort();
+  }
   _state = next;
   emit();
   return _state;
@@ -247,6 +287,11 @@ export function bootstrapAnonAuth(): void {
  * (e.g. after Apple linkIdentity / signInWithIdToken). Does not sign out.
  */
 export function applyExternalSession(session: Session): AuthState {
+  // Always bump lifecycle + clear heavy snapshots on explicit external session
+  // apply (uid_changed / Apple link / restore), including same-UID re-apply.
+  // Remount must not wait for a generation bump or ownerKey miss alone.
+  bumpSessionLifecycleRevision();
+  clearTabFocusHeavySnapshotsBestEffort();
   return setState(sessionToState(session));
 }
 
@@ -285,5 +330,6 @@ export function __resetAnonAuthForTests(): void {
   _state = { ...INITIAL_STATE };
   _inflight = null;
   _lastFailureAtMs = 0;
+  _sessionLifecycleRevision = 0;
   _listeners.clear();
 }

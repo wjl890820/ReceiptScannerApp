@@ -54,8 +54,20 @@ import {
 } from '@/lib/engagementMilestones';
 import {
   buildHomeProgressiveExperience,
+  buildHomeProgressiveExperienceBundle,
+  refreshHomeNextPurchaseFromProfiles,
   type HomeProgressiveExperience,
 } from '@/lib/homeProgressiveExperience';
+import {
+  commitHomeFocusHeavySnapshot,
+  tryReuseHomeFocusHeavySnapshot,
+} from '@/lib/homeFocusHeavySnapshot';
+import {
+  readTabFocusDataGenerations,
+  shouldApplyHomeHeavyReuseResult,
+  shouldBlessHomeHeavySnapshot,
+  tabFocusDataGenerationsEqual,
+} from '@/lib/tabFocusDataGenerations';
 import { loadPersonalProductEndpointInventoryWithDb } from '@/lib/personalProductEndpointInventory';
 import { resolveCurrentLocalReceiptOwnerScope } from '@/lib/receiptOwnershipScope';
 import {
@@ -92,6 +104,7 @@ import {
   listShoppingListItems,
 } from '@/lib/shoppingList';
 import type { NextPurchaseCandidate } from '@/lib/nextPurchaseCandidates';
+import type { RepeatProductProfile } from '@/lib/repeatProductProfile';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 export default function HomeScreen() {
   const router = useRouter();
@@ -146,6 +159,77 @@ export default function HomeScreen() {
       beginHomeRefreshTimingCapture();
       const totalStarted = Date.now();
       try {
+        const generationCheckStarted = Date.now();
+        // REQUIRED: resolve owner before snapshot hit (never generation-only).
+        const reuseOwnerScope = await resolveCurrentLocalReceiptOwnerScope();
+        let reuseOwnerKey =
+          reuseOwnerScope.status === 'ready' ? reuseOwnerScope.ownerKey : '';
+        let startGenerations = readTabFocusDataGenerations();
+        const reusable = tryReuseHomeFocusHeavySnapshot(reuseOwnerKey);
+        recordHomeRefreshTiming({
+          stage: 'focusGenerationCheck',
+          durationMs: Date.now() - generationCheckStarted,
+        });
+        if (reusable) {
+          const reuseStarted = Date.now();
+          const projected = await measureHomeRefreshStage(
+            'timeProjection',
+            () =>
+              refreshHomeNextPurchaseFromProfiles(
+                reusable.experience,
+                reusable.repeatProfiles,
+                Date.now()
+              )
+          );
+          // Post-await re-check: owner + generations may have drifted during await.
+          const postOwnerScope = await resolveCurrentLocalReceiptOwnerScope();
+          const postOwnerKey =
+            postOwnerScope.status === 'ready' ? postOwnerScope.ownerKey : '';
+          const postGenerations = readTabFocusDataGenerations();
+          const requestStillLatest = isLatestHomeRefresh(
+            requestGeneration,
+            refreshGenerationRef.current
+          );
+          const canApply = canApplyHomeUi(options);
+          if (
+            !shouldApplyHomeHeavyReuseResult({
+              snapshotOwnerKey: reusable.ownerKey,
+              snapshotGenerations: reusable.generations,
+              currentOwnerKey: postOwnerKey,
+              currentGenerations: postGenerations,
+              requestStillLatest,
+              canApply,
+            })
+          ) {
+            // Superseded / not visible → discard only. Still-latest drift →
+            // abandon reuse and fall through to a fresh heavy rebuild.
+            if (!requestStillLatest || !canApply) {
+              recordHomeRefreshTiming({
+                stage: 'total',
+                durationMs: Date.now() - totalStarted,
+              });
+              return;
+            }
+            reuseOwnerKey = postOwnerKey;
+            startGenerations = postGenerations;
+          } else {
+            setReceipts(reusable.displayReceipts);
+            setHomeExperience(projected);
+            hasCompleteSnapshotRef.current = true;
+            setHomeRefreshState(completeHomeRefresh());
+            recordHomeRefreshTiming({
+              stage: 'heavySnapshotReuse',
+              durationMs: Date.now() - reuseStarted,
+              receiptCount: reusable.displayReceipts.length,
+            });
+            recordHomeRefreshTiming({
+              stage: 'total',
+              durationMs: Date.now() - totalStarted,
+            });
+            return;
+          }
+        }
+
         const allReceipts = await measureHomeRefreshStage('listReceipts', () =>
           listReceipts()
         );
@@ -269,6 +353,8 @@ export default function HomeScreen() {
         const homeReferenceNow = Date.now();
 
         let finalCompleteExperience: HomeProgressiveExperience;
+        let heavyRepeatProfiles: readonly RepeatProductProfile[] = [];
+        let progressiveAnalyticsSucceeded = true;
         try {
           const [evaluation, productContext, personalInventory] =
             await Promise.all([
@@ -305,8 +391,8 @@ export default function HomeScreen() {
           }
           finalCompleteExperience = await measureHomeRefreshStage(
             'buildHomeProgressiveExperience',
-            () =>
-              buildHomeProgressiveExperience(
+            () => {
+              const bundle = buildHomeProgressiveExperienceBundle(
                 analyticsReceipts,
                 evaluation,
                 false,
@@ -314,7 +400,10 @@ export default function HomeScreen() {
                 personalInventory,
                 homeReferenceNow,
                 longTermAnalyticsReceipts
-              ),
+              );
+              heavyRepeatProfiles = bundle.repeatProfiles;
+              return bundle.experience;
+            },
             {
               receiptCount: allReceipts.length,
               analyticsReceiptCount: analyticsReceipts.length,
@@ -323,10 +412,13 @@ export default function HomeScreen() {
           );
         } catch (analyticsError) {
           if (hadCompleteSnapshot) throw analyticsError;
+          // Displayable fallback only — do NOT bless this generation as
+          // successful heavy truth (no snapshot commit / complete marker).
+          progressiveAnalyticsSucceeded = false;
           logger.warn('Home', 'progressive analytics failed', {
             error: analyticsError,
           });
-          finalCompleteExperience = buildHomeProgressiveExperience(
+          const fallback = buildHomeProgressiveExperienceBundle(
             analyticsReceipts,
             null,
             true,
@@ -334,6 +426,8 @@ export default function HomeScreen() {
             null,
             homeReferenceNow
           );
+          finalCompleteExperience = fallback.experience;
+          heavyRepeatProfiles = fallback.repeatProfiles;
         }
         if (
           !isLatestHomeRefresh(
@@ -344,10 +438,45 @@ export default function HomeScreen() {
         ) {
           return;
         }
+        const liveOwnerScope = await resolveCurrentLocalReceiptOwnerScope();
+        const liveOwnerKey =
+          liveOwnerScope.status === 'ready' ? liveOwnerScope.ownerKey : '';
+        const endGenerations = readTabFocusDataGenerations();
+        // A2: after FINAL await, recompute real request/visibility — never hardcode true.
+        const requestStillLatest = isLatestHomeRefresh(
+          requestGeneration,
+          refreshGenerationRef.current
+        );
+        const canApply = canApplyHomeUi(options);
+        if (
+          !shouldApplyHomeHeavyReuseResult({
+            snapshotOwnerKey: reuseOwnerKey,
+            snapshotGenerations: startGenerations,
+            currentOwnerKey: liveOwnerKey,
+            currentGenerations: endGenerations,
+            requestStillLatest,
+            canApply,
+          })
+        ) {
+          return;
+        }
         setReceipts(allReceipts);
         setHomeExperience(finalCompleteExperience);
-        hasCompleteSnapshotRef.current = true;
         setHomeRefreshState(completeHomeRefresh());
+        if (
+          shouldBlessHomeHeavySnapshot({
+            progressiveAnalyticsSucceeded,
+          })
+        ) {
+          hasCompleteSnapshotRef.current = true;
+          commitHomeFocusHeavySnapshot({
+            ownerKey: liveOwnerKey,
+            startGenerations,
+            displayReceipts: allReceipts,
+            experience: finalCompleteExperience,
+            repeatProfiles: heavyRepeatProfiles,
+          });
+        }
       } catch (e: any) {
         if (
           !isLatestHomeRefresh(
@@ -457,11 +586,16 @@ export default function HomeScreen() {
   const refreshHomeWhenVisible = useCallback(
     async (ctx: { canApply: () => boolean }) => {
       const applyOptions = { canApply: ctx.canApply };
+      const volatileStarted = Date.now();
       await Promise.all([
         loadReceipts(applyOptions),
         refreshPendingReview(applyOptions),
         refreshShoppingListHomeState(applyOptions),
       ]);
+      recordHomeRefreshTiming({
+        stage: 'volatileRefresh',
+        durationMs: Date.now() - volatileStarted,
+      });
     },
     [loadReceipts, refreshPendingReview, refreshShoppingListHomeState]
   );

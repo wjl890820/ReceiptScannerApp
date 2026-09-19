@@ -21,6 +21,7 @@ import {
   buildRepeatProductProfiles,
   mapRepeatProductProfileToHomeFrequentProduct,
   takeHomeRepeatProducts,
+  type RepeatProductProfile,
 } from './repeatProductProfile';
 import { filterV1SupportedReceipts } from './merchantType';
 import type { PersonalProductEndpointInventory } from './personalProductEndpointInventory';
@@ -87,15 +88,24 @@ function buildHomeRepeatSurfaces(args: {
 }): {
   frequentProducts: MilestoneFrequentProduct[];
   nextPurchaseCandidates: NextPurchaseCandidate[];
+  repeatProfiles: RepeatProductProfile[];
 } {
   try {
     const { isProductIdentityPriceHistoryV1Enabled } =
       require('./env') as typeof import('./env');
     if (!isProductIdentityPriceHistoryV1Enabled()) {
-      return { frequentProducts: [], nextPurchaseCandidates: [] };
+      return {
+        frequentProducts: [],
+        nextPurchaseCandidates: [],
+        repeatProfiles: [],
+      };
     }
   } catch {
-    return { frequentProducts: [], nextPurchaseCandidates: [] };
+    return {
+      frequentProducts: [],
+      nextPurchaseCandidates: [],
+      repeatProfiles: [],
+    };
   }
 
   try {
@@ -114,10 +124,57 @@ function buildHomeRepeatSurfaces(args: {
       nextPurchaseCandidates: buildNextPurchaseCandidates(allProfiles, {
         now: args.now,
       }),
+      repeatProfiles: allProfiles,
     };
   } catch {
-    return { frequentProducts: [], nextPurchaseCandidates: [] };
+    return {
+      frequentProducts: [],
+      nextPurchaseCandidates: [],
+      repeatProfiles: [],
+    };
   }
+}
+
+export type HomeProgressiveExperienceBuildResult = {
+  experience: HomeProgressiveExperience;
+  /** Uncapped Repeat profiles for time-sensitive Next Purchase reproject. */
+  repeatProfiles: readonly RepeatProductProfile[];
+};
+
+/**
+ * Recompute Next Purchase from cached Repeat profiles with a fresh `now`.
+ * Does not rebuild receipts / occurrence / Repeat grouping.
+ */
+export function refreshHomeNextPurchaseFromProfiles(
+  experience: HomeProgressiveExperience,
+  repeatProfiles: readonly RepeatProductProfile[],
+  now: number
+): HomeProgressiveExperience {
+  const frequentUnlocked =
+    experience.stage === 'frequent' || experience.stage === 'profile';
+  if (!frequentUnlocked) {
+    return {
+      ...experience,
+      nextPurchaseCandidates: [],
+    };
+  }
+  const referenceNow =
+    typeof now === 'number' && Number.isFinite(now) && now > 0 ? now : 0;
+  try {
+    const { isProductIdentityPriceHistoryV1Enabled } =
+      require('./env') as typeof import('./env');
+    if (!isProductIdentityPriceHistoryV1Enabled()) {
+      return { ...experience, nextPurchaseCandidates: [] };
+    }
+  } catch {
+    return { ...experience, nextPurchaseCandidates: [] };
+  }
+  return {
+    ...experience,
+    nextPurchaseCandidates: buildNextPurchaseCandidates(repeatProfiles, {
+      now: referenceNow,
+    }),
+  };
 }
 
 /**
@@ -143,6 +200,30 @@ export function buildHomeProgressiveExperience(
   now: number = 0,
   longTermAnalyticsReceipts?: readonly ReceiptRow[] | null
 ): HomeProgressiveExperience {
+  return buildHomeProgressiveExperienceBundle(
+    receipts,
+    evaluation,
+    analyticsUnavailable,
+    productRows,
+    personalInventory,
+    now,
+    longTermAnalyticsReceipts
+  ).experience;
+}
+
+/**
+ * Same as {@link buildHomeProgressiveExperience} plus uncapped Repeat profiles
+ * for focus dirty-skip Next Purchase reproject.
+ */
+export function buildHomeProgressiveExperienceBundle(
+  receipts: ReceiptRow[],
+  evaluation: CurrentEngagementMilestoneEvaluation | null,
+  analyticsUnavailable = false,
+  productRows: readonly EngagementProductRow[] = [],
+  personalInventory: PersonalProductEndpointInventory | null = null,
+  now: number = 0,
+  longTermAnalyticsReceipts?: readonly ReceiptRow[] | null
+): HomeProgressiveExperienceBuildResult {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const localCount = countSupportedReceipts(receipts);
   const status =
@@ -176,7 +257,11 @@ export function buildHomeProgressiveExperience(
         personalInventory,
         now: referenceNow,
       })
-    : { frequentProducts: [], nextPurchaseCandidates: [] };
+    : {
+        frequentProducts: [],
+        nextPurchaseCandidates: [],
+        repeatProfiles: [],
+      };
   const profile =
     currentResult?.milestone === 10 ? currentResult : null;
   const dataCoverageIncomplete =
@@ -185,14 +270,17 @@ export function buildHomeProgressiveExperience(
       : false;
 
   return {
-    stage,
-    status,
-    latestPurchase,
-    recentInsight,
-    frequentProducts: repeatSurfaces.frequentProducts,
-    nextPurchaseCandidates: repeatSurfaces.nextPurchaseCandidates,
-    profile,
-    dataCoverageIncomplete,
-    analyticsUnavailable,
+    experience: {
+      stage,
+      status,
+      latestPurchase,
+      recentInsight,
+      frequentProducts: repeatSurfaces.frequentProducts,
+      nextPurchaseCandidates: repeatSurfaces.nextPurchaseCandidates,
+      profile,
+      dataCoverageIncomplete,
+      analyticsUnavailable,
+    },
+    repeatProfiles: repeatSurfaces.repeatProfiles,
   };
 }

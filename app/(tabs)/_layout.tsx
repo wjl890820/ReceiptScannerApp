@@ -5,6 +5,10 @@ import React, { useEffect, useState } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import {
+  getAuthSessionLifecycleRevision,
+  subscribeAuthState,
+} from '@/lib/anonAuth';
 import { subscribeLocaleChange, t } from '@/lib/i18n';
 import { TAB_BAR_PRESENTATION } from '@/lib/tabBarPresentation';
 import { resolveTabTitles } from '@/lib/tabTitles';
@@ -25,14 +29,27 @@ const HIDDEN_TAB_BAR_STYLE = {
 export default function TabLayout() {
   // Refresh labels on locale change (also covers root Stack remount races).
   const [tabTitles, setTabTitles] = useState(readTabTitles);
+  // Remount Home/Analysis/History (and Settings) on session lifecycle transitions
+  // so previously mounted owner React state cannot remain renderable after
+  // login/logout/uid_changed/account switch. Identity authority stays in
+  // resolveCurrentLocalReceiptOwnerScope(); this revision is lifecycle only.
+  const [sessionLifecycleRevision, setSessionLifecycleRevision] = useState(
+    getAuthSessionLifecycleRevision
+  );
   useEffect(() => {
     return subscribeLocaleChange(() => {
       setTabTitles(readTabTitles());
     });
   }, []);
+  useEffect(() => {
+    return subscribeAuthState(() => {
+      setSessionLifecycleRevision(getAuthSessionLifecycleRevision());
+    });
+  }, []);
 
   return (
     <Tabs
+      key={sessionLifecycleRevision}
       screenOptions={{
         headerShown: false,
         tabBarButton: HapticTab,

@@ -17,6 +17,10 @@ export type HomeRefreshTimingStage =
   | 'productContext'
   | 'personalInventory'
   | 'buildHomeProgressiveExperience'
+  | 'focusGenerationCheck'
+  | 'heavySnapshotReuse'
+  | 'volatileRefresh'
+  | 'timeProjection'
   | 'total';
 
 export type HomeRefreshTimingSample = {
