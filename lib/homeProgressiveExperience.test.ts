@@ -122,18 +122,25 @@ describe('progressive Home integration boundaries', () => {
   });
 
   it('keeps the existing scan, batch, retry, recovery, and review wiring', () => {
-    const source = fs.readFileSync(
+    const homeSource = fs.readFileSync(
       path.resolve(__dirname, '../app/(tabs)/index.tsx'),
       'utf8'
     );
-    expect(source).toContain('runScanPipelineToReview');
-    expect(source).toContain('allowsMultipleSelection: true');
-    expect(source).toContain('processMultipleReceiptImages');
-    expect(source).toContain('retryFailedImages');
-    expect(source).toContain('retryAllImages');
-    expect(source).toContain('getPendingScanReviewState');
-    expect(source).toContain('router.push(`/scan-review/${result.draftId}`');
-    expect(source).toContain('onScan={handleScanReceipt}');
+    const launcherSource = fs.readFileSync(
+      path.resolve(__dirname, '../hooks/useReceiptScanLauncher.ts'),
+      'utf8'
+    );
+    expect(homeSource).toContain('useReceiptScanLauncher');
+    expect(homeSource).toContain('onScan={launchReceiptScan}');
+    expect(homeSource).toContain('getPendingScanReviewState');
+    expect(launcherSource).toContain('runScanPipelineToReview');
+    expect(launcherSource).toContain('allowsMultipleSelection: true');
+    expect(launcherSource).toContain('processMultipleReceiptImages');
+    expect(launcherSource).toContain('retryFailedImages');
+    expect(launcherSource).toContain('retryAllImages');
+    expect(launcherSource).toContain(
+      'router.push(`/scan-review/${result.draftId}`'
+    );
   });
 
   it('keeps the new Home presentation deterministic and offline', () => {

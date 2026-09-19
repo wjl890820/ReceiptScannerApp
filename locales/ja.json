@@ -427,6 +427,7 @@
     "removeFromShoppingList": "買い物リストから削除",
     "removedFromShoppingList": "買い物リストから削除しました",
     "removeFromShoppingListA11y": "買い物リストから削除",
+    "scanReceipt": "レシートをスキャン",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品シリーズ",

@@ -427,6 +427,7 @@
     "removeFromShoppingList": "移出购物清单",
     "removedFromShoppingList": "已移出购物清单",
     "removeFromShoppingListA11y": "移出购物清单",
+    "scanReceipt": "扫描小票",
     "targetType": {
       "sku": "具体商品",
       "canonical": "商品系列",

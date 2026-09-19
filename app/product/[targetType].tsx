@@ -22,6 +22,7 @@ import {
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { navigateBackOrHome } from '@/lib/navigationBack';
+import { useReceiptScanLauncher } from '@/hooks/useReceiptScanLauncher';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
 import { buildProductDetailExcludedReceiptIds } from '@/lib/productDetailOccurrenceExclusions';
@@ -84,6 +85,10 @@ export default function ProductDetailScreen() {
   >(null);
   const [shoppingListCtaBusy, setShoppingListCtaBusy] = useState(false);
   const alreadyOnShoppingList = activeShoppingListItemId != null;
+  const {
+    launchReceiptScan,
+    isScanning: receiptScanning,
+  } = useReceiptScanLauncher();
 
   useEffect(() => {
     let active = true;
@@ -340,6 +345,24 @@ export default function ProductDetailScreen() {
               {trustedShoppingIdentity && alreadyOnShoppingList
                 ? t('productDetail.removeFromShoppingList')
                 : t('productDetail.addToShoppingList')}
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={launchReceiptScan}
+            disabled={receiptScanning || shoppingListCtaBusy}
+            accessibilityRole="button"
+            accessibilityLabel={t('productDetail.scanReceipt')}
+            style={({ pressed }) => [
+              styles.scanReceiptCta,
+              pressed && { opacity: 0.55 },
+              (receiptScanning || shoppingListCtaBusy) &&
+                styles.scanReceiptCtaDisabled,
+            ]}
+          >
+            <Text style={styles.scanReceiptCtaText}>
+              {receiptScanning
+                ? t('home.scan.processing')
+                : t('productDetail.scanReceipt')}
             </Text>
           </Pressable>
           {primaryMerchant ? (
@@ -631,6 +654,25 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  scanReceiptCta: {
+    marginTop: 10,
+    minHeight: 44,
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.surfaceMuted,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: UI_COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  scanReceiptCtaDisabled: {
+    opacity: 0.55,
+  },
+  scanReceiptCtaText: {
+    color: UI_COLORS.textPrimary,
+    fontSize: 16,
+    fontWeight: '600',
   },
   productIconTile: {
     width: 34,

@@ -427,6 +427,7 @@
     "removeFromShoppingList": "Remove from Shopping List",
     "removedFromShoppingList": "Removed from Shopping List",
     "removeFromShoppingListA11y": "Remove from Shopping List",
+    "scanReceipt": "Scan Receipt",
     "targetType": {
       "sku": "Specific product",
       "canonical": "Product series",
