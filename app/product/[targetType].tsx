@@ -24,8 +24,8 @@ import { SectionTitle } from '@/components/SectionTitle';
 import { navigateBackOrHome } from '@/lib/navigationBack';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
-import { selectAnalyticsReceipts } from '@/lib/analyticsReceiptSelection';
-import { listReceipts } from '@/lib/db';
+import { buildProductDetailExcludedReceiptIds } from '@/lib/productDetailOccurrenceExclusions';
+import { listReceiptsForAnalysis } from '@/lib/db';
 import { formatDate } from '@/lib/formatDate';
 import { formatProductPriceAmount } from '@/lib/productPricePresentation';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -98,9 +98,10 @@ export default function ProductDetailScreen() {
     void (async () => {
       let excludedReceiptIds: ReadonlySet<string> | undefined;
       try {
-        const allReceipts = await listReceipts();
-        excludedReceiptIds =
-          selectAnalyticsReceipts(allReceipts).excludedDuplicateReceiptIds;
+        // Full owner-scoped history (uncapped) — must match Product History
+        // aggregation universe, not History display listReceipts(200).
+        const allReceipts = await listReceiptsForAnalysis();
+        excludedReceiptIds = buildProductDetailExcludedReceiptIds(allReceipts);
       } catch (e) {
         console.error('[ProductDetail] analytics selection failed', e);
       }

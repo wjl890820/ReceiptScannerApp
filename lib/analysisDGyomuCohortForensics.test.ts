@@ -35,6 +35,7 @@ function makeReceipt(
     id,
     created_at: rest.created_at ?? TX_AT,
     transaction_at: rest.transaction_at ?? TX_AT,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: rest.total ?? 3393,
     tax: rest.tax ?? 251,
@@ -64,6 +65,7 @@ describe('Analysis D Gyomu ¥3,393 cohort forensic export', () => {
     const wrongTime = makeReceipt({
       id: 'wrong-time',
       transaction_at: TX_AT + 60_000,
+    transaction_time_precision: 'second',
     });
     const wrongTotal = makeReceipt({ id: 'wrong-total', total: 3400 });
     expect(receiptMatchesGyomu3393Cohort(inCohort)).toBe(true);

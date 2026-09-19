@@ -38,16 +38,30 @@ function receipt(
   overrides: Partial<ReceiptRow> = {}
 ): ReceiptRow {
   const index = Number(String(id).replace(/\D/g, '')) || 1;
+  const transactionAt =
+    overrides.transaction_at === undefined
+      ? index * DAY_MS
+      : overrides.transaction_at;
+  const precision =
+    overrides.transaction_time_precision ??
+    (transactionAt == null ? 'unknown' : 'second');
   return {
     id,
     created_at: index * DAY_MS,
-    transaction_at: index * DAY_MS,
+    transaction_at: transactionAt,
+    transaction_time_precision: precision,
     image_uri: '',
     total: 100,
     tax: 0,
     tax_is_known: 0,
     currency: 'JPY',
-    analysis_json: JSON.stringify({ items: [] }),
+    analysis_json: JSON.stringify({
+      items: [],
+      transaction_time_precision: precision,
+      ...(precision === 'second' && transactionAt != null
+        ? { transactionDate: '2026-07-06 11:44:46' }
+        : {}),
+    }),
     merchant_raw: 'イオン',
     merchant_normalized: 'イオン',
     merchant_type: 'supermarket',
@@ -224,11 +238,14 @@ describe('repeatProductProfile production identity path', () => {
         merchant_normalized:
           index % 2 === 0 ? '業務スーパー古川店' : '業務スーパー古川',
         analysis_json: JSON.stringify({
+          transactionDate: '2026-07-06 11:44:46',
+          transaction_time_precision: 'second',
           items: gyomuRealItems(
             itemOrders[index]!,
             id === 'auq8r7qU-EN_l38Y2xDea' ? 'outlier' : 'standard'
           ),
         }),
+        transaction_time_precision: 'second',
       })
     );
   }
@@ -506,17 +523,33 @@ describe('repeatProductProfile production identity path', () => {
   it('E. same-day different canonical receipts → occurrence 2 and both dates kept', () => {
     const sameDay = 1_700_000_000_000;
     const receipts = [
-      receipt('r1', { transaction_at: sameDay, created_at: sameDay }),
-      receipt('r2', { transaction_at: sameDay, created_at: sameDay + 1 }),
+      receipt('r1', {
+        transaction_at: sameDay,
+        created_at: sameDay,
+        total: 198,
+        analysis_json: JSON.stringify({
+          items: [{ name: 'コカ・コーラ 500ml', quantity: 1, lineTotal: 198 }],
+        }),
+      }),
+      receipt('r2', {
+        transaction_at: sameDay,
+        created_at: sameDay + 1,
+        total: 250,
+        analysis_json: JSON.stringify({
+          items: [{ name: 'コカ・コーラ 500ml', quantity: 1, lineTotal: 250 }],
+        }),
+      }),
     ];
     const rows = [
       productRow('r1', 'a', {
         displayName: 'コカ・コーラ 500ml',
         occurredAt: sameDay,
+        lineTotal: 198,
       }),
       productRow('r2', 'b', {
         displayName: 'コカ・コーラ 500ml',
         occurredAt: sameDay,
+        lineTotal: 250,
       }),
     ];
     const profiles = buildRepeatProductProfiles(receipts, rows);

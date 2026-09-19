@@ -93,6 +93,7 @@ export function applyEvidenceAwareRepresentativeOverride(args: {
             total: Number(receipt.total) || 0,
             itemCount: 0,
             hasExactTransactionTime: false,
+            transactionTimePrecision: 'unknown' as const,
             hasValidTransactionAt: receipt.transaction_at != null,
             taxKnown: receipt.tax_is_known === 1,
             structuralFingerprint: null,

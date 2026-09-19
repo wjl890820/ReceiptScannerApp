@@ -70,19 +70,31 @@ function makeReceipt(args: {
   userEdited?: number;
   note?: string | null;
   currency?: string | null;
+  transactionTimePrecision?: 'second' | 'minute' | 'date' | 'unknown';
 }): ReceiptRow {
   const itemSum = args.items.reduce((sum, item) => sum + (item.lineTotal || 0), 0);
+  const txAt =
+    args.transactionAt === undefined ? args.at : args.transactionAt;
+  const precision =
+    args.transactionTimePrecision ??
+    (txAt == null ? 'unknown' : 'second');
   return {
     id: args.id,
     created_at: args.createdAt ?? args.at,
-    transaction_at:
-      args.transactionAt === undefined ? args.at : args.transactionAt,
+    transaction_at: txAt,
+    transaction_time_precision: precision,
     image_uri: '',
     total: args.total ?? itemSum,
     tax: args.tax ?? 0,
     tax_is_known: args.taxIsKnown ?? 0,
     currency: args.currency === undefined ? 'JPY' : (args.currency as string),
-    analysis_json: JSON.stringify({ items: args.items }),
+    analysis_json: JSON.stringify({
+      items: args.items,
+      transaction_time_precision: precision,
+      ...(precision === 'second' && txAt != null
+        ? { transactionDate: '2026-07-06 11:44:46' }
+        : {}),
+    }),
     merchant_raw: args.merchantNormalized ?? 'イオン',
     merchant_normalized: args.merchantNormalized ?? 'イオン',
     merchant_type: args.merchantType,

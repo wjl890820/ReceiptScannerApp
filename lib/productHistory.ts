@@ -374,12 +374,31 @@ type PersonalProductHistoryDbRow = {
   specSourceText: string | null;
 };
 
+/**
+ * Authorize personal-product history rows against inventory membership, then
+ * apply effective exclusions:
+ *   caller options.excludedReceiptIds  (HC ∪ occurrence non-reps from Product Detail)
+ *   UNION
+ *   inventory.excludedDuplicateReceiptIds (HC-only from inventory build)
+ *
+ * Caller-supplied exclusions are never dropped; inventory HC is additive.
+ */
 export function selectAuthorizedPersonalProductHistoryRows(
   resolved: ResolvedPersonalProductTarget,
-  rows: readonly PersonalProductHistoryDbRow[]
+  rows: readonly PersonalProductHistoryDbRow[],
+  options: {
+    excludedReceiptIds?: ReadonlySet<string> | null;
+  } = {}
 ): PersonalProductHistoryDbRow[] {
   const memberSet = new Set(resolved.memberMerchantProductIds);
-  const excluded = resolved.inventory.excludedDuplicateReceiptIds;
+  const effectiveExcluded = new Set<string>(
+    resolved.inventory.excludedDuplicateReceiptIds
+  );
+  if (options.excludedReceiptIds) {
+    for (const id of options.excludedReceiptIds) {
+      effectiveExcluded.add(id);
+    }
+  }
   const seen = new Set<string>();
   const selected: PersonalProductHistoryDbRow[] = [];
 
@@ -393,7 +412,7 @@ export function selectAuthorizedPersonalProductHistoryRows(
     if (!inventoryItem || !memberSet.has(inventoryItem.merchantProductId)) {
       continue;
     }
-    if (excluded.has(row.receiptId)) continue;
+    if (effectiveExcluded.has(row.receiptId)) continue;
     if (seen.has(rowKey)) continue;
     seen.add(rowKey);
     selected.push(row);
@@ -476,7 +495,9 @@ async function loadPersonalProductHistorySummaryWithDb(
   );
 
   const matchedRows = projectTrustedConsumerItemAmounts(
-    selectAuthorizedPersonalProductHistoryRows(resolved, rows)
+    selectAuthorizedPersonalProductHistoryRows(resolved, rows, {
+      excludedReceiptIds: options.excludedReceiptIds,
+    })
   );
   if (!matchedRows.length) {
     return null;

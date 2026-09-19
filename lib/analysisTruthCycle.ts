@@ -2,10 +2,10 @@
  * Production Analysis truth cycle — one loaded receipt set + one nowMs clock.
  *
  * Input contract: `receipts` must already be duplicate-safe analytics candidates
- * (see app/(tabs)/analysis.tsx load boundary).
- *
- * Invariant: periodStats, itemCount, and insights for a given range all derive
- * from the same selectAnalysisPeriodReceiptSets(..., nowMs) contract.
+ * with one representative receipt per canonical purchase occurrence
+ * (selectAnalyticsReceipts → retainOccurrenceRepresentativeReceipts at the
+ * Analysis load boundary). Visit / spend / receipt-count metrics therefore
+ * count each physical purchase once.
  */
 
 import type { ReceiptRow } from './db';
@@ -19,7 +19,10 @@ import { calculateStats, type TimeRange, type WeeklyMonthlyStats } from './stats
 
 /** Loaded Analysis data captured once per focus/reload cycle. */
 export type AnalysisLoadedTruth = {
-  /** Duplicate-safe analytics receipts from selectAnalyticsReceipts. */
+  /**
+   * Occurrence-representative analytics receipts (HC survivors collapsed to one
+   * receipt per canonical purchase occurrence).
+   */
   receipts: ReceiptRow[];
   nowMs: number;
 };

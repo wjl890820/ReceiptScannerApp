@@ -289,6 +289,7 @@ function makeReceipt(args: {
     created_at: args.createdAt ?? args.at,
     transaction_at:
       args.transactionAt === undefined ? args.at : args.transactionAt,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: args.total ?? itemSum,
     tax: args.tax ?? 0,

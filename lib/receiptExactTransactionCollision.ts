@@ -356,7 +356,7 @@ export function evaluateExactTransactionReceiptCollision(
     evidence: [
       'distinct_receipt_observations',
       'transaction_source=receipt_ocr',
-      'exact_non_midnight_transaction_at',
+      'exact_second_precision_transaction_at',
       'exact_retailer_identity',
       'no_conflicting_store_hint',
       'currency=JPY',

@@ -4,6 +4,10 @@
  * unless callers explicitly pass fallbackToNow=true (save path must pass false).
  */
 
+import type { ReceiptTransactionPrecision } from './receiptEvidenceTruth/types';
+
+export type { ReceiptTransactionPrecision };
+
 export type ParseReceiptDateTimeOptions = {
   fallbackToNow?: boolean;
   /** Injected clock for tests — defaults to Date.now(). */
@@ -15,6 +19,12 @@ export type ParseReceiptDateTimeOptions = {
 export type NormalizeReceiptDateTimeOptions = {
   /** Costco / high-confidence MM/DD/YYYY when month and day are both ≤ 12. */
   allowAmbiguousMdy?: boolean;
+};
+
+export type ParseReceiptDateTimeResult = {
+  ms: number | null;
+  /** Source-string precision; never inferred from epoch second==0. */
+  precision: ReceiptTransactionPrecision;
 };
 
 function isCostcoMerchantHint(merchant?: string | null): boolean {
@@ -29,6 +39,51 @@ function isCostcoMerchantHint(merchant?: string | null): boolean {
 
 function isAmbiguousSlashMonthDay(month: number, day: number): boolean {
   return month >= 1 && month <= 12 && day >= 1 && day <= 12;
+}
+
+/**
+ * Infer durable time precision from the *source* datetime text.
+ * Does not inspect epoch values (seconds==0 must not imply minute-only).
+ */
+export function inferReceiptTransactionTimePrecision(
+  dateTimeStr: string | null | undefined
+): ReceiptTransactionPrecision {
+  if (!dateTimeStr || typeof dateTimeStr !== 'string') return 'unknown';
+  const trimmed = dateTimeStr.trim();
+  if (!trimmed) return 'unknown';
+
+  // Explicit seconds in common receipt / ISO forms.
+  if (
+    /(\d{1,2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:\s|$|Z|[+-]\d{2}:\d{2})/.test(
+      trimmed
+    ) ||
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(trimmed)
+  ) {
+    return 'second';
+  }
+
+  // Minute-level clock without seconds (after optional date).
+  if (
+    /(\d{4}).{0,12}(\d{1,2}).{0,12}(\d{1,2}).{0,12}(\d{1,2}):(\d{2})(?!\d|:)/.test(
+      trimmed
+    ) ||
+    /^\d{1,2}\/\d{1,2}(?:\/\d{4})?\s+\d{1,2}:\d{2}(?!\d|:)/.test(trimmed) ||
+    /^\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}$/.test(trimmed)
+  ) {
+    return 'minute';
+  }
+
+  // Date only (no HH:mm).
+  if (
+    /^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(trimmed) ||
+    /^\d{4}\s*[\/\-.]\s*\d{1,2}\s*[\/\-.]\s*\d{1,2}$/.test(trimmed) ||
+    /^\d{1,2}\s*\/\s*\d{1,2}\s*\/\s*\d{4}$/.test(trimmed) ||
+    /^\d{4}-\d{1,2}-\d{1,2}$/.test(trimmed)
+  ) {
+    return 'date';
+  }
+
+  return 'unknown';
 }
 
 /**
@@ -179,6 +234,18 @@ export function parseReceiptDateTime(
   fallbackToNow: boolean | ParseReceiptDateTimeOptions = false,
   nowMsArg?: number
 ): number | null {
+  return parseReceiptDateTimeWithPrecision(dateTimeStr, fallbackToNow, nowMsArg)
+    .ms;
+}
+
+/**
+ * Same as parseReceiptDateTime, plus source-text precision provenance.
+ */
+export function parseReceiptDateTimeWithPrecision(
+  dateTimeStr: string | null | undefined,
+  fallbackToNow: boolean | ParseReceiptDateTimeOptions = false,
+  nowMsArg?: number
+): ParseReceiptDateTimeResult {
   const options: ParseReceiptDateTimeOptions =
     typeof fallbackToNow === 'object' && fallbackToNow
       ? fallbackToNow
@@ -187,20 +254,29 @@ export function parseReceiptDateTime(
   const fallback = Boolean(options.fallbackToNow);
   const nowMs = options.nowMs ?? Date.now();
   const allowAmbiguousMdy = isCostcoMerchantHint(options.merchant);
+  const precision = inferReceiptTransactionTimePrecision(
+    typeof dateTimeStr === 'string' ? dateTimeStr : null
+  );
 
   if (!dateTimeStr || typeof dateTimeStr !== 'string') {
-    return fallback ? nowMs : null;
+    return { ms: fallback ? nowMs : null, precision: 'unknown' };
   }
   const trimmed = dateTimeStr.trim();
   if (!trimmed) {
-    return fallback ? nowMs : null;
+    return { ms: fallback ? nowMs : null, precision: 'unknown' };
   }
 
-  // 1) Deterministic receipt formats → Tokyo wall-clock components → +09:00 ISO.
   const normalized = normalizeReceiptDateTime(trimmed, { allowAmbiguousMdy });
   const workStr =
     normalized ||
     trimmed.replace(/[（(][月火水木金土日][)）]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Prefer precision from normalized form when source had seconds / minute / date.
+  const normalizedPrecision = inferReceiptTransactionTimePrecision(
+    normalized || workStr
+  );
+  const resolvedPrecision =
+    precision !== 'unknown' ? precision : normalizedPrecision;
 
   const withTime = workStr.match(
     /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/
@@ -214,7 +290,19 @@ export function parseReceiptDateTime(
       Number(withTime[5]),
       Number(withTime[6] ?? '0')
     );
-    if (ts != null && withinReasonableRange(ts, nowMs)) return ts;
+    if (ts != null && withinReasonableRange(ts, nowMs)) {
+      return {
+        ms: ts,
+        precision:
+          withTime[6] != null
+            ? 'second'
+            : resolvedPrecision === 'date'
+              ? 'date'
+              : resolvedPrecision === 'unknown'
+                ? 'minute'
+                : resolvedPrecision,
+      };
+    }
   }
 
   const dateOnly = workStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
@@ -227,11 +315,12 @@ export function parseReceiptDateTime(
       0,
       0
     );
-    if (ts != null && withinReasonableRange(ts, nowMs)) return ts;
+    if (ts != null && withinReasonableRange(ts, nowMs)) {
+      return { ms: ts, precision: 'date' };
+    }
   }
 
-  // MM/DD without year — assume current Tokyo calendar year
-  const md = workStr.match(/^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+  const md = workStr.match(/^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{2}))?$/);
   if (md) {
     const tokyoYear = Number(
       new Intl.DateTimeFormat('en-CA', {
@@ -247,16 +336,23 @@ export function parseReceiptDateTime(
       Number(md[4]),
       Number(md[5] ?? '0')
     );
-    if (ts != null && withinReasonableRange(ts, nowMs)) return ts;
+    if (ts != null && withinReasonableRange(ts, nowMs)) {
+      return {
+        ms: ts,
+        precision: md[5] != null ? 'second' : 'minute',
+      };
+    }
   }
 
-  // 2) Only after deterministic formats fail: verified machine ISO with timezone.
   const machineIso = parseStrictMachineIso(trimmed);
   if (machineIso != null && withinReasonableRange(machineIso, nowMs)) {
-    return machineIso;
+    return {
+      ms: machineIso,
+      precision: /T\d{2}:\d{2}:\d{2}/.test(trimmed) ? 'second' : 'unknown',
+    };
   }
 
-  return fallback ? nowMs : null;
+  return { ms: fallback ? nowMs : null, precision: resolvedPrecision };
 }
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;

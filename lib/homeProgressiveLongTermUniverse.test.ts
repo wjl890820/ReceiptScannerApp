@@ -36,6 +36,7 @@ function receipt(
     id,
     created_at: NEWEST_BASE,
     transaction_at: NEWEST_BASE,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: 100,
     tax: 0,
@@ -101,6 +102,7 @@ function buildNewestDisplaySlice(count = DISPLAY_LIMIT): ReceiptRow[] {
     receipt(`new${i}`, {
       created_at: NEWEST_BASE + i * DAY_MS,
       transaction_at: NEWEST_BASE + i * DAY_MS,
+    transaction_time_precision: 'second',
       analysis_json: JSON.stringify({
         items: [
           {
@@ -120,6 +122,7 @@ function buildOldStrongPurchases(count: number): ReceiptRow[] {
     receipt(`old-strong-${i}`, {
       created_at: OLD_BASE + i * 7 * DAY_MS,
       transaction_at: OLD_BASE + i * 7 * DAY_MS,
+    transaction_time_precision: 'second',
       total: 160,
       analysis_json: JSON.stringify({
         items: [
@@ -249,18 +252,21 @@ describe('Round 8 Home full-history Repeat / Next Purchase universe', () => {
     const keep = receipt('dup-keep', {
       created_at: at,
       transaction_at: at,
+    transaction_time_precision: 'second',
       total: 160,
       analysis_json: body,
     });
     const drop = receipt('dup-drop', {
       created_at: at + 1,
       transaction_at: at,
+    transaction_time_precision: 'second',
       total: 160,
       analysis_json: body,
     });
     const second = receipt('dup-second', {
       created_at: at + 14 * DAY_MS,
       transaction_at: at + 14 * DAY_MS,
+    transaction_time_precision: 'second',
       total: 160,
       analysis_json: body,
     });

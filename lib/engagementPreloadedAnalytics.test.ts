@@ -12,6 +12,9 @@ jest.mock('./env', () => ({
   isAnonAuthEnabled: () => false,
   getExtra: () => ({}),
 }));
+jest.mock('./db', () => ({
+  initIfNeeded: jest.fn(async () => undefined),
+}));
 jest.mock('./receiptOwnershipScope', () => ({
   resolveCurrentLocalReceiptOwnerScope: jest.fn(async () => ({
     status: 'ready',
@@ -48,6 +51,7 @@ function receipt(id: string): EngagementReceipt {
     id,
     created_at: 1_700_000_000_000,
     transaction_at: 1_700_000_000_000,
+    transaction_time_precision: 'second',
     merchant_raw: 'Lawson',
     merchant_normalized: 'lawson',
     merchant_type: 'convenience',
@@ -57,6 +61,8 @@ function receipt(id: string): EngagementReceipt {
     currency: 'JPY',
     analysis_json: JSON.stringify({
       total: 100,
+      transactionDate: '2023-11-14 22:13:20',
+      transaction_time_precision: 'second',
       items: [{ name: 'A', quantity: 1, unitPrice: 100, lineTotal: 100 }],
     }),
     final_total: null,

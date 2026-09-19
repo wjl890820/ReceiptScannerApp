@@ -195,6 +195,7 @@ export type EngagementReceipt = V1SupportedReceiptSource & {
   id: string;
   created_at: number;
   transaction_at: number | null;
+  transaction_time_precision?: string | null;
   merchant_raw: string | null;
   merchant_normalized: string | null;
   total: number;
@@ -1012,6 +1013,7 @@ export async function loadEngagementOwnerReceiptsWithDb(
        id,
        created_at,
        transaction_at,
+       COALESCE(transaction_time_precision, 'unknown') AS transaction_time_precision,
        merchant_raw,
        merchant_normalized,
        merchant_type,
@@ -1066,17 +1068,30 @@ async function selectEngagementAnalyticsReceipts(
     ownerKey,
     receipts: receipts as ReceiptRow[],
   });
+  let analyticsReceipts: ReceiptRow[];
+  let excludedDuplicateReceiptIds: Set<string>;
   if (!selection) {
     const { selectAnalyticsReceipts } = await import('./analyticsReceiptSelection');
     const fallback = selectAnalyticsReceipts(receipts as ReceiptRow[]);
-    return {
-      analyticsReceipts: fallback.analyticsReceipts as EngagementReceipt[],
-      excludedDuplicateReceiptIds: fallback.excludedDuplicateReceiptIds,
-    };
+    analyticsReceipts = fallback.analyticsReceipts;
+    excludedDuplicateReceiptIds = new Set(fallback.excludedDuplicateReceiptIds);
+  } else {
+    analyticsReceipts = selection.analyticsReceipts;
+    excludedDuplicateReceiptIds = new Set(selection.excludedDuplicateReceiptIds);
   }
+
+  // Same purchase-occurrence universe as Analysis / Repeat / PPH:
+  // analytics survivors → canonical occurrence representatives.
+  const { applyOccurrenceRepresentativeUniverse } = await import(
+    './canonicalPurchaseOccurrence'
+  );
+  const universe = applyOccurrenceRepresentativeUniverse(
+    analyticsReceipts,
+    excludedDuplicateReceiptIds
+  );
   return {
-    analyticsReceipts: selection.analyticsReceipts as EngagementReceipt[],
-    excludedDuplicateReceiptIds: selection.excludedDuplicateReceiptIds,
+    analyticsReceipts: universe.representativeReceipts as EngagementReceipt[],
+    excludedDuplicateReceiptIds: universe.excludedReceiptIds,
   };
 }
 
@@ -1338,8 +1353,17 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
   let analyticsReceipts: EngagementReceipt[];
   let excludedDuplicateReceiptIds: ReadonlySet<string>;
   if (preloadedMatchesOwner(options.preloaded, ownerScope.ownerKey)) {
-    analyticsReceipts = [...options.preloaded.analyticsReceipts];
-    excludedDuplicateReceiptIds = options.preloaded.excludedDuplicateReceiptIds;
+    // Preload may still be analytics-retained only; always project to
+    // occurrence representatives so Home matches post-save / Analysis.
+    const { applyOccurrenceRepresentativeUniverse } = await import(
+      './canonicalPurchaseOccurrence'
+    );
+    const universe = applyOccurrenceRepresentativeUniverse(
+      options.preloaded.analyticsReceipts as ReceiptRow[],
+      options.preloaded.excludedDuplicateReceiptIds
+    );
+    analyticsReceipts = universe.representativeReceipts as EngagementReceipt[];
+    excludedDuplicateReceiptIds = universe.excludedReceiptIds;
   } else {
     const receipts = await readAllReceipts(db, ownerScope);
     const selected = await selectEngagementAnalyticsReceipts(
@@ -1463,8 +1487,13 @@ export async function loadEngagementProductInsightContextWithDb(
   }
   let excludedDuplicateReceiptIds: ReadonlySet<string>;
   if (preloadedMatchesOwner(options?.preloaded, ownerScope.ownerKey)) {
-    excludedDuplicateReceiptIds =
-      options.preloaded.excludedDuplicateReceiptIds;
+    const { applyOccurrenceRepresentativeUniverse } = await import(
+      './canonicalPurchaseOccurrence'
+    );
+    excludedDuplicateReceiptIds = applyOccurrenceRepresentativeUniverse(
+      options.preloaded.analyticsReceipts as ReceiptRow[],
+      options.preloaded.excludedDuplicateReceiptIds
+    ).excludedReceiptIds;
   } else {
     const receipts = await readAllReceipts(db, ownerScope);
     const selected = await selectEngagementAnalyticsReceipts(

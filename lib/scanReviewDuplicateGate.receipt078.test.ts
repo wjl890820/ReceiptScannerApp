@@ -30,7 +30,7 @@ const BASKET = [
   { name: 'c', quantity: 1, lineTotal: 103 },
   { name: 'd', quantity: 1, lineTotal: 386 },
 ];
-const TX = '2026-06-30 13:36';
+const TX = '2026-06-30 13:36:00';
 
 function makeStored(
   id: string,
@@ -57,6 +57,7 @@ function makeStored(
     id,
     created_at: createdAt,
     transaction_at: projection.transactionAt,
+    transaction_time_precision: projection.transactionTimePrecision,
     image_uri: `file://${id}.jpg`,
     merchant_raw: merchant,
     merchant_normalized: merchant,

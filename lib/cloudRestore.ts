@@ -58,7 +58,7 @@ export type CloudRestoreDeps = {
 
 const CLOUD_SELECT = `
   id, user_id, installation_id, transaction_source, social_source,
-  created_at, transaction_at, scanned_at,
+  created_at, transaction_at, transaction_time_precision, scanned_at,
   merchant_raw, merchant_normalized, merchant_type,
   store_raw, store_normalized,
   total, tax, tax_is_known, currency,
@@ -69,7 +69,7 @@ const CLOUD_SELECT = `
 
 const INSERT_RESTORE_SQL = `
   INSERT INTO receipts (
-    id, created_at, transaction_at, scanned_at,
+    id, created_at, transaction_at, transaction_time_precision, scanned_at,
     image_uri, source,
     merchant_raw, merchant_normalized, merchant_type,
     store_raw, store_normalized,
@@ -78,7 +78,7 @@ const INSERT_RESTORE_SQL = `
     user_edited, final_total, final_category, note, user_items_json,
     user_id, installation_id, transaction_source, ocr_request_id,
     client_updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 function insertParams(row: LocalRestoredReceiptInsert): SQLite.SQLiteBindValue[] {
@@ -86,6 +86,7 @@ function insertParams(row: LocalRestoredReceiptInsert): SQLite.SQLiteBindValue[]
     row.id,
     row.created_at,
     row.transaction_at,
+    row.transaction_time_precision,
     row.scanned_at,
     row.image_uri,
     row.source,

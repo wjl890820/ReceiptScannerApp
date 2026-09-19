@@ -67,6 +67,11 @@ export type ReceiptRow = {
   id: string;
   created_at: number;
   transaction_at: number | null; // Receipt transaction date (from receipt itself), fallback to created_at if null
+  /**
+   * Durable provenance for transaction_at source precision.
+   * second | minute | date | unknown — never inferred from epoch second==0.
+   */
+  transaction_time_precision?: string | null;
   scanned_at?: number | null;
 
   image_uri: string;
@@ -572,6 +577,17 @@ async function initIfNeeded() {
           e
         );
       }
+
+      // Transaction-time precision provenance (additive; legacy → unknown).
+      if (!columnNames.has('transaction_time_precision')) {
+        try {
+          await db.runAsync(
+            `ALTER TABLE receipts ADD COLUMN transaction_time_precision TEXT NOT NULL DEFAULT 'unknown'`
+          );
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
       try {
         await db.execAsync(
           `CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id)`
@@ -1056,6 +1072,7 @@ export async function saveReceipt(
   // Always use dedicated receipt date parser (Hermes new Date(string) is unreliable for slash/JP forms).
   // Never fall back to Date.now()/scan time — parse failure stays null (purchase date unknown).
   const transactionAt = materialProjection.transactionAt;
+  const transactionTimePrecision = materialProjection.transactionTimePrecision;
 
   // 新数据库 receipts_v2.db 强制包含 transaction_at 列，直接使用
   const ownership = await resolveOwnershipStamp();
@@ -1071,6 +1088,7 @@ export async function saveReceipt(
   const insertSql = `
     INSERT INTO receipts (
       id, created_at, transaction_at,
+      transaction_time_precision,
       scanned_at,
       image_uri,
       source,
@@ -1085,12 +1103,13 @@ export async function saveReceipt(
       transaction_source,
       ocr_request_id,
       client_updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
     now,
     transactionAt,
+    transactionTimePrecision,
     scannedAt,
     params.imageUri,
     source,
@@ -1119,7 +1138,7 @@ export async function saveReceipt(
     });
     // eslint-disable-next-line no-console
     console.log('[DB][saveReceipt] insert shape', {
-      insertColumnsCount: 22,
+      insertColumnsCount: 23,
       placeholderCount,
       paramsCount: insertParams.length,
       preview,
@@ -1195,6 +1214,7 @@ async function listReceiptRowsWithDb(
     SELECT
       id, created_at,
       transaction_at,
+      COALESCE(transaction_time_precision, 'unknown') as transaction_time_precision,
       image_uri,
       merchant_raw, merchant_normalized,
       merchant_type,
@@ -1392,6 +1412,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
     SELECT
       id, created_at,
       transaction_at,
+      COALESCE(transaction_time_precision, 'unknown') as transaction_time_precision,
       image_uri,
       merchant_raw, merchant_normalized,
       merchant_type,
@@ -1807,6 +1828,7 @@ async function readOwnerScopedReceiptRowsForPurchaseTruth(
     SELECT
       id, created_at,
       transaction_at,
+      COALESCE(transaction_time_precision, 'unknown') as transaction_time_precision,
       image_uri,
       merchant_raw, merchant_normalized,
       merchant_type,

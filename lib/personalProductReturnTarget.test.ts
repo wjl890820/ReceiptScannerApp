@@ -43,6 +43,7 @@ function receipt(
     id,
     created_at: 1_700_000_000_000,
     transaction_at: 1_700_000_000_000,
+    transaction_time_precision: 'second',
     image_uri: 'file://x',
     merchant_raw: 'Store',
     merchant_normalized: 'store',

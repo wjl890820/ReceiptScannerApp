@@ -283,6 +283,7 @@ function projectStoredReceiptRow(row: MutableReceiptRow): ReceiptRow {
     id: String(row.id),
     created_at: Number(row.created_at),
     transaction_at: row.transaction_at == null ? null : Number(row.transaction_at),
+    transaction_time_precision: 'second',
     image_uri: String(row.image_uri ?? ''),
     merchant_raw: row.merchant_raw == null ? null : String(row.merchant_raw),
     merchant_normalized:
@@ -325,6 +326,7 @@ function makeReceipt(args: {
     created_at: args.createdAt ?? args.at,
     transaction_at:
       args.transactionAt === undefined ? args.at : args.transactionAt,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: args.total ?? itemSum,
     tax: args.tax ?? 0,

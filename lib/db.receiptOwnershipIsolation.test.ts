@@ -157,6 +157,7 @@ class OwnerAwareReceiptDb {
     this.rows.set(row.id, {
       created_at: 1_700_000_000_000,
       transaction_at: 1_700_000_000_000,
+    transaction_time_precision: 'second',
       image_uri: 'file://x',
       merchant_raw: 'Store',
       merchant_normalized: 'store',
@@ -464,7 +465,7 @@ describe('db receipt ownership isolation (Privacy-H2)', () => {
       analysis: {
         ...JSON.parse(yorkC.analysis_json),
         merchant: yorkC.merchant_raw,
-        transactionDate: '2026-06-30 12:55',
+        transactionDate: '2026-06-30 12:55:00',
         total: 4102,
         tax: 303,
         tax_is_known: true,

@@ -83,6 +83,7 @@ function makeYorkReceipt(input: {
     id: input.id,
     created_at: input.createdAt,
     transaction_at: YORK_COLLISION_TRANSACTION_AT,
+    transaction_time_precision: 'second',
     image_uri: `file://${input.id}.jpg`,
     merchant_raw: input.merchant,
     merchant_normalized: input.merchant,
@@ -93,7 +94,8 @@ function makeYorkReceipt(input: {
     currency: 'JPY',
     analysis_json: JSON.stringify({
       merchant: input.merchant,
-      transactionDate: '2026-06-30 12:55',
+      transactionDate: '2026-06-30 12:55:00',
+      transaction_time_precision: 'second',
       total: 4102,
       tax: 303,
       tax_is_known: true,

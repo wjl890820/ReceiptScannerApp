@@ -49,7 +49,7 @@ function makeReceipt(args: {
   const items = args.items ?? [
     { name: 'A', quantity: 1, lineTotal: args.total ?? 100 },
   ];
-  const analysis = {
+  const analysis: Record<string, unknown> = {
     items,
     ...args.analysis,
   };
@@ -60,6 +60,7 @@ function makeReceipt(args: {
       args.transactionAt === undefined
         ? Date.parse('2026-01-06T07:23:00Z')
         : args.transactionAt,
+    transaction_time_precision: 'second',
     image_uri: '',
     merchant_raw: args.merchantRaw ?? 'テスト',
     merchant_normalized:
@@ -71,7 +72,14 @@ function makeReceipt(args: {
     tax: args.tax ?? 8,
     tax_is_known: args.taxIsKnown ?? 1,
     currency: 'JPY',
-    analysis_json: JSON.stringify(analysis),
+    analysis_json: JSON.stringify({
+      ...analysis,
+      transaction_time_precision: 'second',
+      transactionDate:
+        (typeof analysis.transactionDate === 'string'
+          ? analysis.transactionDate
+          : null) ?? '2026-01-06 16:23:00',
+    }),
     user_edited: args.userEdited ?? 0,
     final_total: null,
     final_category: null,

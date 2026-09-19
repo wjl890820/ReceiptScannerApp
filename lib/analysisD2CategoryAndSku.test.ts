@@ -48,6 +48,7 @@ function makeReceipt(args: {
     id: args.id,
     created_at: at,
     transaction_at: at,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: args.total ?? itemSum,
     tax: 0,
@@ -70,6 +71,7 @@ function engagementReceipt(id: string, at = Number(id.replace(/\D/g, '')) * DAY_
     id,
     created_at: at,
     transaction_at: at,
+    transaction_time_precision: 'second',
     merchant_raw: 'Store',
     merchant_normalized: 'store',
     merchant_type: 'supermarket',
@@ -273,6 +275,7 @@ describe('D2-B category conservation', () => {
       }),
       created_at: NOW,
       transaction_at: NOW,
+    transaction_time_precision: 'second',
     } as ReceiptRow;
     const drop = {
       ...makeReceipt({
@@ -290,6 +293,7 @@ describe('D2-B category conservation', () => {
       }),
       created_at: NOW + 1,
       transaction_at: NOW,
+    transaction_time_precision: 'second',
     } as ReceiptRow;
     const selection = selectAnalyticsReceipts([keep, drop]);
     expect([...selection.excludedDuplicateReceiptIds]).toEqual(['drop']);

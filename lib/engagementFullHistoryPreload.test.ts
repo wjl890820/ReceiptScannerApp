@@ -73,6 +73,7 @@ function receipt(id: string, createdAt: number): EngagementReceipt {
     id,
     created_at: createdAt,
     transaction_at: createdAt,
+    transaction_time_precision: 'second',
     merchant_raw: 'Lawson',
     merchant_normalized: 'lawson',
     merchant_type: 'convenience',
@@ -82,6 +83,8 @@ function receipt(id: string, createdAt: number): EngagementReceipt {
     currency: 'JPY',
     analysis_json: JSON.stringify({
       total: 100,
+      transactionDate: '2026-08-22 12:00:00',
+      transaction_time_precision: 'second',
       items: [{ name: 'A', quantity: 1, unitPrice: 100, lineTotal: 100 }],
     }),
     final_total: null,
@@ -98,6 +101,8 @@ function duplicatePair(
 ): EngagementReceipt[] {
   const body = JSON.stringify({
     total: 198,
+    transactionDate: '2025-01-15 15:30:00',
+    transaction_time_precision: 'second',
     items: [
       {
         name: '明治おいしい牛乳',
@@ -111,12 +116,14 @@ function duplicatePair(
     {
       ...receipt(keepId, at),
       total: 198,
+      transaction_time_precision: 'second',
       analysis_json: body,
     },
     {
       ...receipt(dropId, at + 1),
       total: 198,
       transaction_at: at,
+      transaction_time_precision: 'second',
       analysis_json: body,
     },
   ];

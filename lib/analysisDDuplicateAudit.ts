@@ -87,6 +87,10 @@ import { itemAmountForAnalytics } from './receiptDiscountAllocation';
 import { getReceiptItems } from './receiptItems';
 import { parseProductSpecification } from './productSpecification';
 import { pickBestRepresentativeReceiptId } from './receiptRepresentativeQuality';
+import {
+  hasExactTransactionTime as hasExactTransactionTimeFromProvenance,
+  resolveReceiptTransactionTimePrecision,
+} from './receiptExactTransactionTime';
 import { deriveRetailerIdentity } from './retailerIdentity';
 
 export const ANALYSIS_D_DUPLICATE_AUDIT_VERSION =
@@ -132,6 +136,8 @@ export type AnalysisDDuplicateReceiptSummary = {
   hasValidTransactionAt: boolean;
   /** False for date-only midnight — not exact-time evidence. */
   hasExactTransactionTime: boolean;
+  /** Durable source precision: second | minute | date | unknown. */
+  transactionTimePrecision: import('./dateParser').ReceiptTransactionPrecision;
   total: number;
   /** True when raw receipt.total is finite and > 0 (not sanitized zero). */
   hasValidPositiveTotal: boolean;
@@ -372,33 +378,14 @@ export function hasValidTransactionAt(receipt: ReceiptRow): boolean {
 }
 
 /**
- * True when transaction_at carries clock-time evidence.
- * Date-only parsers emit Asia/Tokyo midnight (00:00:00) — that is NOT exact time.
+ * Exact transaction-time evidence — requires durable second-precision provenance.
+ * SSOT: receiptExactTransactionTime (minute/date/unknown fail closed).
  */
 export function hasExactTransactionTime(receipt: ReceiptRow): boolean {
-  if (!hasValidTransactionAt(receipt)) return false;
-  const t = receipt.transaction_at as number;
-  const d = new Date(t);
-  if (!Number.isFinite(d.getTime())) return false;
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Tokyo',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(d);
-    const hour = parts.find((p) => p.type === 'hour')?.value ?? '';
-    const minute = parts.find((p) => p.type === 'minute')?.value ?? '';
-    const second = parts.find((p) => p.type === 'second')?.value ?? '';
-    if (hour === '00' && minute === '00' && second === '00') {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  return true;
+  return hasExactTransactionTimeFromProvenance(receipt);
 }
+
+export { resolveReceiptTransactionTimePrecision };
 
 
 function asItemRecord(raw: unknown): Record<string, unknown> {
@@ -714,6 +701,7 @@ export function summarizeReceiptForDuplicateAudit(
       : null,
     hasValidTransactionAt: hasValidTransactionAt(receipt),
     hasExactTransactionTime: hasExactTransactionTime(receipt),
+    transactionTimePrecision: resolveReceiptTransactionTimePrecision(receipt),
     total: Number(receipt.total) || 0,
     hasValidPositiveTotal: isValidStructuralDuplicateTotal(receipt.total),
     tax: tax.value,
@@ -984,6 +972,9 @@ export function hasValidKnownStructuralDuplicateTax(
 /**
  * Structural exact duplicate gate beyond raw fingerprint equality.
  * Handles OCR item-order variance and one-sided unknown tax on rescans.
+ *
+ * Exact transaction-time evidence requires precision===second on both sides.
+ * Minute / date / unknown fail closed (no generic↔branch minute exception).
  */
 export function areStructuralExactDuplicateSummaries(
   left: AnalysisDDuplicateReceiptSummary,
@@ -993,7 +984,15 @@ export function areStructuralExactDuplicateSummaries(
     return false;
   }
   if (!left.currency || left.currency !== right.currency) return false;
-  if (!left.hasExactTransactionTime || !right.hasExactTransactionTime) return false;
+  if (!left.hasExactTransactionTime || !right.hasExactTransactionTime) {
+    return false;
+  }
+  if (
+    left.transactionTimePrecision !== 'second' ||
+    right.transactionTimePrecision !== 'second'
+  ) {
+    return false;
+  }
   if (!areStructuralExactMerchantKeysCompatible(left, right)) return false;
   if (left.transactionAt == null || left.transactionAt !== right.transactionAt) {
     return false;

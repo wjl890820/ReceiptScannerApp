@@ -50,6 +50,7 @@ function makeReceipt(args: {
     id: args.id,
     created_at: at,
     transaction_at: at,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: args.total ?? itemSum,
     tax: 0,
@@ -72,6 +73,7 @@ function engagementReceipt(id: string, at = Number(id.replace(/\D/g, '')) * DAY_
     id,
     created_at: at,
     transaction_at: at,
+    transaction_time_precision: 'second',
     merchant_raw: 'Store',
     merchant_normalized: 'store',
     merchant_type: 'supermarket',
@@ -288,8 +290,9 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
       'utf8'
     );
     expect(source).toContain('selectAnalyticsReceiptsCached');
+    expect(source).toContain('retainOccurrenceRepresentativeReceipts');
     expect(source).toMatch(
-      /analyticsReceipts\s*=\s*selection\.analyticsReceipts/
+      /analyticsReceipts\s*=\s*retainOccurrenceRepresentativeReceipts\(\s*selection\.analyticsReceipts\s*\)/
     );
     expect(source).toMatch(/receipts:\s*analyticsReceipts/);
     expect(source).toMatch(
@@ -302,8 +305,11 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
       path.resolve(__dirname, '../app/product/[targetType].tsx'),
       'utf8'
     );
-    expect(source).toContain('selectAnalyticsReceipts');
-    expect(source).toContain('excludedDuplicateReceiptIds');
+    expect(source).toContain('listReceiptsForAnalysis');
+    expect(source).toContain('buildProductDetailExcludedReceiptIds');
+    expect(source).not.toMatch(
+      /excludedReceiptIds[\s\S]{0,240}listReceipts\(\)/
+    );
   });
 
   it('L — diagnostic productionAnalytics uses the same selected boundary', async () => {

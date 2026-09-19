@@ -59,11 +59,18 @@ function makeReceipt(args: {
   const items = args.items ?? [
     { name: 'A', quantity: 1, lineTotal: args.total ?? 100 },
   ];
-  const analysis = {
+  const analysis: Record<string, unknown> = {
     items,
     transactionDate: args.analysis?.transactionDate,
     ...args.analysis,
   };
+  const hasExplicitPrecision =
+    typeof analysis.transaction_time_precision === 'string' ||
+    typeof analysis.transactionDate === 'string';
+  if (!hasExplicitPrecision && args.transactionAt === undefined) {
+    analysis.transaction_time_precision = 'second';
+    analysis.transactionDate = '2026-01-06 16:23:00';
+  }
   return {
     id: args.id,
     created_at: args.createdAt ?? 1,
@@ -71,6 +78,11 @@ function makeReceipt(args: {
       args.transactionAt === undefined
         ? Date.parse('2026-01-06T07:23:00Z')
         : args.transactionAt,
+    transaction_time_precision: hasExplicitPrecision
+      ? (analysis.transaction_time_precision as string | undefined) ?? null
+      : args.transactionAt === undefined
+        ? 'second'
+        : 'unknown',
     image_uri: '',
     merchant_raw: args.merchantRaw ?? 'テスト',
     merchant_normalized: args.merchantNormalized ?? args.merchantRaw ?? 'テスト',

@@ -41,6 +41,7 @@ function makeReceipt(args: {
     id: args.id,
     created_at: args.createdAt ?? TX_AT,
     transaction_at: args.transactionAt ?? TX_AT,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: args.total ?? 300,
     tax: args.tax ?? 22,

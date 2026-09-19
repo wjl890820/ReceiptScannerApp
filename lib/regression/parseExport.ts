@@ -165,15 +165,18 @@ export function loadExportEnvelope(raw: unknown): ExportEnvelope {
 }
 
 export function loadHistoricalRow(
-  row: Record<string, unknown>
+  row: Record<string, unknown>,
+  rowIndex = 0
 ): LoadedHistoricalRow {
   const resolved = resolveBaselinePayload(row);
   const id =
     asTrimmedString(row.id) ??
     asTrimmedString(row.receipt_id) ??
-    `unknown_${Math.random().toString(16).slice(2, 10)}`;
+    `missing_id_row_${rowIndex}`;
 
   const imageUri = asTrimmedString(row.image_uri);
+  const missingId =
+    !asTrimmedString(row.id) && !asTrimmedString(row.receipt_id);
   return {
     receiptId: id,
     createdAt: asFiniteNumber(row.created_at),
@@ -183,13 +186,15 @@ export function loadHistoricalRow(
     total: asFiniteNumber(row.total),
     tax: asFiniteNumber(row.tax),
     currency: asTrimmedString(row.currency),
-    baselineStage: resolved.baselineStage,
+    baselineStage: missingId ? 'unavailable' : resolved.baselineStage,
     fallbackReason: resolved.fallbackReason,
-    parseError: resolved.parseError,
+    parseError: missingId
+      ? `missing_receipt_id${resolved.parseError ? `;${resolved.parseError}` : ''}`
+      : resolved.parseError,
     imageUriPresent: Boolean(imageUri),
-    analysisObject: resolved.analysisObject,
-    snapshotObject: resolved.snapshotObject,
-    baselinePayload: resolved.baselinePayload,
+    analysisObject: missingId ? null : resolved.analysisObject,
+    snapshotObject: missingId ? null : resolved.snapshotObject,
+    baselinePayload: missingId ? null : resolved.baselinePayload,
     rawRowKeys: Object.keys(row),
   };
 }
@@ -197,7 +202,10 @@ export function loadHistoricalRow(
 export function loadAllHistoricalRows(
   envelope: ExportEnvelope
 ): LoadedHistoricalRow[] {
-  return envelope.receipts.map((r) =>
-    loadHistoricalRow(r && typeof r === 'object' ? (r as Record<string, unknown>) : {})
+  return envelope.receipts.map((r, index) =>
+    loadHistoricalRow(
+      r && typeof r === 'object' ? (r as Record<string, unknown>) : {},
+      index
+    )
   );
 }

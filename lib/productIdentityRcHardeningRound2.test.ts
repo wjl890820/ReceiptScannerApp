@@ -332,6 +332,7 @@ describe('Round2 — date-only reconciled duplicate gate', () => {
       id: args.id,
       created_at: args.createdAt ?? 1000,
       transaction_at: args.transactionAt,
+    transaction_time_precision: 'second',
       image_uri: '',
       total: args.total,
       tax: 0,

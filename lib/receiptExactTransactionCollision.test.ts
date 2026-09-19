@@ -18,6 +18,88 @@ import {
 } from './receiptExactTransactionCollision.testFixtures';
 
 describe('exact-transaction receipt collision (Level 1/2 only)', () => {
+  it('A: minute vs minute same epoch → collided=false', () => {
+    const epoch = Date.parse('2026-07-06T11:44:00+09:00');
+    const left = cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
+      transaction_at: epoch,
+      transaction_time_precision: 'minute',
+      analysisPatch: {
+        transactionDate: '2026-07-06 11:44',
+        transaction_time_precision: 'minute',
+      },
+    });
+    const right = cloneCollisionReceipt(makeYorkCollisionReceiptB(), {
+      transaction_at: epoch,
+      transaction_time_precision: 'minute',
+      analysisPatch: {
+        transactionDate: '2026-07-06 11:44',
+        transaction_time_precision: 'minute',
+      },
+    });
+    const result = evaluateExactTransactionReceiptCollision(left, right);
+    expect(result.collided).toBe(false);
+    if (!result.collided) {
+      expect(result.reason).toBe('transaction_time_not_exact');
+    }
+  });
+
+  it('B: minute vs explicit second same epoch → collided=false', () => {
+    const epoch = Date.parse('2026-07-06T11:44:00+09:00');
+    const left = cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
+      transaction_at: epoch,
+      transaction_time_precision: 'minute',
+      analysisPatch: {
+        transactionDate: '2026-07-06 11:44',
+        transaction_time_precision: 'minute',
+      },
+    });
+    const right = cloneCollisionReceipt(makeYorkCollisionReceiptB(), {
+      transaction_at: epoch,
+      transaction_time_precision: 'second',
+      analysisPatch: {
+        transactionDate: '2026-07-06 11:44:00',
+        transaction_time_precision: 'second',
+      },
+    });
+    expect(evaluateExactTransactionReceiptCollision(left, right).collided).toBe(
+      false
+    );
+  });
+
+  it('C: unknown precision same epoch → collided=false', () => {
+    const a = makeYorkCollisionReceiptA();
+    const left = cloneCollisionReceipt(a, {
+      transaction_time_precision: 'unknown',
+      analysisPatch: {
+        transactionDate: undefined,
+        transaction_time_precision: 'unknown',
+      },
+    });
+    const right = cloneCollisionReceipt(makeYorkCollisionReceiptB(), {
+      transaction_at: left.transaction_at,
+      transaction_time_precision: 'unknown',
+      analysisPatch: {
+        transactionDate: undefined,
+        transaction_time_precision: 'unknown',
+      },
+    });
+    expect(evaluateExactTransactionReceiptCollision(left, right).collided).toBe(
+      false
+    );
+  });
+
+  it('D: second vs second valid exact duplicate → collided=true', () => {
+    const result = evaluateExactTransactionReceiptCollision(
+      makeYorkCollisionReceiptA(),
+      makeYorkCollisionReceiptB()
+    );
+    expect(result.collided).toBe(true);
+    if (result.collided) {
+      expect(result.evidence).toContain('exact_second_precision_transaction_at');
+      expect(result.evidence).not.toContain('exact_non_midnight_transaction_at');
+    }
+  });
+
   const pairCases = [
     ['A/B', makeYorkCollisionReceiptA, makeYorkCollisionReceiptB],
     ['A/C', makeYorkCollisionReceiptA, makeYorkCollisionReceiptC],

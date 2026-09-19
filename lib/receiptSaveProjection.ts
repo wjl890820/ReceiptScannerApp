@@ -1,4 +1,7 @@
-import { parseReceiptDateTime } from './dateParser';
+import {
+  parseReceiptDateTimeWithPrecision,
+  type ReceiptTransactionPrecision,
+} from './dateParser';
 import { resolvePersistedMerchantObservation } from './merchantObservationPersist';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 import { persistReceiptTaxFields } from './receiptOcrNormalize';
@@ -8,6 +11,8 @@ export type ReceiptSaveMaterialProjection = {
   merchantNormalized: string | null;
   merchantType: ReturnType<typeof resolvePersistedMerchantObservation>['merchantType'];
   transactionAt: number | null;
+  /** Source-text precision; never inferred from epoch second==0. */
+  transactionTimePrecision: ReceiptTransactionPrecision;
   transactionSource: 'receipt_ocr';
   total: number;
   tax: number;
@@ -58,21 +63,25 @@ export function projectReceiptSaveMaterialEvidence(input: {
       : 'JPY';
   const transactionDateText = resolveTransactionDateText(analysis);
   let transactionAt: number | null = null;
+  let transactionTimePrecision: ReceiptTransactionPrecision = 'unknown';
   if (transactionDateText) {
     try {
       const rawMerchantHint =
         analysis.merchant ||
         analysis.merchant_normalized ||
         analysis.merchantNormalized;
-      transactionAt = parseReceiptDateTime(transactionDateText, {
+      const parsed = parseReceiptDateTimeWithPrecision(transactionDateText, {
         fallbackToNow: false,
         merchant:
           typeof rawMerchantHint === 'string'
             ? rawMerchantHint
             : null,
       });
+      transactionAt = parsed.ms;
+      transactionTimePrecision = parsed.precision;
     } catch {
       transactionAt = null;
+      transactionTimePrecision = 'unknown';
     }
   }
   const items = Array.isArray(analysis.items) ? analysis.items : [];
@@ -83,6 +92,7 @@ export function projectReceiptSaveMaterialEvidence(input: {
     merchant_type: merchant.merchantType,
     tax: persistedTax.tax,
     tax_is_known: persistedTax.taxIsKnown === 1,
+    transaction_time_precision: transactionTimePrecision,
   } as ReceiptAnalysis & Record<string, unknown>;
 
   return {
@@ -90,6 +100,7 @@ export function projectReceiptSaveMaterialEvidence(input: {
     merchantNormalized: merchant.merchantNormalized,
     merchantType: merchant.merchantType,
     transactionAt,
+    transactionTimePrecision,
     transactionSource: 'receipt_ocr',
     total,
     tax: persistedTax.tax,

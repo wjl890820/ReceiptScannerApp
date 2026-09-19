@@ -86,6 +86,7 @@ function buildCanonicalTruthFixture(): {
 } {
   const duplicateCanonical = receipt('dup-canonical', {
     transaction_at: NOW - 2 * MS_DAY,
+    transaction_time_precision: 'second',
     total: 198,
     merchant_raw: 'イオン',
     merchant_normalized: 'イオン',
@@ -93,6 +94,7 @@ function buildCanonicalTruthFixture(): {
   });
   const duplicateExtra = receipt('dup-extra', {
     transaction_at: NOW - 2 * MS_DAY,
+    transaction_time_precision: 'second',
     total: 198,
     merchant_raw: 'イオン',
     merchant_normalized: 'イオン',
@@ -104,18 +106,21 @@ function buildCanonicalTruthFixture(): {
     duplicateExtra,
     receipt('unsupported', {
       transaction_at: NOW - 3 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 9000,
       merchant_type: 'other',
       items: [item('Pharmacy', 9000, 'other')],
     }),
     receipt('usd', {
       transaction_at: NOW - 4 * MS_DAY,
+    transaction_time_precision: 'second',
       currency: 'USD',
       total: 42,
       items: [item('Import', 42, 'food_ingredients')],
     }),
     receipt('discounted', {
       transaction_at: NOW - 5 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 1800,
       merchant_raw: 'Costco',
       merchant_normalized: 'costco',
@@ -126,11 +131,13 @@ function buildCanonicalTruthFixture(): {
     }),
     receipt('uncategorized-row', {
       transaction_at: NOW - 6 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 400,
       items: [item('Mystery', 400, 'uncategorized')],
     }),
     receipt('cur-a', {
       transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 3000,
       items: Array.from({ length: 4 }, (_, i) =>
         item(`CurA-${i}`, 750, 'ready_to_eat')
@@ -138,6 +145,7 @@ function buildCanonicalTruthFixture(): {
     }),
     receipt('cur-b', {
       transaction_at: NOW - 10 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 2500,
       items: Array.from({ length: 4 }, (_, i) =>
         item(`CurB-${i}`, 625, 'snacks_drinks')
@@ -145,6 +153,7 @@ function buildCanonicalTruthFixture(): {
     }),
     receipt('cur-c', {
       transaction_at: NOW - 20 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 2200,
       items: Array.from({ length: 4 }, (_, i) =>
         item(`CurC-${i}`, 550, 'food_ingredients')
@@ -152,6 +161,7 @@ function buildCanonicalTruthFixture(): {
     }),
     receipt('prev-a', {
       transaction_at: NOW - 35 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 1500,
       items: Array.from({ length: 4 }, (_, i) =>
         item(`PrevA-${i}`, 375, 'food_ingredients')
@@ -159,6 +169,7 @@ function buildCanonicalTruthFixture(): {
     }),
     receipt('prev-b', {
       transaction_at: NOW - 45 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 1500,
       items: Array.from({ length: 4 }, (_, i) =>
         item(`PrevB-${i}`, 375, 'household')
@@ -166,6 +177,7 @@ function buildCanonicalTruthFixture(): {
     }),
     receipt('prev-c', {
       transaction_at: NOW - 55 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 1500,
       items: Array.from({ length: 4 }, (_, i) =>
         item(`PrevC-${i}`, 375, 'ready_to_eat')
@@ -173,11 +185,13 @@ function buildCanonicalTruthFixture(): {
     }),
     receipt('boundary-current', {
       transaction_at: NOW - 30 * MS_DAY,
+    transaction_time_precision: 'second',
       total: 1000,
       items: [item('BoundaryCurrent', 1000, 'food_ingredients')],
     }),
     receipt('boundary-previous', {
       transaction_at: NOW - 30 * MS_DAY - 1,
+    transaction_time_precision: 'second',
       total: 1000,
       items: [item('BoundaryPrevious', 1000, 'food_ingredients')],
     }),
@@ -280,6 +294,7 @@ describe('analysis truth unification (AP-1)', () => {
     it('excludes unsupported from Overview supported metrics and Insights', () => {
       const supported = receipt('s1', {
         transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 2000,
         items: Array.from({ length: 5 }, (_, i) =>
           item(`S-${i}`, 400, 'food_ingredients')
@@ -287,6 +302,7 @@ describe('analysis truth unification (AP-1)', () => {
       });
       const unsupported = receipt('u1', {
         transaction_at: NOW - 2 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 8000,
         merchant_type: 'other',
         items: [item('Drug', 8000, 'other')],
@@ -307,10 +323,12 @@ describe('analysis truth unification (AP-1)', () => {
     it('excludes USD from Overview and Insights monetary universe', () => {
       const jpy = receipt('jpy', {
         transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 1500,
       });
       const usd = receipt('usd', {
         transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
         currency: 'USD',
         total: 999,
       });
@@ -329,6 +347,7 @@ describe('analysis truth unification (AP-1)', () => {
     it('uses canonical receipt only after analytics selection', () => {
       const a = receipt('keep', {
         transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
         created_at: NOW - 2 * MS_DAY,
         total: 198,
         merchant_raw: 'イオン',
@@ -337,6 +356,7 @@ describe('analysis truth unification (AP-1)', () => {
       });
       const b = receipt('drop', {
         transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
         created_at: NOW - 1 * MS_DAY,
         total: 198,
         merchant_raw: 'イオン',
@@ -394,6 +414,7 @@ describe('analysis truth unification (AP-1)', () => {
       const bounds = resolveAnalysisRollingWindowBounds('month', NOW);
       const atBoundary = receipt('boundary', {
         transaction_at: bounds.currentStartMs,
+    transaction_time_precision: 'second',
         total: 1000,
       });
       const rows = [atBoundary];
@@ -420,6 +441,7 @@ describe('analysis truth unification (AP-1)', () => {
     it('remains insufficient with 2 supported + 1 unsupported in period', () => {
       const s1 = receipt('s1', {
         transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 1500,
         items: Array.from({ length: 5 }, (_, i) =>
           item(`A-${i}`, 300, 'food_ingredients')
@@ -427,6 +449,7 @@ describe('analysis truth unification (AP-1)', () => {
       });
       const s2 = receipt('s2', {
         transaction_at: NOW - 2 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 1500,
         items: Array.from({ length: 5 }, (_, i) =>
           item(`B-${i}`, 300, 'food_ingredients')
@@ -434,6 +457,7 @@ describe('analysis truth unification (AP-1)', () => {
       });
       const unsupported = receipt('u1', {
         transaction_at: NOW - 2 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 9000,
         merchant_type: 'other',
       });
@@ -455,6 +479,7 @@ describe('analysis truth unification (AP-1)', () => {
       const mk = (id: string, dayOffset: number) =>
         receipt(id, {
           transaction_at: NOW - dayOffset * MS_DAY,
+    transaction_time_precision: 'second',
           total: 1000,
           items: Array.from({ length: 4 }, (_, i) =>
             item(`${id}-${i}`, 250, 'food_ingredients')
@@ -481,6 +506,7 @@ describe('analysis truth unification (AP-1)', () => {
     it('allows categoryCompositionTotal to differ from supportedSpend', () => {
       const row = receipt('mix', {
         transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 2000,
         items: [
           item('Cat', 1200, 'food_ingredients'),
@@ -499,6 +525,7 @@ describe('analysis truth unification (AP-1)', () => {
       const storeA = (id: string, tx: number, total: number) =>
         receipt(id, {
           transaction_at: tx,
+    transaction_time_precision: 'second',
           total,
           merchant_raw: 'Costco',
           merchant_normalized: 'costco',
@@ -532,6 +559,7 @@ describe('analysis truth unification (AP-1)', () => {
     it('uses full eligible history for Overview and suppresses change without prior window', () => {
       const only = receipt('solo', {
         transaction_at: NOW - 100 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 1500,
         items: Array.from({ length: 5 }, (_, i) =>
           item(`S-${i}`, 300, 'food_ingredients')
@@ -550,14 +578,17 @@ describe('analysis truth unification (AP-1)', () => {
     it('includes timestamp-invalid supported JPY in all WHAT universe', () => {
       const valid = receipt('valid', {
         transaction_at: NOW - 50 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 1000,
       });
       const noTs = {
         ...receipt('no-ts', {
           transaction_at: NOW - 1 * MS_DAY,
+    transaction_time_precision: 'second',
           total: 500,
         }),
         transaction_at: null as unknown as number,
+    transaction_time_precision: 'second',
         created_at: NOW - 1 * MS_DAY,
       };
       const snapshot = buildAnalysisTruthSnapshot({
@@ -587,6 +618,7 @@ describe('analysis truth unification (AP-1)', () => {
     it('allows matched prior window when span history exists', () => {
       const early = receipt('early', {
         transaction_at: NOW - 120 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 1000,
         items: Array.from({ length: 4 }, (_, i) =>
           item(`E-${i}`, 250, 'food_ingredients')
@@ -594,6 +626,7 @@ describe('analysis truth unification (AP-1)', () => {
       });
       const mid = receipt('mid', {
         transaction_at: NOW - 90 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 1000,
         items: Array.from({ length: 4 }, (_, i) =>
           item(`M-${i}`, 250, 'food_ingredients')
@@ -601,6 +634,7 @@ describe('analysis truth unification (AP-1)', () => {
       });
       const late = receipt('late', {
         transaction_at: NOW - 30 * MS_DAY,
+    transaction_time_precision: 'second',
         total: 5000,
         items: Array.from({ length: 4 }, (_, i) =>
           item(`L-${i}`, 1250, 'food_ingredients')
@@ -609,6 +643,7 @@ describe('analysis truth unification (AP-1)', () => {
       const priorOnly = [
         receipt('p1', {
           transaction_at: NOW - 200 * MS_DAY,
+    transaction_time_precision: 'second',
           total: 1000,
           items: Array.from({ length: 4 }, (_, i) =>
             item(`P1-${i}`, 250, 'food_ingredients')
@@ -616,6 +651,7 @@ describe('analysis truth unification (AP-1)', () => {
         }),
         receipt('p2', {
           transaction_at: NOW - 180 * MS_DAY,
+    transaction_time_precision: 'second',
           total: 1000,
           items: Array.from({ length: 4 }, (_, i) =>
             item(`P2-${i}`, 250, 'food_ingredients')
@@ -623,6 +659,7 @@ describe('analysis truth unification (AP-1)', () => {
         }),
         receipt('p3', {
           transaction_at: NOW - 160 * MS_DAY,
+    transaction_time_precision: 'second',
           total: 1000,
           items: Array.from({ length: 4 }, (_, i) =>
             item(`P3-${i}`, 250, 'food_ingredients')
@@ -647,6 +684,7 @@ describe('analysis truth unification (AP-1)', () => {
       const rows = [
         receipt('a', {
           transaction_at: NOW,
+    transaction_time_precision: 'second',
           items: [
             item('1', 100, 'food_ingredients'),
             item('2', 100, 'food_ingredients'),

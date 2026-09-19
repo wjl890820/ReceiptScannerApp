@@ -45,6 +45,7 @@ function receipt(args: {
     id: args.id,
     created_at: args.createdAt ?? args.transactionAt + 1_000,
     transaction_at: args.transactionAt,
+    transaction_time_precision: 'second',
     image_uri: '',
     merchant_raw: args.merchant,
     merchant_normalized: args.merchant,

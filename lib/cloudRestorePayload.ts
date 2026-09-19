@@ -2,6 +2,8 @@
  * Cloud user_receipts row → local receipts insert values.
  * JSON TEXT columns must pass through unchanged (no parse/stringify).
  */
+import { inferReceiptTransactionTimePrecision } from './dateParser';
+
 export type CloudUserReceiptRow = {
   id: string;
   user_id: string;
@@ -10,6 +12,7 @@ export type CloudUserReceiptRow = {
   social_source?: string | null;
   created_at: string;
   transaction_at?: string | null;
+  transaction_time_precision?: string | null;
   scanned_at?: string | null;
   merchant_raw?: string | null;
   merchant_normalized?: string | null;
@@ -36,6 +39,7 @@ export type LocalRestoredReceiptInsert = {
   id: string;
   created_at: number;
   transaction_at: number | null;
+  transaction_time_precision: string;
   scanned_at: number | null;
   image_uri: string;
   source: string | null;
@@ -125,10 +129,41 @@ export function mapCloudReceiptToLocalInsert(
     params.fallbackClientUpdatedAtMs ??
     createdAt;
 
+  let transactionTimePrecision =
+    typeof cloud.transaction_time_precision === 'string' &&
+    ['second', 'minute', 'date', 'unknown'].includes(
+      cloud.transaction_time_precision
+    )
+      ? cloud.transaction_time_precision
+      : 'unknown';
+  if (transactionTimePrecision === 'unknown') {
+    try {
+      const analysis = JSON.parse(cloud.analysis_json) as Record<string, unknown>;
+      const dateText =
+        (typeof analysis.transactionDate === 'string' &&
+          analysis.transactionDate.trim()) ||
+        (typeof analysis.transaction_date === 'string' &&
+          analysis.transaction_date.trim()) ||
+        (typeof analysis.transactionAt === 'string' &&
+          analysis.transactionAt.trim()) ||
+        (typeof analysis.purchasedAt === 'string' &&
+          analysis.purchasedAt.trim()) ||
+        (typeof analysis.datetime === 'string' && analysis.datetime.trim()) ||
+        null;
+      if (dateText) {
+        const inferred = inferReceiptTransactionTimePrecision(dateText);
+        if (inferred !== 'unknown') transactionTimePrecision = inferred;
+      }
+    } catch {
+      // keep unknown
+    }
+  }
+
   return {
     id: cloud.id.trim(),
     created_at: createdAt,
     transaction_at: isoToMs(cloud.transaction_at ?? null),
+    transaction_time_precision: transactionTimePrecision,
     scanned_at: isoToMs(cloud.scanned_at ?? null),
     image_uri: '',
     source:

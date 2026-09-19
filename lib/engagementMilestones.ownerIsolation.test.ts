@@ -53,6 +53,7 @@ function receipt(
     id,
     created_at: numericId * DAY_MS,
     transaction_at: numericId * DAY_MS,
+    transaction_time_precision: 'second',
     merchant_raw: 'イオン',
     merchant_normalized: 'イオン',
     merchant_type: 'supermarket',
@@ -326,6 +327,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
         user_id: 'user-a',
         created_at: duplicateAt,
         transaction_at: duplicateAt,
+    transaction_time_precision: 'second',
         analysis_json: JSON.stringify({ items: duplicateLikeItems }),
       })
     );
@@ -334,6 +336,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
         user_id: 'user-b',
         created_at: duplicateAt + 1,
         transaction_at: duplicateAt,
+    transaction_time_precision: 'second',
         analysis_json: JSON.stringify({ items: duplicateLikeItems }),
       })
     );
@@ -367,6 +370,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
         user_id: 'user-a',
         created_at: duplicateAt,
         transaction_at: duplicateAt,
+    transaction_time_precision: 'second',
       })
     );
     db.seedReceipt(
@@ -374,6 +378,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
         user_id: 'user-a',
         created_at: duplicateAt + 1,
         transaction_at: duplicateAt,
+    transaction_time_precision: 'second',
       })
     );
 
@@ -392,6 +397,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
         user_id: 'user-a',
         created_at: duplicateAt,
         transaction_at: duplicateAt,
+    transaction_time_precision: 'second',
         analysis_json: JSON.stringify({ items: duplicateLikeItems }),
       })
     );
@@ -400,6 +406,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
         user_id: 'user-a',
         created_at: duplicateAt + 1,
         transaction_at: duplicateAt,
+    transaction_time_precision: 'second',
         analysis_json: JSON.stringify({ items: duplicateLikeItems }),
       })
     );
@@ -408,6 +415,7 @@ describe('Engagement Milestones owner isolation (Privacy-H4)', () => {
         user_id: 'user-b',
         created_at: duplicateAt + 2,
         transaction_at: duplicateAt + 2,
+    transaction_time_precision: 'second',
         analysis_json: JSON.stringify({
           items: [item('Foreign Milk', 'food_ingredients', 2000)],
         }),

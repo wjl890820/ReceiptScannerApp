@@ -19,6 +19,7 @@ import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
 import { SectionTitle } from '@/components/SectionTitle';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { selectAnalyticsReceiptsCached } from '@/lib/analyticsReceiptSelectionCache';
+import { retainOccurrenceRepresentativeReceipts } from '@/lib/canonicalPurchaseOccurrence';
 import { listReceiptsForAnalysis } from '@/lib/db';
 import { resolveCurrentLocalReceiptOwnerScope } from '@/lib/receiptOwnershipScope';
 import {
@@ -153,7 +154,9 @@ export default function AnalysisScreen() {
         });
         return;
       }
-      analyticsReceipts = selection.analyticsReceipts;
+      analyticsReceipts = retainOccurrenceRepresentativeReceipts(
+        selection.analyticsReceipts
+      );
       recordAnalysisRefreshTiming({
         stage: 'selectAnalyticsReceipts',
         durationMs: Date.now() - selectStarted,

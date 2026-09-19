@@ -39,6 +39,7 @@ function makeReceipt(args: {
     created_at: args.createdAt ?? TX,
     transaction_at:
       args.transactionAt === undefined ? TX : args.transactionAt,
+    transaction_time_precision: 'second',
     image_uri: 'file:///tmp/receipt.jpg',
     total: args.total ?? itemSum,
     tax: args.tax ?? 706,

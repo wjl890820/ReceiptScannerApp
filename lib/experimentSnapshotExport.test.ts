@@ -85,6 +85,7 @@ function makeReceipt(args: {
     id: args.id,
     created_at: args.createdAt ?? args.at,
     transaction_at: args.at,
+    transaction_time_precision: 'second',
     image_uri: args.imageUri ?? 'file:///private/receipt.jpg',
     total: args.total ?? itemSum,
     tax: args.tax ?? 10,

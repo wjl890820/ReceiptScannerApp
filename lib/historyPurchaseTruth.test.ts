@@ -58,6 +58,7 @@ function makeReceipt(args: {
     created_at: args.createdAt ?? args.at,
     transaction_at:
       args.transactionAt === undefined ? args.at : args.transactionAt,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: args.total ?? itemSum,
     tax: args.tax ?? 0,
@@ -712,6 +713,7 @@ describe('history purchase delete truth', () => {
     const aeonGroup = fourIdenticalAeonScans().map((row) => ({
       ...row,
       transaction_at: Date.parse('2020-01-01T12:00:00+09:00'),
+    transaction_time_precision: 'second',
       created_at: Date.parse('2020-01-01T12:00:00+09:00') + Number(row.id.slice(-1)),
     }));
     const exhaustive = [...fillers, ...aeonGroup];

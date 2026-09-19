@@ -35,6 +35,7 @@ function makeReceipt(overrides: Partial<ReceiptRow> & { id: string }): ReceiptRo
     id,
     created_at: rest.created_at ?? TX_AT,
     transaction_at: rest.transaction_at ?? TX_AT,
+    transaction_time_precision: 'second',
     image_uri: '',
     total: rest.total ?? 300,
     tax: rest.tax !== undefined ? rest.tax : 22,
@@ -175,6 +176,7 @@ describe('structural duplicate safety guards', () => {
     const left = summarize('a', { transaction_at: TX_AT });
     const right = summarize('b', {
       transaction_at: Date.parse('2026-08-20T17:43:00+09:00'),
+    transaction_time_precision: 'second',
     });
     expect(areStructuralExactDuplicateSummaries(left, right)).toBe(false);
   });

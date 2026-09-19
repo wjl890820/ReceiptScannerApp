@@ -6,7 +6,8 @@
  *
  * Safe identities only: merchant_product | personal_product.
  * Never family / family_only / unresolved raw names.
- * Occurrence = distinct analytics (canonical) receiptId — not quantity, not item rows.
+ * Occurrence = distinct canonical purchase occurrence (representative receipt) —
+ * not quantity, not item rows, not rescan receipt ids.
  *
  * PURE DERIVED / RECOMPUTABLE — no persistence.
  */
@@ -23,6 +24,10 @@ import type {
   IdentityFrequentProductGroup,
   QualifiedIdentityObservation,
 } from './productIdentityConsumer';
+import {
+  buildCanonicalPurchaseOccurrenceIndex,
+  type CanonicalPurchaseOccurrenceIndex,
+} from './canonicalPurchaseOccurrence';
 
 export const HOME_REPEAT_PRODUCT_CAP = 5 as const;
 export const REPEAT_DAY_MS = 24 * 60 * 60 * 1000;
@@ -95,12 +100,16 @@ function medianSorted(values: readonly number[]): number {
 }
 
 /**
- * Per distinct receiptId: pick one occurredAt for timeline purposes.
- * Prefer the latest usable timestamp among that receipt's rows.
- * Undated receipts still contribute to purchaseOccurrenceCount.
+ * Per distinct purchase occurrence: one timeline timestamp from the
+ * representative receipt only (never max created_at across rescans).
+ * Undated representative receipts still contribute to purchaseOccurrenceCount.
  */
 export function buildPurchaseEventDatesFromRows(
-  rows: ReadonlyArray<{ receiptId: string; occurredAt: number }>
+  rows: ReadonlyArray<{ receiptId: string; occurredAt: number }>,
+  options?: {
+    purchaseOccurrenceIdByReceiptId?: ReadonlyMap<string, string>;
+    representativeReceiptIdByReceiptId?: ReadonlyMap<string, string>;
+  }
 ): {
   purchaseOccurrenceCount: number;
   purchaseEventDates: number[];
@@ -108,30 +117,37 @@ export function buildPurchaseEventDatesFromRows(
   firstPurchasedAt: number | null;
   lastPurchasedAt: number | null;
 } {
-  const byReceipt = new Map<string, number | null>();
+  const remap = options?.purchaseOccurrenceIdByReceiptId;
+  const repMap = options?.representativeReceiptIdByReceiptId;
+  const byOccurrence = new Map<string, number | null>();
   for (const row of rows) {
-    const id = typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
-    if (!id) continue;
+    const rawId = typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
+    if (!rawId) continue;
+    if (repMap && repMap.size > 0) {
+      const representative = repMap.get(rawId) ?? rawId;
+      if (representative !== rawId) continue;
+    }
+    const id = remap?.get(rawId) ?? rawId;
     const ts = usablePurchaseTimestamp(row.occurredAt);
-    const existing = byReceipt.get(id);
-    if (!byReceipt.has(id)) {
-      byReceipt.set(id, ts);
+    if (!byOccurrence.has(id)) {
+      byOccurrence.set(id, ts);
       continue;
     }
+    // Multiple lines on the same representative receipt: keep any usable ts.
     if (ts == null) continue;
-    if (existing == null || ts > existing) {
-      byReceipt.set(id, ts);
+    const existing = byOccurrence.get(id);
+    if (existing == null) {
+      byOccurrence.set(id, ts);
     }
   }
 
-  const purchaseOccurrenceCount = byReceipt.size;
-  const datedEntries = [...byReceipt.entries()]
+  const purchaseOccurrenceCount = byOccurrence.size;
+  const datedEntries = [...byOccurrence.entries()]
     .filter((entry): entry is [string, number] => entry[1] != null)
     .sort(
       (left, right) =>
         left[1] - right[1] || left[0].localeCompare(right[0])
     );
-  // Keep one date per receipt; do not collapse equal timestamps across receipts.
   const purchaseEventDates = datedEntries.map((entry) => entry[1]);
   return {
     purchaseOccurrenceCount,
@@ -198,6 +214,31 @@ function sumQuantity(
   return any ? sum : undefined;
 }
 
+/**
+ * Quantity from one representative receipt per occurrence.
+ * Multiple same-product lines on that receipt still aggregate; rescans do not.
+ */
+function sumQuantityFromOccurrenceRepresentatives(
+  rows: ReadonlyArray<{
+    receiptId: string;
+    quantity?: number | null;
+    purchaseQuantity?: number | null;
+  }>,
+  occurrenceIndex?: CanonicalPurchaseOccurrenceIndex | null
+): number | undefined {
+  if (!occurrenceIndex || occurrenceIndex.representativeReceiptIdByReceiptId.size === 0) {
+    return sumQuantity(rows);
+  }
+  const representativeRows = rows.filter((row) => {
+    const id = typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
+    if (!id) return false;
+    return (
+      occurrenceIndex.representativeReceiptIdByReceiptId.get(id) === id
+    );
+  });
+  return sumQuantity(representativeRows);
+}
+
 function merchantSummariesFromRows(
   rows: ReadonlyArray<{ merchantKey?: string; merchantScopeKey?: string }>
 ): RepeatMerchantSummary[] | undefined {
@@ -219,19 +260,38 @@ function profileFromQualifiedRows(
   displayName: string,
   rows: ReadonlyArray<
     QualifiedIdentityObservation | IdentityConsumerObservation
-  >
+  >,
+  occurrenceIndex?: CanonicalPurchaseOccurrenceIndex | null
 ): RepeatProductProfile | null {
-  const timeline = buildPurchaseEventDatesFromRows(rows);
+  const timeline = buildPurchaseEventDatesFromRows(rows, {
+    purchaseOccurrenceIdByReceiptId: occurrenceIndex?.occurrenceIdByReceiptId,
+    representativeReceiptIdByReceiptId:
+      occurrenceIndex?.representativeReceiptIdByReceiptId,
+  });
   if (timeline.purchaseOccurrenceCount < 2) return null;
   const name = displayName.trim();
   if (!name) return null;
-  const quantity = sumQuantity(
+  const representativeRows =
+    occurrenceIndex && occurrenceIndex.representativeReceiptIdByReceiptId.size > 0
+      ? rows.filter((row) => {
+          const id =
+            typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
+          return (
+            !!id &&
+            occurrenceIndex.representativeReceiptIdByReceiptId.get(id) === id
+          );
+        })
+      : rows;
+  const quantity = sumQuantityFromOccurrenceRepresentatives(
     rows.map((row) => ({
+      receiptId: row.receiptId,
       quantity: (row as { quantity?: number | null }).quantity,
       purchaseQuantity: (row as { purchaseQuantity?: number | null })
         .purchaseQuantity,
-    }))
+    })),
+    occurrenceIndex
   );
+  const metaSource = representativeRows.length > 0 ? representativeRows : rows;
   return {
     identityKind,
     identityKey,
@@ -243,7 +303,7 @@ function profileFromQualifiedRows(
     lastPurchasedAt: timeline.lastPurchasedAt,
     ...(quantity != null ? { totalPurchaseQuantity: quantity } : {}),
     merchantSummary: merchantSummariesFromRows(
-      rows.map((row) => ({
+      metaSource.map((row) => ({
         merchantKey: (row as { merchantKey?: string }).merchantKey,
         merchantScopeKey: (row as { merchantScopeKey?: string }).merchantScopeKey,
       }))
@@ -339,11 +399,20 @@ export function buildRepeatProductProfiles(
   options?: {
     personalInventory?: PersonalProductEndpointInventory | null;
     identityStore?: import('./productIdentityStore').ProductIdentityStore;
+    /**
+     * Optional prebuilt occurrence index. When omitted, built from
+     * analyticsReceipts (canonical purchase-occurrence SSOT).
+     */
+    purchaseOccurrenceIndex?: CanonicalPurchaseOccurrenceIndex | null;
   }
 ): RepeatProductProfile[] {
   const supported = filterV1SupportedReceipts(analyticsReceipts as ReceiptRow[]);
   const supportedReceiptIds = new Set(supported.map((receipt) => receipt.id));
   if (supportedReceiptIds.size === 0) return [];
+
+  const occurrenceIndex =
+    options?.purchaseOccurrenceIndex ??
+    buildCanonicalPurchaseOccurrenceIndex(supported);
 
   const observations = observationsFromProductRows(
     productRows,
@@ -437,7 +506,8 @@ export function buildRepeatProductProfiles(
         'personal_product',
         personalKey,
         displayName,
-        retained
+        retained,
+        occurrenceIndex
       );
       if (!profile) {
         personalKeysSeen.delete(personalKey);
@@ -480,7 +550,8 @@ export function buildRepeatProductProfiles(
       'merchant_product',
       mpId,
       displayName,
-      rows
+      rows,
+      occurrenceIndex
     );
     if (profile) profiles.push(profile);
   }

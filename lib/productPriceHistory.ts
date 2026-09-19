@@ -10,6 +10,10 @@ import type {
 } from './analysisFoundation/types';
 import { initIfNeeded } from './db';
 import type { ReceiptRow } from './db';
+import {
+  buildCanonicalPurchaseOccurrenceIndex,
+  type CanonicalPurchaseOccurrenceIndex,
+} from './canonicalPurchaseOccurrence';
 import { normalizeReceiptCurrency } from './receiptCurrency';
 import {
   buildOwnerScopedInventoryPredicates,
@@ -222,6 +226,9 @@ export type ProductPriceHistoryRow = {
   receiptTax?: number | null;
   receiptTaxIsKnown?: number | null;
   receiptCurrency?: string | null;
+  /** Distinct from occurredAt when transaction_at is null. */
+  receiptTransactionAt?: number | null;
+  receiptCreatedAt?: number | null;
 };
 
 export type ProductPriceHistoryDatabase = {
@@ -252,6 +259,11 @@ export type BuildProductPriceHistoryOptions = {
    * When omitted, metadata is resolved from rows (Product Detail default).
    */
   preparedRowIdentityMetadata?: Map<string, RowIdentityMetadata>;
+  /**
+   * Canonical purchase-occurrence remapping (Repeat/PPH shared SSOT).
+   * When omitted, built from synthesized receipt envelopes on the row list.
+   */
+  purchaseOccurrenceIndex?: import('./canonicalPurchaseOccurrence').CanonicalPurchaseOccurrenceIndex | null;
 };
 
 type RowIdentityMetadata = {
@@ -398,10 +410,15 @@ type ComparableCandidate = {
 
 /**
  * Purchase-event occurrence SSOT shared with Repeat:
- * one canonical receiptId = one purchase occurrence for a target product.
+ * one canonical purchase occurrence = one purchase event for a target product.
+ * Multiple retained receipt ids that share a physical purchase collapse via
+ * purchaseOccurrenceIdByReceiptId.
  */
 export function countDistinctPurchaseEventOccurrences(
-  rows: ReadonlyArray<{ receiptId: string; occurredAt?: number }>
+  rows: ReadonlyArray<{ receiptId: string; occurredAt?: number }>,
+  options?: {
+    purchaseOccurrenceIdByReceiptId?: ReadonlyMap<string, string>;
+  }
 ): number {
   return buildPurchaseEventDatesFromRows(
     rows.map((row) => ({
@@ -410,8 +427,59 @@ export function countDistinctPurchaseEventOccurrences(
         typeof row.occurredAt === 'number' && Number.isFinite(row.occurredAt)
           ? row.occurredAt
           : 0,
-    }))
+    })),
+    options
   ).purchaseOccurrenceCount;
+}
+
+function synthesizeReceiptRowsForOccurrenceIndex(
+  rows: readonly ProductPriceHistoryRow[]
+): ReceiptRow[] {
+  const byId = new Map<string, ReceiptRow>();
+  for (const row of rows) {
+    const id = typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
+    if (!id || byId.has(id)) continue;
+    const createdAt =
+      typeof row.receiptCreatedAt === 'number' &&
+      Number.isFinite(row.receiptCreatedAt)
+        ? row.receiptCreatedAt
+        : row.occurredAt;
+    const hasExplicitTx = row.receiptTransactionAt !== undefined;
+    const transactionAt: number | null = hasExplicitTx
+      ? (row.receiptTransactionAt ?? null)
+      : row.occurredAt;
+    byId.set(id, {
+      id,
+      created_at: createdAt,
+      transaction_at: transactionAt,
+      image_uri: '',
+      merchant_raw: row.merchantRaw,
+      merchant_normalized: row.merchantNormalized,
+      total: row.receiptTotal ?? 0,
+      tax: row.receiptTax ?? 0,
+      tax_is_known: row.receiptTaxIsKnown ?? undefined,
+      currency: row.receiptCurrency ?? row.currency ?? '',
+      analysis_json: row.receiptAnalysisJson ?? '{}',
+      user_edited: row.receiptUserEdited ?? 0,
+      final_total: row.receiptFinalTotal ?? null,
+      final_category: null,
+      note: null,
+      user_items_json: row.receiptUserItemsJson ?? null,
+    });
+  }
+  return [...byId.values()];
+}
+
+export function resolvePurchaseOccurrenceIndexForRows(
+  rows: readonly ProductPriceHistoryRow[],
+  options?: BuildProductPriceHistoryOptions
+): CanonicalPurchaseOccurrenceIndex {
+  if (options?.purchaseOccurrenceIndex) {
+    return options.purchaseOccurrenceIndex;
+  }
+  return buildCanonicalPurchaseOccurrenceIndex(
+    synthesizeReceiptRowsForOccurrenceIndex(rows)
+  );
 }
 
 function comparableUnitPricesEqual(a: number, b: number): boolean {
@@ -562,133 +630,184 @@ function reconcilePurchaseEventInterpretationMetadata(
 }
 
 /**
+ * Aggregate legitimate same-product lines within ONE receipt representation.
+ * Never sums across distinct receipt ids (rescans).
+ */
+function aggregateCandidatesWithinOneReceipt(
+  group: readonly ComparableCandidate[]
+): ComparableCandidate | null {
+  const sorted = [...group].sort(sortComparableCandidatesForAggregation);
+  if (sorted.length === 0) return null;
+  if (sorted.length === 1) return sorted[0]!;
+
+  const representative = sorted[0]!;
+  const currency = representative.currency;
+  const amountBasis = representative.amountBasis;
+  const dimension = representative.dimension;
+  for (const member of sorted) {
+    if (member.currency !== currency) return null;
+    if (member.amountBasis !== amountBasis) return null;
+    if (member.dimension !== dimension) return null;
+    if (!comparableUnitPricesEqual(member.priceValue, representative.priceValue)) {
+      return null;
+    }
+    if (
+      !positiveFinite(member.grossLineAmount) ||
+      !positiveFinite(member.row.purchaseQuantity)
+    ) {
+      return null;
+    }
+  }
+
+  const purchaseQuantity = sorted.reduce(
+    (sum, member) => sum + (member.row.purchaseQuantity as number),
+    0
+  );
+  const grossLineAmount = sorted.reduce(
+    (sum, member) => sum + member.grossLineAmount,
+    0
+  );
+  if (!positiveFinite(purchaseQuantity) || !positiveFinite(grossLineAmount)) {
+    return null;
+  }
+  const priceValue =
+    dimension == null
+      ? grossLineAmount / purchaseQuantity
+      : representative.priceValue;
+  if (!positiveFinite(priceValue)) return null;
+  if (!comparableUnitPricesEqual(priceValue, representative.priceValue)) {
+    return null;
+  }
+
+  const effectiveLineAmount = sumFiniteMonetaryOrNull(
+    sorted.map((member) => nullishNumber(member.row.effectiveLineAmount))
+  );
+  const discountAllocated = sumFiniteMonetaryOrNull(
+    sorted.map((member) => nullishNumber(member.row.discountAllocated))
+  );
+  const interpretation = reconcilePurchaseEventInterpretationMetadata(sorted, {
+    eventDiscountAllocated: discountAllocated,
+  });
+
+  return {
+    ...representative,
+    row: {
+      ...representative.row,
+      purchaseQuantity,
+      grossLineAmount,
+      lineTotal: grossLineAmount,
+      effectiveLineAmount,
+      discountAllocated,
+    },
+    observation: {
+      ...representative.observation,
+      purchaseQuantity,
+      grossLineAmount,
+      effectiveLineAmount,
+      discountAllocated,
+      promoContext: interpretation.promoContext,
+      promoMarkers: interpretation.promoMarkers,
+      qualityLevel: interpretation.qualityLevel,
+    },
+    priceValue,
+    grossLineAmount,
+  };
+}
+
+/**
  * Collapse Level-2 comparable item-row candidates into one candidate per
- * purchase event (receiptId). Compatible same-receipt unit prices aggregate
- * quantity + gross; incompatible prices fail-close (no comparable event).
- * Untrusted rows are already absent from `candidates`, so they cannot mint a
- * second point.
- *
- * Event-level monetary metadata (effective / discount) is summed only when every
- * sibling supplies a finite value; otherwise those fields are explicitly null —
- * never copied from the representative row alone.
- *
- * promoContext / promoMarkers / qualityLevel are reconciled across ALL
- * contributing comparable siblings (not representative-only).
+ * purchase occurrence:
+ * 1) aggregate lines within each receipt id
+ * 2) pick ONE receipt representation (occurrence representative when present
+ *    and valid; else fail closed on conflicting unit prices — never sum/average
+ *    across rescan receipt ids)
  */
 function collapseComparableCandidatesToPurchaseEvents(
-  candidates: readonly ComparableCandidate[]
+  candidates: readonly ComparableCandidate[],
+  purchaseOccurrenceIdByReceiptId?: ReadonlyMap<string, string>,
+  representativeReceiptIdByOccurrenceId?: ReadonlyMap<string, string>
 ): ComparableCandidate[] {
-  const byReceipt = new Map<string, ComparableCandidate[]>();
+  const byOccurrence = new Map<string, ComparableCandidate[]>();
   for (const candidate of candidates) {
     const receiptId =
       typeof candidate.row.receiptId === 'string'
         ? candidate.row.receiptId.trim()
         : '';
     if (!receiptId) continue;
-    const list = byReceipt.get(receiptId) ?? [];
+    const occurrenceId =
+      purchaseOccurrenceIdByReceiptId?.get(receiptId) ?? receiptId;
+    const list = byOccurrence.get(occurrenceId) ?? [];
     list.push(candidate);
-    byReceipt.set(receiptId, list);
+    byOccurrence.set(occurrenceId, list);
   }
 
   const collapsed: ComparableCandidate[] = [];
-  const receiptIds = [...byReceipt.keys()].sort((a, b) => a.localeCompare(b));
-  for (const receiptId of receiptIds) {
-    const group = [...byReceipt.get(receiptId)!].sort(
-      sortComparableCandidatesForAggregation
-    );
-    if (group.length === 1) {
-      collapsed.push(group[0]!);
-      continue;
-    }
+  const occurrenceIds = [...byOccurrence.keys()].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  for (const occurrenceId of occurrenceIds) {
+    const group = byOccurrence.get(occurrenceId)!;
 
-    const representative = group[0]!;
-    const currency = representative.currency;
-    const amountBasis = representative.amountBasis;
-    const dimension = representative.dimension;
-    let compatible = true;
+    // Aggregate within each receipt id first.
+    const byReceipt = new Map<string, ComparableCandidate[]>();
     for (const member of group) {
-      if (member.currency !== currency) {
-        compatible = false;
-        break;
-      }
-      if (member.amountBasis !== amountBasis) {
-        compatible = false;
-        break;
-      }
-      if (member.dimension !== dimension) {
-        compatible = false;
-        break;
-      }
-      if (!comparableUnitPricesEqual(member.priceValue, representative.priceValue)) {
-        compatible = false;
-        break;
-      }
-      if (
-        !positiveFinite(member.grossLineAmount) ||
-        !positiveFinite(member.row.purchaseQuantity)
-      ) {
-        compatible = false;
-        break;
-      }
+      const receiptId = member.row.receiptId.trim();
+      const list = byReceipt.get(receiptId) ?? [];
+      list.push(member);
+      byReceipt.set(receiptId, list);
     }
-    if (!compatible) {
-      // Purchase event still exists in totalOccurrenceCount; no fabricated average.
+    const perReceipt: ComparableCandidate[] = [];
+    const receiptIds = [...byReceipt.keys()].sort((a, b) => a.localeCompare(b));
+    for (const receiptId of receiptIds) {
+      const aggregated = aggregateCandidatesWithinOneReceipt(
+        byReceipt.get(receiptId)!
+      );
+      if (aggregated) perReceipt.push(aggregated);
+    }
+    if (perReceipt.length === 0) continue;
+    if (perReceipt.length === 1) {
+      collapsed.push(perReceipt[0]!);
       continue;
     }
 
-    const purchaseQuantity = group.reduce(
-      (sum, member) => sum + (member.row.purchaseQuantity as number),
-      0
-    );
-    const grossLineAmount = group.reduce(
-      (sum, member) => sum + member.grossLineAmount,
-      0
-    );
-    if (!positiveFinite(purchaseQuantity) || !positiveFinite(grossLineAmount)) {
-      continue;
-    }
-    const priceValue =
-      dimension == null
-        ? grossLineAmount / purchaseQuantity
-        : representative.priceValue;
-    if (!positiveFinite(priceValue)) continue;
-    if (!comparableUnitPricesEqual(priceValue, representative.priceValue)) {
+    // Prefer the occurrence representative when it has a valid observation.
+    const preferredRepId =
+      representativeReceiptIdByOccurrenceId?.get(occurrenceId) ?? null;
+    const preferred =
+      preferredRepId != null
+        ? perReceipt.find((c) => c.row.receiptId === preferredRepId) ?? null
+        : null;
+    if (preferred) {
+      collapsed.push(preferred);
       continue;
     }
 
-    const effectiveLineAmount = sumFiniteMonetaryOrNull(
-      group.map((member) => nullishNumber(member.row.effectiveLineAmount))
-    );
-    const discountAllocated = sumFiniteMonetaryOrNull(
-      group.map((member) => nullishNumber(member.row.discountAllocated))
-    );
-    const interpretation = reconcilePurchaseEventInterpretationMetadata(group, {
-      eventDiscountAllocated: discountAllocated,
-    });
-
-    collapsed.push({
-      ...representative,
-      row: {
-        ...representative.row,
-        purchaseQuantity,
-        grossLineAmount,
-        lineTotal: grossLineAmount,
-        effectiveLineAmount,
-        discountAllocated,
-      },
-      observation: {
-        ...representative.observation,
-        purchaseQuantity,
-        grossLineAmount,
-        effectiveLineAmount,
-        discountAllocated,
-        promoContext: interpretation.promoContext,
-        promoMarkers: interpretation.promoMarkers,
-        qualityLevel: interpretation.qualityLevel,
-      },
-      priceValue,
-      grossLineAmount,
-    });
+    // Otherwise: all remaining representations must agree on unit price;
+    // pick deterministic first by receiptId. Conflicting amounts → fail closed.
+    const anchor = [...perReceipt].sort((a, b) =>
+      a.row.receiptId.localeCompare(b.row.receiptId)
+    )[0]!;
+    let compatible = true;
+    for (const member of perReceipt) {
+      if (member.currency !== anchor.currency) {
+        compatible = false;
+        break;
+      }
+      if (member.amountBasis !== anchor.amountBasis) {
+        compatible = false;
+        break;
+      }
+      if (member.dimension !== anchor.dimension) {
+        compatible = false;
+        break;
+      }
+      if (!comparableUnitPricesEqual(member.priceValue, anchor.priceValue)) {
+        compatible = false;
+        break;
+      }
+    }
+    if (!compatible) continue;
+    collapsed.push(anchor);
   }
 
   return collapsed;
@@ -988,7 +1107,8 @@ function failClosedRequestedMerchantProductTargetResult(
   target: Extract<ProductDetailTarget, { type: 'merchant_product' }>,
   filtered: ProductPriceHistoryRow[],
   cache: ReceiptEvidenceCache,
-  canonicalDuplicateSelectionApplied: boolean
+  canonicalDuplicateSelectionApplied: boolean,
+  purchaseOccurrenceIdByReceiptId?: ReadonlyMap<string, string>
 ): ProductPriceHistoryResult {
   const observations = buildMerchantTargetObservations(
     filtered,
@@ -1001,14 +1121,21 @@ function failClosedRequestedMerchantProductTargetResult(
       resolveMerchantTargetMembershipRowKeys(filtered, target.key)
     )
   );
+  const occurrenceOpts = purchaseOccurrenceIdByReceiptId
+    ? { purchaseOccurrenceIdByReceiptId }
+    : undefined;
+  const totalOccurrenceCount = countDistinctPurchaseEventOccurrences(
+    targetRows,
+    occurrenceOpts
+  );
   return {
     target,
     status: 'not_enough_points',
     priceKind: 'purchase_unit',
     currency: null,
-    totalOccurrenceCount: countDistinctPurchaseEventOccurrences(targetRows),
+    totalOccurrenceCount,
     comparableOccurrenceCount: 0,
-    excludedOccurrenceCount: countDistinctPurchaseEventOccurrences(targetRows),
+    excludedOccurrenceCount: totalOccurrenceCount,
     points: [],
     observations,
     seriesKind: null,
@@ -1140,7 +1267,14 @@ function buildExactPurchaseUnitPriceHistory(
   const cache = options.receiptEvidenceCache ?? buildReceiptEvidenceCache(rows);
   const canonicalDuplicateSelectionApplied =
     options.canonicalDuplicateSelectionApplied === true;
-  const totalOccurrenceCount = countDistinctPurchaseEventOccurrences(rows);
+  const occurrenceIndex = resolvePurchaseOccurrenceIndexForRows(rows, options);
+  const occurrenceOpts = {
+    purchaseOccurrenceIdByReceiptId: occurrenceIndex.occurrenceIdByReceiptId,
+  };
+  const totalOccurrenceCount = countDistinctPurchaseEventOccurrences(
+    rows,
+    occurrenceOpts
+  );
   const structuralCohort = buildSkuStructuralCohort(rows, cache);
   const { observations, observationsByKey } =
     buildObservationsAndStructuralCohort(rows, cache, structuralCohort);
@@ -1162,7 +1296,9 @@ function buildExactPurchaseUnitPriceHistory(
     observations,
     identityByRowKey,
     specCandidates,
-    canonicalDuplicateSelectionApplied
+    canonicalDuplicateSelectionApplied,
+    occurrenceIndex.occurrenceIdByReceiptId,
+    occurrenceIndex.representativeReceiptIdByOccurrenceId
   );
 }
 
@@ -1598,7 +1734,9 @@ function finalizeCandidates(
   observations: ProductPriceHistoryObservation[],
   identityByRowKey: Map<string, RowIdentityMetadata>,
   specCandidates: ComparableCandidate[] = candidates,
-  canonicalDuplicateSelectionApplied = false
+  canonicalDuplicateSelectionApplied = false,
+  purchaseOccurrenceIdByReceiptId?: ReadonlyMap<string, string>,
+  representativeReceiptIdByOccurrenceId?: ReadonlyMap<string, string>
 ): ProductPriceHistoryResult {
   const basisGate = evaluateAmountBasisSeriesGate(candidates);
   if (basisGate.mixedBasis) {
@@ -1648,7 +1786,11 @@ function finalizeCandidates(
       candidate.currency != null && hasValidOccurredAt(candidate.row.occurredAt)
   );
   const purchaseEventCandidates =
-    collapseComparableCandidatesToPurchaseEvents(knownCandidates);
+    collapseComparableCandidatesToPurchaseEvents(
+      knownCandidates,
+      purchaseOccurrenceIdByReceiptId,
+      representativeReceiptIdByOccurrenceId
+    );
   const currencies = new Set(
     purchaseEventCandidates.map((candidate) => candidate.currency)
   );
@@ -1864,6 +2006,7 @@ export function buildMerchantProductPriceHistoryFromRows(
   const identityByRowKey =
     options.preparedRowIdentityMetadata ??
     buildRowIdentityMetadataByKey(rowList);
+  const occurrenceIndex = resolvePurchaseOccurrenceIndexForRows(rowList, options);
   const target = { type: 'merchant_product' as const, key: merchantProductId };
 
   let identityView = options.preparedMerchantProductIdentityView ?? null;
@@ -1881,7 +2024,8 @@ export function buildMerchantProductPriceHistoryFromRows(
       target,
       rowList,
       cache,
-      canonicalDuplicateSelectionApplied
+      canonicalDuplicateSelectionApplied,
+      occurrenceIndex.occurrenceIdByReceiptId
     );
   }
   return applyIdentityG3Gates(
@@ -1890,7 +2034,9 @@ export function buildMerchantProductPriceHistoryFromRows(
     identityView,
     cache,
     identityByRowKey,
-    canonicalDuplicateSelectionApplied
+    canonicalDuplicateSelectionApplied,
+    occurrenceIndex.occurrenceIdByReceiptId,
+    occurrenceIndex.representativeReceiptIdByOccurrenceId
   );
 }
 
@@ -1909,14 +2055,26 @@ export function buildProductPriceHistory(
   const identityByRowKey =
     options.preparedRowIdentityMetadata ??
     buildRowIdentityMetadataByKey(truthRows);
-  const totalOccurrenceCount =
-    countDistinctPurchaseEventOccurrences(truthRows);
+  const occurrenceIndex = resolvePurchaseOccurrenceIndexForRows(
+    truthRows,
+    options
+  );
+  const optionsWithOccurrence: BuildProductPriceHistoryOptions = {
+    ...options,
+    purchaseOccurrenceIndex: occurrenceIndex,
+  };
+  const totalOccurrenceCount = countDistinctPurchaseEventOccurrences(
+    truthRows,
+    {
+      purchaseOccurrenceIdByReceiptId: occurrenceIndex.occurrenceIdByReceiptId,
+    }
+  );
 
   if (target.type === 'merchant_product') {
     return buildMerchantProductPriceHistoryFromRows(
       target.key,
       truthRows,
-      options
+      optionsWithOccurrence
     );
   }
 
@@ -1937,7 +2095,7 @@ export function buildProductPriceHistory(
       target,
       truthRows,
       identityByRowKey,
-      options
+      optionsWithOccurrence
     );
   }
 
@@ -2021,7 +2179,9 @@ export function buildProductPriceHistory(
     observations,
     identityByRowKey,
     specCandidates,
-    canonicalDuplicateSelectionApplied
+    canonicalDuplicateSelectionApplied,
+    occurrenceIndex.occurrenceIdByReceiptId,
+    occurrenceIndex.representativeReceiptIdByOccurrenceId
   );
 }
 
@@ -2096,7 +2256,9 @@ const PRICE_HISTORY_SELECT_SQL = `
     receipts.final_total AS receiptFinalTotal,
     receipts.tax AS receiptTax,
     COALESCE(receipts.tax_is_known, 0) AS receiptTaxIsKnown,
-    receipts.currency AS receiptCurrency
+    receipts.currency AS receiptCurrency,
+    receipts.transaction_at AS receiptTransactionAt,
+    receipts.created_at AS receiptCreatedAt
   FROM receipt_items
   INNER JOIN receipts ON receipts.id = receipt_items.receipt_id`;
 
@@ -2122,8 +2284,13 @@ function applyIdentityG3Gates(
   },
   cache: ReceiptEvidenceCache,
   identityByRowKey: Map<string, RowIdentityMetadata>,
-  canonicalDuplicateSelectionApplied: boolean
+  canonicalDuplicateSelectionApplied: boolean,
+  purchaseOccurrenceIdByReceiptId?: ReadonlyMap<string, string>,
+  representativeReceiptIdByOccurrenceId?: ReadonlyMap<string, string>
 ): ProductPriceHistoryResult {
+  const occurrenceOpts = purchaseOccurrenceIdByReceiptId
+    ? { purchaseOccurrenceIdByReceiptId }
+    : undefined;
   const targetScopedRows =
     target.type === 'merchant_product'
       ? filterRowsByMembershipKeys(
@@ -2146,16 +2313,28 @@ function applyIdentityG3Gates(
       identitySource: meta?.identitySource ?? null,
     });
   });
-  if (identityComparablePoints.length < 2) {
+  // Count distinct purchase occurrences (not raw receipt rows / points).
+  const identityComparableOccurrenceCount = countDistinctPurchaseEventOccurrences(
+    identityComparablePoints.map((point) => ({
+      receiptId: point.receiptId,
+      occurredAt: point.occurredAt,
+    })),
+    occurrenceOpts
+  );
+  if (identityComparableOccurrenceCount < 2) {
     const { observations } = buildObservationsForRows(targetScopedRows, cache);
+    const totalOccurrenceCount = countDistinctPurchaseEventOccurrences(
+      targetScopedRows,
+      occurrenceOpts
+    );
     return {
       target,
       status: 'not_enough_points',
       priceKind: 'purchase_unit',
       currency: null,
-      totalOccurrenceCount: countDistinctPurchaseEventOccurrences(targetScopedRows),
+      totalOccurrenceCount,
       comparableOccurrenceCount: 0,
-      excludedOccurrenceCount: countDistinctPurchaseEventOccurrences(targetScopedRows),
+      excludedOccurrenceCount: totalOccurrenceCount,
       points: [],
       observations,
       seriesKind: null,
@@ -2175,8 +2354,10 @@ function applyIdentityG3Gates(
     targetScopedRows,
     cache
   );
-  const totalOccurrenceCount =
-    countDistinctPurchaseEventOccurrences(targetScopedRows);
+  const totalOccurrenceCount = countDistinctPurchaseEventOccurrences(
+    targetScopedRows,
+    occurrenceOpts
+  );
 
   const structuralCohort = buildSkuStructuralCohort(identityRows, cache);
 
@@ -2244,7 +2425,9 @@ function applyIdentityG3Gates(
     candidates.filter(
       (candidate) =>
         candidate.currency != null && hasValidOccurredAt(candidate.row.occurredAt)
-    )
+    ),
+    purchaseOccurrenceIdByReceiptId,
+    representativeReceiptIdByOccurrenceId
   );
 
   const points = purchaseEventCandidates
@@ -2415,6 +2598,10 @@ export async function loadProductPriceHistoryWithDb(
       : rows;
   const cache = buildReceiptEvidenceCache(filtered);
   const identityByRowKey = buildRowIdentityMetadataByKey(filtered);
+  const occurrenceIndex = resolvePurchaseOccurrenceIndexForRows(filtered, options);
+  const occurrenceMap = occurrenceIndex.occurrenceIdByReceiptId;
+  const representativeMap =
+    occurrenceIndex.representativeReceiptIdByOccurrenceId;
 
   try {
     const { isProductIdentityPriceHistoryV1Enabled } = await import('./env');
@@ -2437,7 +2624,8 @@ export async function loadProductPriceHistoryWithDb(
             target,
             filtered,
             cache,
-            canonicalDuplicateSelectionApplied
+            canonicalDuplicateSelectionApplied,
+            occurrenceMap
           );
         }
         return applyIdentityG3Gates(
@@ -2446,7 +2634,9 @@ export async function loadProductPriceHistoryWithDb(
           identityView,
           cache,
           identityByRowKey,
-          canonicalDuplicateSelectionApplied
+          canonicalDuplicateSelectionApplied,
+          occurrenceMap,
+          representativeMap
         );
       }
       if (target.type === 'merchant_product') {
@@ -2454,7 +2644,8 @@ export async function loadProductPriceHistoryWithDb(
           target,
           filtered,
           cache,
-          canonicalDuplicateSelectionApplied
+          canonicalDuplicateSelectionApplied,
+          occurrenceMap
         );
       }
     }
@@ -2464,7 +2655,8 @@ export async function loadProductPriceHistoryWithDb(
         target,
         filtered,
         cache,
-        canonicalDuplicateSelectionApplied
+        canonicalDuplicateSelectionApplied,
+        occurrenceMap
       );
     }
   }
@@ -2474,13 +2666,15 @@ export async function loadProductPriceHistoryWithDb(
       target,
       filtered,
       cache,
-      canonicalDuplicateSelectionApplied
+      canonicalDuplicateSelectionApplied,
+      occurrenceMap
     );
   }
 
   return buildProductPriceHistory(target, filtered, {
     receiptEvidenceCache: cache,
     canonicalDuplicateSelectionApplied,
+    purchaseOccurrenceIndex: occurrenceIndex,
   });
 }
 

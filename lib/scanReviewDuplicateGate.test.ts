@@ -48,7 +48,7 @@ function transientYorkC() {
     analysis: {
       ...parsed,
       merchant: yorkC.merchant_raw,
-      transactionDate: '2026-06-30 12:55',
+      transactionDate: '2026-06-30 12:55:00',
       total: 4102,
       tax: 303,
       tax_is_known: true,
@@ -156,6 +156,7 @@ describe('scanReviewDuplicateGate', () => {
     const ownerAReceipt = cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
       id: 'owner-a-unrelated',
       transaction_at: 1_782_791_700_000 - 60_000,
+    transaction_time_precision: 'second',
       user_id: 'owner-a',
     });
     const foreignMatchingReceipt = cloneCollisionReceipt(
@@ -242,9 +243,11 @@ describe('scanReviewDuplicateGate', () => {
 
     const changedTransient = cloneCollisionReceipt(transientYorkC(), {
       transaction_at: transientYorkC().transaction_at! + 60_000,
+    transaction_time_precision: 'second',
     });
     const changedStored = cloneCollisionReceipt(makeYorkCollisionReceiptA(), {
       transaction_at: makeYorkCollisionReceiptA().transaction_at! + 60_000,
+    transaction_time_precision: 'second',
     });
     const changed = evaluateScanReviewDuplicateGate(
       changedTransient,

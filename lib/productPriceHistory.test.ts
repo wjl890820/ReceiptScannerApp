@@ -940,12 +940,22 @@ describe('currency, validity, coverage, and ordering', () => {
   });
 
   it('orders every occurrence chronologically without daily aggregation', () => {
+    // Same wall-clock ms but different basket totals → genuine distinct purchases
+    // (must not collapse via canonical occurrence identity).
     const result = buildWithTrusted(
       { type: 'sku', key: 'sku' },
       [
-        trustedG3Row('3', { occurredAt: 300 }),
-        trustedG3Row('2', { occurredAt: 100, receiptId: 'receipt-b' }),
-        trustedG3Row('1', { occurredAt: 100, receiptId: 'receipt-a' }),
+        trustedG3Row('3', { occurredAt: 300, grossLineAmount: 120 }),
+        trustedG3Row('2', {
+          occurredAt: 100,
+          receiptId: 'receipt-b',
+          grossLineAmount: 110,
+        }),
+        trustedG3Row('1', {
+          occurredAt: 100,
+          receiptId: 'receipt-a',
+          grossLineAmount: 100,
+        }),
       ]
     );
 

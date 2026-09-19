@@ -51,6 +51,7 @@ function receipt(id: string, options: FixtureOptions): ReceiptRow {
     id,
     created_at: createdAt,
     transaction_at: options.transactionAt ?? null,
+    transaction_time_precision: 'second',
     image_uri: '',
     merchant_raw: merchant,
     merchant_normalized: merchant,

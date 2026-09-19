@@ -1,6 +1,8 @@
 import {
+  inferReceiptTransactionTimePrecision,
   normalizeReceiptDateTime,
   parseReceiptDateTime,
+  parseReceiptDateTimeWithPrecision,
 } from './dateParser';
 
 /** Fixed clock: 2026-08-11 12:00 Asia/Tokyo — avoids Date.now() in assertions. */
@@ -34,6 +36,40 @@ function expectLocalParts(
   expect(get('minute')).toBe(minute);
   expect(get('second')).toBe(second);
 }
+
+describe('receipt transaction time precision', () => {
+  it('infers second / minute / date / unknown from source text', () => {
+    expect(inferReceiptTransactionTimePrecision('2026-07-06 11:44:46')).toBe(
+      'second'
+    );
+    expect(inferReceiptTransactionTimePrecision('2026-07-06 11:44')).toBe(
+      'minute'
+    );
+    expect(inferReceiptTransactionTimePrecision('2026-07-06')).toBe('date');
+    expect(inferReceiptTransactionTimePrecision('')).toBe('unknown');
+    expect(inferReceiptTransactionTimePrecision(null)).toBe('unknown');
+  });
+
+  it('parseReceiptDateTimeWithPrecision preserves minute vs second', () => {
+    const minute = parseReceiptDateTimeWithPrecision('2026-07-06 11:44', {
+      nowMs: NOW_MS,
+    });
+    const second = parseReceiptDateTimeWithPrecision('2026-07-06 11:44:00', {
+      nowMs: NOW_MS,
+    });
+    expect(minute.precision).toBe('minute');
+    expect(second.precision).toBe('second');
+    expect(minute.ms).toBe(second.ms);
+  });
+
+  it('does not infer minute solely from epoch seconds==0', () => {
+    // Explicit :00 in source is second precision, even if wall-clock seconds are zero.
+    const parsed = parseReceiptDateTimeWithPrecision('2026-07-06 11:44:00', {
+      nowMs: NOW_MS,
+    });
+    expect(parsed.precision).toBe('second');
+  });
+});
 
 describe('receipt datetime parsing', () => {
   it('parses Japanese weekday format', () => {
@@ -253,7 +289,7 @@ describe('receipt datetime parsing', () => {
     expect(parserSource).toMatch(/new Date\(value\)/);
 
     expect(dbSource).toContain('projectReceiptSaveMaterialEvidence');
-    expect(projectionSource).toContain('parseReceiptDateTime(transactionDateText');
+    expect(projectionSource).toContain('parseReceiptDateTimeWithPrecision(transactionDateText');
     expect(projectionSource).toContain('fallbackToNow: false');
     expect(dbSource).not.toMatch(/new Date\(\s*txDateStr/);
     expect(dbSource).not.toMatch(/new Date\(\s*txDate/);

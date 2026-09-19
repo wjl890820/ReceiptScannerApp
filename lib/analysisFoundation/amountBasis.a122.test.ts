@@ -60,6 +60,7 @@ function makeReceipt(args: {
     id: args.id,
     created_at: Date.now(),
     transaction_at: Date.parse('2024-06-01T12:00:00+09:00'),
+    transaction_time_precision: 'second',
     image_uri: '',
     total: args.total ?? 2637,
     tax: args.tax ?? 195,

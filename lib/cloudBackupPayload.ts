@@ -10,6 +10,8 @@ export type LocalReceiptBackupSource = {
   source?: string | null;
   created_at: number;
   transaction_at?: number | null;
+  /** second | minute | date | unknown */
+  transaction_time_precision?: string | null;
   scanned_at?: number | null;
   merchant_raw?: string | null;
   merchant_normalized?: string | null;
@@ -39,6 +41,8 @@ export type CloudUserReceiptUpsertPayload = {
   social_source: string | null;
   created_at: string;
   transaction_at: string | null;
+  /** second | minute | date | unknown */
+  transaction_time_precision: string;
   scanned_at: string | null;
   merchant_raw: string | null;
   merchant_normalized: string | null;
@@ -107,6 +111,13 @@ export function buildCloudUserReceiptUpsertPayload(
       typeof row.source === 'string' && row.source.trim() ? row.source.trim() : null,
     created_at: msToIso(row.created_at) || new Date(0).toISOString(),
     transaction_at: msToIso(row.transaction_at ?? null),
+    transaction_time_precision:
+      typeof row.transaction_time_precision === 'string' &&
+      ['second', 'minute', 'date', 'unknown'].includes(
+        row.transaction_time_precision
+      )
+        ? row.transaction_time_precision
+        : 'unknown',
     scanned_at: msToIso(row.scanned_at ?? null),
     merchant_raw: row.merchant_raw ?? null,
     merchant_normalized: row.merchant_normalized ?? null,
