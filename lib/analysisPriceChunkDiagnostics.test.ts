@@ -219,7 +219,8 @@ describe('C2D identity producer timing boundaries', () => {
     const qualify = byLabel('identity:qualify');
 
     expect(rows.length).toBeGreaterThan(0);
-    expect(peer.length).toBe(1);
+    // Peer prepare now emits one sync sample per bounded chunk (may be >1).
+    expect(peer.length).toBeGreaterThan(0);
     expect(qualify.length).toBeGreaterThan(0);
 
     // If duration spanned the awaited yield/import, samples would be ≈180ms+.

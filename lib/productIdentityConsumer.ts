@@ -215,6 +215,66 @@ function preparePeerBucketsFromDraft(
   return preparedPeersByMp;
 }
 
+/**
+ * Cooperative peer-bucket prepare — same Map membership/order as sync
+ * preparePeerBucketsFromDraft. Yields every `chunkSize` work units so blur
+ * can observe shouldCancel between bounded sync chunks.
+ */
+async function preparePeerBucketsFromDraftAsync(
+  draft: readonly IdentityDraft[],
+  options: {
+    shouldCancel: () => boolean;
+    yieldFn: () => Promise<void>;
+    chunkSize: number;
+    recordTiming: (label: string, durationMs: number) => void;
+  }
+): Promise<Map<string, PreparedPeerPriceBucket> | null> {
+  const { shouldCancel, yieldFn, recordTiming } = options;
+  const chunkSize = Math.max(1, options.chunkSize);
+  if (shouldCancel()) return null;
+
+  const peersByMp = new Map<string, number[]>();
+  let sinceYield = 0;
+  let chunkStarted = Date.now();
+
+  const flushAndYield = async (): Promise<boolean> => {
+    recordTiming('identity:peerPrepare', Date.now() - chunkStarted);
+    sinceYield = 0;
+    await yieldFn();
+    if (shouldCancel()) return false;
+    chunkStarted = Date.now();
+    return true;
+  };
+
+  for (const row of draft) {
+    if (shouldCancel()) return null;
+    if (row.merchantProductId && row.purchaseUnitPrice != null) {
+      const list = peersByMp.get(row.merchantProductId) ?? [];
+      list.push(row.purchaseUnitPrice);
+      peersByMp.set(row.merchantProductId, list);
+    }
+    sinceYield += 1;
+    if (sinceYield >= chunkSize) {
+      if (!(await flushAndYield())) return null;
+    }
+  }
+
+  const preparedPeersByMp = new Map<string, PreparedPeerPriceBucket>();
+  for (const [mpId, prices] of peersByMp) {
+    if (shouldCancel()) return null;
+    preparedPeersByMp.set(mpId, preparePeerPriceBucket(prices));
+    sinceYield += 1;
+    if (sinceYield >= chunkSize) {
+      if (!(await flushAndYield())) return null;
+    }
+  }
+
+  if (sinceYield > 0) {
+    recordTiming('identity:peerPrepare', Date.now() - chunkStarted);
+  }
+  return preparedPeersByMp;
+}
+
 function qualifyIdentityDraftRow(
   row: IdentityDraft,
   preparedPeersByMp: ReadonlyMap<string, PreparedPeerPriceBucket>
@@ -326,13 +386,16 @@ export async function resolveIdentityConsumerObservationsAsync(
     recordAnalysisPriceChunkTiming('identity:rows', chunkMs);
   }
 
-  // Peer prepare once per MP bucket, then qualify in bounded row chunks.
+  // Peer prepare once per MP bucket (chunked), then qualify in bounded row chunks.
   await yieldFn();
   if (shouldCancel()) return null;
-  const prepareStarted = Date.now();
-  const preparedPeersByMp = preparePeerBucketsFromDraft(draft);
-  const peerPrepareMs = Date.now() - prepareStarted;
-  recordAnalysisPriceChunkTiming('identity:peerPrepare', peerPrepareMs);
+  const preparedPeersByMp = await preparePeerBucketsFromDraftAsync(draft, {
+    shouldCancel,
+    yieldFn,
+    chunkSize: rowsPerChunk,
+    recordTiming: recordAnalysisPriceChunkTiming,
+  });
+  if (preparedPeersByMp == null || shouldCancel()) return null;
   await yieldFn();
   if (shouldCancel()) return null;
 

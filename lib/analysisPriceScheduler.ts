@@ -273,6 +273,11 @@ export function endAnalysisPriceChunkTimingCapture(): ChunkTimingSample[] {
   return snapshot;
 }
 
+/** Test seam: inspect in-flight sync chunk labels without clearing. */
+export function __peekAnalysisPriceChunkTimingLabelsForTests(): string[] {
+  return chunkTimings.map((sample) => sample.label);
+}
+
 export function getMaxAnalysisPriceChunkDurationMs(): number {
   return summarizeAp3SyncChunkTimings(chunkTimings).maxDurationMs;
 }

@@ -249,9 +249,161 @@ function finalizePreparedAnalysisPriceInsightContext(input: {
   };
 }
 
+/**
+ * Cooperative finalize — identical Maps/Sets/order to sync finalize.
+ * Chunks the large linear loops; small seeded-set assembly stays sync at end.
+ */
+async function finalizePreparedAnalysisPriceInsightContextAsync(
+  input: {
+    rows: readonly ProductPriceHistoryRow[];
+    seedReceiptIds: ReadonlySet<string>;
+    qualified: readonly QualifiedIdentityObservation[];
+    rowByKey: Map<string, ProductPriceHistoryRow>;
+    receiptEvidenceCache: ReceiptEvidenceCache;
+  },
+  options: {
+    shouldCancel: () => boolean;
+    yieldFn: () => Promise<void>;
+    chunkSize: number;
+    recordTiming: (label: string, durationMs: number) => void;
+  }
+): Promise<PreparedAnalysisPriceInsightContext | null> {
+  const { shouldCancel, yieldFn, recordTiming } = options;
+  const chunkSize = Math.max(1, options.chunkSize);
+  if (shouldCancel()) return null;
+
+  const { rows, seedReceiptIds, qualified, rowByKey, receiptEvidenceCache } =
+    input;
+
+  // Metadata build is O(qualified) but cheap vs MP history views — still chunk.
+  const rowIdentityMetadata = new Map<
+    string,
+    ProductPriceHistoryRowIdentityMetadata
+  >();
+  let sinceYield = 0;
+  let chunkStarted = Date.now();
+
+  const flushAndYield = async (): Promise<boolean> => {
+    recordTiming('prepare:finalize', Date.now() - chunkStarted);
+    sinceYield = 0;
+    await yieldFn();
+    if (shouldCancel()) return false;
+    chunkStarted = Date.now();
+    return true;
+  };
+
+  for (const observation of qualified) {
+    if (shouldCancel()) return null;
+    const key = `${observation.receiptId}:${observation.itemSourceIndex}`;
+    const row = rowByKey.get(key);
+    rowIdentityMetadata.set(key, {
+      skuKey: row?.skuKey?.trim() || null,
+      merchantProductId: observation.merchantProductId,
+      identityLevel: observation.identityLevel,
+      identityConfidence: observation.identityConfidence,
+      identitySource: observation.identitySource,
+      merchantScopeKey: observation.merchantScopeKey,
+    });
+    sinceYield += 1;
+    if (sinceYield >= chunkSize) {
+      if (!(await flushAndYield())) return null;
+    }
+  }
+
+  const skuBuckets = new Map<string, ProductPriceHistoryRow[]>();
+  for (const row of rows) {
+    if (shouldCancel()) return null;
+    const sku = row.skuKey?.trim();
+    if (sku) {
+      const list = skuBuckets.get(sku) ?? [];
+      list.push(row);
+      skuBuckets.set(sku, list);
+    }
+    sinceYield += 1;
+    if (sinceYield >= chunkSize) {
+      if (!(await flushAndYield())) return null;
+    }
+  }
+
+  const qualifiedByMp = new Map<string, QualifiedIdentityObservation[]>();
+  for (const observation of qualified) {
+    if (shouldCancel()) return null;
+    const mpId = observation.merchantProductId?.trim();
+    if (mpId) {
+      const list = qualifiedByMp.get(mpId) ?? [];
+      list.push(observation);
+      qualifiedByMp.set(mpId, list);
+    }
+    sinceYield += 1;
+    if (sinceYield >= chunkSize) {
+      if (!(await flushAndYield())) return null;
+    }
+  }
+
+  const merchantProductBuckets = new Map<string, ProductPriceHistoryRow[]>();
+  const merchantProductIdentityViews = new Map<
+    string,
+    IdentityMerchantProductHistoryView
+  >();
+  for (const [mpId, mpQualified] of qualifiedByMp) {
+    if (shouldCancel()) return null;
+    const bucket: ProductPriceHistoryRow[] = [];
+    for (const observation of mpQualified) {
+      const row = rowByKey.get(
+        `${observation.receiptId}:${observation.itemSourceIndex}`
+      );
+      if (row) bucket.push(row);
+    }
+    merchantProductBuckets.set(mpId, bucket);
+    const view = buildIdentityMerchantProductHistoryView(mpId, mpQualified);
+    if (view) {
+      merchantProductIdentityViews.set(mpId, view);
+    }
+    sinceYield += 1;
+    if (sinceYield >= chunkSize) {
+      if (!(await flushAndYield())) return null;
+    }
+  }
+
+  // Seeded key sets — linear but typically smaller; keep sync within current chunk.
+  if (shouldCancel()) return null;
+  const seededSkuKeys = new Set<string>();
+  for (const row of rows) {
+    if (!seedReceiptIds.has(row.receiptId)) continue;
+    const sku = row.skuKey?.trim();
+    if (sku) seededSkuKeys.add(sku);
+  }
+  const seededMerchantProductIds = new Set<string>();
+  for (const observation of qualified) {
+    if (!seedReceiptIds.has(observation.receiptId)) continue;
+    const mpId = observation.merchantProductId?.trim();
+    if (mpId) seededMerchantProductIds.add(mpId);
+  }
+
+  if (sinceYield > 0) {
+    recordTiming('prepare:finalize', Date.now() - chunkStarted);
+  }
+
+  return {
+    rows,
+    seedReceiptIds,
+    qualified,
+    rowByKey,
+    rowIdentityMetadata,
+    receiptEvidenceCache,
+    skuBuckets,
+    merchantProductBuckets,
+    merchantProductIdentityViews,
+    seededSkuKeys,
+    seededMerchantProductIds,
+  };
+}
+
 export type PrepareAnalysisPriceInsightContextAsyncOptions = {
   shouldCancel?: () => boolean;
   rowsPerChunk?: number;
+  /** Test seam / custom scheduler; defaults to yieldAnalysisPriceChunk. */
+  yieldFn?: () => Promise<void>;
 };
 
 /**
@@ -265,13 +417,15 @@ export async function prepareAnalysisPriceInsightContextAsync(
   const { yieldAnalysisPriceChunk, recordAnalysisPriceChunkTiming } =
     await import('./analysisPriceScheduler');
   const shouldCancel = options.shouldCancel ?? (() => false);
+  const yieldFn = options.yieldFn ?? (() => yieldAnalysisPriceChunk());
+  const chunkSize = options.rowsPerChunk ?? 64;
   if (shouldCancel()) return null;
 
   const rowByKey = new Map<string, ProductPriceHistoryRow>();
   for (const row of rows) {
     rowByKey.set(priceHistoryRowObservationKey(row), row);
   }
-  await yieldAnalysisPriceChunk();
+  await yieldFn();
   if (shouldCancel()) return null;
 
   if (activeWorkCounters) {
@@ -282,13 +436,13 @@ export async function prepareAnalysisPriceInsightContextAsync(
     undefined,
     {
       shouldCancel,
-      rowsPerChunk: options.rowsPerChunk ?? 64,
-      yieldFn: yieldAnalysisPriceChunk,
+      rowsPerChunk: chunkSize,
+      yieldFn,
     }
   );
   if (resolved == null || shouldCancel()) return null;
 
-  await yieldAnalysisPriceChunk();
+  await yieldFn();
   if (shouldCancel()) return null;
 
   if (activeWorkCounters) {
@@ -304,7 +458,6 @@ export async function prepareAnalysisPriceInsightContextAsync(
     uniqueReceiptRows.push(row);
   }
   const receiptEvidenceCache: ReceiptEvidenceCache = new Map();
-  const chunkSize = options.rowsPerChunk ?? 64;
   for (let i = 0; i < uniqueReceiptRows.length; i += chunkSize) {
     if (shouldCancel()) return null;
     const evidenceStarted = Date.now();
@@ -317,25 +470,26 @@ export async function prepareAnalysisPriceInsightContextAsync(
       'prepare:evidence',
       Date.now() - evidenceStarted
     );
-    await yieldAnalysisPriceChunk();
+    await yieldFn();
   }
   if (shouldCancel()) return null;
 
-  // Finalize is O(I + MP); yield between merchant-product view builds when large.
-  const finalizeStarted = Date.now();
-  const prepared = finalizePreparedAnalysisPriceInsightContext({
-    rows,
-    seedReceiptIds,
-    qualified: resolved.qualified,
-    rowByKey,
-    receiptEvidenceCache,
-  });
-  recordAnalysisPriceChunkTiming(
-    'prepare:finalize',
-    Date.now() - finalizeStarted
+  // Finalize is O(I + MP); chunk large loops so blur can cancel mid-finalize.
+  const prepared = await finalizePreparedAnalysisPriceInsightContextAsync(
+    {
+      rows,
+      seedReceiptIds,
+      qualified: resolved.qualified,
+      rowByKey,
+      receiptEvidenceCache,
+    },
+    {
+      shouldCancel,
+      yieldFn,
+      chunkSize,
+      recordTiming: recordAnalysisPriceChunkTiming,
+    }
   );
-  // Finalize currently builds all MP views synchronously. It is linear in
-  // identity observations + MP count; identity/qualify already yielded. If
-  // finalize timings dominate later, split MP view construction similarly.
+  if (prepared == null || shouldCancel()) return null;
   return prepared;
 }
