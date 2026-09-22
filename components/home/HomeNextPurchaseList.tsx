@@ -72,94 +72,137 @@ export function HomeNextPurchaseList({
         return (
           <MerunoGroupedRow
             key={`${candidate.identityKind}:${candidate.identityKey}`}
-            onPress={pressable ? () => onPress(candidate) : undefined}
-            accessibilityRole={pressable ? 'button' : undefined}
-            accessibilityLabel={
-              pressable
-                ? t('home.progressive.nextPurchase.openHistoryA11y', {
-                    name: candidate.displayName,
-                  })
-                : undefined
-            }
             showDivider={index < candidates.length - 1}
             dividerInset={58}
             minHeight={78}
             style={styles.row}
           >
-            {({ pressed }) => (
-              <View style={styles.rowInner}>
-                <View style={styles.iconTile} importantForAccessibility="no">
-                  <MaterialIcons
-                    name="shopping-bag"
-                    size={16}
-                    color={UI_COLORS.textSecondary}
-                  />
-                </View>
-                <View style={styles.text}>
-                  <MerunoText
-                    role="bodySmall"
-                    tone="primary"
-                    style={styles.name}
-                    numberOfLines={2}
-                  >
-                    {candidate.displayName}
-                  </MerunoText>
-                  <MerunoText role="meta" tone="secondary" style={styles.meta}>
-                    {explanation}
-                  </MerunoText>
-                </View>
-                {typeof onAddToShoppingList === 'function' ? (
-                  <View style={styles.qtyCluster}>
-                    {alreadyAdded ? (
-                      <MerunoText
-                        role="caption"
-                        tone="secondary"
-                        style={styles.qtyLabel}
+            <View style={styles.rowInner}>
+              {pressable ? (
+                <Pressable
+                  onPress={() => onPress(candidate)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(
+                    'home.progressive.nextPurchase.openProductDetailA11y',
+                    { name: candidate.displayName }
+                  )}
+                  style={({ pressed }) => [
+                    styles.contentHit,
+                    pressed && styles.contentPressed,
+                  ]}
+                >
+                  {({ pressed }) => (
+                    <>
+                      <View
+                        style={styles.iconTile}
                         importantForAccessibility="no"
                       >
-                        {`×${quantity}`}
-                      </MerunoText>
-                    ) : null}
-                    <Pressable
-                      onPress={() => {
-                        if (canTapPlus) onAddToShoppingList(candidate);
-                      }}
-                      disabled={!canTapPlus}
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        alreadyAdded
-                          ? t('shoppingList.increaseQuantityA11y', {
-                              quantity,
-                            })
-                          : t('home.progressive.nextPurchase.addA11y', {
-                              name: candidate.displayName,
-                            })
-                      }
-                      hitSlop={8}
-                      style={({ pressed: addPressed }) => [
-                        styles.addButton,
-                        addPressed && styles.addPressed,
-                        !canTapPlus && styles.addDisabled,
-                      ]}
-                    >
-                      <MerunoText
-                        role="bodySmall"
-                        tone="primary"
-                        style={styles.addLabel}
-                      >
-                        +
-                      </MerunoText>
-                    </Pressable>
+                        <MaterialIcons
+                          name="shopping-bag"
+                          size={16}
+                          color={UI_COLORS.textSecondary}
+                        />
+                      </View>
+                      <View style={styles.text}>
+                        <MerunoText
+                          role="bodySmall"
+                          tone="primary"
+                          style={styles.name}
+                          numberOfLines={2}
+                        >
+                          {candidate.displayName}
+                        </MerunoText>
+                        <MerunoText
+                          role="meta"
+                          tone="secondary"
+                          style={styles.meta}
+                        >
+                          {explanation}
+                        </MerunoText>
+                      </View>
+                      <MerunoDisclosureIndicator
+                        kind="crossEntity"
+                        pressed={pressed}
+                      />
+                    </>
+                  )}
+                </Pressable>
+              ) : (
+                <View style={styles.contentHit}>
+                  <View
+                    style={styles.iconTile}
+                    importantForAccessibility="no"
+                  >
+                    <MaterialIcons
+                      name="shopping-bag"
+                      size={16}
+                      color={UI_COLORS.textSecondary}
+                    />
                   </View>
-                ) : null}
-                {pressable ? (
-                  <MerunoDisclosureIndicator
-                    kind="crossEntity"
-                    pressed={pressed}
-                  />
-                ) : null}
-              </View>
-            )}
+                  <View style={styles.text}>
+                    <MerunoText
+                      role="bodySmall"
+                      tone="primary"
+                      style={styles.name}
+                      numberOfLines={2}
+                    >
+                      {candidate.displayName}
+                    </MerunoText>
+                    <MerunoText
+                      role="meta"
+                      tone="secondary"
+                      style={styles.meta}
+                    >
+                      {explanation}
+                    </MerunoText>
+                  </View>
+                </View>
+              )}
+              {typeof onAddToShoppingList === 'function' ? (
+                <View style={styles.qtyCluster}>
+                  {alreadyAdded ? (
+                    <MerunoText
+                      role="caption"
+                      tone="secondary"
+                      style={styles.qtyLabel}
+                      importantForAccessibility="no"
+                    >
+                      {`×${quantity}`}
+                    </MerunoText>
+                  ) : null}
+                  <Pressable
+                    onPress={() => {
+                      if (canTapPlus) onAddToShoppingList(candidate);
+                    }}
+                    disabled={!canTapPlus}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      alreadyAdded
+                        ? t('shoppingList.increaseQuantityA11y', {
+                            quantity,
+                          })
+                        : t('home.progressive.nextPurchase.addA11y', {
+                            name: candidate.displayName,
+                          })
+                    }
+                    hitSlop={8}
+                    style={({ pressed: addPressed }) => [
+                      styles.addButton,
+                      addPressed && styles.addPressed,
+                      !canTapPlus && styles.addDisabled,
+                    ]}
+                  >
+                    <MerunoText
+                      role="bodySmall"
+                      tone="primary"
+                      style={styles.addLabel}
+                    >
+                      +
+                    </MerunoText>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
           </MerunoGroupedRow>
         );
       })}
@@ -178,6 +221,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: UI_SPACING.lg,
     paddingVertical: 15,
     gap: UI_SPACING.md,
+  },
+  contentHit: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: UI_SPACING.md,
+  },
+  contentPressed: {
+    opacity: 0.72,
   },
   iconTile: {
     width: 34,

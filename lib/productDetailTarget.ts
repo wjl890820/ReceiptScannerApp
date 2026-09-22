@@ -48,6 +48,34 @@ export function buildProductDetailHref(
   return `/product/${target.type}?key=${encodeURIComponent(target.key)}`;
 }
 
+/** Trusted Shopping Loop / Next Purchase identities only (fail-closed). */
+export type TrustedProductIdentityKind =
+  | 'merchant_product'
+  | 'personal_product';
+
+export type TrustedProductIdentityDetailHref =
+  `/product/${TrustedProductIdentityKind}?key=${string}`;
+
+/**
+ * Product Detail href for trusted product identities only.
+ * Never invents a route from displayName / family / sku / canonical.
+ */
+export function buildTrustedProductIdentityDetailHref(input: {
+  identityKind: unknown;
+  identityKey: unknown;
+}): TrustedProductIdentityDetailHref | null {
+  const kind = input.identityKind;
+  if (kind !== 'merchant_product' && kind !== 'personal_product') {
+    return null;
+  }
+  const key = nonEmptyString(input.identityKey);
+  if (!key) return null;
+  return buildProductDetailHref({
+    type: kind,
+    key,
+  }) as TrustedProductIdentityDetailHref;
+}
+
 /**
  * Product Detail route for aggregatable identities only.
  * Occurrence (insufficient identity) → null — never invent a target.

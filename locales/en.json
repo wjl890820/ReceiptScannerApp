@@ -56,7 +56,7 @@
         "title": "May need soon",
         "explanation": "Usually about every {medianDays} days · {daysSince} days since last purchase",
         "empty": "Nothing looks due to buy again right now.",
-        "openHistoryA11y": "View purchase history for {name}",
+        "openProductDetailA11y": "View product details for {name}",
         "add": "Add",
         "addA11y": "Add {name} to shopping list",
         "added": "Added"
@@ -406,6 +406,8 @@
     "loading": "Loading…",
     "loadFailed": "Unable to load product purchase history",
     "noHistory": "No purchase history",
+    "dataUpdatedReload": "Data was updated. Please reload.",
+    "reload": "Reload",
     "purchaseCount": "Purchase records",
     "purchaseCountValue": "{count} times",
     "totalQuantityLabel": "Total quantity",

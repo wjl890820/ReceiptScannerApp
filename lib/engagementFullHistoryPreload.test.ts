@@ -42,6 +42,7 @@ jest.mock('./receiptOwnershipScope', () => {
 import * as analyticsReceiptSelection from './analyticsReceiptSelection';
 import {
   __resetAnalyticsReceiptSelectionCacheForTests,
+  getAnalyticsReceiptSelectionDataGeneration,
   selectAnalyticsReceiptsCached,
 } from './analyticsReceiptSelectionCache';
 import {
@@ -170,6 +171,7 @@ describe('Round 7 A2 full-history engagement preloaded', () => {
       receipts: rows,
       analyticsReceipts: decision.analyticsReceipts as EngagementReceipt[],
       excludedDuplicateReceiptIds: decision.excludedDuplicateReceiptIds,
+      analyticsGeneration: getAnalyticsReceiptSelectionDataGeneration(),
       precomputedSelection: true,
       sharedProductInsight: Promise.resolve({
         rows: [],
@@ -230,6 +232,7 @@ describe('Round 7 A2 full-history engagement preloaded', () => {
       receipts: full,
       analyticsReceipts: selection.analyticsReceipts as EngagementReceipt[],
       excludedDuplicateReceiptIds: selection.excludedDuplicateReceiptIds,
+      analyticsGeneration: getAnalyticsReceiptSelectionDataGeneration(),
       precomputedSelection: true,
     };
     const insight = await loadEngagementProductInsightContextWithDb(db, {
@@ -250,6 +253,7 @@ describe('Round 7 A2 full-history engagement preloaded', () => {
       receipts: rows,
       analyticsReceipts: rows,
       excludedDuplicateReceiptIds: new Set(),
+      analyticsGeneration: getAnalyticsReceiptSelectionDataGeneration(),
       precomputedSelection: true,
       sharedProductInsight: Promise.resolve({
         rows: [{ receiptId: 'poison' } as EngagementProductRow],

@@ -25,6 +25,7 @@ describe('Round 6 Home dedup / blur suppression (source contracts)', () => {
 
   it('Home uses selectAnalyticsReceiptsCached and passes preloaded engagement context', () => {
     expect(homeSource).toContain('selectAnalyticsReceiptsCached');
+    expect(homeSource).toContain('buildEngagementPreloadedAnalyticsContext');
     expect(homeSource).toContain('preloaded');
     expect(homeSource).toContain('sharedProductInsight');
     expect(homeSource).toContain('shouldSkipExpensiveBuild');

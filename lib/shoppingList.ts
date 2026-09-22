@@ -14,6 +14,10 @@ import { nanoid } from 'nanoid/non-secure';
 
 import type { NextPurchaseCandidate } from './nextPurchaseCandidates';
 import {
+  buildTrustedProductIdentityDetailHref,
+  type TrustedProductIdentityDetailHref,
+} from './productDetailTarget';
+import {
   createShoppingIntentWithDb,
   decrementActiveShoppingIntentQuantityWithDb,
   deleteCompletedShoppingIntentsWithDb,
@@ -218,16 +222,15 @@ export function shoppingListIdentityKey(
 /**
  * Product Detail href for a trusted Shopping List identity only.
  * Manual / untrusted rows return null — never invent a Detail target from text.
+ * Delegates to the shared trusted identity → Detail route builder.
  */
 export function buildShoppingListItemProductDetailHref(
   item: Pick<ShoppingListItem, 'sourceIdentityKind' | 'sourceIdentityKey'>
-): `/product/${ShoppingListIdentityKind}?key=${string}` | null {
-  const kind = item.sourceIdentityKind;
-  const key = item.sourceIdentityKey;
-  if (!isTrustedShoppingListIdentity(kind, key) || key == null) {
-    return null;
-  }
-  return `/product/${kind}?key=${encodeURIComponent(key.trim())}`;
+): TrustedProductIdentityDetailHref | null {
+  return buildTrustedProductIdentityDetailHref({
+    identityKind: item.sourceIdentityKind,
+    identityKey: item.sourceIdentityKey,
+  });
 }
 
 export function getActiveShoppingListIdentitySetFromItems(

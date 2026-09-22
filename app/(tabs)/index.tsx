@@ -22,7 +22,9 @@ import {
 } from '@/lib/scanReviewQueue';
 import { logger } from '@/lib/logger';
 
-import { selectAnalyticsReceiptsCached } from '@/lib/analyticsReceiptSelectionCache';
+import {
+  selectAnalyticsReceiptsCached,
+} from '@/lib/analyticsReceiptSelectionCache';
 import {
   listReceipts,
   getReceiptsDatabase,
@@ -31,6 +33,7 @@ import {
   type ReceiptRow,
 } from '@/lib/db';
 import {
+  buildEngagementPreloadedAnalyticsContext,
   evaluateCurrentEngagementMilestone,
   loadEngagementOwnerReceiptsWithDb,
   loadEngagementProductInsightContext,
@@ -85,6 +88,7 @@ import {
 import {
   buildHomeFrequentProductDetailHref,
 } from '@/lib/homeValueHierarchy';
+import { buildTrustedProductIdentityDetailHref } from '@/lib/productDetailTarget';
 import {
   addShoppingListItemFromNextPurchase,
   listShoppingListItems,
@@ -276,15 +280,30 @@ export default function HomeScreen() {
         }
 
         // Full-history engagement universe (one load + one decision + shared JOIN).
+        // Slice 3D.2: generation bound to owner receipt READ (not post-await capture).
         let preloaded: EngagementPreloadedAnalyticsContext | undefined;
         /** Full-history analytics receipts for Repeat / Next Purchase (not display-200). */
         let longTermAnalyticsReceipts: ReceiptRow[] | undefined;
         if (ownerScope.status === 'ready') {
           const db = await getReceiptsDatabase();
-          const engagementReceipts = await measureHomeRefreshStage(
+          const engagementSelectStarted = Date.now();
+          const engagementPreloaded = await measureHomeRefreshStage(
             'engagementReceiptLoad',
-            () => loadEngagementOwnerReceiptsWithDb(db, ownerScope)
+            () =>
+              buildEngagementPreloadedAnalyticsContext({
+                ownerKey: ownerScope.ownerKey,
+                loadReceipts: () =>
+                  loadEngagementOwnerReceiptsWithDb(db, ownerScope),
+                shouldSkipExpensiveBuild: () =>
+                  !isLatestHomeRefresh(
+                    requestGeneration,
+                    refreshGenerationRef.current
+                  ) || !canApplyHomeUi(options),
+              })
           );
+          if (!engagementPreloaded) {
+            return;
+          }
           if (
             !isLatestHomeRefresh(
               requestGeneration,
@@ -294,39 +313,18 @@ export default function HomeScreen() {
           ) {
             return;
           }
-          const engagementSelectStarted = Date.now();
-          const engagementSelection = selectAnalyticsReceiptsCached({
-            ownerKey: ownerScope.ownerKey,
-            receipts: engagementReceipts as ReceiptRow[],
-            shouldSkipExpensiveBuild: () =>
-              !isLatestHomeRefresh(
-                requestGeneration,
-                refreshGenerationRef.current
-              ) || !canApplyHomeUi(options),
-          });
-          if (!engagementSelection) {
-            return;
-          }
           recordHomeRefreshTiming({
             stage: 'selectAnalyticsReceipts',
             durationMs: Date.now() - engagementSelectStarted,
-            receiptCount: engagementReceipts.length,
-            analyticsReceiptCount: engagementSelection.analyticsReceipts.length,
+            receiptCount: engagementPreloaded.receipts.length,
+            analyticsReceiptCount: engagementPreloaded.analyticsReceipts.length,
           });
           longTermAnalyticsReceipts =
-            engagementSelection.analyticsReceipts as ReceiptRow[];
-          preloaded = {
-            ownerKey: ownerScope.ownerKey,
-            receipts: engagementReceipts,
-            analyticsReceipts:
-              engagementSelection.analyticsReceipts as EngagementPreloadedAnalyticsContext['analyticsReceipts'],
-            excludedDuplicateReceiptIds:
-              engagementSelection.excludedDuplicateReceiptIds,
-            precomputedSelection: true,
-          };
+            engagementPreloaded.analyticsReceipts as ReceiptRow[];
+          preloaded = engagementPreloaded;
           logger.info(
             'HomePerf',
-            `engagement precomputedSelection=true fullHistoryCount=${engagementReceipts.length} displayCount=${allReceipts.length} analyticsCount=${engagementSelection.analyticsReceipts.length}`
+            `engagement precomputedSelection=true fullHistoryCount=${engagementPreloaded.receipts.length} displayCount=${allReceipts.length} analyticsCount=${engagementPreloaded.analyticsReceipts.length}`
           );
           const sharedProductInsight = (async () => {
             return loadEngagementProductInsightContextWithDb(db, {
@@ -705,12 +703,12 @@ export default function HomeScreen() {
   );
   const handleNextPurchasePress = useCallback(
     (candidate: {
-      identityKind: MilestoneFrequentProduct['groupingType'];
+      identityKind: string;
       identityKey: string;
     }) => {
-      const href = buildHomeFrequentProductDetailHref({
-        groupingType: candidate.identityKind,
-        key: candidate.identityKey,
+      const href = buildTrustedProductIdentityDetailHref({
+        identityKind: candidate.identityKind,
+        identityKey: candidate.identityKey,
       });
       if (!href) return;
       router.push(href as any);

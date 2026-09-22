@@ -56,7 +56,7 @@
         "title": "そろそろ買い足すもの",
         "explanation": "通常は約 {medianDays} 日ごと · 前回から {daysSince} 日",
         "empty": "今のところ、買い足し時期に近い商品はありません",
-        "openHistoryA11y": "{name}の購入履歴を見る",
+        "openProductDetailA11y": "{name}の商品詳細を表示",
         "add": "追加",
         "addA11y": "{name}を買い物リストに追加",
         "added": "追加済み"
@@ -406,6 +406,8 @@
     "loading": "読み込み中…",
     "loadFailed": "商品の購入履歴を読み込めませんでした",
     "noHistory": "購入履歴がありません",
+    "dataUpdatedReload": "データが更新されました。再読み込みしてください。",
+    "reload": "再読み込み",
     "purchaseCount": "購入記録",
     "purchaseCountValue": "{count}回",
     "totalQuantityLabel": "累計数量",

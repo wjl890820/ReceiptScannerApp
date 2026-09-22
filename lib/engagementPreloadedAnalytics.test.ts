@@ -37,6 +37,7 @@ jest.mock('./analyticsReceiptSelectionCache', () => {
 import {
   __resetAnalyticsReceiptSelectionCacheForTests,
   getAnalyticsReceiptSelectionBuildCount,
+  getAnalyticsReceiptSelectionDataGeneration,
 } from './analyticsReceiptSelectionCache';
 import {
   evaluateCurrentEngagementMilestoneWithDb,
@@ -84,6 +85,7 @@ describe('Round 6/7 engagement preloaded path', () => {
       receipts: rows,
       analyticsReceipts: rows,
       excludedDuplicateReceiptIds: new Set(),
+      analyticsGeneration: getAnalyticsReceiptSelectionDataGeneration(),
       precomputedSelection: true,
       sharedProductInsight: Promise.resolve({
         rows: [],
@@ -114,6 +116,7 @@ describe('Round 6/7 engagement preloaded path', () => {
       receipts: [receipt('r1')],
       analyticsReceipts: [receipt('r1')],
       excludedDuplicateReceiptIds: new Set(),
+      analyticsGeneration: getAnalyticsReceiptSelectionDataGeneration(),
       sharedProductInsight: shared,
     };
     const a = await loadEngagementProductInsightContextWithDb(db, { preloaded });

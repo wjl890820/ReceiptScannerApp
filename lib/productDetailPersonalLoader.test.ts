@@ -151,4 +151,24 @@ describe('G4-2C productDetailPersonalLoader', () => {
     );
     expect(result).toEqual({ ok: false, reason: 'personal_product_not_authorized' });
   });
+
+  it('classifies null personal history as history_load_failed', async () => {
+    const result = await loadPersonalProductDetailDataWithDb(
+      'mp-a',
+      { locale: 'en' as Locale },
+      {
+        getDatabase: async () => ({} as never),
+        resolveTarget: async () =>
+          ({
+            status: 'ready',
+            resolved: {
+              canonicalTarget: { type: 'personal_product', key: 'mp-a' },
+            },
+          }) as never,
+        loadHistory: async () => null,
+        loadPriceHistory: async () => priceHistoryResult(),
+      }
+    );
+    expect(result).toEqual({ ok: false, reason: 'history_load_failed' });
+  });
 });

@@ -301,13 +301,18 @@ describe('D2-D SKU contract + diagnostics alignment', () => {
   });
 
   it('K — Product Detail/history excludes duplicate scan observations', () => {
-    const source = fs.readFileSync(
+    const screen = fs.readFileSync(
       path.resolve(__dirname, '../app/product/[targetType].tsx'),
       'utf8'
     );
-    expect(source).toContain('listReceiptsForAnalysis');
-    expect(source).toContain('buildProductDetailExcludedReceiptIds');
-    expect(source).not.toMatch(
+    const pipeline = fs.readFileSync(
+      path.resolve(__dirname, 'productDetailScreenLoad.ts'),
+      'utf8'
+    );
+    expect(screen).toContain('runProductDetailMainLoadWithStaleRetry');
+    expect(pipeline).toContain('listReceiptsForAnalysis');
+    expect(pipeline).toContain('buildProductDetailExcludedReceiptIds');
+    expect(pipeline).not.toMatch(
       /excludedReceiptIds[\s\S]{0,240}listReceipts\(\)/
     );
   });

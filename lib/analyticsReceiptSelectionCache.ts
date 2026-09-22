@@ -142,6 +142,16 @@ export function invalidateAnalyticsReceiptSelection(
   dataGeneration += 1;
   entries.clear();
   inFlight = null;
+  // Memory hygiene for occurrence index cache (generation already guarantees MISS).
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const occurrenceCache = require('./canonicalPurchaseOccurrenceCache') as {
+      clearCanonicalPurchaseOccurrenceCache?: (reason?: string) => void;
+    };
+    occurrenceCache.clearCanonicalPurchaseOccurrenceCache?.(String(reason));
+  } catch {
+    // Occurrence cache module may be unavailable in partial test graphs.
+  }
   logger.info(
     'AnalyticsSelectionPerf',
     `invalidated reason=${reason} generation=${dataGeneration}`

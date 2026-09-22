@@ -69,15 +69,31 @@ function makeReceipt(
 
 describe('Product Detail full-history occurrence exclusions', () => {
   it('production path uses listReceiptsForAnalysis (uncapped), not listReceipts(200)', () => {
-    const source = fs.readFileSync(
+    const screen = fs.readFileSync(
       path.resolve(__dirname, '../app/product/[targetType].tsx'),
       'utf8'
     );
-    expect(source).toContain('listReceiptsForAnalysis');
-    expect(source).toContain('buildProductDetailExcludedReceiptIds');
-    expect(source).not.toMatch(
+    const pipeline = fs.readFileSync(
+      path.resolve(__dirname, 'productDetailScreenLoad.ts'),
+      'utf8'
+    );
+    expect(screen).toContain('runProductDetailMainLoadWithStaleRetry');
+    expect(pipeline).toContain('listReceiptsForAnalysis');
+    expect(pipeline).toContain('buildProductDetailExcludedReceiptIds');
+    expect(pipeline).toContain('readWithAnalyticsGeneration');
+    expect(pipeline).toContain('runProductDetailMainLoadWithStaleRetry');
+    expect(pipeline).toContain('resolveCurrentLocalReceiptOwnerScope');
+    expect(pipeline).toContain('ownerKey');
+    expect(pipeline).not.toMatch(
       /excludedReceiptIds[\s\S]{0,200}listReceipts\(\)/
     );
+
+    const exclusions = fs.readFileSync(
+      path.resolve(__dirname, 'productDetailOccurrenceExclusions.ts'),
+      'utf8'
+    );
+    expect(exclusions).toContain('selectAnalyticsReceiptsCached');
+    expect(exclusions).toContain('applyOccurrenceRepresentativeUniverse');
   });
 
   it('>200 receipts: old proven duplicate beyond newest-200 still excludes once', () => {

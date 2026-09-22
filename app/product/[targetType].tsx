@@ -25,18 +25,16 @@ import { navigateBackOrHome } from '@/lib/navigationBack';
 import { useReceiptScanLauncher } from '@/hooks/useReceiptScanLauncher';
 
 import { ProductPriceHistoryChart } from '@/components/ProductPriceHistoryChart';
-import { buildProductDetailExcludedReceiptIds } from '@/lib/productDetailOccurrenceExclusions';
-import { listReceiptsForAnalysis } from '@/lib/db';
 import { formatDate } from '@/lib/formatDate';
 import { formatProductPriceAmount } from '@/lib/productPricePresentation';
 import { getCurrentLocale, t } from '@/lib/i18n';
 import {
   formatProductSpecification,
-  loadProductHistory,
   type ProductHistorySummary,
 } from '@/lib/productHistory';
 import { parseProductDetailTarget } from '@/lib/productDetailTarget';
-import { loadPersonalProductDetailDataWithDb } from '@/lib/productDetailPersonalLoader';
+import { measureProductDetailLoadStage } from '@/lib/productDetailLoadTimings';
+import { runProductDetailMainLoadWithStaleRetry } from '@/lib/productDetailScreenLoad';
 import { PRODUCT_FAMILY_KEYS } from '@/lib/productFamily';
 import {
   addShoppingListItemFromProductDetail,
@@ -47,7 +45,6 @@ import {
 } from '@/lib/shoppingList';
 import { UI_COLORS, UI_LAYOUT, UI_RADIUS } from '@/lib/uiTokens';
 import {
-  loadProductPriceHistory,
   type ProductPriceHistoryResult,
 } from '@/lib/productPriceHistory';
 
@@ -79,7 +76,10 @@ export default function ProductDetailScreen() {
     useState<ProductPriceHistoryResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [staleNeedsReload, setStaleNeedsReload] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
   const [priceLoadFailed, setPriceLoadFailed] = useState(false);
+  const [priceLoading, setPriceLoading] = useState(false);
   const [activeShoppingListItemId, setActiveShoppingListItemId] = useState<
     string | null
   >(null);
@@ -94,7 +94,9 @@ export default function ProductDetailScreen() {
     let active = true;
     setLoading(true);
     setLoadFailed(false);
+    setStaleNeedsReload(false);
     setPriceLoadFailed(false);
+    setPriceLoading(false);
     setSummary(null);
     setPriceHistory(null);
     if (!target) {
@@ -105,61 +107,35 @@ export default function ProductDetailScreen() {
     }
 
     void (async () => {
-      let excludedReceiptIds: ReadonlySet<string> | undefined;
-      try {
-        // Full owner-scoped history (uncapped) — must match Product History
-        // aggregation universe, not History display listReceipts(200).
-        const allReceipts = await listReceiptsForAnalysis();
-        excludedReceiptIds = buildProductDetailExcludedReceiptIds(allReceipts);
-      } catch (e) {
-        console.error('[ProductDetail] analytics selection failed', e);
-      }
-
-      if (target.type === 'personal_product') {
-        const personalResult = await loadPersonalProductDetailDataWithDb(
-          target.key,
-          { locale, excludedReceiptIds }
-        );
-        if (!active) return;
-        if (personalResult.ok) {
-          setSummary(personalResult.history);
-          setPriceHistory(personalResult.priceHistory);
-        } else {
-          console.error(
-            '[ProductDetail] personal product load failed',
-            personalResult.reason
-          );
-          setLoadFailed(true);
-          setPriceLoadFailed(true);
+      const outcome = await runProductDetailMainLoadWithStaleRetry(
+        target,
+        locale,
+        {
+          isActive: () => active,
+          setSummary,
+          setPriceHistory,
+          setLoadFailed,
+          setPriceLoadFailed,
+          setLoading,
+          setPriceLoading,
         }
-        if (active) setLoading(false);
-        return;
-      }
-
-      const [historyResult, priceResult] = await Promise.allSettled([
-        loadProductHistory(target, { locale, excludedReceiptIds }),
-        loadProductPriceHistory(target, { excludedReceiptIds }),
-      ]);
+      );
       if (!active) return;
-      if (historyResult.status === 'fulfilled') {
-        setSummary(historyResult.value);
-      } else {
-        console.error('[ProductDetail] history load failed', historyResult.reason);
-        setLoadFailed(true);
+      // Terminal stale after bounded auto-retry — distinct reload UI, not noHistory.
+      if (outcome.status === 'stale') {
+        setStaleNeedsReload(true);
+        setLoading(false);
       }
-      if (priceResult.status === 'fulfilled') {
-        setPriceHistory(priceResult.value);
-      } else {
-        console.error('[ProductDetail] price history load failed', priceResult.reason);
-        setPriceLoadFailed(true);
-      }
-      if (active) setLoading(false);
     })();
 
     return () => {
       active = false;
     };
-  }, [locale, target]);
+  }, [locale, target, reloadToken]);
+
+  const onReloadAfterStale = useCallback(() => {
+    setReloadToken((n) => n + 1);
+  }, []);
 
   const trustedShoppingIdentity = useMemo(
     () => trustedShoppingIdentityFromProductDetailTarget(target),
@@ -172,15 +148,23 @@ export default function ProductDetailScreen() {
       return;
     }
     try {
-      const item = await findActiveShoppingListItemByTrustedIdentity(
-        trustedShoppingIdentity.identityKind,
-        trustedShoppingIdentity.identityKey
+      const item = await measureProductDetailLoadStage(
+        'productDetail.shoppingMembership',
+        () =>
+          findActiveShoppingListItemByTrustedIdentity(
+            trustedShoppingIdentity.identityKind,
+            trustedShoppingIdentity.identityKey
+          ),
+        (found) => ({
+          targetType: target?.type,
+          found: found != null,
+        })
       );
       setActiveShoppingListItemId(item?.id ?? null);
     } catch (error) {
       console.error('[ProductDetail] shopping list CTA refresh failed', error);
     }
-  }, [trustedShoppingIdentity]);
+  }, [target?.type, trustedShoppingIdentity]);
 
   useFocusEffect(
     useCallback(() => {
@@ -294,6 +278,25 @@ export default function ProductDetailScreen() {
         <View style={styles.centerState}>
           <ActivityIndicator color="#555" />
           <Text style={styles.stateText}>{t('productDetail.loading')}</Text>
+        </View>
+      ) : staleNeedsReload ? (
+        <View style={styles.centerState}>
+          <Text style={styles.stateTitle}>
+            {t('productDetail.dataUpdatedReload')}
+          </Text>
+          <Pressable
+            onPress={onReloadAfterStale}
+            accessibilityRole="button"
+            accessibilityLabel={t('productDetail.reload')}
+            style={({ pressed }) => [
+              styles.staleReloadButton,
+              pressed && { opacity: 0.55 },
+            ]}
+          >
+            <Text style={styles.staleReloadButtonText}>
+              {t('productDetail.reload')}
+            </Text>
+          </Pressable>
         </View>
       ) : loadFailed || !target || !summary ? (
         <View style={styles.centerState}>
@@ -477,6 +480,18 @@ export default function ProductDetailScreen() {
                 </Text>
               </View>
             </>
+          ) : priceLoading ? (
+            <>
+              <Text style={styles.sectionTitle}>
+                {t('priceHistory.title')}
+              </Text>
+              <View style={[styles.sectionCard, styles.priceLoadingCard]}>
+                <ActivityIndicator color="#555" />
+                <Text style={styles.priceLoadError}>
+                  {t('productDetail.loading')}
+                </Text>
+              </View>
+            </>
           ) : null}
 
           <SectionTitle title={t('productDetail.stores')} />
@@ -616,6 +631,21 @@ const styles = StyleSheet.create({
     color: '#555',
     fontSize: 16,
     textAlign: 'center',
+  },
+  staleReloadButton: {
+    marginTop: 4,
+    minHeight: UI_LAYOUT.controlMinHeight,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  staleReloadButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: UI_COLORS.textPrimary,
   },
   scroll: {
     flex: 1,
@@ -800,6 +830,13 @@ const styles = StyleSheet.create({
     color: UI_COLORS.textSecondary,
     fontSize: 14,
     lineHeight: 20,
+  },
+  priceLoadingCard: {
+    minHeight: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 18,
   },
   chips: {
     flexDirection: 'row',

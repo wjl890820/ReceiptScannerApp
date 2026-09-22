@@ -18,6 +18,8 @@ import {
 } from './receiptOwnershipScope';
 import { jstCalendarDayStartMs } from './dateParser';
 import type { ReceiptRow } from './db';
+import { readWithAnalyticsGeneration } from './analyticsReceiptReadProvenance';
+import { getAnalyticsReceiptSelectionDataGeneration } from './analyticsReceiptSelectionCache';
 
 export const ENGAGEMENT_MILESTONES = [1, 3, 5, 10] as const;
 
@@ -251,6 +253,11 @@ export type EngagementPreloadedAnalyticsContext = {
   receipts: readonly EngagementReceipt[];
   analyticsReceipts: readonly EngagementReceipt[];
   excludedDuplicateReceiptIds: ReadonlySet<string>;
+  /**
+   * Analytics generation that produced analyticsReceipts / HC exclusions.
+   * Slice 3D.1: required provenance for occurrence-cache safety across awaits.
+   */
+  analyticsGeneration: number;
   /**
    * Optional shared product-insight Promise for one Home refresh so milestone
    * and productContext share a single receipt_items JOIN.
@@ -1055,15 +1062,24 @@ function preloadedMatchesOwner(
 /** Apply D2-A3 analytics selection; returns purchase-candidate receipts + excluded ids. */
 async function selectEngagementAnalyticsReceipts(
   receipts: EngagementReceipt[],
-  ownerKey: string
+  ownerKey: string,
+  analyticsGeneration: number
 ): Promise<{
   analyticsReceipts: EngagementReceipt[];
   excludedDuplicateReceiptIds: ReadonlySet<string>;
-}> {
+} | null> {
+  // Pre-import check: carried read generation must still be live.
+  if (getAnalyticsReceiptSelectionDataGeneration() !== analyticsGeneration) {
+    return null;
+  }
   // Dynamic import keeps engagement module graph free of analysisDReport → expo-sqlite.
+  // Provenance is the receipt-read generation — not the import timing.
   const { selectAnalyticsReceiptsCached } = await import(
     './analyticsReceiptSelectionCache'
   );
+  if (getAnalyticsReceiptSelectionDataGeneration() !== analyticsGeneration) {
+    return null;
+  }
   const selection = selectAnalyticsReceiptsCached({
     ownerKey,
     receipts: receipts as ReceiptRow[],
@@ -1072,6 +1088,9 @@ async function selectEngagementAnalyticsReceipts(
   let excludedDuplicateReceiptIds: Set<string>;
   if (!selection) {
     const { selectAnalyticsReceipts } = await import('./analyticsReceiptSelection');
+    if (getAnalyticsReceiptSelectionDataGeneration() !== analyticsGeneration) {
+      return null;
+    }
     const fallback = selectAnalyticsReceipts(receipts as ReceiptRow[]);
     analyticsReceipts = fallback.analyticsReceipts;
     excludedDuplicateReceiptIds = new Set(fallback.excludedDuplicateReceiptIds);
@@ -1080,18 +1099,94 @@ async function selectEngagementAnalyticsReceipts(
     excludedDuplicateReceiptIds = new Set(selection.excludedDuplicateReceiptIds);
   }
 
-  // Same purchase-occurrence universe as Analysis / Repeat / PPH:
-  // analytics survivors → canonical occurrence representatives.
-  const { applyOccurrenceRepresentativeUniverse } = await import(
-    './canonicalPurchaseOccurrence'
+  if (getAnalyticsReceiptSelectionDataGeneration() !== analyticsGeneration) {
+    return null;
+  }
+
+  // Same purchase-occurrence universe as Analysis / Repeat / PPH.
+  const { applyOccurrenceRepresentativeUniverseCached } = await import(
+    './canonicalPurchaseOccurrenceCache'
   );
-  const universe = applyOccurrenceRepresentativeUniverse(
+  const universe = applyOccurrenceRepresentativeUniverseCached(
     analyticsReceipts,
-    excludedDuplicateReceiptIds
+    excludedDuplicateReceiptIds,
+    { ownerKey, analyticsGeneration }
   );
+  if (!universe.ok) {
+    return null;
+  }
   return {
     analyticsReceipts: universe.representativeReceipts as EngagementReceipt[],
     excludedDuplicateReceiptIds: universe.excludedReceiptIds,
+  };
+}
+
+async function readEngagementReceiptsWithProvenance(
+  db: EngagementMilestoneDatabase,
+  ownerScope: LocalReceiptOwnerScopeReady
+): Promise<{
+  receipts: EngagementReceipt[];
+  analyticsGeneration: number;
+} | null> {
+  // Static helper: generation captured before await (no dynamic-import race).
+  const read = await readWithAnalyticsGeneration(() =>
+    readAllReceipts(db, ownerScope)
+  );
+  if (!read.ok) return null;
+  return {
+    receipts: read.value,
+    analyticsGeneration: read.analyticsGeneration,
+  };
+}
+
+/**
+ * Home preloaded analytics context: generation captured BEFORE owner receipt
+ * read; drift after read → null (no selection / no occurrence prewarm).
+ */
+export async function buildEngagementPreloadedAnalyticsContext(input: {
+  ownerKey: string;
+  loadReceipts: () => Promise<readonly EngagementReceipt[]>;
+  shouldSkipExpensiveBuild?: () => boolean;
+}): Promise<EngagementPreloadedAnalyticsContext | null> {
+  // Capture+read first — before any selection dynamic import.
+  const read = await readWithAnalyticsGeneration(() => input.loadReceipts());
+  if (!read.ok) return null;
+  if (
+    getAnalyticsReceiptSelectionDataGeneration() !== read.analyticsGeneration
+  ) {
+    return null;
+  }
+
+  // Dynamic import keeps selection/analysis graph off the engagement static path
+  // until after receipt-read provenance is established.
+  const { selectAnalyticsReceiptsCached } = await import(
+    './analyticsReceiptSelectionCache'
+  );
+  if (
+    getAnalyticsReceiptSelectionDataGeneration() !== read.analyticsGeneration
+  ) {
+    return null;
+  }
+
+  const selection = selectAnalyticsReceiptsCached({
+    ownerKey: input.ownerKey,
+    receipts: read.value as ReceiptRow[],
+    shouldSkipExpensiveBuild: input.shouldSkipExpensiveBuild,
+  });
+  if (!selection) return null;
+  if (
+    getAnalyticsReceiptSelectionDataGeneration() !== read.analyticsGeneration
+  ) {
+    return null;
+  }
+
+  return {
+    ownerKey: input.ownerKey,
+    receipts: read.value,
+    analyticsReceipts: selection.analyticsReceipts as EngagementReceipt[],
+    excludedDuplicateReceiptIds: selection.excludedDuplicateReceiptIds,
+    analyticsGeneration: read.analyticsGeneration,
+    precomputedSelection: true,
   };
 }
 
@@ -1291,15 +1386,24 @@ export async function evaluateEngagementMilestonesWithDb(
   if (ownerScope.status !== 'ready') {
     return emptyOwnerMilestoneEvaluation(options);
   }
-  const receipts = await readAllReceipts(db, ownerScope);
-  const { analyticsReceipts, excludedDuplicateReceiptIds } =
-    await selectEngagementAnalyticsReceipts(receipts, ownerScope.ownerKey);
+  const read = await readEngagementReceiptsWithProvenance(db, ownerScope);
+  if (!read) {
+    return emptyOwnerMilestoneEvaluation(options);
+  }
+  const selected = await selectEngagementAnalyticsReceipts(
+    read.receipts,
+    ownerScope.ownerKey,
+    read.analyticsGeneration
+  );
+  if (!selected) {
+    return emptyOwnerMilestoneEvaluation(options);
+  }
   return evaluateReceiptSetWithDb(
     db,
-    analyticsReceipts,
+    selected.analyticsReceipts,
     {
       ...options,
-      excludedDuplicateReceiptIds,
+      excludedDuplicateReceiptIds: selected.excludedDuplicateReceiptIds,
     },
     ownerScope
   );
@@ -1317,9 +1421,25 @@ export async function evaluateSavedReceiptMilestoneWithDb(
       beforeSupportedReceiptCount: 0,
     });
   }
-  const receipts = await readAllReceipts(db, ownerScope);
-  const { analyticsReceipts, excludedDuplicateReceiptIds } =
-    await selectEngagementAnalyticsReceipts(receipts, ownerScope.ownerKey);
+  const read = await readEngagementReceiptsWithProvenance(db, ownerScope);
+  if (!read) {
+    return emptyOwnerMilestoneEvaluation({
+      generatedAt: options.generatedAt,
+      beforeSupportedReceiptCount: 0,
+    });
+  }
+  const selected = await selectEngagementAnalyticsReceipts(
+    read.receipts,
+    ownerScope.ownerKey,
+    read.analyticsGeneration
+  );
+  if (!selected) {
+    return emptyOwnerMilestoneEvaluation({
+      generatedAt: options.generatedAt,
+      beforeSupportedReceiptCount: 0,
+    });
+  }
+  const { analyticsReceipts, excludedDuplicateReceiptIds } = selected;
   const supportedCount = countSupportedReceipts(analyticsReceipts);
   const savedReceipt = analyticsReceipts.find(
     (receipt) => receipt.id === savedReceiptId
@@ -1350,28 +1470,48 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
   if (ownerScope.status !== 'ready') {
     return emptyOwnerCurrentMilestoneEvaluation();
   }
-  let analyticsReceipts: EngagementReceipt[];
-  let excludedDuplicateReceiptIds: ReadonlySet<string>;
+  let analyticsReceipts: EngagementReceipt[] | undefined;
+  let excludedDuplicateReceiptIds: ReadonlySet<string> | undefined;
+  let usedPreloaded = false;
   if (preloadedMatchesOwner(options.preloaded, ownerScope.ownerKey)) {
     // Preload may still be analytics-retained only; always project to
     // occurrence representatives so Home matches post-save / Analysis.
-    const { applyOccurrenceRepresentativeUniverse } = await import(
-      './canonicalPurchaseOccurrence'
+    // Slice 3D.1: carry preloaded.analyticsGeneration; stale → fall through.
+    const { applyOccurrenceRepresentativeUniverseCached } = await import(
+      './canonicalPurchaseOccurrenceCache'
     );
-    const universe = applyOccurrenceRepresentativeUniverse(
+    const universe = applyOccurrenceRepresentativeUniverseCached(
       options.preloaded.analyticsReceipts as ReceiptRow[],
-      options.preloaded.excludedDuplicateReceiptIds
+      options.preloaded.excludedDuplicateReceiptIds,
+      {
+        ownerKey: ownerScope.ownerKey,
+        analyticsGeneration: options.preloaded.analyticsGeneration,
+      }
     );
-    analyticsReceipts = universe.representativeReceipts as EngagementReceipt[];
-    excludedDuplicateReceiptIds = universe.excludedReceiptIds;
-  } else {
-    const receipts = await readAllReceipts(db, ownerScope);
+    if (universe.ok) {
+      analyticsReceipts = universe.representativeReceipts as EngagementReceipt[];
+      excludedDuplicateReceiptIds = universe.excludedReceiptIds;
+      usedPreloaded = true;
+    }
+  }
+  if (!usedPreloaded) {
+    const read = await readEngagementReceiptsWithProvenance(db, ownerScope);
+    if (!read) {
+      return emptyOwnerCurrentMilestoneEvaluation();
+    }
     const selected = await selectEngagementAnalyticsReceipts(
-      receipts,
-      ownerScope.ownerKey
+      read.receipts,
+      ownerScope.ownerKey,
+      read.analyticsGeneration
     );
+    if (!selected) {
+      return emptyOwnerCurrentMilestoneEvaluation();
+    }
     analyticsReceipts = selected.analyticsReceipts;
     excludedDuplicateReceiptIds = selected.excludedDuplicateReceiptIds;
+  }
+  if (analyticsReceipts == null || excludedDuplicateReceiptIds == null) {
+    return emptyOwnerCurrentMilestoneEvaluation();
   }
   const supportedReceipts = filterV1SupportedReceipts(analyticsReceipts);
   const status = getEngagementMilestoneStatus(supportedReceipts.length);
@@ -1397,12 +1537,11 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
       ),
     };
   }
-  const trustedPreloaded = preloadedMatchesOwner(
-    options.preloaded,
-    ownerScope.ownerKey
-  )
-    ? options.preloaded
-    : undefined;
+  const trustedPreloaded =
+    usedPreloaded &&
+    preloadedMatchesOwner(options.preloaded, ownerScope.ownerKey)
+      ? options.preloaded
+      : undefined;
   const productContext = trustedPreloaded?.sharedProductInsight
     ? await trustedPreloaded.sharedProductInsight
     : await readProductInsightContext(
@@ -1485,21 +1624,36 @@ export async function loadEngagementProductInsightContextWithDb(
       return options.preloaded.sharedProductInsight;
     }
   }
-  let excludedDuplicateReceiptIds: ReadonlySet<string>;
+  let excludedDuplicateReceiptIds: ReadonlySet<string> | undefined;
   if (preloadedMatchesOwner(options?.preloaded, ownerScope.ownerKey)) {
-    const { applyOccurrenceRepresentativeUniverse } = await import(
-      './canonicalPurchaseOccurrence'
+    const { applyOccurrenceRepresentativeUniverseCached } = await import(
+      './canonicalPurchaseOccurrenceCache'
     );
-    excludedDuplicateReceiptIds = applyOccurrenceRepresentativeUniverse(
+    const universe = applyOccurrenceRepresentativeUniverseCached(
       options.preloaded.analyticsReceipts as ReceiptRow[],
-      options.preloaded.excludedDuplicateReceiptIds
-    ).excludedReceiptIds;
-  } else {
-    const receipts = await readAllReceipts(db, ownerScope);
-    const selected = await selectEngagementAnalyticsReceipts(
-      receipts,
-      ownerScope.ownerKey
+      options.preloaded.excludedDuplicateReceiptIds,
+      {
+        ownerKey: ownerScope.ownerKey,
+        analyticsGeneration: options.preloaded.analyticsGeneration,
+      }
     );
+    if (universe.ok) {
+      excludedDuplicateReceiptIds = universe.excludedReceiptIds;
+    }
+  }
+  if (excludedDuplicateReceiptIds == null) {
+    const read = await readEngagementReceiptsWithProvenance(db, ownerScope);
+    if (!read) {
+      return emptyOwnerProductInsightContext();
+    }
+    const selected = await selectEngagementAnalyticsReceipts(
+      read.receipts,
+      ownerScope.ownerKey,
+      read.analyticsGeneration
+    );
+    if (!selected) {
+      return emptyOwnerProductInsightContext();
+    }
     excludedDuplicateReceiptIds = selected.excludedDuplicateReceiptIds;
   }
   return readProductInsightContext(
