@@ -58,6 +58,11 @@ import {
 } from './personalProductEndpointInventory';
 import type { ReceiptRow } from './db';
 import { readTabFocusDataGenerations } from './tabFocusDataGenerations';
+import {
+  __resetAnalyticsReceiptSelectionCacheForTests,
+  getAnalyticsReceiptSelectionDataGeneration,
+} from './analyticsReceiptSelectionCache';
+import { __resetCanonicalPurchaseOccurrenceCacheForTests } from './canonicalPurchaseOccurrenceCache';
 
 const OWNER = 'user:h11-owner';
 const USER_ID = 'h11-user';
@@ -88,6 +93,7 @@ function privacyKeysOf(sample: HomeRefreshTimingSample): string[] {
         'resolvedRowCount',
         'analyticsReceiptCount',
         'productRowCount',
+        'cacheState',
       ].includes(k)
   );
 }
@@ -175,6 +181,8 @@ describe('Slice H1.1 — Cold Home internal stage attribution', () => {
     mockResolveCurrentLocalReceiptOwnerScope.mockReset();
     mockResolveCurrentLocalReceiptOwnerScope.mockResolvedValue(ownerScopeReady());
     __resetHomeFocusHeavySnapshotForTests();
+    __resetAnalyticsReceiptSelectionCacheForTests();
+    __resetCanonicalPurchaseOccurrenceCacheForTests();
   });
 
   afterEach(() => {
@@ -206,7 +214,7 @@ describe('Slice H1.1 — Cold Home internal stage attribution', () => {
             baseReceipt('r1', 1_700_000_000_000) as EngagementReceipt,
           ],
           excludedDuplicateReceiptIds: new Set(),
-          analyticsGeneration: 1,
+          analyticsGeneration: getAnalyticsReceiptSelectionDataGeneration(),
           precomputedSelection: true,
         },
       });
@@ -256,11 +264,11 @@ describe('Slice H1.1 — Cold Home internal stage attribution', () => {
           receipts: [baseReceipt('r1', 1) as EngagementReceipt],
           analyticsReceipts: [baseReceipt('r1', 1) as EngagementReceipt],
           excludedDuplicateReceiptIds: new Set(),
-          analyticsGeneration: 1,
+          analyticsGeneration: getAnalyticsReceiptSelectionDataGeneration(),
           precomputedSelection: true,
         },
       });
-      // readProductInsightContext swallows into queryFailed
+      // readProductInsightContext / assemble swallows into queryFailed
       expect(ctx.queryFailed).toBe(true);
       const samples = endHomeRefreshTimingCapture();
       const dbSample = samples.find((s) => s.stage === 'home.productContext.db');
@@ -508,6 +516,7 @@ describe('Slice H1.1 — Cold Home internal stage attribution', () => {
         'home.personalInventory.db.decisions',
         'home.personalInventory.identity',
         'home.progressive.repeatBuild',
+        'home.occurrence.apply',
       ] as const;
       for (const stage of childStages) {
         expect(samples.some((s) => s.stage === stage)).toBe(false);

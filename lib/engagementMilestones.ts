@@ -1215,15 +1215,13 @@ function filterProductRowsByExcludedReceiptIds<T extends { receiptId: string }>(
   return rows.filter((row) => !excludedIds.has(row.receiptId));
 }
 
-async function readProductRows(
+async function fetchProductInsightRowsFromDb(
   db: EngagementMilestoneDatabase,
   ownerScope: LocalReceiptOwnerScopeReady,
-  options: { includeRecognitionSnapshot?: boolean } = {}
+  options: { includeRecognitionSnapshot?: boolean } = {},
+  measureHomeRefreshStage: typeof import('./homeRefreshTimings').measureHomeRefreshStage
 ): Promise<EngagementProductRow[]> {
-  const { measureHomeRefreshStage, measureHomeRefreshStageSync } = await import(
-    './homeRefreshTimings'
-  );
-  const rows = await measureHomeRefreshStage(
+  return measureHomeRefreshStage(
     'home.productContext.db',
     () =>
       db.getAllAsync<EngagementProductRow>(
@@ -1238,6 +1236,12 @@ async function readProductRows(
       success: true,
     })
   );
+}
+
+async function enrichProductInsightRows(
+  rows: EngagementProductRow[],
+  measureHomeRefreshStageSync: typeof import('./homeRefreshTimings').measureHomeRefreshStageSync
+): Promise<EngagementProductRow[]> {
   const { enrichProductRowsWithCurrentItemMonetaryTruth } = await import(
     './currentItemMonetaryTruth'
   );
@@ -1250,6 +1254,50 @@ async function readProductRows(
       success: true,
     })
   );
+}
+
+/**
+ * Observe a product-rows promise so its rejection cannot become unhandled.
+ * The derived handler always settles successfully; the ORIGINAL promise is
+ * unchanged and still rejects for authoritative await paths (H4.1b).
+ */
+function observeProductRowsPromise(
+  productRowsPromise: Promise<unknown>
+): void {
+  void productRowsPromise.then(
+    () => undefined,
+    () => undefined
+  );
+  onProductRowsObserverAttachedForTests?.();
+}
+
+/** Test-only: delay occurrence-cache import after DB#1 observer is attached. */
+let occurrenceCacheImportGateForTests: (() => Promise<void>) | null = null;
+/** Test-only: fires synchronously when the DB#1 rejection observer attaches. */
+let onProductRowsObserverAttachedForTests: (() => void) | null = null;
+
+/**
+ * H4.1b test seam — delay occurrence-module readiness / observe drain attach.
+ * Null clears. Production path is unchanged when unset.
+ */
+export function __setProductInsightPreOccurrenceHooksForTests(
+  hooks: {
+    occurrenceCacheImportGate?: (() => Promise<void>) | null;
+    onProductRowsObserverAttached?: (() => void) | null;
+  } | null
+): void {
+  if (!hooks) {
+    occurrenceCacheImportGateForTests = null;
+    onProductRowsObserverAttachedForTests = null;
+    return;
+  }
+  if ('occurrenceCacheImportGate' in hooks) {
+    occurrenceCacheImportGateForTests = hooks.occurrenceCacheImportGate ?? null;
+  }
+  if ('onProductRowsObserverAttached' in hooks) {
+    onProductRowsObserverAttachedForTests =
+      hooks.onProductRowsObserverAttached ?? null;
+  }
 }
 
 /**
@@ -1318,25 +1366,26 @@ export function buildEngagementProductInsightSelectSql(options: {
        receipt_items.source_index ASC`;
 }
 
-async function readProductInsightContext(
-  db: EngagementMilestoneDatabase,
-  ownerScope: LocalReceiptOwnerScopeReady,
-  excludedDuplicateReceiptIds?: ReadonlySet<string>,
-  options: { includeRecognitionSnapshot?: boolean } = {}
+async function assembleProductInsightContextFromRows(
+  rows: EngagementProductRow[],
+  excludedDuplicateReceiptIds: ReadonlySet<string> | undefined,
+  measureHomeRefreshStageSync: typeof import('./homeRefreshTimings').measureHomeRefreshStageSync
 ): Promise<MilestoneProductInsightContext> {
+  // Baseline 36af57c / H4.1a: enrich ALL fetched rows, then filter exclusions.
   try {
-    const rows = await readProductRows(db, ownerScope, options);
+    const enriched = await enrichProductInsightRows(
+      rows,
+      measureHomeRefreshStageSync
+    );
     const filtered =
       excludedDuplicateReceiptIds && excludedDuplicateReceiptIds.size > 0
         ? filterProductRowsByExcludedReceiptIds(
-            rows,
+            enriched,
             excludedDuplicateReceiptIds
           )
-        : rows;
+        : enriched;
     try {
-      const { buildProductPriceHistory } = await import(
-        './productPriceHistory'
-      );
+      const { buildProductPriceHistory } = await import('./productPriceHistory');
       return {
         rows: filtered,
         queryFailed: false,
@@ -1345,6 +1394,32 @@ async function readProductInsightContext(
     } catch {
       return { rows: filtered, queryFailed: false };
     }
+  } catch {
+    return { rows: [], queryFailed: true };
+  }
+}
+
+async function readProductInsightContext(
+  db: EngagementMilestoneDatabase,
+  ownerScope: LocalReceiptOwnerScopeReady,
+  excludedDuplicateReceiptIds?: ReadonlySet<string>,
+  options: { includeRecognitionSnapshot?: boolean } = {}
+): Promise<MilestoneProductInsightContext> {
+  const { measureHomeRefreshStage, measureHomeRefreshStageSync } = await import(
+    './homeRefreshTimings'
+  );
+  try {
+    const rows = await fetchProductInsightRowsFromDb(
+      db,
+      ownerScope,
+      options,
+      measureHomeRefreshStage
+    );
+    return assembleProductInsightContextFromRows(
+      rows,
+      excludedDuplicateReceiptIds,
+      measureHomeRefreshStageSync
+    );
   } catch {
     return { rows: [], queryFailed: true };
   }
@@ -1647,6 +1722,11 @@ export async function evaluateSavedReceiptMilestone(
  * (no extra SELECT). Home / ordinary callers must leave this false.
  *
  * Observational variant: uses the provided DB handle and never initializes.
+ *
+ * Slice H4.1/H4.1a/H4.1b: with preloaded HC context, product-row SQL is
+ * dispatched before synchronous occurrence apply; a rejection observer is
+ * attached immediately after dispatch (before any await). Enrich-all then
+ * filter. Preloaded occurrence stale abandons DB #1 and falls through.
  */
 export async function loadEngagementProductInsightContextWithDb(
   db: EngagementMilestoneDatabase,
@@ -1664,27 +1744,95 @@ export async function loadEngagementProductInsightContextWithDb(
       return options.preloaded.sharedProductInsight;
     }
   }
+
+  const includeRecognitionSnapshot =
+    options?.includeRecognitionSnapshot === true;
+  const rowOptions = { includeRecognitionSnapshot };
+
+  const {
+    measureHomeRefreshStage,
+    measureHomeRefreshStageSync,
+    recordHomeRefreshTiming,
+  } = await import('./homeRefreshTimings');
+
   let excludedDuplicateReceiptIds: ReadonlySet<string> | undefined;
+
+  // Preloaded Home path: dispatch DB before sync occurrence (H4.1 overlap).
   if (preloadedMatchesOwner(options?.preloaded, ownerScope.ownerKey)) {
-    const { applyOccurrenceRepresentativeUniverseCached } = await import(
-      './canonicalPurchaseOccurrenceCache'
+    const preloaded = options.preloaded;
+    const productRowsPromise = fetchProductInsightRowsFromDb(
+      db,
+      ownerScope,
+      rowOptions,
+      measureHomeRefreshStage
     );
-    const universe = applyOccurrenceRepresentativeUniverseCached(
-      options.preloaded.analyticsReceipts as ReceiptRow[],
-      options.preloaded.excludedDuplicateReceiptIds,
-      {
-        ownerKey: ownerScope.ownerKey,
-        analyticsGeneration: options.preloaded.analyticsGeneration,
+    // H4.1b: attach rejection observer BEFORE any await (incl. dynamic import).
+    // Original promise remains authoritative for success/failure awaits.
+    observeProductRowsPromise(productRowsPromise);
+
+    try {
+      if (occurrenceCacheImportGateForTests) {
+        await occurrenceCacheImportGateForTests();
       }
-    );
-    if (universe.ok) {
-      captureOccurrencePreparedEvidenceOntoPreloaded(
-        options.preloaded,
-        universe.preparedEvidence
+      // Import outside occurrence timer (H4.1a) — dynamic load is not apply work.
+      const { applyOccurrenceRepresentativeUniverseCached } = await import(
+        './canonicalPurchaseOccurrenceCache'
       );
-      excludedDuplicateReceiptIds = universe.excludedReceiptIds;
+      const occurrenceStarted = Date.now();
+      let universe: ReturnType<typeof applyOccurrenceRepresentativeUniverseCached>;
+      try {
+        universe = applyOccurrenceRepresentativeUniverseCached(
+          preloaded.analyticsReceipts as ReceiptRow[],
+          preloaded.excludedDuplicateReceiptIds,
+          {
+            ownerKey: ownerScope.ownerKey,
+            analyticsGeneration: preloaded.analyticsGeneration,
+          }
+        );
+        recordHomeRefreshTiming({
+          stage: 'home.occurrence.apply',
+          durationMs: Date.now() - occurrenceStarted,
+          success: universe.ok,
+          cacheState: universe.cacheState,
+          receiptCount: preloaded.analyticsReceipts.length,
+        });
+      } catch (error) {
+        recordHomeRefreshTiming({
+          stage: 'home.occurrence.apply',
+          durationMs: Date.now() - occurrenceStarted,
+          success: false,
+          receiptCount: preloaded.analyticsReceipts.length,
+        });
+        // DB#1 already observed at dispatch; do not await it (occurrence wins).
+        throw error;
+      }
+
+      if (universe.ok) {
+        captureOccurrencePreparedEvidenceOntoPreloaded(
+          preloaded,
+          universe.preparedEvidence
+        );
+        try {
+          const rows = await productRowsPromise;
+          return assembleProductInsightContextFromRows(
+            rows,
+            universe.excludedReceiptIds,
+            measureHomeRefreshStageSync
+          );
+        } catch {
+          return { rows: [], queryFailed: true };
+        }
+      }
+
+      // Preloaded occurrence stale: abandon speculative DB #1 (already observed);
+      // baseline fallthrough re-reads provenance and issues DB #2 (H4.1a).
+    } catch (error) {
+      // Occurrence threw before/during apply (not a stale ok:false result).
+      // DB#1 already observed at dispatch — do not await / surface its rejection.
+      throw error;
     }
   }
+
   if (excludedDuplicateReceiptIds == null) {
     const read = await readEngagementReceiptsWithProvenance(db, ownerScope);
     if (!read) {
@@ -1700,12 +1848,9 @@ export async function loadEngagementProductInsightContextWithDb(
     }
     excludedDuplicateReceiptIds = selected.excludedDuplicateReceiptIds;
   }
-  return readProductInsightContext(
-    db,
-    ownerScope,
-    excludedDuplicateReceiptIds,
-    { includeRecognitionSnapshot: options?.includeRecognitionSnapshot === true }
-  );
+  return readProductInsightContext(db, ownerScope, excludedDuplicateReceiptIds, {
+    includeRecognitionSnapshot,
+  });
 }
 
 export async function loadEngagementProductInsightContext(options?: {

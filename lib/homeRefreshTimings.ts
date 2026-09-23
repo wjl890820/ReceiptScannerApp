@@ -40,7 +40,9 @@ export type HomeRefreshTimingStage =
   /** Slice H1.1: resolveReceiptItemIdentity loop + inventory build. */
   | 'home.personalInventory.identity'
   /** Slice H1.1: buildHomeRepeatSurfaces / Repeat+NP construction. */
-  | 'home.progressive.repeatBuild';
+  | 'home.progressive.repeatBuild'
+  /** Slice H4.1: Phase-A applyOccurrenceRepresentativeUniverseCached wall. */
+  | 'home.occurrence.apply';
 
 export type HomeRefreshTimingSample = {
   stage: HomeRefreshTimingStage;
@@ -56,6 +58,8 @@ export type HomeRefreshTimingSample = {
   inputRowCount?: number;
   outputRowCount?: number;
   resolvedRowCount?: number;
+  /** Slice H4.1: occurrence cache decision when cheaply available. */
+  cacheState?: string;
 };
 
 type StageMeta = Omit<HomeRefreshTimingSample, 'stage' | 'durationMs'>;
@@ -100,6 +104,7 @@ function diagnosticMetaFromSample(
   if (sample.resolvedRowCount != null) {
     meta.resolvedRowCount = sample.resolvedRowCount;
   }
+  if (sample.cacheState != null) meta.cacheState = sample.cacheState;
   return meta;
 }
 
