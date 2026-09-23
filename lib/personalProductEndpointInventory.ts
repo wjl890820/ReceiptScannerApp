@@ -427,8 +427,16 @@ async function loadPersonalProductEndpointInventoryUncached(
     };
   }
 
+  const { measureHomeRefreshStageSync, recordHomeRefreshTiming } = await import(
+    './homeRefreshTimings'
+  );
+
   let sourceRows: PersonalProductEndpointInventorySourceRow[];
   let receipts: ReceiptRow[];
+  let decisionRows: StoredPersonalProductIdentityDecision[];
+
+  // H1.1: one DB stage for all owner-wide reads before identity.
+  const dbStarted = Date.now();
   try {
     sourceRows = await db.getAllAsync<PersonalProductEndpointInventorySourceRow>(
       `${INVENTORY_ITEM_SELECT_SQL}
@@ -446,6 +454,11 @@ async function loadPersonalProductEndpointInventoryUncached(
       predicates.params
     );
   } catch {
+    recordHomeRefreshTiming({
+      stage: 'home.personalInventory.db',
+      durationMs: Date.now() - dbStarted,
+      success: false,
+    });
     return {
       result: {
         status: 'current_endpoint_context_incomplete',
@@ -456,7 +469,6 @@ async function loadPersonalProductEndpointInventoryUncached(
     };
   }
 
-  let decisionRows: StoredPersonalProductIdentityDecision[];
   try {
     const listDecisions =
       deps.listDecisions ??
@@ -471,6 +483,13 @@ async function loadPersonalProductEndpointInventoryUncached(
       });
     decisionRows = await listDecisions(db, ownerKey);
   } catch {
+    recordHomeRefreshTiming({
+      stage: 'home.personalInventory.db',
+      durationMs: Date.now() - dbStarted,
+      success: false,
+      itemRowCount: sourceRows.length,
+      receiptCount: receipts.length,
+    });
     return {
       result: {
         status: 'current_endpoint_context_incomplete',
@@ -480,6 +499,15 @@ async function loadPersonalProductEndpointInventoryUncached(
       resolveCount: 0,
     };
   }
+
+  recordHomeRefreshTiming({
+    stage: 'home.personalInventory.db',
+    durationMs: Date.now() - dbStarted,
+    success: true,
+    itemRowCount: sourceRows.length,
+    receiptCount: receipts.length,
+    decisionCount: decisionRows.length,
+  });
 
   let excludedDuplicateReceiptIds: ReadonlySet<string> = new Set<string>();
   let highConfidenceDuplicateGroupByReceiptId: ReadonlyMap<
@@ -521,18 +549,27 @@ async function loadPersonalProductEndpointInventoryUncached(
   try {
     const buildInventory =
       deps.buildInventory ?? buildPersonalProductEndpointInventory;
-    const result = buildInventory({
-      ownerKey,
-      sourceRows,
-      receipts,
-      decisionRows,
-      store: deps.createStore?.(),
-      excludedDuplicateReceiptIds,
-      highConfidenceDuplicateGroupByReceiptId,
-      onIdentityResolve: () => {
-        resolveCount += 1;
-      },
-    });
+    const result = measureHomeRefreshStageSync(
+      'home.personalInventory.identity',
+      () =>
+        buildInventory({
+          ownerKey,
+          sourceRows,
+          receipts,
+          decisionRows,
+          store: deps.createStore?.(),
+          excludedDuplicateReceiptIds,
+          highConfidenceDuplicateGroupByReceiptId,
+          onIdentityResolve: () => {
+            resolveCount += 1;
+          },
+        }),
+      () => ({
+        inputRowCount: sourceRows.length,
+        resolvedRowCount: resolveCount,
+        success: true,
+      })
+    );
     return { result, rowCount: sourceRows.length, resolveCount };
   } catch {
     return {

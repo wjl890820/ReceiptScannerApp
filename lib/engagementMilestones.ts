@@ -1203,17 +1203,36 @@ async function readProductRows(
   ownerScope: LocalReceiptOwnerScopeReady,
   options: { includeRecognitionSnapshot?: boolean } = {}
 ): Promise<EngagementProductRow[]> {
-  const rows = await db.getAllAsync<EngagementProductRow>(
-    buildEngagementProductInsightSelectSql({
-      itemWhereSql: ownerScope.itemWhereSql,
-      includeRecognitionSnapshot: options.includeRecognitionSnapshot === true,
-    }),
-    ownerScope.params
+  const { measureHomeRefreshStage, measureHomeRefreshStageSync } = await import(
+    './homeRefreshTimings'
+  );
+  const rows = await measureHomeRefreshStage(
+    'home.productContext.db',
+    () =>
+      db.getAllAsync<EngagementProductRow>(
+        buildEngagementProductInsightSelectSql({
+          itemWhereSql: ownerScope.itemWhereSql,
+          includeRecognitionSnapshot: options.includeRecognitionSnapshot === true,
+        }),
+        ownerScope.params
+      ),
+    (fetched) => ({
+      rowCount: fetched.length,
+      success: true,
+    })
   );
   const { enrichProductRowsWithCurrentItemMonetaryTruth } = await import(
     './currentItemMonetaryTruth'
   );
-  return enrichProductRowsWithCurrentItemMonetaryTruth(rows);
+  return measureHomeRefreshStageSync(
+    'home.productContext.enrich',
+    () => enrichProductRowsWithCurrentItemMonetaryTruth(rows),
+    (enriched) => ({
+      inputRowCount: rows.length,
+      outputRowCount: enriched.length,
+      success: true,
+    })
+  );
 }
 
 /**

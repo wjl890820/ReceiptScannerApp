@@ -25,6 +25,7 @@ import {
 } from './repeatProductProfile';
 import { filterV1SupportedReceipts } from './merchantType';
 import type { PersonalProductEndpointInventory } from './personalProductEndpointInventory';
+import { measureHomeRefreshStageSync } from './homeRefreshTimings';
 
 export type ProgressiveHomeStage =
   | 'empty'
@@ -251,12 +252,21 @@ export function buildHomeProgressiveExperienceBundle(
       ? ([...longTermAnalyticsReceipts] as ReceiptRow[])
       : receipts;
   const repeatSurfaces = frequentUnlocked
-    ? buildHomeRepeatSurfaces({
-        longTermAnalyticsReceipts: repeatReceiptUniverse,
-        productRows,
-        personalInventory,
-        now: referenceNow,
-      })
+    ? measureHomeRefreshStageSync(
+        'home.progressive.repeatBuild',
+        () =>
+          buildHomeRepeatSurfaces({
+            longTermAnalyticsReceipts: repeatReceiptUniverse,
+            productRows,
+            personalInventory,
+            now: referenceNow,
+          }),
+        () => ({
+          inputRowCount: productRows.length,
+          receiptCount: repeatReceiptUniverse.length,
+          success: true,
+        })
+      )
     : {
         frequentProducts: [],
         nextPurchaseCandidates: [],
