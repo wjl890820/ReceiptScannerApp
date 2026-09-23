@@ -269,11 +269,11 @@ describe('Slice 3D.1 — occurrence cache generation provenance', () => {
       const rows = gyomuPair(['d-a', 'd-b']);
       const g = liveGen();
       const original =
-        canonicalPurchaseOccurrence.buildCanonicalPurchaseOccurrenceIndex;
+        canonicalPurchaseOccurrence.prepareCanonicalPurchaseOccurrenceEvidence;
       const spy = jest
         .spyOn(
           canonicalPurchaseOccurrence,
-          'buildCanonicalPurchaseOccurrenceIndex'
+          'prepareCanonicalPurchaseOccurrenceEvidence'
         )
         .mockImplementation((receipts) => {
           invalidateAnalyticsReceiptSelection('receipt_updated');
@@ -525,11 +525,11 @@ describe('Slice 3D.1 — occurrence cache generation provenance', () => {
     it('generation mismatch during occurrence throws (no stale exclusions)', () => {
       const rows = gyomuPair(['pd-stale-a', 'pd-stale-b']);
       const original =
-        canonicalPurchaseOccurrence.buildCanonicalPurchaseOccurrenceIndex;
+        canonicalPurchaseOccurrence.prepareCanonicalPurchaseOccurrenceEvidence;
       const spy = jest
         .spyOn(
           canonicalPurchaseOccurrence,
-          'buildCanonicalPurchaseOccurrenceIndex'
+          'prepareCanonicalPurchaseOccurrenceEvidence'
         )
         .mockImplementation((receipts) => {
           invalidateAnalyticsReceiptSelection('receipt_updated');

@@ -234,15 +234,15 @@ describe('Slice 3C.1 — exclusion stage instrumentation', () => {
       expect(samples[analyticsIdx]!.cacheState).toBe('miss');
     });
 
-    it('B — occurrence timing wraps buildCanonicalPurchaseOccurrenceIndex on MISS', () => {
+    it('B — occurrence timing wraps prepare+buildFromPrepared on MISS', () => {
       const rows = gyomuPair(['tbb-a', 'tbb-b']);
       const original =
-        canonicalPurchaseOccurrence.buildCanonicalPurchaseOccurrenceIndex;
+        canonicalPurchaseOccurrence.prepareCanonicalPurchaseOccurrenceEvidence;
       let calledDuringBuild = false;
       const buildSpy = jest
         .spyOn(
           canonicalPurchaseOccurrence,
-          'buildCanonicalPurchaseOccurrenceIndex'
+          'prepareCanonicalPurchaseOccurrenceEvidence'
         )
         .mockImplementation((...args) => {
           calledDuringBuild = true;
@@ -262,6 +262,7 @@ describe('Slice 3C.1 — exclusion stage instrumentation', () => {
         samples.find((s) => s.stage === 'productDetail.exclusionOccurrence')
           ?.cacheState
       ).toBe('miss');
+      buildSpy.mockRestore();
     });
 
     it('D — analytics HIT still executes occurrence stage (may HIT occurrence too)', () => {

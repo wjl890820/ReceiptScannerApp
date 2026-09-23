@@ -326,13 +326,21 @@ export default function HomeScreen() {
             'HomePerf',
             `engagement precomputedSelection=true fullHistoryCount=${engagementPreloaded.receipts.length} displayCount=${allReceipts.length} analyticsCount=${engagementPreloaded.analyticsReceipts.length}`
           );
+          const sharedLoadPreloaded: EngagementPreloadedAnalyticsContext = {
+            ...preloaded!,
+            sharedProductInsight: undefined,
+          };
           const sharedProductInsight = (async () => {
-            return loadEngagementProductInsightContextWithDb(db, {
-              preloaded: {
-                ...preloaded!,
-                sharedProductInsight: undefined,
-              },
+            const ctx = await loadEngagementProductInsightContextWithDb(db, {
+              preloaded: sharedLoadPreloaded,
             });
+            // H2.1: promote MISS prepared evidence onto the refresh-owned preloaded
+            // (shared load uses a shallow copy to avoid recursive sharedProductInsight).
+            if (sharedLoadPreloaded.occurrencePreparedEvidence) {
+              preloaded!.occurrencePreparedEvidence =
+                sharedLoadPreloaded.occurrencePreparedEvidence;
+            }
+            return ctx;
           })();
           preloaded.sharedProductInsight = sharedProductInsight;
         }
@@ -386,7 +394,8 @@ export default function HomeScreen() {
                 productContext.rows,
                 personalInventory,
                 homeReferenceNow,
-                longTermAnalyticsReceipts
+                longTermAnalyticsReceipts,
+                preloaded?.occurrencePreparedEvidence
               );
               heavyRepeatProfiles = bundle.repeatProfiles;
               return bundle.experience;

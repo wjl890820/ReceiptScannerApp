@@ -86,6 +86,11 @@ function buildHomeRepeatSurfaces(args: {
   productRows: readonly EngagementProductRow[];
   personalInventory: PersonalProductEndpointInventory | null;
   now: number;
+  /**
+   * Slice H2.1: prepared H evidence from Phase-A MISS. When present, Repeat
+   * builds exact F(V) via buildFromPrepared without re-summarizing pairs.
+   */
+  occurrencePreparedEvidence?: import('./canonicalPurchaseOccurrence').CanonicalPurchaseOccurrencePreparedEvidence | null;
 }): {
   frequentProducts: MilestoneFrequentProduct[];
   nextPurchaseCandidates: NextPurchaseCandidate[];
@@ -116,7 +121,10 @@ function buildHomeRepeatSurfaces(args: {
     const allProfiles = buildRepeatProductProfiles(
       args.longTermAnalyticsReceipts,
       args.productRows,
-      { personalInventory: args.personalInventory }
+      {
+        personalInventory: args.personalInventory,
+        occurrencePreparedEvidence: args.occurrencePreparedEvidence,
+      }
     );
     return {
       frequentProducts: takeHomeRepeatProducts(allProfiles).map(
@@ -199,7 +207,8 @@ export function buildHomeProgressiveExperience(
   productRows: readonly EngagementProductRow[] = [],
   personalInventory: PersonalProductEndpointInventory | null = null,
   now: number = 0,
-  longTermAnalyticsReceipts?: readonly ReceiptRow[] | null
+  longTermAnalyticsReceipts?: readonly ReceiptRow[] | null,
+  occurrencePreparedEvidence?: import('./canonicalPurchaseOccurrence').CanonicalPurchaseOccurrencePreparedEvidence | null
 ): HomeProgressiveExperience {
   return buildHomeProgressiveExperienceBundle(
     receipts,
@@ -208,7 +217,8 @@ export function buildHomeProgressiveExperience(
     productRows,
     personalInventory,
     now,
-    longTermAnalyticsReceipts
+    longTermAnalyticsReceipts,
+    occurrencePreparedEvidence
   ).experience;
 }
 
@@ -223,7 +233,8 @@ export function buildHomeProgressiveExperienceBundle(
   productRows: readonly EngagementProductRow[] = [],
   personalInventory: PersonalProductEndpointInventory | null = null,
   now: number = 0,
-  longTermAnalyticsReceipts?: readonly ReceiptRow[] | null
+  longTermAnalyticsReceipts?: readonly ReceiptRow[] | null,
+  occurrencePreparedEvidence?: import('./canonicalPurchaseOccurrence').CanonicalPurchaseOccurrencePreparedEvidence | null
 ): HomeProgressiveExperienceBuildResult {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
   const localCount = countSupportedReceipts(receipts);
@@ -260,6 +271,7 @@ export function buildHomeProgressiveExperienceBundle(
             productRows,
             personalInventory,
             now: referenceNow,
+            occurrencePreparedEvidence,
           }),
         () => ({
           inputRowCount: productRows.length,

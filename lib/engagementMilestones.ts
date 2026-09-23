@@ -259,6 +259,12 @@ export type EngagementPreloadedAnalyticsContext = {
    */
   analyticsGeneration: number;
   /**
+   * Slice H2.1: prepared H occurrence evidence from Phase-A MISS/direct only.
+   * Set on the preloaded object during this Home refresh when applyOccurrence
+   * builds F(H). Absent on cache HIT. Never persisted; discard with refresh.
+   */
+  occurrencePreparedEvidence?: import('./canonicalPurchaseOccurrence').CanonicalPurchaseOccurrencePreparedEvidence;
+  /**
    * Optional shared product-insight Promise for one Home refresh so milestone
    * and productContext share a single receipt_items JOIN.
    */
@@ -1047,6 +1053,17 @@ async function readAllReceipts(
   return loadEngagementOwnerReceiptsWithDb(db, ownerScope);
 }
 
+function captureOccurrencePreparedEvidenceOntoPreloaded(
+  preloaded: EngagementPreloadedAnalyticsContext | undefined,
+  preparedEvidence:
+    | import('./canonicalPurchaseOccurrence').CanonicalPurchaseOccurrencePreparedEvidence
+    | undefined
+): void {
+  if (!preloaded || !preparedEvidence) return;
+  // Intra-refresh only — never module-global. Overwrite is fine (same H snapshot).
+  preloaded.occurrencePreparedEvidence = preparedEvidence;
+}
+
 function preloadedMatchesOwner(
   preloaded: EngagementPreloadedAnalyticsContext | undefined,
   ownerKey: string
@@ -1508,6 +1525,10 @@ export async function evaluateCurrentEngagementMilestoneWithDb(
       }
     );
     if (universe.ok) {
+      captureOccurrencePreparedEvidenceOntoPreloaded(
+        options.preloaded,
+        universe.preparedEvidence
+      );
       analyticsReceipts = universe.representativeReceipts as EngagementReceipt[];
       excludedDuplicateReceiptIds = universe.excludedReceiptIds;
       usedPreloaded = true;
@@ -1657,6 +1678,10 @@ export async function loadEngagementProductInsightContextWithDb(
       }
     );
     if (universe.ok) {
+      captureOccurrencePreparedEvidenceOntoPreloaded(
+        options.preloaded,
+        universe.preparedEvidence
+      );
       excludedDuplicateReceiptIds = universe.excludedReceiptIds;
     }
   }

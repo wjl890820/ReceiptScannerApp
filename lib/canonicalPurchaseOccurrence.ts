@@ -44,6 +44,79 @@ export type CanonicalPurchaseOccurrenceIndex = {
   groups: readonly CanonicalPurchaseOccurrenceGroup[];
 };
 
+/**
+ * Immutable pair + summary evidence for one prepared receipt universe.
+ *
+ * Contains NO cluster / representative / occurrence materialization.
+ * Reusable for any subset X of the prepared universe via
+ * {@link buildCanonicalPurchaseOccurrenceIndexFromPrepared}.
+ *
+ * Subset contract (Slice H2.1): each receipt passed to buildFromPrepared must
+ * be the same object reference used during prepare (receiptById.get(id) === r).
+ * Incompatible snapshots fall back to a fresh prepare+build for that universe.
+ */
+export type CanonicalPurchaseOccurrencePreparedEvidence = {
+  /** Object-identity snapshots from prepare — subset safety contract. */
+  receiptById: ReadonlyMap<string, ReceiptRow>;
+  summariesByReceiptId: ReadonlyMap<
+    string,
+    AnalysisDDuplicateReceiptSummary
+  >;
+  /**
+   * True unordered pairs only: outer key = lexicographically smaller receiptId,
+   * inner set = larger receiptIds. Collision-safe (no delimiter join).
+   */
+  qualifiedPairs: ReadonlyMap<string, ReadonlySet<string>>;
+};
+
+/** Test-only counters — not part of production correctness. */
+export type CanonicalPurchaseOccurrencePrepareStats = {
+  summarizeCount: number;
+  pairEvaluationCount: number;
+};
+
+let lastPrepareStats: CanonicalPurchaseOccurrencePrepareStats | null = null;
+
+export function __getLastCanonicalPurchaseOccurrencePrepareStatsForTests(): CanonicalPurchaseOccurrencePrepareStats | null {
+  return lastPrepareStats;
+}
+
+export function __resetLastCanonicalPurchaseOccurrencePrepareStatsForTests(): void {
+  lastPrepareStats = null;
+}
+
+/**
+ * Canonical orientation for one unordered pair of opaque receipt IDs.
+ *
+ * Pair identity is exact and locale-independent. Complete-link edge processing
+ * deliberately keeps its existing localeCompare ordering; this helper is only
+ * the storage/lookup authority for qualifiedPairs.
+ */
+function canonicalizeOccurrencePairIds(
+  receiptIdA: string,
+  receiptIdB: string
+): readonly [string, string] | null {
+  if (receiptIdA === receiptIdB) return null;
+  return receiptIdA < receiptIdB
+    ? [receiptIdA, receiptIdB]
+    : [receiptIdB, receiptIdA];
+}
+
+/**
+ * Order-independent pair lookup against prepared Boolean evidence.
+ * Nested Map+Set — never concatenates receipt IDs.
+ */
+export function isPreparedOccurrencePairQualified(
+  prepared: CanonicalPurchaseOccurrencePreparedEvidence,
+  receiptIdA: string,
+  receiptIdB: string
+): boolean {
+  const pair = canonicalizeOccurrencePairIds(receiptIdA, receiptIdB);
+  if (!pair) return false;
+  const [lo, hi] = pair;
+  return prepared.qualifiedPairs.get(lo)?.has(hi) === true;
+}
+
 function auditModule(): typeof import('./analysisDDuplicateAudit') {
   // Lazy require avoids pulling productPriceHistory/expo-sqlite into light
   // Repeat unit tests that only need occurrence remapping at call time.
@@ -235,10 +308,14 @@ export function evaluateCanonicalPurchaseOccurrencePair(
 /**
  * Complete-link clustering: merge clusters only when every cross-pair matches.
  * Prevents generic-merchant bridging of conflicting specific branches.
+ *
+ * When `pairQualified` is provided (prepared evidence), cross-cluster checks use
+ * that Boolean relation and do not re-run evaluateCanonicalPurchaseOccurrencePair.
  */
 function clusterCompleteLink(
   ids: readonly string[],
-  byId: ReadonlyMap<string, AnalysisDDuplicateReceiptSummary>
+  byId: ReadonlyMap<string, AnalysisDDuplicateReceiptSummary>,
+  pairQualified?: (a: string, b: string) => boolean
 ): string[][] {
   const clusters: string[][] = ids.map((id) => [id]);
   const clusterIndex = new Map<string, number>();
@@ -246,13 +323,21 @@ function clusterCompleteLink(
     clusterIndex.set(ids[i]!, i);
   }
 
+  const isPair = (idA: string, idB: string): boolean => {
+    if (pairQualified) return pairQualified(idA, idB);
+    return evaluateCanonicalPurchaseOccurrencePair(
+      byId.get(idA)!,
+      byId.get(idB)!
+    );
+  };
+
   const edges: Array<[string, string]> = [];
   for (let i = 0; i < ids.length; i += 1) {
     for (let j = i + 1; j < ids.length; j += 1) {
-      const left = byId.get(ids[i]!)!;
-      const right = byId.get(ids[j]!)!;
-      if (evaluateCanonicalPurchaseOccurrencePair(left, right)) {
-        edges.push([ids[i]!, ids[j]!]);
+      const a = ids[i]!;
+      const b = ids[j]!;
+      if (isPair(a, b)) {
+        edges.push([a, b]);
       }
     }
   }
@@ -270,12 +355,7 @@ function clusterCompleteLink(
     let compatible = true;
     for (const idA of clusterA) {
       for (const idB of clusterB) {
-        if (
-          !evaluateCanonicalPurchaseOccurrencePair(
-            byId.get(idA)!,
-            byId.get(idB)!
-          )
-        ) {
+        if (!isPair(idA, idB)) {
           compatible = false;
           break;
         }
@@ -334,18 +414,117 @@ export function pickOccurrenceRepresentativeReceiptId(
 }
 
 /**
- * Build occurrence index over the provided receipt set (typically analytics-retained).
+ * Preserve the pre-H2.1 Map semantics from commit 444c3ba: duplicate receipt
+ * IDs resolve to the LAST ReceiptRow snapshot. Map key insertion order is not
+ * authoritative because occurrence IDs are sorted before clustering.
  */
-export function buildCanonicalPurchaseOccurrenceIndex(
+function normalizeCanonicalOccurrenceReceiptUniverse(
   receipts: readonly ReceiptRow[]
-): CanonicalPurchaseOccurrenceIndex {
+): ReceiptRow[] {
+  const receiptById = new Map<string, ReceiptRow>();
+  for (const receipt of receipts) {
+    receiptById.set(receipt.id, receipt);
+  }
+  return [...receiptById.values()];
+}
+
+function prepareNormalizedCanonicalPurchaseOccurrenceEvidence(
+  receipts: readonly ReceiptRow[]
+): CanonicalPurchaseOccurrencePreparedEvidence {
   const { summarizeReceiptForDuplicateAudit } = auditModule();
-  const summaries = receipts.map(summarizeReceiptForDuplicateAudit);
-  const byId = new Map(summaries.map((s) => [s.receiptId, s]));
-  const receiptById = new Map(receipts.map((r) => [r.id, r]));
+  const receiptById = new Map<string, ReceiptRow>();
+  const summariesByReceiptId = new Map<
+    string,
+    AnalysisDDuplicateReceiptSummary
+  >();
+  let summarizeCount = 0;
+  for (const receipt of receipts) {
+    receiptById.set(receipt.id, receipt);
+    summariesByReceiptId.set(
+      receipt.id,
+      summarizeReceiptForDuplicateAudit(receipt)
+    );
+    summarizeCount += 1;
+  }
+
+  const ids = [...summariesByReceiptId.keys()].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  const qualifiedPairs = new Map<string, Set<string>>();
+  let pairEvaluationCount = 0;
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const idA = ids[i]!;
+      const idB = ids[j]!;
+      pairEvaluationCount += 1;
+      if (
+        evaluateCanonicalPurchaseOccurrencePair(
+          summariesByReceiptId.get(idA)!,
+          summariesByReceiptId.get(idB)!
+        )
+      ) {
+        const pair = canonicalizeOccurrencePairIds(idA, idB)!;
+        const [lo, hi] = pair;
+        let bucket = qualifiedPairs.get(lo);
+        if (!bucket) {
+          bucket = new Set();
+          qualifiedPairs.set(lo, bucket);
+        }
+        bucket.add(hi);
+      }
+    }
+  }
+
+  lastPrepareStats = { summarizeCount, pairEvaluationCount };
+
+  return {
+    receiptById,
+    summariesByReceiptId,
+    qualifiedPairs,
+  };
+}
+
+/**
+ * Prepare receipt-local summaries + unordered pair Boolean evidence.
+ * No clustering, representative selection, or occurrence materialization.
+ */
+export function prepareCanonicalPurchaseOccurrenceEvidence(
+  receipts: readonly ReceiptRow[]
+): CanonicalPurchaseOccurrencePreparedEvidence {
+  const normalized = normalizeCanonicalOccurrenceReceiptUniverse(receipts);
+  return prepareNormalizedCanonicalPurchaseOccurrenceEvidence(normalized);
+}
+
+function preparedEvidenceCoversReceipts(
+  receipts: readonly ReceiptRow[],
+  prepared: CanonicalPurchaseOccurrencePreparedEvidence
+): boolean {
+  for (const receipt of receipts) {
+    if (prepared.receiptById.get(receipt.id) !== receipt) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildCanonicalPurchaseOccurrenceIndexFromPreparedUnchecked(
+  receipts: readonly ReceiptRow[],
+  preparedEvidence: CanonicalPurchaseOccurrencePreparedEvidence
+): CanonicalPurchaseOccurrenceIndex {
+  const receiptById = new Map<string, ReceiptRow>();
+  for (const receipt of receipts) {
+    receiptById.set(receipt.id, receipt);
+  }
+  const byId = new Map<string, AnalysisDDuplicateReceiptSummary>();
+  for (const id of receiptById.keys()) {
+    byId.set(id, preparedEvidence.summariesByReceiptId.get(id)!);
+  }
   const ids = [...byId.keys()].sort((a, b) => a.localeCompare(b));
 
-  const clusters = clusterCompleteLink(ids, byId);
+  const pairQualified = (a: string, b: string): boolean =>
+    isPreparedOccurrencePairQualified(preparedEvidence, a, b);
+
+  const clusters = clusterCompleteLink(ids, byId, pairQualified);
 
   const occurrenceIdByReceiptId = new Map<string, string>();
   const representativeReceiptIdByOccurrenceId = new Map<string, string>();
@@ -380,6 +559,49 @@ export function buildCanonicalPurchaseOccurrenceIndex(
     representativeReceiptIdByReceiptId,
     groups,
   };
+}
+
+function buildCanonicalPurchaseOccurrenceIndexFreshNormalized(
+  receipts: readonly ReceiptRow[]
+): CanonicalPurchaseOccurrenceIndex {
+  const prepared = prepareNormalizedCanonicalPurchaseOccurrenceEvidence(
+    receipts
+  );
+  return buildCanonicalPurchaseOccurrenceIndexFromPreparedUnchecked(
+    receipts,
+    prepared
+  );
+}
+
+/**
+ * Build occurrence index from prepared pair/summary evidence.
+ * Always re-clusters and re-selects representatives for the supplied universe.
+ * Never projects final clusters/representatives from another universe.
+ */
+export function buildCanonicalPurchaseOccurrenceIndexFromPrepared(
+  receipts: readonly ReceiptRow[],
+  preparedEvidence: CanonicalPurchaseOccurrencePreparedEvidence
+): CanonicalPurchaseOccurrenceIndex {
+  const normalized = normalizeCanonicalOccurrenceReceiptUniverse(receipts);
+  if (!preparedEvidenceCoversReceipts(normalized, preparedEvidence)) {
+    // One non-recursive fresh fallback for the requested normalized universe.
+    return buildCanonicalPurchaseOccurrenceIndexFreshNormalized(normalized);
+  }
+  return buildCanonicalPurchaseOccurrenceIndexFromPreparedUnchecked(
+    normalized,
+    preparedEvidence
+  );
+}
+
+/**
+ * Build occurrence index over the provided receipt set (typically analytics-retained).
+ * Authoritative public convenience API — prepare then buildFromPrepared.
+ */
+export function buildCanonicalPurchaseOccurrenceIndex(
+  receipts: readonly ReceiptRow[]
+): CanonicalPurchaseOccurrenceIndex {
+  const normalized = normalizeCanonicalOccurrenceReceiptUniverse(receipts);
+  return buildCanonicalPurchaseOccurrenceIndexFreshNormalized(normalized);
 }
 
 export function emptyCanonicalPurchaseOccurrenceIndex(): CanonicalPurchaseOccurrenceIndex {

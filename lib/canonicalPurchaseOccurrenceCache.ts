@@ -25,10 +25,12 @@ import {
 } from './analyticsReceiptSelectionCache';
 import {
   applyOccurrenceRepresentativeUniverse,
-  buildCanonicalPurchaseOccurrenceIndex,
+  buildCanonicalPurchaseOccurrenceIndexFromPrepared,
   collectNonRepresentativeOccurrenceReceiptIds,
+  prepareCanonicalPurchaseOccurrenceEvidence,
   retainOccurrenceRepresentativeReceipts,
   type CanonicalPurchaseOccurrenceIndex,
+  type CanonicalPurchaseOccurrencePreparedEvidence,
 } from './canonicalPurchaseOccurrence';
 import type { ReceiptRow } from './db';
 import { logger } from './logger';
@@ -116,6 +118,12 @@ export type GetOrBuildCanonicalPurchaseOccurrenceIndexResult =
       ok: true;
       index: CanonicalPurchaseOccurrenceIndex;
       cacheState: Exclude<CanonicalPurchaseOccurrenceCacheState, 'stale'>;
+      /**
+       * Slice H2.1: prepared pair/summary evidence from this call's MISS/direct
+       * build only. Absent on HIT (final-index cache does not store prepared).
+       * Lifetime = current caller / Home refresh — never module-global.
+       */
+      preparedEvidence?: CanonicalPurchaseOccurrencePreparedEvidence;
     }
   | {
       ok: false;
@@ -155,7 +163,11 @@ export function getOrBuildCanonicalPurchaseOccurrenceIndexCached(input: {
   }
 
   if (!ownerKey) {
-    const index = buildCanonicalPurchaseOccurrenceIndex(receipts);
+    const prepared = prepareCanonicalPurchaseOccurrenceEvidence(receipts);
+    const index = buildCanonicalPurchaseOccurrenceIndexFromPrepared(
+      receipts,
+      prepared
+    );
     // Pre-return recheck: do not treat stale rows as current direct truth.
     if (isStaleInputGeneration(inputAnalyticsGeneration)) {
       logger.info(
@@ -168,7 +180,7 @@ export function getOrBuildCanonicalPurchaseOccurrenceIndexCached(input: {
       'OccurrenceIndexPerf',
       `decisionCache=direct durationMs=${Date.now() - started} receiptCount=${receipts.length} generation=${inputAnalyticsGeneration}`
     );
-    return { ok: true, index, cacheState: 'direct' };
+    return { ok: true, index, cacheState: 'direct', preparedEvidence: prepared };
   }
 
   const setSignature = buildAnalyticsReceiptSetSignature(receipts);
@@ -192,10 +204,15 @@ export function getOrBuildCanonicalPurchaseOccurrenceIndexCached(input: {
       'OccurrenceIndexPerf',
       `decisionCache=HIT durationMs=${Date.now() - started} receiptCount=${receipts.length} generation=${inputAnalyticsGeneration}`
     );
+    // HIT: final index only — no prepared evidence (never project F(H)→V).
     return { ok: true, index: hit.index, cacheState: 'hit' };
   }
 
-  const index = buildCanonicalPurchaseOccurrenceIndex(receipts);
+  const prepared = prepareCanonicalPurchaseOccurrenceEvidence(receipts);
+  const index = buildCanonicalPurchaseOccurrenceIndexFromPrepared(
+    receipts,
+    prepared
+  );
 
   // Pre-insert recheck: never install under a generation that no longer matches.
   if (isStaleInputGeneration(inputAnalyticsGeneration)) {
@@ -212,7 +229,7 @@ export function getOrBuildCanonicalPurchaseOccurrenceIndexCached(input: {
     'OccurrenceIndexPerf',
     `decisionCache=MISS durationMs=${Date.now() - started} receiptCount=${receipts.length} generation=${inputAnalyticsGeneration}`
   );
-  return { ok: true, index, cacheState: 'miss' };
+  return { ok: true, index, cacheState: 'miss', preparedEvidence: prepared };
 }
 
 export type ApplyOccurrenceRepresentativeUniverseCachedResult =
@@ -222,6 +239,11 @@ export type ApplyOccurrenceRepresentativeUniverseCachedResult =
       excludedReceiptIds: Set<string>;
       occurrenceIndex: CanonicalPurchaseOccurrenceIndex;
       cacheState: Exclude<CanonicalPurchaseOccurrenceCacheState, 'stale'>;
+      /**
+       * Present only when this call built the index (MISS/direct).
+       * Absent on HIT — Repeat must fresh-build F(V).
+       */
+      preparedEvidence?: CanonicalPurchaseOccurrencePreparedEvidence;
     }
   | {
       ok: false;
@@ -246,7 +268,7 @@ export function applyOccurrenceRepresentativeUniverseCached(
     return { ok: false, cacheState: 'stale' };
   }
 
-  const { index, cacheState } = built;
+  const { index, cacheState, preparedEvidence } = built;
   const excludedReceiptIds = new Set(excludedDuplicateReceiptIds ?? []);
   for (const id of collectNonRepresentativeOccurrenceReceiptIds(
     analyticsReceipts,
@@ -264,6 +286,7 @@ export function applyOccurrenceRepresentativeUniverseCached(
     excludedReceiptIds,
     occurrenceIndex: index,
     cacheState,
+    ...(preparedEvidence ? { preparedEvidence } : {}),
   };
 }
 

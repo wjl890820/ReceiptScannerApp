@@ -26,7 +26,9 @@ import type {
 } from './productIdentityConsumer';
 import {
   buildCanonicalPurchaseOccurrenceIndex,
+  buildCanonicalPurchaseOccurrenceIndexFromPrepared,
   type CanonicalPurchaseOccurrenceIndex,
+  type CanonicalPurchaseOccurrencePreparedEvidence,
 } from './canonicalPurchaseOccurrence';
 
 export const HOME_REPEAT_PRODUCT_CAP = 5 as const;
@@ -402,8 +404,16 @@ export function buildRepeatProductProfiles(
     /**
      * Optional prebuilt occurrence index. When omitted, built from
      * analyticsReceipts (canonical purchase-occurrence SSOT).
+     * Do NOT pass F(H) when the receipt universe is V ⊂ H.
      */
     purchaseOccurrenceIndex?: CanonicalPurchaseOccurrenceIndex | null;
+    /**
+     * Slice H2.1: prepared evidence from a superset universe (typically H).
+     * When compatible with V = filterV1SupportedReceipts(analyticsReceipts),
+     * builds exact F(V) without re-summarizing / re-evaluating pairs.
+     * Ignored when purchaseOccurrenceIndex is provided.
+     */
+    occurrencePreparedEvidence?: CanonicalPurchaseOccurrencePreparedEvidence | null;
   }
 ): RepeatProductProfile[] {
   const supported = filterV1SupportedReceipts(analyticsReceipts as ReceiptRow[]);
@@ -412,7 +422,12 @@ export function buildRepeatProductProfiles(
 
   const occurrenceIndex =
     options?.purchaseOccurrenceIndex ??
-    buildCanonicalPurchaseOccurrenceIndex(supported);
+    (options?.occurrencePreparedEvidence
+      ? buildCanonicalPurchaseOccurrenceIndexFromPrepared(
+          supported,
+          options.occurrencePreparedEvidence
+        )
+      : buildCanonicalPurchaseOccurrenceIndex(supported));
 
   const observations = observationsFromProductRows(
     productRows,
