@@ -7,6 +7,9 @@
  *   C. Comparable product price — PPH shelf-price contract (separate)
  *
  * This module projects B only. Never treat A/B/C as interchangeable.
+ *
+ * Slice 4B.1: bulk projection prepares receipt-level monetary truth once per
+ * receiptId within a single projectTrustedConsumerItemAmounts call.
  */
 
 import type { ReceiptRow } from './db';
@@ -16,7 +19,10 @@ import {
   type DiscountableItem,
 } from './receiptDiscountAllocation';
 import { buildReceiptMonetaryCoherenceEvidence } from './receiptEvidenceTruth/monetaryCoherenceEvidence';
-import { resolveReceiptMonetarySourceBundle } from './analysisFoundation/monetarySourceBundle';
+import {
+  resolveReceiptMonetarySourceBundle,
+  type ReceiptMonetarySourceBundle,
+} from './analysisFoundation/monetarySourceBundle';
 import {
   isTrustedReceiptCurrency,
   normalizeReceiptCurrency,
@@ -82,6 +88,35 @@ export const CONSUMER_MONETARY_RECEIPT_SELECT_SQL = `
        receipts.currency AS currency
 `.trim();
 
+/** Receipt-level monetary preparation result (independent of sourceIndex). */
+export type PreparedConsumerReceiptMonetaryContext =
+  | {
+      status: 'blocked';
+      reason: string;
+    }
+  | {
+      status: 'ready';
+      /** Minimal receipt used for bundle/coherence (read-only consumption). */
+      receipt: ReceiptRow;
+      bundle: ReceiptMonetarySourceBundle;
+    };
+
+export type ConsumerMonetaryBulkStats = {
+  receiptContextBuildCount: number;
+  receiptContextReuseCount: number;
+};
+
+let lastBulkStatsForTests: ConsumerMonetaryBulkStats | null = null;
+
+/** Test seam: stats from the most recent projectTrustedConsumerItemAmounts call. */
+export function __getLastConsumerMonetaryBulkStatsForTests(): ConsumerMonetaryBulkStats | null {
+  return lastBulkStatsForTests;
+}
+
+export function __resetLastConsumerMonetaryBulkStatsForTests(): void {
+  lastBulkStatsForTests = null;
+}
+
 function finiteAmount(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -123,6 +158,67 @@ function minimalReceiptForBundle(input: ConsumerMonetaryEvidenceInput): ReceiptR
   } as ReceiptRow;
 }
 
+/**
+ * Receipt-level inputs that define prepared monetary context identity.
+ * Production JOIN callers attach identical fields per receiptId; conflicting
+ * keys force separate preparation (no silent reuse).
+ *
+ * Slice 4B.1a: structured field equality — never delimiter-concat fingerprints
+ * (U+001F inside JSON is ordinary data and must not collapse distinct inputs).
+ */
+export type ConsumerReceiptMonetaryPreparationKey = {
+  analysisJson: string | null | undefined;
+  userItemsJson: string | null | undefined;
+  receiptTotal: number | null | undefined;
+  receiptTax: number | null | undefined;
+  receiptTaxIsKnown: number | null | undefined;
+  finalTotal: number | null | undefined;
+  userEdited: number | null | undefined;
+  currency: string | null | undefined;
+};
+
+export function buildConsumerReceiptMonetaryPreparationKey(
+  input: Pick<
+    ConsumerMonetaryEvidenceInput,
+    | 'analysisJson'
+    | 'userItemsJson'
+    | 'receiptTotal'
+    | 'receiptTax'
+    | 'receiptTaxIsKnown'
+    | 'finalTotal'
+    | 'userEdited'
+    | 'currency'
+  >
+): ConsumerReceiptMonetaryPreparationKey {
+  return {
+    analysisJson: input.analysisJson,
+    userItemsJson: input.userItemsJson,
+    receiptTotal: input.receiptTotal,
+    receiptTax: input.receiptTax,
+    receiptTaxIsKnown: input.receiptTaxIsKnown,
+    finalTotal: input.finalTotal,
+    userEdited: input.userEdited,
+    currency: input.currency,
+  };
+}
+
+/** Exact primitive/string/null/undefined equality — no join/stringify/hash. */
+export function isSameConsumerReceiptMonetaryPreparationKey(
+  a: ConsumerReceiptMonetaryPreparationKey,
+  b: ConsumerReceiptMonetaryPreparationKey
+): boolean {
+  return (
+    a.analysisJson === b.analysisJson &&
+    a.userItemsJson === b.userItemsJson &&
+    a.receiptTotal === b.receiptTotal &&
+    a.receiptTax === b.receiptTax &&
+    a.receiptTaxIsKnown === b.receiptTaxIsKnown &&
+    a.finalTotal === b.finalTotal &&
+    a.userEdited === b.userEdited &&
+    a.currency === b.currency
+  );
+}
+
 function validSourceIndex(
   sourceIndex: unknown,
   itemCount: number
@@ -144,72 +240,75 @@ function indexedRowName(input: ConsumerMonetaryEvidenceInput): string {
   return raw;
 }
 
+const RECEIPT_LEVEL_BLOCK_REASONS = new Set([
+  'discount_ownership_unresolved',
+  'monetary_source_incoherent',
+  'monetary_provenance_insufficient',
+  'receipt_level_discount_unallocated_for_spend',
+  'analysis_json_missing',
+  'currency_unknown',
+]);
+
 /**
- * Project whether a receipt_items line may be shown / summed as
- * trusted attributable product spend (concept B).
- *
- * Ordering:
- * 1. Establish receipt/product monetary trust (ownership + provenance + closure)
- * 2. Require valid sourceIndex correspondence to source-of-truth merchandise
- * 3. Project money from THAT mapped item only — never fall back to raw index amount
+ * Prepare receipt-level monetary truth (bundle + coherence gates).
+ * Independent of sourceIndex / item correspondence.
  */
-export function projectTrustedConsumerItemAmount(
+export function prepareConsumerReceiptMonetaryContext(
   input: ConsumerMonetaryEvidenceInput
-): ConsumerItemMonetaryProjection {
+): PreparedConsumerReceiptMonetaryContext {
   if (!analysisJsonPresent(input.analysisJson)) {
-    return {
-      amount: null,
-      trusted: false,
-      reason: 'analysis_json_missing',
-    };
+    return { status: 'blocked', reason: 'analysis_json_missing' };
   }
 
   if (!isTrustedReceiptCurrency(input.currency)) {
-    return {
-      amount: null,
-      trusted: false,
-      reason: 'currency_unknown',
-    };
+    return { status: 'blocked', reason: 'currency_unknown' };
   }
 
   const receipt = minimalReceiptForBundle(input);
   const bundle = resolveReceiptMonetarySourceBundle(receipt);
 
   if (bundle.discountOwnershipStatus === 'unresolved') {
-    return {
-      amount: null,
-      trusted: false,
-      reason: 'discount_ownership_unresolved',
-    };
+    return { status: 'blocked', reason: 'discount_ownership_unresolved' };
   }
 
   if (!bundle.coherent) {
-    return {
-      amount: null,
-      trusted: false,
-      reason: 'monetary_source_incoherent',
-    };
+    return { status: 'blocked', reason: 'monetary_source_incoherent' };
   }
 
   const coherence = buildReceiptMonetaryCoherenceEvidence(receipt);
   if (!coherence.monetaryProvenanceSufficient) {
-    return {
-      amount: null,
-      trusted: false,
-      reason: 'monetary_provenance_insufficient',
-    };
+    return { status: 'blocked', reason: 'monetary_provenance_insufficient' };
   }
 
   // ANY nonzero unallocated receipt-level reduction → product spend unknown.
-  // Do not reuse arithmetic reconciliation tolerance here.
   const remainder = Number(bundle.receiptLevelUnallocatedDiscountTotal);
   if (Number.isFinite(remainder) && remainder !== 0) {
     return {
-      amount: null,
-      trusted: false,
+      status: 'blocked',
       reason: 'receipt_level_discount_unallocated_for_spend',
     };
   }
+
+  return { status: 'ready', receipt, bundle };
+}
+
+/**
+ * Item-specific projection against an already-prepared receipt context.
+ * Authoritative item path shared by single-item and bulk APIs.
+ */
+export function projectTrustedConsumerItemAmountWithPreparedReceipt(
+  input: ConsumerMonetaryEvidenceInput,
+  prepared: PreparedConsumerReceiptMonetaryContext
+): ConsumerItemMonetaryProjection {
+  if (prepared.status === 'blocked') {
+    return {
+      amount: null,
+      trusted: false,
+      reason: prepared.reason,
+    };
+  }
+
+  const { bundle } = prepared;
 
   if (!validSourceIndex(input.sourceIndex, bundle.items.length)) {
     return {
@@ -229,7 +328,6 @@ export function projectTrustedConsumerItemAmount(
     };
   }
 
-  // Correspondence: indexed monetary field must agree with mapped source item.
   const indexed = finiteAmount(input.lineTotal);
   if (indexed != null && indexed !== mappedAmount) {
     return {
@@ -239,7 +337,6 @@ export function projectTrustedConsumerItemAmount(
     };
   }
 
-  // Optional name correspondence when the indexed row exposes a display/raw name.
   const indexedName = indexedRowName(input);
   const mappedName =
     typeof mapped.name === 'string' ? String(mapped.name).trim() : '';
@@ -255,7 +352,6 @@ export function projectTrustedConsumerItemAmount(
     }
   }
 
-  // Optional quantity correspondence when both sides expose a stable quantity.
   const indexedQty = finiteAmount(input.purchaseQuantity);
   const mappedQty = finiteAmount(
     (mapped as { quantity?: unknown }).quantity ??
@@ -282,6 +378,22 @@ export function projectTrustedConsumerItemAmount(
   };
 }
 
+/**
+ * Project whether a receipt_items line may be shown / summed as
+ * trusted attributable product spend (concept B).
+ *
+ * Ordering:
+ * 1. Establish receipt/product monetary trust (ownership + provenance + closure)
+ * 2. Require valid sourceIndex correspondence to source-of-truth merchandise
+ * 3. Project money from THAT mapped item only — never fall back to raw index amount
+ */
+export function projectTrustedConsumerItemAmount(
+  input: ConsumerMonetaryEvidenceInput
+): ConsumerItemMonetaryProjection {
+  const prepared = prepareConsumerReceiptMonetaryContext(input);
+  return projectTrustedConsumerItemAmountWithPreparedReceipt(input, prepared);
+}
+
 function toEvidenceInput(row: ConsumerMonetaryRowFields): ConsumerMonetaryEvidenceInput {
   return {
     lineTotal: row.lineTotal,
@@ -301,9 +413,17 @@ function toEvidenceInput(row: ConsumerMonetaryRowFields): ConsumerMonetaryEviden
   };
 }
 
+type PreparedCacheEntry = {
+  preparationKey: ConsumerReceiptMonetaryPreparationKey;
+  prepared: PreparedConsumerReceiptMonetaryContext;
+};
+
 /**
  * Apply consumer monetary projection to item rows.
  * Untrusted rows keep occurrence identity but set lineTotal to null.
+ *
+ * Slice 4B.1 / 4B.1a: receipt-level preparation runs once per receiptId when
+ * preparation keys are exactly equal; item correspondence stays per-row.
  */
 export function projectTrustedConsumerItemAmounts<
   T extends ConsumerMonetaryRowFields,
@@ -315,52 +435,106 @@ export function projectTrustedConsumerItemAmounts<
     receiptSpendAllowed: boolean;
   };
   const gateByReceipt = new Map<string, ReceiptGate>();
+  const preparedByReceipt = new Map<string, PreparedCacheEntry>();
+  let receiptContextBuildCount = 0;
+  let receiptContextReuseCount = 0;
 
-  return rows.map((row) => {
-    let gate = gateByReceipt.get(row.receiptId);
-    if (!gate) {
-      const probe = projectTrustedConsumerItemAmount(toEvidenceInput(row));
-      const receiptBlocked =
-        probe.reason === 'discount_ownership_unresolved' ||
-        probe.reason === 'monetary_source_incoherent' ||
-        probe.reason === 'monetary_provenance_insufficient' ||
-        probe.reason === 'receipt_level_discount_unallocated_for_spend' ||
-        probe.reason === 'analysis_json_missing' ||
-        probe.reason === 'currency_unknown';
-
-      gateByReceipt.set(row.receiptId, {
-        reason: receiptBlocked ? probe.reason : 'trusted_product_spend',
-        receiptSpendAllowed: !receiptBlocked,
-      });
-      gate = gateByReceipt.get(row.receiptId)!;
+  const resolvePrepared = (
+    input: ConsumerMonetaryEvidenceInput,
+    receiptId: string
+  ): PreparedConsumerReceiptMonetaryContext => {
+    const preparationKey = buildConsumerReceiptMonetaryPreparationKey(input);
+    const cached = preparedByReceipt.get(receiptId);
+    if (
+      cached &&
+      isSameConsumerReceiptMonetaryPreparationKey(
+        cached.preparationKey,
+        preparationKey
+      )
+    ) {
+      receiptContextReuseCount += 1;
+      return cached.prepared;
     }
+    // Conflicting key for same receiptId: prepare without overwriting
+    // a prior compatible cache entry (fail closed to separate preparation).
+    receiptContextBuildCount += 1;
+    const prepared = prepareConsumerReceiptMonetaryContext(input);
+    if (!cached) {
+      preparedByReceipt.set(receiptId, { preparationKey, prepared });
+    }
+    return prepared;
+  };
 
-    if (!gate.receiptSpendAllowed) {
+  try {
+    return rows.map((row) => {
+      const input = toEvidenceInput(row);
+      let gate = gateByReceipt.get(row.receiptId);
+      // First row of a receipt: prepare once, run probe, then project with
+      // the same prepared context (avoid a second resolvePrepared).
+      let preparedForRow: PreparedConsumerReceiptMonetaryContext | null = null;
+      if (!gate) {
+        preparedForRow = resolvePrepared(input, row.receiptId);
+        const probe = projectTrustedConsumerItemAmountWithPreparedReceipt(
+          input,
+          preparedForRow
+        );
+        const receiptBlocked = RECEIPT_LEVEL_BLOCK_REASONS.has(probe.reason);
+
+        gateByReceipt.set(row.receiptId, {
+          reason: receiptBlocked ? probe.reason : 'trusted_product_spend',
+          receiptSpendAllowed: !receiptBlocked,
+        });
+        gate = gateByReceipt.get(row.receiptId)!;
+
+        if (!gate.receiptSpendAllowed) {
+          return {
+            ...row,
+            lineTotal: null,
+            monetaryTrusted: false,
+            monetaryTrustReason: gate.reason,
+          };
+        }
+      }
+
+      if (!gate.receiptSpendAllowed) {
+        return {
+          ...row,
+          lineTotal: null,
+          monetaryTrusted: false,
+          monetaryTrustReason: gate.reason,
+        };
+      }
+
+      const prepared =
+        preparedForRow ?? resolvePrepared(input, row.receiptId);
+      const projected = projectTrustedConsumerItemAmountWithPreparedReceipt(
+        input,
+        prepared
+      );
+      if (!projected.trusted || projected.amount == null) {
+        return {
+          ...row,
+          lineTotal: null,
+          monetaryTrusted: false,
+          monetaryTrustReason: projected.reason,
+        };
+      }
+
       return {
         ...row,
-        lineTotal: null,
-        monetaryTrusted: false,
-        monetaryTrustReason: gate.reason,
-      };
-    }
-
-    const projected = projectTrustedConsumerItemAmount(toEvidenceInput(row));
-    if (!projected.trusted || projected.amount == null) {
-      return {
-        ...row,
-        lineTotal: null,
-        monetaryTrusted: false,
+        lineTotal: projected.amount,
+        monetaryTrusted: true,
         monetaryTrustReason: projected.reason,
       };
-    }
-
-    return {
-      ...row,
-      lineTotal: projected.amount,
-      monetaryTrusted: true,
-      monetaryTrustReason: projected.reason,
+    });
+  } finally {
+    lastBulkStatsForTests = {
+      receiptContextBuildCount,
+      receiptContextReuseCount,
     };
-  });
+    preparedByReceipt.clear();
+    gateByReceipt.clear();
+  }
 }
 
 /**
