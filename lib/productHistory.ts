@@ -24,6 +24,10 @@ import {
   CONSUMER_MONETARY_RECEIPT_SELECT_SQL,
   projectTrustedConsumerItemAmounts,
 } from './consumerItemMonetaryTruth';
+import {
+  measureProductDetailLoadStage,
+  measureProductDetailLoadStageSync,
+} from './productDetailLoadTimings';
 
 export type ProductSpecificationVariant = {
   sizeValue: number | null;
@@ -460,8 +464,11 @@ async function loadPersonalProductHistorySummaryWithDb(
     )
   );
 
-  const rows = await db.getAllAsync<PersonalProductHistoryDbRow>(
-    `SELECT
+  const rows = await measureProductDetailLoadStage(
+    'productDetail.historyDbFetch',
+    () =>
+      db.getAllAsync<PersonalProductHistoryDbRow>(
+        `SELECT
        receipt_items.receipt_id AS receiptId,
        receipt_items.id AS itemId,
        receipt_items.source_index AS sourceIndex,
@@ -491,121 +498,158 @@ async function loadPersonalProductHistorySummaryWithDb(
      WHERE ${predicates.itemWhereSql}
      ORDER BY COALESCE(receipts.transaction_at, receipts.created_at) DESC,
        receipt_items.source_index ASC`,
-    predicates.params
+        predicates.params
+      ),
+    (fetched) => ({
+      targetType: 'personal_product',
+      rowCount: fetched.length,
+      success: true,
+    })
   );
 
-  const matchedRows = projectTrustedConsumerItemAmounts(
-    selectAuthorizedPersonalProductHistoryRows(resolved, rows, {
-      excludedReceiptIds: options.excludedReceiptIds,
+  // Personal membership/authorization (not merchant identity resolve) — left
+  // outside historyIdentityFilter so that stage name stays merchant-only.
+  const authorizedRows = selectAuthorizedPersonalProductHistoryRows(
+    resolved,
+    rows,
+    { excludedReceiptIds: options.excludedReceiptIds }
+  );
+
+  const matchedRows = measureProductDetailLoadStageSync(
+    'productDetail.historyProjection',
+    () => projectTrustedConsumerItemAmounts(authorizedRows),
+    (projected) => ({
+      targetType: 'personal_product',
+      inputRowCount: authorizedRows.length,
+      projectedObservationCount: projected.length,
+      success: true,
     })
   );
   if (!matchedRows.length) {
     return null;
   }
 
-  const titleRow = [...matchedRows].sort(
-    (left, right) =>
-      Number(right.purchasedAt) - Number(left.purchasedAt) ||
-      left.receiptId.localeCompare(right.receiptId) ||
-      left.sourceIndex - right.sourceIndex
-  )[0]!;
-  const title =
-    (titleRow.displayName || titleRow.rawName || '').trim() || null;
+  return measureProductDetailLoadStageSync(
+    'productDetail.historyAggregate',
+    () => {
+      const titleRow = [...matchedRows].sort(
+        (left, right) =>
+          Number(right.purchasedAt) - Number(left.purchasedAt) ||
+          left.receiptId.localeCompare(right.receiptId) ||
+          left.sourceIndex - right.sourceIndex
+      )[0]!;
+      const title =
+        (titleRow.displayName || titleRow.rawName || '').trim() || null;
 
-  const spendAgg = aggregateTrustedProductSpend(matchedRows);
+      const spendAgg = aggregateTrustedProductSpend(matchedRows);
 
-  const purchasedAts = matchedRows
-    .map((row) => Number(row.purchasedAt))
-    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
-  const merchants = aggregateProductMerchantsByAnalyticsKey(
-    matchedRows.map((row) => ({
-      merchantRaw: row.merchantRaw,
-      merchantNormalized: row.merchantNormalized,
-      purchasedAt: Number(row.purchasedAt) || 0,
-      receiptId: row.receiptId,
-    }))
+      const purchasedAts = matchedRows
+        .map((row) => Number(row.purchasedAt))
+        .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+      const merchants = aggregateProductMerchantsByAnalyticsKey(
+        matchedRows.map((row) => ({
+          merchantRaw: row.merchantRaw,
+          merchantNormalized: row.merchantNormalized,
+          purchasedAt: Number(row.purchasedAt) || 0,
+          receiptId: row.receiptId,
+        }))
+      );
+
+      const specBuckets = new Map<
+        string,
+        ProductSpecificationVariant & { receiptIds: Set<string> }
+      >();
+      for (const row of matchedRows) {
+        const key = [
+          row.specSizeValue,
+          row.specSizeUnit,
+          row.specPackCount,
+          row.volumeBaseMl,
+          row.weightBaseG,
+          row.countBase,
+          row.specSourceText,
+        ].join('|');
+        const bucket = specBuckets.get(key) ?? {
+          ...toSpecificationVariant({
+            specSizeValue: row.specSizeValue,
+            specSizeUnit: row.specSizeUnit,
+            specPackCount: row.specPackCount,
+            volumeBaseMl: row.volumeBaseMl,
+            weightBaseG: row.weightBaseG,
+            countBase: row.countBase,
+            specSourceText: row.specSourceText,
+            purchaseOccurrenceCount: 0,
+          }),
+          receiptIds: new Set<string>(),
+        };
+        bucket.receiptIds.add(row.receiptId);
+        specBuckets.set(key, bucket);
+      }
+
+      return {
+        target: resolved.canonicalTarget,
+        title,
+        purchaseOccurrenceCount: countDistinctPurchaseReceiptIds(
+          matchedRows.map((row) => row.receiptId)
+        ),
+        totalPurchaseQuantity: matchedRows.reduce((sum, row) => {
+          const quantity = finiteNumber(row.purchaseQuantity);
+          return sum + (quantity > 0 ? quantity : 0);
+        }, 0),
+        totalSpend: spendAgg.totalSpend,
+        currency: spendAgg.currency,
+        currencyTotals: spendAgg.currencyTotals,
+        firstPurchasedAt: purchasedAts.length
+          ? Math.min(...purchasedAts)
+          : null,
+        lastPurchasedAt: purchasedAts.length
+          ? Math.max(...purchasedAts)
+          : null,
+        merchantCount: merchants.length,
+        canonicalProductCount: 0,
+        skuCount: 0,
+        specificationVariants: [...specBuckets.values()].map((variant) => ({
+          sizeValue: variant.sizeValue,
+          sizeUnit: variant.sizeUnit,
+          packCount: variant.packCount,
+          volumeBaseMl: variant.volumeBaseMl,
+          weightBaseG: variant.weightBaseG,
+          countBase: variant.countBase,
+          sourceText: variant.sourceText,
+          purchaseOccurrenceCount: variant.receiptIds.size,
+        })),
+        merchants,
+        recentPurchases: matchedRows.slice(0, recentLimit).map((row) => ({
+          receiptId: row.receiptId,
+          itemId: row.itemId,
+          sourceIndex: row.sourceIndex,
+          displayName: row.displayName,
+          category: row.category,
+          purchaseQuantity: finiteNumber(row.purchaseQuantity, 1),
+          lineTotal:
+            row.lineTotal == null ? null : finiteNumber(row.lineTotal),
+          currency: (row.currency || '').trim(),
+          purchasedAt: Number(row.purchasedAt) || 0,
+          merchantRaw: row.merchantRaw,
+          merchantNormalized: row.merchantNormalized,
+          specification: toSpecificationVariant({
+            specSizeValue: row.specSizeValue,
+            specSizeUnit: row.specSizeUnit,
+            specPackCount: row.specPackCount,
+            volumeBaseMl: row.volumeBaseMl,
+            weightBaseG: row.weightBaseG,
+            countBase: row.countBase,
+            specSourceText: row.specSourceText,
+          }),
+        })),
+      };
+    },
+    (summary) => ({
+      targetType: 'personal_product',
+      purchaseOccurrenceCount: summary.purchaseOccurrenceCount,
+      success: true,
+    })
   );
-
-  const specBuckets = new Map<string, ProductSpecificationVariant & { receiptIds: Set<string> }>();
-  for (const row of matchedRows) {
-    const key = [
-      row.specSizeValue,
-      row.specSizeUnit,
-      row.specPackCount,
-      row.volumeBaseMl,
-      row.weightBaseG,
-      row.countBase,
-      row.specSourceText,
-    ].join('|');
-    const bucket = specBuckets.get(key) ?? {
-      ...toSpecificationVariant({
-        specSizeValue: row.specSizeValue,
-        specSizeUnit: row.specSizeUnit,
-        specPackCount: row.specPackCount,
-        volumeBaseMl: row.volumeBaseMl,
-        weightBaseG: row.weightBaseG,
-        countBase: row.countBase,
-        specSourceText: row.specSourceText,
-        purchaseOccurrenceCount: 0,
-      }),
-      receiptIds: new Set<string>(),
-    };
-    bucket.receiptIds.add(row.receiptId);
-    specBuckets.set(key, bucket);
-  }
-
-  return {
-    target: resolved.canonicalTarget,
-    title,
-    purchaseOccurrenceCount: countDistinctPurchaseReceiptIds(
-      matchedRows.map((row) => row.receiptId)
-    ),
-    totalPurchaseQuantity: matchedRows.reduce((sum, row) => {
-      const quantity = finiteNumber(row.purchaseQuantity);
-      return sum + (quantity > 0 ? quantity : 0);
-    }, 0),
-    totalSpend: spendAgg.totalSpend,
-    currency: spendAgg.currency,
-    currencyTotals: spendAgg.currencyTotals,
-    firstPurchasedAt: purchasedAts.length ? Math.min(...purchasedAts) : null,
-    lastPurchasedAt: purchasedAts.length ? Math.max(...purchasedAts) : null,
-    merchantCount: merchants.length,
-    canonicalProductCount: 0,
-    skuCount: 0,
-    specificationVariants: [...specBuckets.values()].map((variant) => ({
-      sizeValue: variant.sizeValue,
-      sizeUnit: variant.sizeUnit,
-      packCount: variant.packCount,
-      volumeBaseMl: variant.volumeBaseMl,
-      weightBaseG: variant.weightBaseG,
-      countBase: variant.countBase,
-      sourceText: variant.sourceText,
-      purchaseOccurrenceCount: variant.receiptIds.size,
-    })),
-    merchants,
-    recentPurchases: matchedRows.slice(0, recentLimit).map((row) => ({
-      receiptId: row.receiptId,
-      itemId: row.itemId,
-      sourceIndex: row.sourceIndex,
-      displayName: row.displayName,
-      category: row.category,
-      purchaseQuantity: finiteNumber(row.purchaseQuantity, 1),
-      lineTotal: row.lineTotal == null ? null : finiteNumber(row.lineTotal),
-      currency: (row.currency || '').trim(),
-      purchasedAt: Number(row.purchasedAt) || 0,
-      merchantRaw: row.merchantRaw,
-      merchantNormalized: row.merchantNormalized,
-      specification: toSpecificationVariant({
-        specSizeValue: row.specSizeValue,
-        specSizeUnit: row.specSizeUnit,
-        specPackCount: row.specPackCount,
-        volumeBaseMl: row.volumeBaseMl,
-        weightBaseG: row.weightBaseG,
-        countBase: row.countBase,
-        specSourceText: row.specSourceText,
-      }),
-    })),
-  };
 }
 
 async function loadMerchantProductHistorySummaryWithDb(
@@ -631,21 +675,24 @@ async function loadMerchantProductHistorySummaryWithDb(
     )
   );
 
-  const rows = await db.getAllAsync<{
-    receiptId: string;
-    itemId: string;
-    sourceIndex: number;
-    displayName: string;
-    category: string | null;
-    purchaseQuantity: number;
-    lineTotal: number | null;
-    currency: string | null;
-    purchasedAt: number;
-    merchantRaw: string | null;
-    merchantNormalized: string | null;
-    rawName: string | null;
-  }>(
-    `SELECT
+  const rows = await measureProductDetailLoadStage(
+    'productDetail.historyDbFetch',
+    () =>
+      db.getAllAsync<{
+        receiptId: string;
+        itemId: string;
+        sourceIndex: number;
+        displayName: string;
+        category: string | null;
+        purchaseQuantity: number;
+        lineTotal: number | null;
+        currency: string | null;
+        purchasedAt: number;
+        merchantRaw: string | null;
+        merchantNormalized: string | null;
+        rawName: string | null;
+      }>(
+        `SELECT
        receipt_items.receipt_id AS receiptId,
        receipt_items.id AS itemId,
        receipt_items.source_index AS sourceIndex,
@@ -668,13 +715,30 @@ async function loadMerchantProductHistorySummaryWithDb(
      WHERE ${whereSql}
      ORDER BY COALESCE(receipts.transaction_at, receipts.created_at) DESC,
        receipt_items.source_index ASC`,
-    whereParams
+        whereParams
+      ),
+    (fetched) => ({
+      targetType: 'merchant_product',
+      rowCount: fetched.length,
+      success: true,
+    })
   );
 
   const { resolveIdentityConsumerObservations } = await import(
     './productIdentityConsumer'
   );
-  const projectedRows = projectTrustedConsumerItemAmounts(rows);
+
+  const projectedRows = measureProductDetailLoadStageSync(
+    'productDetail.historyProjection',
+    () => projectTrustedConsumerItemAmounts(rows),
+    (projected) => ({
+      targetType: 'merchant_product',
+      inputRowCount: rows.length,
+      projectedObservationCount: projected.length,
+      success: true,
+    })
+  );
+
   const observations = projectedRows.map((r) => ({
     receiptId: r.receiptId,
     itemSourceIndex: r.sourceIndex,
@@ -684,8 +748,25 @@ async function loadMerchantProductHistorySummaryWithDb(
     lineTotal: r.lineTotal,
     quantity: r.purchaseQuantity,
   }));
-  const { qualified } = resolveIdentityConsumerObservations(observations);
-  const matched = qualified.filter((q) => q.merchantProductId === target.key);
+
+  const identityResult = measureProductDetailLoadStageSync(
+    'productDetail.historyIdentityFilter',
+    () => {
+      const { qualified } = resolveIdentityConsumerObservations(observations);
+      const matched = qualified.filter(
+        (q) => q.merchantProductId === target.key
+      );
+      return { qualified, matched };
+    },
+    (result) => ({
+      targetType: 'merchant_product',
+      inputObservationCount: observations.length,
+      qualifiedObservationCount: result.qualified.length,
+      matchedObservationCount: result.matched.length,
+      success: true,
+    })
+  );
+  const { matched } = identityResult;
   if (!matched.length) return null;
 
   const keySet = new Set(
@@ -696,68 +777,83 @@ async function loadMerchantProductHistorySummaryWithDb(
   );
   if (!matchedRows.length) return null;
 
-  const title =
-    matched.find((q) => (q.rawName || '').trim())?.rawName ??
-    matchedRows[0]?.displayName ??
-    null;
+  return measureProductDetailLoadStageSync(
+    'productDetail.historyAggregate',
+    () => {
+      const title =
+        matched.find((q) => (q.rawName || '').trim())?.rawName ??
+        matchedRows[0]?.displayName ??
+        null;
 
-  const spendAgg = aggregateTrustedProductSpend(matchedRows);
+      const spendAgg = aggregateTrustedProductSpend(matchedRows);
 
-  const purchasedAts = matchedRows
-    .map((r) => Number(r.purchasedAt))
-    .filter((t) => Number.isFinite(t) && t > 0);
-  const merchants = aggregateProductMerchantsByAnalyticsKey(
-    matchedRows.map((r) => ({
-      merchantRaw: r.merchantRaw,
-      merchantNormalized: r.merchantNormalized,
-      purchasedAt: Number(r.purchasedAt) || 0,
-      receiptId: r.receiptId,
-    }))
+      const purchasedAts = matchedRows
+        .map((r) => Number(r.purchasedAt))
+        .filter((t) => Number.isFinite(t) && t > 0);
+      const merchants = aggregateProductMerchantsByAnalyticsKey(
+        matchedRows.map((r) => ({
+          merchantRaw: r.merchantRaw,
+          merchantNormalized: r.merchantNormalized,
+          purchasedAt: Number(r.purchasedAt) || 0,
+          receiptId: r.receiptId,
+        }))
+      );
+
+      return {
+        target,
+        title,
+        purchaseOccurrenceCount: countDistinctPurchaseReceiptIds(
+          matchedRows.map((r) => r.receiptId)
+        ),
+        totalPurchaseQuantity: matchedRows.reduce((sum, r) => {
+          const q = finiteNumber(r.purchaseQuantity);
+          return sum + (q > 0 ? q : 0);
+        }, 0),
+        totalSpend: spendAgg.totalSpend,
+        currency: spendAgg.currency,
+        currencyTotals: spendAgg.currencyTotals,
+        firstPurchasedAt: purchasedAts.length
+          ? Math.min(...purchasedAts)
+          : null,
+        lastPurchasedAt: purchasedAts.length
+          ? Math.max(...purchasedAts)
+          : null,
+        merchantCount: merchants.length,
+        canonicalProductCount: 0,
+        skuCount: 0,
+        specificationVariants: [],
+        merchants,
+        recentPurchases: matchedRows.slice(0, recentLimit).map((row) => ({
+          receiptId: row.receiptId,
+          itemId: row.itemId,
+          sourceIndex: row.sourceIndex,
+          displayName: row.displayName,
+          category: row.category,
+          purchaseQuantity: finiteNumber(row.purchaseQuantity, 1),
+          lineTotal:
+            row.lineTotal == null ? null : finiteNumber(row.lineTotal),
+          currency: (row.currency || '').trim(),
+          purchasedAt: Number(row.purchasedAt) || 0,
+          merchantRaw: row.merchantRaw,
+          merchantNormalized: row.merchantNormalized,
+          specification: toSpecificationVariant({
+            specSizeValue: null,
+            specSizeUnit: null,
+            specPackCount: null,
+            volumeBaseMl: null,
+            weightBaseG: null,
+            countBase: null,
+            specSourceText: null,
+          }),
+        })),
+      };
+    },
+    (summary) => ({
+      targetType: 'merchant_product',
+      purchaseOccurrenceCount: summary.purchaseOccurrenceCount,
+      success: true,
+    })
   );
-
-  return {
-    target,
-    title,
-    purchaseOccurrenceCount: countDistinctPurchaseReceiptIds(
-      matchedRows.map((r) => r.receiptId)
-    ),
-    totalPurchaseQuantity: matchedRows.reduce((sum, r) => {
-      const q = finiteNumber(r.purchaseQuantity);
-      return sum + (q > 0 ? q : 0);
-    }, 0),
-    totalSpend: spendAgg.totalSpend,
-    currency: spendAgg.currency,
-    currencyTotals: spendAgg.currencyTotals,
-    firstPurchasedAt: purchasedAts.length ? Math.min(...purchasedAts) : null,
-    lastPurchasedAt: purchasedAts.length ? Math.max(...purchasedAts) : null,
-    merchantCount: merchants.length,
-    canonicalProductCount: 0,
-    skuCount: 0,
-    specificationVariants: [],
-    merchants,
-    recentPurchases: matchedRows.slice(0, recentLimit).map((row) => ({
-      receiptId: row.receiptId,
-      itemId: row.itemId,
-      sourceIndex: row.sourceIndex,
-      displayName: row.displayName,
-      category: row.category,
-      purchaseQuantity: finiteNumber(row.purchaseQuantity, 1),
-      lineTotal: row.lineTotal == null ? null : finiteNumber(row.lineTotal),
-      currency: (row.currency || '').trim(),
-      purchasedAt: Number(row.purchasedAt) || 0,
-      merchantRaw: row.merchantRaw,
-      merchantNormalized: row.merchantNormalized,
-      specification: toSpecificationVariant({
-        specSizeValue: null,
-        specSizeUnit: null,
-        specPackCount: null,
-        volumeBaseMl: null,
-        weightBaseG: null,
-        countBase: null,
-        specSourceText: null,
-      }),
-    })),
-  };
 }
 
 export async function loadProductHistoryWithDb(

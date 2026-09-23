@@ -16,6 +16,17 @@ export type ProductDetailLoadTimingName =
   | 'productDetail.exclusionAnalyticsSelection'
   | 'productDetail.exclusionOccurrence'
   | 'productDetail.historyLoad'
+  /** Slice 4A.1: SQLite getAllAsync wall time only. */
+  | 'productDetail.historyDbFetch'
+  /** Slice 4A.1: projectTrustedConsumerItemAmounts (monetary projection). */
+  | 'productDetail.historyProjection'
+  /**
+   * Slice 4A.1: merchant identity resolve + target membership filter.
+   * Not emitted for personal_product (authorization ≠ merchant identity resolve).
+   */
+  | 'productDetail.historyIdentityFilter'
+  /** Slice 4A.1: matched-row aggregation / summary construction. */
+  | 'productDetail.historyAggregate'
   | 'productDetail.pphLoad'
   | 'productDetail.personalResolve'
   | 'productDetail.shoppingMembership';
@@ -39,6 +50,18 @@ export type ProductDetailLoadTimingSample = {
   comparableOccurrenceCount?: number;
   found?: boolean;
   success?: boolean;
+  /** historyDbFetch: rows returned from SQLite (item rows). */
+  rowCount?: number;
+  /** historyProjection: rows passed into monetary projection. */
+  inputRowCount?: number;
+  /** historyProjection: observation-shaped rows after projection. */
+  projectedObservationCount?: number;
+  /** historyIdentityFilter: observations fed to identity resolve. */
+  inputObservationCount?: number;
+  /** historyIdentityFilter: qualified identity observations. */
+  qualifiedObservationCount?: number;
+  /** historyIdentityFilter: observations matching the Detail target. */
+  matchedObservationCount?: number;
 };
 
 let forceEnabledForTests = false;
@@ -85,6 +108,20 @@ export function recordProductDetailLoadTiming(
       }
       if (sample.found != null) meta.found = sample.found;
       if (sample.success != null) meta.success = sample.success;
+      if (sample.rowCount != null) meta.rowCount = sample.rowCount;
+      if (sample.inputRowCount != null) meta.inputRowCount = sample.inputRowCount;
+      if (sample.projectedObservationCount != null) {
+        meta.projectedObservationCount = sample.projectedObservationCount;
+      }
+      if (sample.inputObservationCount != null) {
+        meta.inputObservationCount = sample.inputObservationCount;
+      }
+      if (sample.qualifiedObservationCount != null) {
+        meta.qualifiedObservationCount = sample.qualifiedObservationCount;
+      }
+      if (sample.matchedObservationCount != null) {
+        meta.matchedObservationCount = sample.matchedObservationCount;
+      }
       recordDiagnosticTiming(
         PRODUCT_DETAIL_DIAGNOSTICS_SCREEN,
         sample.stage,
