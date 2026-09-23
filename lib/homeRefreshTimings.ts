@@ -31,6 +31,12 @@ export type HomeRefreshTimingStage =
   | 'home.productContext.enrich'
   /** Slice H1.1: personal inventory owner-wide DB reads before identity. */
   | 'home.personalInventory.db'
+  /** Slice H3.1: inventory Q1 receipt_items JOIN only. */
+  | 'home.personalInventory.db.items'
+  /** Slice H3.1: inventory Q2 owner receipts SELECT only. */
+  | 'home.personalInventory.db.receipts'
+  /** Slice H3.1: inventory Q3 schema ensure + decisions SELECT. */
+  | 'home.personalInventory.db.decisions'
   /** Slice H1.1: resolveReceiptItemIdentity loop + inventory build. */
   | 'home.personalInventory.identity'
   /** Slice H1.1: buildHomeRepeatSurfaces / Repeat+NP construction. */

@@ -427,31 +427,63 @@ async function loadPersonalProductEndpointInventoryUncached(
     };
   }
 
-  const { measureHomeRefreshStageSync, recordHomeRefreshTiming } = await import(
-    './homeRefreshTimings'
-  );
+  const { measureHomeRefreshStage, measureHomeRefreshStageSync, recordHomeRefreshTiming } =
+    await import('./homeRefreshTimings');
 
   let sourceRows: PersonalProductEndpointInventorySourceRow[];
   let receipts: ReceiptRow[];
   let decisionRows: StoredPersonalProductIdentityDecision[];
 
-  // H1.1: one DB stage for all owner-wide reads before identity.
+  // H1.1 parent: wall-clock for Q1+Q2+Q3. H3.1 children measure each query.
   const dbStarted = Date.now();
   try {
-    sourceRows = await db.getAllAsync<PersonalProductEndpointInventorySourceRow>(
-      `${INVENTORY_ITEM_SELECT_SQL}
+    sourceRows = await measureHomeRefreshStage(
+      'home.personalInventory.db.items',
+      () =>
+        db.getAllAsync<PersonalProductEndpointInventorySourceRow>(
+          `${INVENTORY_ITEM_SELECT_SQL}
        WHERE ${predicates.itemWhereSql}
        ORDER BY
          COALESCE(receipts.transaction_at, receipts.created_at) ASC,
          receipt_items.receipt_id ASC,
          receipt_items.source_index ASC`,
-      predicates.params
+          predicates.params
+        ),
+      (rows) => ({
+        success: true,
+        rowCount: rows.length,
+      })
     );
-    receipts = await db.getAllAsync<ReceiptRow>(
-      `${OWNER_RECEIPT_SELECT_SQL}
+  } catch {
+    recordHomeRefreshTiming({
+      stage: 'home.personalInventory.db',
+      durationMs: Date.now() - dbStarted,
+      success: false,
+    });
+    return {
+      result: {
+        status: 'current_endpoint_context_incomplete',
+        reason: 'owner_inventory_query_failed',
+      },
+      rowCount: 0,
+      resolveCount: 0,
+    };
+  }
+
+  try {
+    receipts = await measureHomeRefreshStage(
+      'home.personalInventory.db.receipts',
+      () =>
+        db.getAllAsync<ReceiptRow>(
+          `${OWNER_RECEIPT_SELECT_SQL}
        WHERE ${predicates.receiptWhereSql}
        ORDER BY COALESCE(receipts.transaction_at, receipts.created_at) ASC, receipts.id ASC`,
-      predicates.params
+          predicates.params
+        ),
+      (rows) => ({
+        success: true,
+        rowCount: rows.length,
+      })
     );
   } catch {
     recordHomeRefreshTiming({
@@ -481,7 +513,14 @@ async function loadPersonalProductEndpointInventoryUncached(
           key
         );
       });
-    decisionRows = await listDecisions(db, ownerKey);
+    decisionRows = await measureHomeRefreshStage(
+      'home.personalInventory.db.decisions',
+      () => listDecisions(db, ownerKey),
+      (rows) => ({
+        success: true,
+        rowCount: rows.length,
+      })
+    );
   } catch {
     recordHomeRefreshTiming({
       stage: 'home.personalInventory.db',

@@ -503,6 +503,9 @@ describe('Slice H1.1 — Cold Home internal stage attribution', () => {
         'home.productContext.db',
         'home.productContext.enrich',
         'home.personalInventory.db',
+        'home.personalInventory.db.items',
+        'home.personalInventory.db.receipts',
+        'home.personalInventory.db.decisions',
         'home.personalInventory.identity',
         'home.progressive.repeatBuild',
       ] as const;
