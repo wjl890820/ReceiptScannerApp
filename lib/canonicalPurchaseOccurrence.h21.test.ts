@@ -263,7 +263,13 @@ describe('H2.1a — pair canonicalization and duplicate-ID hardening', () => {
     expect(prepared.receiptById.get('duplicate')).toBe(last);
     expect(
       __getLastCanonicalPurchaseOccurrencePrepareStatsForTests()
-    ).toEqual({ summarizeCount: 1, pairEvaluationCount: 0 });
+    ).toMatchObject({
+      summarizeCount: 1,
+      theoreticalPairCount: 0,
+      candidatePairCount: 0,
+      pairEvaluationCount: 0,
+      qualifiedPairCount: 0,
+    });
 
     const index = buildCanonicalPurchaseOccurrenceIndex([first, last]);
     expect(index.groups).toHaveLength(1);
@@ -327,7 +333,13 @@ describe('H2.1a — pair canonicalization and duplicate-ID hardening', () => {
     );
     expect(
       __getLastCanonicalPurchaseOccurrencePrepareStatsForTests()
-    ).toEqual({ summarizeCount: 2, pairEvaluationCount: 1 });
+    ).toMatchObject({
+      summarizeCount: 2,
+      theoreticalPairCount: 1,
+      pairEvaluationCount:
+        __getLastCanonicalPurchaseOccurrencePrepareStatsForTests()!
+          .candidatePairCount,
+    });
 
     const expected = buildCanonicalPurchaseOccurrenceIndex([
       replacement,
@@ -353,7 +365,13 @@ describe('H2.1a — pair canonicalization and duplicate-ID hardening', () => {
     );
     expect(
       __getLastCanonicalPurchaseOccurrencePrepareStatsForTests()
-    ).toEqual({ summarizeCount: 2, pairEvaluationCount: 1 });
+    ).toMatchObject({
+      summarizeCount: 2,
+      theoreticalPairCount: 1,
+      pairEvaluationCount:
+        __getLastCanonicalPurchaseOccurrencePrepareStatsForTests()!
+          .candidatePairCount,
+    });
     expect(actual.groups).toHaveLength(1);
     expect(actual.groups[0]!.receiptIds).toEqual(['peer', 'same-id']);
   });
@@ -613,7 +631,7 @@ describe('H2.1 — H/V non-equivalence (unsafe restrict guardrail)', () => {
 });
 
 describe('H2.1 — preparation evaluation counts', () => {
-  it('prepare summarizes n and evaluates n(n-1)/2; buildFromPrepared adds none', () => {
+  it('prepare summarizes n; buildFromPrepared adds no prepare stats', () => {
     const H = [
       makeReceipt('c1'),
       makeReceipt('c2'),
@@ -626,10 +644,14 @@ describe('H2.1 — preparation evaluation counts', () => {
     __resetLastCanonicalPurchaseOccurrencePrepareStatsForTests();
     const prepared = prepareCanonicalPurchaseOccurrenceEvidence(H);
     const afterPrepare = __getLastCanonicalPurchaseOccurrencePrepareStatsForTests();
-    expect(afterPrepare).toEqual({
-      summarizeCount: n,
-      pairEvaluationCount: (n * (n - 1)) / 2,
-    });
+    expect(afterPrepare?.summarizeCount).toBe(n);
+    expect(afterPrepare?.theoreticalPairCount).toBe((n * (n - 1)) / 2);
+    expect(afterPrepare?.pairEvaluationCount).toBe(
+      afterPrepare?.candidatePairCount
+    );
+    expect(afterPrepare!.pairEvaluationCount).toBeLessThanOrEqual(
+      afterPrepare!.theoreticalPairCount
+    );
 
     __resetLastCanonicalPurchaseOccurrencePrepareStatsForTests();
     buildCanonicalPurchaseOccurrenceIndexFromPrepared(H, prepared);

@@ -72,7 +72,14 @@ export type CanonicalPurchaseOccurrencePreparedEvidence = {
 /** Test-only counters — not part of production correctness. */
 export type CanonicalPurchaseOccurrencePrepareStats = {
   summarizeCount: number;
+  /** n*(n-1)/2 for the normalized universe. */
+  theoreticalPairCount: number;
+  /** Unique unordered pairs admitted by exact candidate families. */
+  candidatePairCount: number;
+  /** Evaluator invocations (must equal candidatePairCount). */
   pairEvaluationCount: number;
+  /** Pairs for which the evaluator returned true. */
+  qualifiedPairCount: number;
 };
 
 let lastPrepareStats: CanonicalPurchaseOccurrencePrepareStats | null = null;
@@ -428,6 +435,166 @@ function normalizeCanonicalOccurrenceReceiptUniverse(
   return [...receiptById.values()];
 }
 
+/**
+ * H6.1 — exact SUPERSET of pairs that can evaluate true.
+ *
+ * True-return paths of evaluateCanonicalPurchaseOccurrencePair:
+ * A) non-empty contentFingerprint equality (HC early) — may ignore currency/total/ts
+ * B) structural HC — requires both hasExactTransactionTime, precision second,
+ *    transactionAt ===, currency, totals, merchant, baskets…
+ * C) reconciled HC — requires both hasExactTransactionTime, transactionAt ===,
+ *    same merchantKey, totals…
+ * D) normal basket path — monetary + both second-exact + transactionAt === + basket
+ *
+ * Candidate families (union; evaluator remains authoritative):
+ * Family fingerprint: same non-empty contentFingerprint
+ * Family exactSecondTx: both hasExactTransactionTime && transactionAt != null,
+ *   grouped by identical summary.transactionAt (===)
+ *
+ * No monetary/merchant bucketing (avoids false negatives from moneyEquals /
+ * retailer-equivalence divergence across modules).
+ */
+function addExactOccurrencePairCandidate(
+  candidatePairs: Map<string, Set<string>>,
+  idA: string,
+  idB: string
+): void {
+  const pair = canonicalizeOccurrencePairIds(idA, idB);
+  if (!pair) return;
+  const [lo, hi] = pair;
+  let bucket = candidatePairs.get(lo);
+  if (!bucket) {
+    bucket = new Set();
+    candidatePairs.set(lo, bucket);
+  }
+  bucket.add(hi);
+}
+
+function addAllPairsWithinGroup(
+  candidatePairs: Map<string, Set<string>>,
+  group: readonly string[]
+): void {
+  for (let i = 0; i < group.length; i += 1) {
+    for (let j = i + 1; j < group.length; j += 1) {
+      addExactOccurrencePairCandidate(candidatePairs, group[i]!, group[j]!);
+    }
+  }
+}
+
+function buildExactOccurrencePairCandidates(
+  ids: readonly string[],
+  summariesByReceiptId: ReadonlyMap<string, AnalysisDDuplicateReceiptSummary>
+): Map<string, Set<string>> {
+  const candidatePairs = new Map<string, Set<string>>();
+
+  // Family A — contentFingerprint HC early return.
+  const byFingerprint = new Map<string, string[]>();
+  for (const id of ids) {
+    const fp = summariesByReceiptId.get(id)!.contentFingerprint;
+    if (typeof fp !== 'string' || fp.length === 0) continue;
+    let group = byFingerprint.get(fp);
+    if (!group) {
+      group = [];
+      byFingerprint.set(fp, group);
+    }
+    group.push(id);
+  }
+  for (const group of byFingerprint.values()) {
+    if (group.length >= 2) addAllPairsWithinGroup(candidatePairs, group);
+  }
+
+  // Family B — structural / reconciled / exact-second basket necessary tx gate.
+  const byExactSecondTx = new Map<number, string[]>();
+  for (const id of ids) {
+    const summary = summariesByReceiptId.get(id)!;
+    if (!summary.hasExactTransactionTime || summary.transactionAt == null) {
+      continue;
+    }
+    const tx = summary.transactionAt;
+    let group = byExactSecondTx.get(tx);
+    if (!group) {
+      group = [];
+      byExactSecondTx.set(tx, group);
+    }
+    group.push(id);
+  }
+  for (const group of byExactSecondTx.values()) {
+    if (group.length >= 2) addAllPairsWithinGroup(candidatePairs, group);
+  }
+
+  return candidatePairs;
+}
+
+function isExactOccurrencePairCandidate(
+  candidatePairs: ReadonlyMap<string, ReadonlySet<string>>,
+  idA: string,
+  idB: string
+): boolean {
+  const pair = canonicalizeOccurrencePairIds(idA, idB);
+  if (!pair) return false;
+  const [lo, hi] = pair;
+  return candidatePairs.get(lo)?.has(hi) === true;
+}
+
+function countNestedPairEntries(
+  pairs: ReadonlyMap<string, ReadonlySet<string>>
+): number {
+  let count = 0;
+  for (const bucket of pairs.values()) {
+    count += bucket.size;
+  }
+  return count;
+}
+
+/**
+ * TEST-ONLY exhaustive all-pairs oracle (independent of H6.1 candidate gen).
+ * Returns the nested qualifiedPairs map using the production evaluator.
+ */
+export function __prepareCanonicalPurchaseOccurrenceEvidenceAllPairsForTests(
+  receipts: readonly ReceiptRow[]
+): CanonicalPurchaseOccurrencePreparedEvidence {
+  const { summarizeReceiptForDuplicateAudit } = auditModule();
+  const normalized = normalizeCanonicalOccurrenceReceiptUniverse(receipts);
+  const receiptById = new Map<string, ReceiptRow>();
+  const summariesByReceiptId = new Map<
+    string,
+    AnalysisDDuplicateReceiptSummary
+  >();
+  for (const receipt of normalized) {
+    receiptById.set(receipt.id, receipt);
+    summariesByReceiptId.set(
+      receipt.id,
+      summarizeReceiptForDuplicateAudit(receipt)
+    );
+  }
+  const ids = [...summariesByReceiptId.keys()].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  const qualifiedPairs = new Map<string, Set<string>>();
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const idA = ids[i]!;
+      const idB = ids[j]!;
+      if (
+        evaluateCanonicalPurchaseOccurrencePair(
+          summariesByReceiptId.get(idA)!,
+          summariesByReceiptId.get(idB)!
+        )
+      ) {
+        const pair = canonicalizeOccurrencePairIds(idA, idB)!;
+        const [lo, hi] = pair;
+        let bucket = qualifiedPairs.get(lo);
+        if (!bucket) {
+          bucket = new Set();
+          qualifiedPairs.set(lo, bucket);
+        }
+        bucket.add(hi);
+      }
+    }
+  }
+  return { receiptById, summariesByReceiptId, qualifiedPairs };
+}
+
 function prepareNormalizedCanonicalPurchaseOccurrenceEvidence(
   receipts: readonly ReceiptRow[]
 ): CanonicalPurchaseOccurrencePreparedEvidence {
@@ -450,12 +617,23 @@ function prepareNormalizedCanonicalPurchaseOccurrenceEvidence(
   const ids = [...summariesByReceiptId.keys()].sort((a, b) =>
     a.localeCompare(b)
   );
+  const theoreticalPairCount = (ids.length * (ids.length - 1)) / 2;
+  const candidatePairs = buildExactOccurrencePairCandidates(
+    ids,
+    summariesByReceiptId
+  );
+  const candidatePairCount = countNestedPairEntries(candidatePairs);
+
   const qualifiedPairs = new Map<string, Set<string>>();
   let pairEvaluationCount = 0;
+  // Preserve baseline i<j visitation order over localeCompare-sorted ids.
   for (let i = 0; i < ids.length; i += 1) {
     for (let j = i + 1; j < ids.length; j += 1) {
       const idA = ids[i]!;
       const idB = ids[j]!;
+      if (!isExactOccurrencePairCandidate(candidatePairs, idA, idB)) {
+        continue;
+      }
       pairEvaluationCount += 1;
       if (
         evaluateCanonicalPurchaseOccurrencePair(
@@ -475,7 +653,14 @@ function prepareNormalizedCanonicalPurchaseOccurrenceEvidence(
     }
   }
 
-  lastPrepareStats = { summarizeCount, pairEvaluationCount };
+  const qualifiedPairCount = countNestedPairEntries(qualifiedPairs);
+  lastPrepareStats = {
+    summarizeCount,
+    theoreticalPairCount,
+    candidatePairCount,
+    pairEvaluationCount,
+    qualifiedPairCount,
+  };
 
   return {
     receiptById,
