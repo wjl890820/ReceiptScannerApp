@@ -243,7 +243,9 @@ describe('Home Next Purchase V0 wiring', () => {
       path.resolve(__dirname, 'homeProgressiveExperience.ts'),
       'utf8'
     );
-    expect(experienceSource).toContain('buildNextPurchaseCandidates(allProfiles');
+    expect(experienceSource).toContain(
+      'buildNextPurchaseCandidatesBound(allProfiles'
+    );
     expect(experienceSource).toContain('takeHomeRepeatProducts(allProfiles)');
     expect(experienceSource).toContain(
       'Home frequent cap must NOT truncate Next Purchase input'

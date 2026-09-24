@@ -464,6 +464,9 @@ function lookupRepeatMerchantProductObservations(
  * Does not use legacy family / canonical / sku as replenishment identities.
  * Only identityLevel === 'merchant_product' observations contribute to merchant
  * or personal Repeat profiles (personal SAME then combines those safe rows).
+ *
+ * Slice H7.3: optional nested home-refresh substages (repeat.*) when timings
+ * are enabled — observational only; no semantic / scheduling change.
  */
 export function buildRepeatProductProfiles(
   analyticsReceipts: readonly ReceiptRow[],
@@ -495,18 +498,34 @@ export function buildRepeatProductProfiles(
     __mpObservationIndexStatsForTests?: RepeatMerchantProductObservationIndexStats | null;
   }
 ): RepeatProductProfile[] {
+  const {
+    measureHomeRefreshStageSync,
+  } = require('./homeRefreshTimings') as typeof import('./homeRefreshTimings');
+
   const supported = filterV1SupportedReceipts(analyticsReceipts as ReceiptRow[]);
   const supportedReceiptIds = new Set(supported.map((receipt) => receipt.id));
   if (supportedReceiptIds.size === 0) return [];
 
-  const occurrenceIndex =
-    options?.purchaseOccurrenceIndex ??
-    (options?.occurrencePreparedEvidence
-      ? buildCanonicalPurchaseOccurrenceIndexFromPrepared(
-          supported,
-          options.occurrencePreparedEvidence
-        )
-      : buildCanonicalPurchaseOccurrenceIndex(supported));
+  const occurrenceIndex = measureHomeRefreshStageSync(
+    'repeat.occurrence',
+    () =>
+      options?.purchaseOccurrenceIndex ??
+      (options?.occurrencePreparedEvidence
+        ? buildCanonicalPurchaseOccurrenceIndexFromPrepared(
+            supported,
+            options.occurrencePreparedEvidence
+          )
+        : buildCanonicalPurchaseOccurrenceIndex(supported)),
+    () => ({
+      receiptCount: supported.length,
+      cacheState: options?.purchaseOccurrenceIndex
+        ? 'prebuilt'
+        : options?.occurrencePreparedEvidence
+          ? 'prepared'
+          : 'fresh',
+      success: true,
+    })
+  );
 
   const observations = observationsFromProductRows(
     productRows,
@@ -528,92 +547,120 @@ export function buildRepeatProductProfiles(
 
   const store =
     options?.identityStore ?? createMemoryProductIdentityStore();
-  const { groups, qualified } = buildIdentityFrequentProductGroups(
-    observations,
-    store
-  ) as {
-    groups: IdentityFrequentProductGroup[];
-    qualified: QualifiedIdentityObservation[];
-  };
+  const { groups, qualified } = measureHomeRefreshStageSync(
+    'repeat.identity',
+    () =>
+      buildIdentityFrequentProductGroups(observations, store) as {
+        groups: IdentityFrequentProductGroup[];
+        qualified: QualifiedIdentityObservation[];
+      },
+    (result) => ({
+      inputRowCount: observations.length,
+      outputRowCount: result.qualified.length,
+      success: true,
+    })
+  );
 
   // Strict qualification: family_only / family_spec / unresolved never contribute,
   // even when they share merchantProductId with a later merchant_product row.
-  const safeQualified = filterRepeatSafeMerchantObservations(qualified);
+  const safeQualified = measureHomeRefreshStageSync(
+    'repeat.safeFilter',
+    () => filterRepeatSafeMerchantObservations(qualified),
+    (result) => ({
+      inputRowCount: qualified.length,
+      outputRowCount: result.length,
+      safeQualifiedCount: result.length,
+      success: true,
+    })
+  );
 
   const personalInventory = options?.personalInventory ?? null;
   const suppressedMemberMerchantProductIds = new Set<string>();
   const profiles: RepeatProductProfile[] = [];
   const personalKeysSeen = new Set<string>();
 
-  if (personalInventory) {
-    for (const row of safeQualified) {
-      if (!supportedReceiptIds.has(row.receiptId)) continue;
-      const resolution = resolvePersonalProductTargetFromInventory(
-        row.merchantProductId,
-        personalInventory
-      );
-      if (resolution.status !== 'ready') continue;
-      const personalKey = resolution.resolved.canonicalTarget.key;
-      if (personalKeysSeen.has(personalKey)) continue;
-      personalKeysSeen.add(personalKey);
-
-      const memberSet = new Set(resolution.resolved.memberMerchantProductIds);
-      const authorized = new Set(resolution.resolved.authorizedRowKeys);
-      const retained: QualifiedIdentityObservation[] = [];
-      for (const candidate of safeQualified) {
-        if (!supportedReceiptIds.has(candidate.receiptId)) continue;
-        if (personalInventory.excludedDuplicateReceiptIds.has(candidate.receiptId)) {
-          continue;
-        }
-        if (!memberSet.has(candidate.merchantProductId)) continue;
-        const rowKey = buildPersonalProductInventoryRowKey(
-          candidate.receiptId,
-          candidate.itemSourceIndex
+  measureHomeRefreshStageSync(
+    'repeat.personalOverlay',
+    () => {
+      if (!personalInventory) return;
+      for (const row of safeQualified) {
+        if (!supportedReceiptIds.has(row.receiptId)) continue;
+        const resolution = resolvePersonalProductTargetFromInventory(
+          row.merchantProductId,
+          personalInventory
         );
-        if (!authorized.has(rowKey)) continue;
-        const inventoryItem = personalInventory.itemsByRowKey.get(rowKey);
-        if (
-          !inventoryItem ||
-          inventoryItem.merchantProductId !== candidate.merchantProductId
-        ) {
+        if (resolution.status !== 'ready') continue;
+        const personalKey = resolution.resolved.canonicalTarget.key;
+        if (personalKeysSeen.has(personalKey)) continue;
+        personalKeysSeen.add(personalKey);
+
+        const memberSet = new Set(resolution.resolved.memberMerchantProductIds);
+        const authorized = new Set(resolution.resolved.authorizedRowKeys);
+        const retained: QualifiedIdentityObservation[] = [];
+        for (const candidate of safeQualified) {
+          if (!supportedReceiptIds.has(candidate.receiptId)) continue;
+          if (
+            personalInventory.excludedDuplicateReceiptIds.has(candidate.receiptId)
+          ) {
+            continue;
+          }
+          if (!memberSet.has(candidate.merchantProductId)) continue;
+          const rowKey = buildPersonalProductInventoryRowKey(
+            candidate.receiptId,
+            candidate.itemSourceIndex
+          );
+          if (!authorized.has(rowKey)) continue;
+          const inventoryItem = personalInventory.itemsByRowKey.get(rowKey);
+          if (
+            !inventoryItem ||
+            inventoryItem.merchantProductId !== candidate.merchantProductId
+          ) {
+            continue;
+          }
+          retained.push(candidate);
+        }
+        if (retained.length === 0) {
+          personalKeysSeen.delete(personalKey);
           continue;
         }
-        retained.push(candidate);
-      }
-      if (retained.length === 0) {
-        personalKeysSeen.delete(personalKey);
-        continue;
-      }
 
-      const displayName =
-        retained
-          .slice()
-          .sort(
-            (left, right) =>
-              right.occurredAt - left.occurredAt ||
-              right.receiptId.localeCompare(left.receiptId)
-          )
-          .map((r) => (r.displayName || r.rawName || '').trim())
-          .find(Boolean) || personalKey;
+        const displayName =
+          retained
+            .slice()
+            .sort(
+              (left, right) =>
+                right.occurredAt - left.occurredAt ||
+                right.receiptId.localeCompare(left.receiptId)
+            )
+            .map((r) => (r.displayName || r.rawName || '').trim())
+            .find(Boolean) || personalKey;
 
-      const profile = profileFromQualifiedRows(
-        'personal_product',
-        personalKey,
-        displayName,
-        retained,
-        occurrenceIndex
-      );
-      if (!profile) {
-        personalKeysSeen.delete(personalKey);
-        continue;
-      }
+        const profile = profileFromQualifiedRows(
+          'personal_product',
+          personalKey,
+          displayName,
+          retained,
+          occurrenceIndex
+        );
+        if (!profile) {
+          personalKeysSeen.delete(personalKey);
+          continue;
+        }
 
-      profiles.push(profile);
-      for (const memberId of memberSet) {
-        suppressedMemberMerchantProductIds.add(memberId);
+        profiles.push(profile);
+        for (const memberId of memberSet) {
+          suppressedMemberMerchantProductIds.add(memberId);
+        }
       }
-    }
-  }
+    },
+    () => ({
+      personalProfileCount: profiles.filter(
+        (p) => p.identityKind === 'personal_product'
+      ).length,
+      suppressedMpCount: suppressedMemberMerchantProductIds.size,
+      success: true,
+    })
+  );
 
   // Iterate MPs that appear in safe observations (not merely in frequent groups
   // that may have been inflated by family_only / family_spec rows).
@@ -621,59 +668,96 @@ export function buildRepeatProductProfiles(
   const groupByKey = new Map(groups.map((group) => [group.key, group]));
   const useMpIndex =
     options?.__useMerchantProductObservationIndexForTests !== false;
-  const mpIndexStats = options?.__mpObservationIndexStatsForTests ?? null;
-  if (mpIndexStats) {
-    mpIndexStats.indexRowVisits = 0;
-    mpIndexStats.bucketLookups = 0;
-  }
+  const mpIndexStats: RepeatMerchantProductObservationIndexStats =
+    options?.__mpObservationIndexStatsForTests ?? {
+      indexRowVisits: 0,
+      bucketLookups: 0,
+    };
+  mpIndexStats.indexRowVisits = 0;
+  mpIndexStats.bucketLookups = 0;
+
   const mpObservationIndex = useMpIndex
-    ? buildRepeatMerchantProductObservationIndex(
-        safeQualified,
-        supportedReceiptIds,
-        mpIndexStats
+    ? measureHomeRefreshStageSync(
+        'repeat.mpIndexBuild',
+        () =>
+          buildRepeatMerchantProductObservationIndex(
+            safeQualified,
+            supportedReceiptIds,
+            mpIndexStats
+          ),
+        () => ({
+          mpIndexRowVisits: mpIndexStats.indexRowVisits,
+          safeQualifiedCount: safeQualified.length,
+          success: true,
+        })
       )
     : null;
 
-  for (const mpId of [...safeMpIds].sort((left, right) =>
-    left.localeCompare(right)
-  )) {
-    if (suppressedMemberMerchantProductIds.has(mpId)) continue;
-    const rows = useMpIndex
-      ? lookupRepeatMerchantProductObservations(
-          mpObservationIndex!,
+  measureHomeRefreshStageSync(
+    'repeat.mpProfiles',
+    () => {
+      for (const mpId of [...safeMpIds].sort((left, right) =>
+        left.localeCompare(right)
+      )) {
+        if (suppressedMemberMerchantProductIds.has(mpId)) continue;
+        const rows = useMpIndex
+          ? lookupRepeatMerchantProductObservations(
+              mpObservationIndex!,
+              mpId,
+              mpIndexStats
+            )
+          : __baselineQualifiedRowsForMerchantProductForTests(
+              safeQualified,
+              mpId,
+              supportedReceiptIds
+            );
+        if (rows.length === 0) continue;
+        const group = groupByKey.get(mpId);
+        const displayName =
+          group?.displayName ||
+          rows
+            .slice()
+            .sort(
+              (left, right) =>
+                right.occurredAt - left.occurredAt ||
+                right.receiptId.localeCompare(left.receiptId)
+            )
+            .map((r) => (r.displayName || r.rawName || '').trim())
+            .find(Boolean) ||
+          mpId;
+        const profile = profileFromQualifiedRows(
+          'merchant_product',
           mpId,
-          mpIndexStats
-        )
-      : __baselineQualifiedRowsForMerchantProductForTests(
-          safeQualified,
-          mpId,
-          supportedReceiptIds
+          displayName,
+          rows,
+          occurrenceIndex
         );
-    if (rows.length === 0) continue;
-    const group = groupByKey.get(mpId);
-    const displayName =
-      group?.displayName ||
-      rows
-        .slice()
-        .sort(
-          (left, right) =>
-            right.occurredAt - left.occurredAt ||
-            right.receiptId.localeCompare(left.receiptId)
-        )
-        .map((r) => (r.displayName || r.rawName || '').trim())
-        .find(Boolean) ||
-      mpId;
-    const profile = profileFromQualifiedRows(
-      'merchant_product',
-      mpId,
-      displayName,
-      rows,
-      occurrenceIndex
-    );
-    if (profile) profiles.push(profile);
-  }
+        if (profile) profiles.push(profile);
+      }
+    },
+    () => ({
+      safeMpTargetCount: safeMpIds.size,
+      mpBucketLookups: useMpIndex ? mpIndexStats.bucketLookups : 0,
+      success: true,
+    })
+  );
 
-  return profiles.sort(compareRepeatProfiles);
+  return measureHomeRefreshStageSync(
+    'repeat.profileSort',
+    () => profiles.sort(compareRepeatProfiles),
+    () => ({
+      finalProfileCount: profiles.length,
+      safeQualifiedCount: safeQualified.length,
+      safeMpTargetCount: safeMpIds.size,
+      personalProfileCount: profiles.filter(
+        (p) => p.identityKind === 'personal_product'
+      ).length,
+      suppressedMpCount: suppressedMemberMerchantProductIds.size,
+      mpIndexRowVisits: useMpIndex ? mpIndexStats.indexRowVisits : 0,
+      mpBucketLookups: useMpIndex ? mpIndexStats.bucketLookups : 0,
+      success: true,
+    })
+  );
 }
 
 /** Home presentation cap — not applied inside the SSOT builder. */

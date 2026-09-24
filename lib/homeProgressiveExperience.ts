@@ -27,6 +27,24 @@ import { filterV1SupportedReceipts } from './merchantType';
 import type { PersonalProductEndpointInventory } from './personalProductEndpointInventory';
 import { measureHomeRefreshStageSync } from './homeRefreshTimings';
 
+/**
+ * @internal H7.3b — test-only hooks for buildHomeRepeatSurfaces failure/order
+ * regressions. Null in production; no authority / cache / scheduling.
+ */
+export type HomeRepeatSurfacesTestHooks = {
+  mapFrequentProduct?: typeof mapRepeatProductProfileToHomeFrequentProduct;
+  buildNextPurchaseCandidates?: typeof buildNextPurchaseCandidates;
+};
+
+let __homeRepeatSurfacesTestHooksForTests: HomeRepeatSurfacesTestHooks | null =
+  null;
+
+export function __setHomeRepeatSurfacesTestHooksForTests(
+  hooks: HomeRepeatSurfacesTestHooks | null
+): void {
+  __homeRepeatSurfacesTestHooksForTests = hooks;
+}
+
 export type ProgressiveHomeStage =
   | 'empty'
   | 'first'
@@ -118,6 +136,7 @@ function buildHomeRepeatSurfaces(args: {
     // Uncapped Repeat SSOT — Home frequent cap must NOT truncate Next Purchase input.
     // Receipt-ID eligibility MUST use the long-term analytics universe, not the
     // newest-200 Home display slice.
+    // Nested under home.progressive.repeatBuild (H7.3 substages live inside).
     const allProfiles = buildRepeatProductProfiles(
       args.longTermAnalyticsReceipts,
       args.productRows,
@@ -126,13 +145,32 @@ function buildHomeRepeatSurfaces(args: {
         occurrencePreparedEvidence: args.occurrencePreparedEvidence,
       }
     );
+    // Baseline order (H7.3a): profiles → frequent presentation → Next Purchase.
+    const mapFrequentProduct =
+      __homeRepeatSurfacesTestHooksForTests?.mapFrequentProduct ??
+      mapRepeatProductProfileToHomeFrequentProduct;
+    const buildNextPurchaseCandidatesBound =
+      __homeRepeatSurfacesTestHooksForTests?.buildNextPurchaseCandidates ??
+      buildNextPurchaseCandidates;
+    const frequentProducts = takeHomeRepeatProducts(allProfiles).map(
+      mapFrequentProduct
+    );
+    const nextPurchaseCandidates = measureHomeRefreshStageSync(
+      'repeat.nextPurchase',
+      () =>
+        buildNextPurchaseCandidatesBound(allProfiles, {
+          now: args.now,
+        }),
+      (candidates) => ({
+        inputRowCount: allProfiles.length,
+        outputRowCount: candidates.length,
+        finalProfileCount: allProfiles.length,
+        success: true,
+      })
+    );
     return {
-      frequentProducts: takeHomeRepeatProducts(allProfiles).map(
-        mapRepeatProductProfileToHomeFrequentProduct
-      ),
-      nextPurchaseCandidates: buildNextPurchaseCandidates(allProfiles, {
-        now: args.now,
-      }),
+      frequentProducts,
+      nextPurchaseCandidates,
       repeatProfiles: allProfiles,
     };
   } catch {

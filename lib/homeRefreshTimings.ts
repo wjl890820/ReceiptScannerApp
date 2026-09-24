@@ -42,7 +42,16 @@ export type HomeRefreshTimingStage =
   /** Slice H1.1: buildHomeRepeatSurfaces / Repeat+NP construction. */
   | 'home.progressive.repeatBuild'
   /** Slice H4.1: Phase-A applyOccurrenceRepresentativeUniverseCached wall. */
-  | 'home.occurrence.apply';
+  | 'home.occurrence.apply'
+  /** Slice H7.3: Repeat cold-path substages (nested under repeatBuild). */
+  | 'repeat.occurrence'
+  | 'repeat.identity'
+  | 'repeat.safeFilter'
+  | 'repeat.personalOverlay'
+  | 'repeat.mpIndexBuild'
+  | 'repeat.mpProfiles'
+  | 'repeat.profileSort'
+  | 'repeat.nextPurchase';
 
 export type HomeRefreshTimingSample = {
   stage: HomeRefreshTimingStage;
@@ -60,6 +69,14 @@ export type HomeRefreshTimingSample = {
   resolvedRowCount?: number;
   /** Slice H4.1: occurrence cache decision when cheaply available. */
   cacheState?: string;
+  /** Slice H7.3: non-PII Repeat structural counts. */
+  safeQualifiedCount?: number;
+  safeMpTargetCount?: number;
+  personalProfileCount?: number;
+  suppressedMpCount?: number;
+  finalProfileCount?: number;
+  mpIndexRowVisits?: number;
+  mpBucketLookups?: number;
 };
 
 type StageMeta = Omit<HomeRefreshTimingSample, 'stage' | 'durationMs'>;
@@ -105,6 +122,27 @@ function diagnosticMetaFromSample(
     meta.resolvedRowCount = sample.resolvedRowCount;
   }
   if (sample.cacheState != null) meta.cacheState = sample.cacheState;
+  if (sample.safeQualifiedCount != null) {
+    meta.safeQualifiedCount = sample.safeQualifiedCount;
+  }
+  if (sample.safeMpTargetCount != null) {
+    meta.safeMpTargetCount = sample.safeMpTargetCount;
+  }
+  if (sample.personalProfileCount != null) {
+    meta.personalProfileCount = sample.personalProfileCount;
+  }
+  if (sample.suppressedMpCount != null) {
+    meta.suppressedMpCount = sample.suppressedMpCount;
+  }
+  if (sample.finalProfileCount != null) {
+    meta.finalProfileCount = sample.finalProfileCount;
+  }
+  if (sample.mpIndexRowVisits != null) {
+    meta.mpIndexRowVisits = sample.mpIndexRowVisits;
+  }
+  if (sample.mpBucketLookups != null) {
+    meta.mpBucketLookups = sample.mpBucketLookups;
+  }
   return meta;
 }
 

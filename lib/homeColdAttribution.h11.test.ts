@@ -94,6 +94,13 @@ function privacyKeysOf(sample: HomeRefreshTimingSample): string[] {
         'analyticsReceiptCount',
         'productRowCount',
         'cacheState',
+        'safeQualifiedCount',
+        'safeMpTargetCount',
+        'personalProfileCount',
+        'suppressedMpCount',
+        'finalProfileCount',
+        'mpIndexRowVisits',
+        'mpBucketLookups',
       ].includes(k)
   );
 }
