@@ -126,6 +126,7 @@ describe('Shopping List 1.0 UI wiring', () => {
       expect(json.productDetail.addToShoppingList).toBeTruthy();
       expect(json.productDetail.removeFromShoppingList).toBeTruthy();
       expect(json.shoppingList.openProductDetailA11y).toBeTruthy();
+      expect(json.shoppingList.scanReceipt).toBeTruthy();
     }
   });
 });

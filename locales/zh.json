@@ -940,6 +940,7 @@
     "alreadyOnList": "该商品已在购物清单中。",
     "increaseQuantityA11y": "增加数量，当前 {quantity}",
     "decreaseQuantityA11y": "减少数量，当前 {quantity}",
-    "openProductDetailA11y": "打开 {name} 的商品详情"
+    "openProductDetailA11y": "打开 {name} 的商品详情",
+    "scanReceipt": "扫描小票"
   }
 }

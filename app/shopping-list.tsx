@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MerunoText } from '@/components/primitives/MerunoText';
 import { SectionTitle } from '@/components/SectionTitle';
+import { useReceiptScanLauncher } from '@/hooks/useReceiptScanLauncher';
 import { t } from '@/lib/i18n';
 import { navigateBackOrHome } from '@/lib/navigationBack';
 import {
@@ -43,6 +44,10 @@ export default function ShoppingListScreen() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  const {
+    launchReceiptScan,
+    isScanning: receiptScanning,
+  } = useReceiptScanLauncher();
 
   const onBack = useCallback(() => {
     navigateBackOrHome(router);
@@ -331,6 +336,24 @@ export default function ShoppingListScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
+      <Pressable
+        onPress={launchReceiptScan}
+        disabled={receiptScanning || busy}
+        accessibilityRole="button"
+        accessibilityLabel={t('shoppingList.scanReceipt')}
+        style={({ pressed }) => [
+          styles.scanReceiptCta,
+          pressed && styles.pressed,
+          (receiptScanning || busy) && styles.scanReceiptCtaDisabled,
+        ]}
+      >
+        <Text style={styles.scanReceiptCtaText}>
+          {receiptScanning
+            ? t('home.scan.processing')
+            : t('shoppingList.scanReceipt')}
+        </Text>
+      </Pressable>
+
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -458,6 +481,24 @@ const styles = StyleSheet.create({
   },
   headerSpacer: {
     minWidth: 56,
+  },
+  scanReceiptCta: {
+    marginHorizontal: UI_SPACING.lg,
+    marginBottom: UI_SPACING.sm,
+    minHeight: 44,
+    borderRadius: UI_RADIUS.control,
+    backgroundColor: UI_COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: UI_SPACING.lg,
+  },
+  scanReceiptCtaDisabled: {
+    opacity: 0.55,
+  },
+  scanReceiptCtaText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
   composer: {
     flexDirection: 'row',

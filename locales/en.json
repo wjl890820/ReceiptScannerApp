@@ -940,6 +940,7 @@
     "alreadyOnList": "This item is already on your shopping list.",
     "increaseQuantityA11y": "Increase quantity, currently {quantity}",
     "decreaseQuantityA11y": "Decrease quantity, currently {quantity}",
-    "openProductDetailA11y": "Open product details for {name}"
+    "openProductDetailA11y": "Open product details for {name}",
+    "scanReceipt": "Scan Receipt"
   }
 }
