@@ -24,6 +24,7 @@ import {
 import { buildIdentityNameStem } from './productIdentityNameStem';
 import {
   __baselineStemEqualCandidatesForTests,
+  __emptyResolveIdentityStemPhaseStatsForTests,
   resolveReceiptItemIdentity,
   type ResolveIdentityInput,
   type ResolveIdentityStemPhaseStats,
@@ -53,14 +54,7 @@ const VOLUME_500_ATTRS: ProductAttributes = {
 };
 
 function emptyStats(): ResolveIdentityStemPhaseStats {
-  return {
-    catalogLists: 0,
-    stemCandidateChecks: 0,
-    candidateStemComputations: 0,
-    stemIndexLookups: 0,
-    stemIndexedCandidateChecks: 0,
-    fuzzyCandidateChecks: 0,
-  };
+  return __emptyResolveIdentityStemPhaseStatsForTests();
 }
 
 function upsertMp(

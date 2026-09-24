@@ -60,9 +60,19 @@ export type ResolveIdentityInput = {
   evidence?: ResolveIdentityEvidence;
 };
 
-/** @internal H8.1 test-only stem-phase / fuzzy structural counters. */
+/**
+ * @internal H8.1 / H8.2 test-only structural counters.
+ * `catalogLists` aliases `catalogMaterializations` for H8.1 callers.
+ */
 export type ResolveIdentityStemPhaseStats = {
+  resolverCalls: number;
+  catalogMaterializations: number;
+  /** @deprecated Prefer catalogMaterializations; kept equal for H8.1. */
   catalogLists: number;
+  exactHits: number;
+  stemHits: number;
+  stemRejected: number;
+  fuzzyEntries: number;
   stemCandidateChecks: number;
   candidateStemComputations: number;
   stemIndexLookups: number;
@@ -76,9 +86,32 @@ export type ResolveIdentityOptions = {
    * Default / omitted = stem index.
    */
   __useMerchantProductStemIndexForTests?: boolean;
-  /** @internal H8.1 operation-count seam. */
+  /**
+   * @internal H8.2 — when true, materialize catalog after link / before exact
+   * (pre-H8.2 eager HEAD). Default / omitted = lazy (materialize at fuzzy / baseline stem).
+   */
+  __eagerCatalogMaterializationForTests?: boolean;
+  /** @internal H8.1 / H8.2 operation-count seam. */
   __stemPhaseStatsForTests?: ResolveIdentityStemPhaseStats | null;
 };
+
+/** @internal Empty counter bag for H8.2 tests. */
+export function __emptyResolveIdentityStemPhaseStatsForTests(): ResolveIdentityStemPhaseStats {
+  return {
+    resolverCalls: 0,
+    catalogMaterializations: 0,
+    catalogLists: 0,
+    exactHits: 0,
+    stemHits: 0,
+    stemRejected: 0,
+    fuzzyEntries: 0,
+    stemCandidateChecks: 0,
+    candidateStemComputations: 0,
+    stemIndexLookups: 0,
+    stemIndexedCandidateChecks: 0,
+    fuzzyCandidateChecks: 0,
+  };
+}
 
 /**
  * @internal Baseline phase-2b candidate discovery: linear catalog scan + stem
@@ -249,7 +282,9 @@ export function resolveReceiptItemIdentity(
   options?: ResolveIdentityOptions
 ): ResolveIdentityResult {
   const stats = options?.__stemPhaseStatsForTests ?? null;
+  if (stats) stats.resolverCalls += 1;
   const useStemIndex = options?.__useMerchantProductStemIndexForTests !== false;
+  const eagerCatalog = options?.__eagerCatalogMaterializationForTests === true;
 
   const merchantKey = scopeMerchantKeyForIdentity(input.merchantKey, input.receiptId);
   const rawName = typeof input.rawName === 'string' ? input.rawName : '';
@@ -273,6 +308,19 @@ export function resolveReceiptItemIdentity(
     evidence.aliasCanonicalName?.trim() ||
     evidence.dictionaryCanonicalName?.trim() ||
     null;
+
+  // H8.2: at most one listMerchantProducts per resolve call.
+  let catalog: MerchantProductRecord[] | null = null;
+  const ensureCatalog = (): MerchantProductRecord[] => {
+    if (catalog === null) {
+      catalog = store.listMerchantProducts(merchantKey);
+      if (stats) {
+        stats.catalogMaterializations += 1;
+        stats.catalogLists += 1;
+      }
+    }
+    return catalog;
+  };
 
   // 1) Cache hit — bind to merchant + resolverVersion (never reuse across merchants/versions)
   if (input.receiptId != null && input.itemSourceIndex != null) {
@@ -343,8 +391,10 @@ export function resolveReceiptItemIdentity(
     }
   }
 
-  if (stats) stats.catalogLists += 1;
-  const catalog = store.listMerchantProducts(merchantKey);
+  // Pre-H8.2 eager HEAD: materialize after link, before exact/stem/alias.
+  if (eagerCatalog) {
+    ensureCatalog();
+  }
 
   const inquiryStem = buildIdentityNameStem(
     norm.normalizedName || norm.comparisonKey || rawName
@@ -364,6 +414,7 @@ export function resolveReceiptItemIdentity(
         `${exact.canonicalDisplayName ?? ''} ${exact.normalizedName ?? ''}`
       );
       if (compat.ok) {
+        if (stats) stats.exactHits += 1;
         const legacyFamily = resolveProductIdentity({ rawName }).productFamilyKey;
         const weak = classifyGenericWeakIdentity(
           norm.normalizedName,
@@ -398,19 +449,22 @@ export function resolveReceiptItemIdentity(
   // H8.1: insertion-order stem index replaces full-catalog stem discovery;
   // downstream structural/compat gates and first-winner semantics unchanged.
   if (inquiryStem.length >= 2) {
+    let stemSawCandidates = false;
     const stemCandidates = useStemIndex
       ? (() => {
           if (stats) stats.stemIndexLookups += 1;
           return store.findMerchantProductsByNameStem(merchantKey, inquiryStem);
         })()
-      : __baselineStemEqualCandidatesForTests(catalog, inquiryStem, stats);
+      : __baselineStemEqualCandidatesForTests(
+          ensureCatalog(),
+          inquiryStem,
+          stats
+        );
 
     for (const candidate of stemCandidates) {
+      stemSawCandidates = true;
       if (stats) {
         if (useStemIndex) stats.stemIndexedCandidateChecks += 1;
-        else {
-          // baseline path already counted equality checks in oracle helper
-        }
       }
       // Indexed path: stem equality already applied; still run gates in order.
       // Baseline path: helper already filtered by stem equality.
@@ -437,6 +491,7 @@ export function resolveReceiptItemIdentity(
         conflictsRejected.push(...compat.conflicts);
         continue;
       }
+      if (stats) stats.stemHits += 1;
       const legacyFamily = resolveProductIdentity({ rawName }).productFamilyKey;
       const weak = classifyGenericWeakIdentity(
         norm.normalizedName,
@@ -461,6 +516,7 @@ export function resolveReceiptItemIdentity(
         conflictsRejected,
       });
     }
+    if (stemSawCandidates && stats) stats.stemRejected += 1;
   }
 
   // 3–4) Alias / dictionary exact
@@ -500,9 +556,11 @@ export function resolveReceiptItemIdentity(
     }
   }
 
-  // 5) Same-merchant fuzzy only
+  // 5) Same-merchant fuzzy only — H8.2: first production full-catalog consumer.
+  if (stats) stats.fuzzyEntries += 1;
+  const fuzzyCatalog = ensureCatalog();
   let bestAuto: { merchant: MerchantProductRecord; score: number } | null = null;
-  for (const candidate of catalog) {
+  for (const candidate of fuzzyCatalog) {
     if (stats) stats.fuzzyCandidateChecks += 1;
     const score = combinedNameSimilarityAtOrAbovePotential(
       norm.comparisonKey,
