@@ -14,7 +14,10 @@ import {
   type ProductIdentitySourceV1,
   type ReceiptItemIdentityLink,
 } from './productIdentityContract';
-import { normalizeProductForIdentity } from './normalizeProductForIdentity';
+import {
+  normalizeProductForIdentityCached,
+  type ProductIdentityNormalizePassCache,
+} from './normalizeProductForIdentity';
 import { buildItemIdentityFingerprint } from './productIdentityFingerprint';
 import {
   attributesAreCompatible,
@@ -91,6 +94,11 @@ export type ResolveIdentityOptions = {
    * (pre-H8.2 eager HEAD). Default / omitted = lazy (materialize at fuzzy / baseline stem).
    */
   __eagerCatalogMaterializationForTests?: boolean;
+  /**
+   * H8.4 — pass-local normalize memo owned by the consumer/inventory pass.
+   * Resolver never creates or shares a module-level cache.
+   */
+  normalizePassCache?: ProductIdentityNormalizePassCache | null;
   /** @internal H8.1 / H8.2 operation-count seam. */
   __stemPhaseStatsForTests?: ResolveIdentityStemPhaseStats | null;
 };
@@ -285,10 +293,11 @@ export function resolveReceiptItemIdentity(
   if (stats) stats.resolverCalls += 1;
   const useStemIndex = options?.__useMerchantProductStemIndexForTests !== false;
   const eagerCatalog = options?.__eagerCatalogMaterializationForTests === true;
+  const normalizePassCache = options?.normalizePassCache ?? null;
 
   const merchantKey = scopeMerchantKeyForIdentity(input.merchantKey, input.receiptId);
   const rawName = typeof input.rawName === 'string' ? input.rawName : '';
-  const norm = normalizeProductForIdentity(rawName);
+  const norm = normalizeProductForIdentityCached(rawName, normalizePassCache);
   const attributes = norm.attributes ?? emptyProductAttributes();
   const fingerprint = buildItemIdentityFingerprint({
     rawName,
@@ -521,7 +530,10 @@ export function resolveReceiptItemIdentity(
 
   // 3–4) Alias / dictionary exact
   if (strongName) {
-    const strong = normalizeProductForIdentity(strongName);
+    const strong = normalizeProductForIdentityCached(
+      strongName,
+      normalizePassCache
+    );
     const hit = store.findMerchantProductByComparisonKey(
       merchantKey,
       strong.comparisonKey

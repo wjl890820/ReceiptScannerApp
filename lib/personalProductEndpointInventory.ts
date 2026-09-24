@@ -23,6 +23,10 @@ import {
   type ProductIdentityLevel,
 } from './productIdentityContract';
 import {
+  resolveProductIdentityNormalizePassCache,
+  type ProductIdentityNormalizePassCache,
+} from './normalizeProductForIdentity';
+import {
   isUnknownMerchantScopeKey,
   resolveReceiptItemIdentity,
   scopeMerchantKeyForIdentity,
@@ -261,12 +265,20 @@ export type BuildPersonalProductEndpointInventoryInput = {
   >;
   /** Called once per row that runs resolveReceiptItemIdentity (perf / tests). */
   onIdentityResolve?: () => void;
+  /**
+   * H8.4 — pass-local normalize memo for this inventory build.
+   * When omitted, a fresh cache is created for the pass.
+   */
+  normalizePassCache?: ProductIdentityNormalizePassCache | null;
+  /** @internal Disable pass-local normalize memo (eager baseline). */
+  __disableNormalizePassCacheForTests?: boolean;
 };
 
 export function buildPersonalProductEndpointInventory(
   input: BuildPersonalProductEndpointInventoryInput
 ): PersonalProductEndpointInventoryLoadResult {
   const store = input.store ?? createMemoryProductIdentityStore();
+  const normalizePassCache = resolveProductIdentityNormalizePassCache(input);
   const sortedRows = [...input.sourceRows].sort(
     (left, right) =>
       left.occurredAt - right.occurredAt ||
@@ -298,7 +310,8 @@ export function buildPersonalProductEndpointInventory(
         quantity: row.purchaseQuantity,
         lineTotal: row.lineTotal,
       },
-      store
+      store,
+      { normalizePassCache }
     );
     input.onIdentityResolve?.();
 

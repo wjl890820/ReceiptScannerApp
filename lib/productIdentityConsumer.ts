@@ -3,7 +3,11 @@
  * Derived / in-memory only. No mass DB write. Gemini additional calls = 0.
  */
 
-import { normalizeProductForIdentity } from './normalizeProductForIdentity';
+import {
+  normalizeProductForIdentityCached,
+  resolveProductIdentityNormalizePassCache,
+  type ProductIdentityNormalizePassCache,
+} from './normalizeProductForIdentity';
 import {
   buildMerchantProductPriceHistory,
   computePurchaseUnitPrice,
@@ -32,6 +36,17 @@ import {
   type MerchantProductRecord,
   type ProductIdentityStore,
 } from './productIdentityStore';
+
+export type IdentityConsumerNormalizePassOptions = {
+  /**
+   * H8.4 — explicit pass-local normalize cache. When omitted, a fresh cache is
+   * created for this consumer pass. Pass null with
+   * `__disableNormalizePassCacheForTests` for baseline oracle.
+   */
+  normalizePassCache?: ProductIdentityNormalizePassCache | null;
+  /** @internal Disable pass-local normalize memo (eager baseline). */
+  __disableNormalizePassCacheForTests?: boolean;
+};
 
 export type IdentityConsumerObservation = {
   receiptId: string;
@@ -167,7 +182,8 @@ type IdentityDraft = IdentityConsumerObservation & {
 function pushIdentityDraft(
   draft: IdentityDraft[],
   obs: IdentityConsumerObservation,
-  store: ProductIdentityStore
+  store: ProductIdentityStore,
+  normalizePassCache: ProductIdentityNormalizePassCache | null
 ): void {
   const name = (obs.rawName || '').trim();
   if (!name) return;
@@ -184,7 +200,8 @@ function pushIdentityDraft(
       quantity: obs.quantity,
       lineTotal: obs.lineTotal,
     },
-    store
+    store,
+    { normalizePassCache }
   );
   draft.push({
     ...obs,
@@ -277,7 +294,8 @@ async function preparePeerBucketsFromDraftAsync(
 
 function qualifyIdentityDraftRow(
   row: IdentityDraft,
-  preparedPeersByMp: ReadonlyMap<string, PreparedPeerPriceBucket>
+  preparedPeersByMp: ReadonlyMap<string, PreparedPeerPriceBucket>,
+  normalizePassCache: ProductIdentityNormalizePassCache | null
 ): QualifiedIdentityObservation | null {
   if (!row.merchantProductId) return null;
   const bucket = preparedPeersByMp.get(row.merchantProductId);
@@ -285,7 +303,10 @@ function qualifyIdentityDraftRow(
     bucket != null
       ? leaveOneOutPeerStats(bucket, row.purchaseUnitPrice)
       : null;
-  const attrs = normalizeProductForIdentity(row.rawName).attributes;
+  const attrs = normalizeProductForIdentityCached(
+    row.rawName,
+    normalizePassCache
+  ).attributes;
   const quality = evaluatePriceObservationQuality({
     lineTotal: row.lineTotal,
     quantity: row.quantity,
@@ -311,12 +332,13 @@ function qualifyIdentityDraftRow(
 }
 
 function qualifyIdentityDraft(
-  draft: readonly IdentityDraft[]
+  draft: readonly IdentityDraft[],
+  normalizePassCache: ProductIdentityNormalizePassCache | null
 ): QualifiedIdentityObservation[] {
   const preparedPeersByMp = preparePeerBucketsFromDraft(draft);
   const qualified: QualifiedIdentityObservation[] = [];
   for (const row of draft) {
-    const q = qualifyIdentityDraftRow(row, preparedPeersByMp);
+    const q = qualifyIdentityDraftRow(row, preparedPeersByMp, normalizePassCache);
     if (q) qualified.push(q);
   }
   return qualified;
@@ -324,24 +346,30 @@ function qualifyIdentityDraft(
 
 export function resolveIdentityConsumerObservations(
   observations: readonly IdentityConsumerObservation[],
-  store: ProductIdentityStore = createMemoryProductIdentityStore()
+  store: ProductIdentityStore = createMemoryProductIdentityStore(),
+  options?: IdentityConsumerNormalizePassOptions
 ): {
   store: ProductIdentityStore;
   qualified: QualifiedIdentityObservation[];
 } {
+  const normalizePassCache = resolveProductIdentityNormalizePassCache(options);
   const draft: IdentityDraft[] = [];
   for (const obs of observations) {
-    pushIdentityDraft(draft, obs, store);
+    pushIdentityDraft(draft, obs, store, normalizePassCache);
   }
-  return { store, qualified: qualifyIdentityDraft(draft) };
+  return {
+    store,
+    qualified: qualifyIdentityDraft(draft, normalizePassCache),
+  };
 }
 
-export type ResolveIdentityConsumerObservationsAsyncOptions = {
-  shouldCancel?: () => boolean;
-  /** Yield after this many identity resolves. Default 64. */
-  rowsPerChunk?: number;
-  yieldFn?: () => Promise<void>;
-};
+export type ResolveIdentityConsumerObservationsAsyncOptions =
+  IdentityConsumerNormalizePassOptions & {
+    shouldCancel?: () => boolean;
+    /** Yield after this many identity resolves. Default 64. */
+    rowsPerChunk?: number;
+    yieldFn?: () => Promise<void>;
+  };
 
 /**
  * Same semantics as resolveIdentityConsumerObservations, with cooperative yields
@@ -357,6 +385,7 @@ export async function resolveIdentityConsumerObservationsAsync(
 } | null> {
   const shouldCancel = options.shouldCancel ?? (() => false);
   const rowsPerChunk = Math.max(1, options.rowsPerChunk ?? 64);
+  const normalizePassCache = resolveProductIdentityNormalizePassCache(options);
 
   if (shouldCancel()) return null;
   const { yieldAnalysisPriceChunk, recordAnalysisPriceChunkTiming } =
@@ -369,7 +398,7 @@ export async function resolveIdentityConsumerObservationsAsync(
   let chunkStarted = Date.now();
   for (const obs of observations) {
     if (shouldCancel()) return null;
-    pushIdentityDraft(draft, obs, store);
+    pushIdentityDraft(draft, obs, store, normalizePassCache);
     sinceYield += 1;
     if (sinceYield >= rowsPerChunk) {
       // Capture sync duration before any await/yield.
@@ -404,7 +433,7 @@ export async function resolveIdentityConsumerObservationsAsync(
   let qualifyChunkStarted = Date.now();
   for (const row of draft) {
     if (shouldCancel()) return null;
-    const q = qualifyIdentityDraftRow(row, preparedPeersByMp);
+    const q = qualifyIdentityDraftRow(row, preparedPeersByMp, normalizePassCache);
     if (q) qualified.push(q);
     qualifySinceYield += 1;
     if (qualifySinceYield >= rowsPerChunk) {
@@ -553,14 +582,15 @@ export function buildIdentityMerchantProductHistoryView(
 
 export function buildIdentityFrequentProductGroups(
   observations: readonly IdentityConsumerObservation[],
-  store: ProductIdentityStore = createMemoryProductIdentityStore()
+  store: ProductIdentityStore = createMemoryProductIdentityStore(),
+  options?: IdentityConsumerNormalizePassOptions
 ): {
   groups: IdentityFrequentProductGroup[];
   qualified: QualifiedIdentityObservation[];
   store: ProductIdentityStore;
 } {
   const { qualified, store: usedStore } =
-    resolveIdentityConsumerObservations(observations, store);
+    resolveIdentityConsumerObservations(observations, store, options);
   const byMp = new Map<string, QualifiedIdentityObservation[]>();
   for (const q of qualified) {
     const list = byMp.get(q.merchantProductId) ?? [];
