@@ -48,6 +48,10 @@ type ProgressiveHomeInsightsProps = {
   activeShoppingListQuantities?: ReadonlyMap<string, number>;
   onShoppingListPress?: () => void;
   onAddNextPurchaseToShoppingList?: (candidate: NextPurchaseCandidate) => void;
+  onAddFrequentProductToShoppingList?: (
+    product: MilestoneFrequentProduct
+  ) => void;
+  frequentAddBusy?: boolean;
 };
 
 function categoryLabel(category: string): string {
@@ -74,6 +78,8 @@ export function ProgressiveHomeInsights({
   activeShoppingListQuantities,
   onShoppingListPress,
   onAddNextPurchaseToShoppingList,
+  onAddFrequentProductToShoppingList,
+  frequentAddBusy = false,
 }: ProgressiveHomeInsightsProps) {
   const showRecent =
     experience.stage !== 'empty' && experience.latestPurchase != null;
@@ -341,6 +347,9 @@ export function ProgressiveHomeInsights({
             <HomeFrequentProductList
               products={experience.frequentProducts}
               onPress={onProductPress}
+              activeShoppingListIdentities={activeShoppingListIdentities}
+              onAddToShoppingList={onAddFrequentProductToShoppingList}
+              addBusy={frequentAddBusy}
             />
           ) : (
             <MerunoText role="meta" tone="secondary" style={styles.fallbackText}>

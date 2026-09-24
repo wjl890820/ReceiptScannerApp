@@ -67,7 +67,11 @@
         "quantity": "合計 {count} 点",
         "preparing": "信頼できる一覧を作るには、商品の記録がまだ足りません。",
         "viewHistory": "購入履歴を見る",
-        "openHistoryA11y": "{name}の購入履歴を見る"
+        "openHistoryA11y": "{name}の購入履歴を見る",
+        "add": "追加",
+        "added": "リストに追加済み",
+        "addA11y": "{name}を買い物リストに追加",
+        "addedA11y": "{name}は買い物リストに追加済み"
       },
       "profile": {
         "title": "買い物プロフィール",

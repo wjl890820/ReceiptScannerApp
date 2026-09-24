@@ -67,7 +67,11 @@
         "quantity": "共 {count} 件",
         "preparing": "已记录的商品还不足以形成可靠的常购列表。",
         "viewHistory": "查看购买记录",
-        "openHistoryA11y": "查看{name}的购买记录"
+        "openHistoryA11y": "查看{name}的购买记录",
+        "add": "添加",
+        "added": "已在清单",
+        "addA11y": "将{name}加入购物清单",
+        "addedA11y": "{name}已在购物清单"
       },
       "profile": {
         "title": "购物画像",

@@ -67,7 +67,11 @@
         "quantity": "{count} items total",
         "preparing": "There are not yet enough recorded products for a reliable frequent list.",
         "viewHistory": "View purchase history",
-        "openHistoryA11y": "View purchase history for {name}"
+        "openHistoryA11y": "View purchase history for {name}",
+        "add": "Add",
+        "added": "On List",
+        "addA11y": "Add {name} to shopping list",
+        "addedA11y": "{name} is already on the shopping list"
       },
       "profile": {
         "title": "Shopping Profile",

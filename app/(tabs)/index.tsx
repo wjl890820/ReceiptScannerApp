@@ -99,10 +99,13 @@ import {
 import { buildTrustedProductIdentityDetailHref } from '@/lib/productDetailTarget';
 import {
   addShoppingListItemFromNextPurchase,
+  addShoppingListItemFromProductDetail,
+  isTrustedShoppingListIdentity,
   listShoppingListItems,
 } from '@/lib/shoppingList';
 import type { NextPurchaseCandidate } from '@/lib/nextPurchaseCandidates';
 import type { RepeatProductProfile } from '@/lib/repeatProductProfile';
+import { formatFrequentProductLabel } from '@/lib/milestonePresentation';
 // 商品分类由 receiptEnricher.applyCategoriesWithLearning 完成（规则 + classify-item AI + 学习表），在 lib/scanPipeline 内调用
 export default function HomeScreen() {
   const router = useRouter();
@@ -137,6 +140,7 @@ export default function HomeScreen() {
     useState<ReadonlySet<string>>(() => new Set());
   const [activeShoppingListQuantities, setActiveShoppingListQuantities] =
     useState<ReadonlyMap<string, number>>(() => new Map());
+  const [frequentAddBusy, setFrequentAddBusy] = useState(false);
 
 
   const canApplyHomeUi = useCallback(
@@ -852,6 +856,38 @@ export default function HomeScreen() {
     [refreshShoppingListHomeState]
   );
 
+  const handleAddFrequentProductToShoppingList = useCallback(
+    async (product: MilestoneFrequentProduct) => {
+      if (frequentAddBusy) return;
+      if (!isTrustedShoppingListIdentity(product.groupingType, product.key)) {
+        return;
+      }
+      const displayName = formatFrequentProductLabel(product, t).trim();
+      if (!displayName) return;
+      setFrequentAddBusy(true);
+      try {
+        const result = await addShoppingListItemFromProductDetail({
+          displayName,
+          identityKind: product.groupingType,
+          identityKey: product.key,
+        });
+        if (
+          result.status === 'created' ||
+          result.status === 'already_exists'
+        ) {
+          await refreshShoppingListHomeState();
+        }
+      } catch (error) {
+        logger.warn('Home', 'add frequent product to shopping list failed', {
+          error,
+        });
+      } finally {
+        setFrequentAddBusy(false);
+      }
+    },
+    [frequentAddBusy, refreshShoppingListHomeState]
+  );
+
   return (
     <View
       style={[
@@ -882,6 +918,10 @@ export default function HomeScreen() {
           activeShoppingListQuantities={activeShoppingListQuantities}
           onShoppingListPress={handleShoppingListPress}
           onAddNextPurchaseToShoppingList={handleAddNextPurchaseToShoppingList}
+          onAddFrequentProductToShoppingList={
+            handleAddFrequentProductToShoppingList
+          }
+          frequentAddBusy={frequentAddBusy}
         />
       </ScrollView>
 
