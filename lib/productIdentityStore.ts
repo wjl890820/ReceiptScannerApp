@@ -34,6 +34,7 @@ import {
 } from './productIdentityContract';
 import type { MerchantProductSemanticCache } from './productIdentitySemanticContract';
 import type { SemanticStatus } from './productIdentitySemanticGate';
+import { buildIdentityNameStem } from './productIdentityNameStem';
 
 export type MerchantProductRecord = {
   id: string;
@@ -78,12 +79,47 @@ export type UpsertMerchantProductInput = {
   semanticResolverVersion?: string | null;
 };
 
+/**
+ * Stem string used by resolver phase 2b for a merchant-product record.
+ * Must stay in lockstep with productIdentityResolver candidate stem input.
+ */
+export function merchantProductIdentityStemSource(
+  row: Pick<
+    MerchantProductRecord,
+    'normalizedName' | 'canonicalDisplayName' | 'comparisonKey'
+  >
+): string {
+  return (
+    row.normalizedName ||
+    row.canonicalDisplayName ||
+    row.comparisonKey ||
+    ''
+  );
+}
+
+export function merchantProductIdentityStem(
+  row: Pick<
+    MerchantProductRecord,
+    'normalizedName' | 'canonicalDisplayName' | 'comparisonKey'
+  >
+): string {
+  return buildIdentityNameStem(merchantProductIdentityStemSource(row));
+}
+
 export type ProductIdentityStore = {
   listMerchantProducts(merchantKey: string): MerchantProductRecord[];
   findMerchantProductByComparisonKey(
     merchantKey: string,
     comparisonKey: string
   ): MerchantProductRecord | null;
+  /**
+   * H8.1 — merchant-scoped stem bucket in catalog insertion order.
+   * Equivalent to filtering listMerchantProducts(merchantKey) by stem equality.
+   */
+  findMerchantProductsByNameStem(
+    merchantKey: string,
+    stem: string
+  ): MerchantProductRecord[];
   getMerchantProduct(merchantProductId: string): MerchantProductRecord | null;
   upsertMerchantProduct(input: UpsertMerchantProductInput): MerchantProductRecord;
   /** Persist AI semantic cache on MerchantProduct (Batch 4). */
@@ -117,6 +153,8 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
     string,
     Map<string, string[]>
   >();
+  /** H8.1: merchantKey → stem → ids in catalog insertion order. */
+  const merchantProductIdsByStem = new Map<string, Map<string, string[]>>();
   const merchantProductInsertionOrder = new Map<string, number>();
   let nextMerchantProductInsertionOrder = 0;
   const canonicals = new Map<string, CanonicalProduct>();
@@ -138,18 +176,47 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
     }
   };
 
+  const addMerchantProductToStemIndex = (row: MerchantProductRecord) => {
+    const stem = merchantProductIdentityStem(row);
+    if (!stem) return;
+    const byStem = merchantProductIdsByStem.get(row.merchantKey) ?? new Map();
+    const stemIds = byStem.get(stem) ?? [];
+    insertMerchantProductIdInOrder(stemIds, row.id);
+    byStem.set(stem, stemIds);
+    merchantProductIdsByStem.set(row.merchantKey, byStem);
+  };
+
+  const removeMerchantProductFromStemIndex = (row: MerchantProductRecord) => {
+    const stem = merchantProductIdentityStem(row);
+    if (!stem) return;
+    const byStem = merchantProductIdsByStem.get(row.merchantKey);
+    const stemIds = byStem?.get(stem);
+    if (!stemIds) return;
+    const index = stemIds.indexOf(row.id);
+    if (index >= 0) stemIds.splice(index, 1);
+    if (stemIds.length === 0) {
+      byStem?.delete(stem);
+    }
+    if (byStem?.size === 0) {
+      merchantProductIdsByStem.delete(row.merchantKey);
+    }
+  };
+
   const addMerchantProductToIndexes = (row: MerchantProductRecord) => {
     const merchantIds = merchantProductIdsByMerchant.get(row.merchantKey) ?? [];
     insertMerchantProductIdInOrder(merchantIds, row.id);
     merchantProductIdsByMerchant.set(row.merchantKey, merchantIds);
 
-    if (!row.comparisonKey) return;
-    const exactByComparisonKey =
-      merchantProductIdsByExactKey.get(row.merchantKey) ?? new Map();
-    const exactIds = exactByComparisonKey.get(row.comparisonKey) ?? [];
-    insertMerchantProductIdInOrder(exactIds, row.id);
-    exactByComparisonKey.set(row.comparisonKey, exactIds);
-    merchantProductIdsByExactKey.set(row.merchantKey, exactByComparisonKey);
+    if (row.comparisonKey) {
+      const exactByComparisonKey =
+        merchantProductIdsByExactKey.get(row.merchantKey) ?? new Map();
+      const exactIds = exactByComparisonKey.get(row.comparisonKey) ?? [];
+      insertMerchantProductIdInOrder(exactIds, row.id);
+      exactByComparisonKey.set(row.comparisonKey, exactIds);
+      merchantProductIdsByExactKey.set(row.merchantKey, exactByComparisonKey);
+    }
+
+    addMerchantProductToStemIndex(row);
   };
 
   const removeMerchantProductFromIndexes = (row: MerchantProductRecord) => {
@@ -162,21 +229,24 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
       }
     }
 
-    if (!row.comparisonKey) return;
-    const exactByComparisonKey = merchantProductIdsByExactKey.get(
-      row.merchantKey
-    );
-    const exactIds = exactByComparisonKey?.get(row.comparisonKey);
-    if (exactIds) {
-      const index = exactIds.indexOf(row.id);
-      if (index >= 0) exactIds.splice(index, 1);
-      if (exactIds.length === 0) {
-        exactByComparisonKey?.delete(row.comparisonKey);
-      }
-      if (exactByComparisonKey?.size === 0) {
-        merchantProductIdsByExactKey.delete(row.merchantKey);
+    if (row.comparisonKey) {
+      const exactByComparisonKey = merchantProductIdsByExactKey.get(
+        row.merchantKey
+      );
+      const exactIds = exactByComparisonKey?.get(row.comparisonKey);
+      if (exactIds) {
+        const index = exactIds.indexOf(row.id);
+        if (index >= 0) exactIds.splice(index, 1);
+        if (exactIds.length === 0) {
+          exactByComparisonKey?.delete(row.comparisonKey);
+        }
+        if (exactByComparisonKey?.size === 0) {
+          merchantProductIdsByExactKey.delete(row.merchantKey);
+        }
       }
     }
+
+    removeMerchantProductFromStemIndex(row);
   };
 
   const findMerchantProductByExactKey = (
@@ -199,6 +269,14 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
 
     findMerchantProductByComparisonKey(merchantKey, comparisonKey) {
       return findMerchantProductByExactKey(merchantKey, comparisonKey);
+    },
+
+    findMerchantProductsByNameStem(merchantKey, stem) {
+      if (!stem) return [];
+      const ids = merchantProductIdsByStem.get(merchantKey)?.get(stem) ?? [];
+      return ids
+        .map((id) => merchants.get(id))
+        .filter((row): row is MerchantProductRecord => row != null);
     },
 
     getMerchantProduct(merchantProductId) {
@@ -258,20 +336,28 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
         );
         nextMerchantProductInsertionOrder += 1;
       }
-      if (
-        previous &&
+
+      const previousStem = previous ? merchantProductIdentityStem(previous) : '';
+      const nextStem = merchantProductIdentityStem(row);
+      const merchantOrKeyChanged =
+        !!previous &&
         (previous.merchantKey !== row.merchantKey ||
-          previous.comparisonKey !== row.comparisonKey)
-      ) {
-        removeMerchantProductFromIndexes(previous);
+          previous.comparisonKey !== row.comparisonKey);
+      const stemChanged = !!previous && previousStem !== nextStem;
+
+      if (previous && (merchantOrKeyChanged || stemChanged)) {
+        // Full index rebuild when merchant/key change; stem-only when names mutate.
+        if (merchantOrKeyChanged) {
+          removeMerchantProductFromIndexes(previous);
+        } else {
+          removeMerchantProductFromStemIndex(previous);
+        }
       }
       merchants.set(id, row);
-      if (
-        !previous ||
-        previous.merchantKey !== row.merchantKey ||
-        previous.comparisonKey !== row.comparisonKey
-      ) {
+      if (!previous || merchantOrKeyChanged) {
         addMerchantProductToIndexes(row);
+      } else if (stemChanged) {
+        addMerchantProductToStemIndex(row);
       }
       return row;
     },
@@ -355,6 +441,7 @@ export function createMemoryProductIdentityStore(): ProductIdentityStore {
       merchants.clear();
       merchantProductIdsByMerchant.clear();
       merchantProductIdsByExactKey.clear();
+      merchantProductIdsByStem.clear();
       merchantProductInsertionOrder.clear();
       nextMerchantProductInsertionOrder = 0;
       canonicals.clear();

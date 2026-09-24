@@ -33,6 +33,9 @@ import type {
   MerchantProductRecord,
   ProductIdentityStore,
 } from './productIdentityStore';
+import {
+  merchantProductIdentityStemSource,
+} from './productIdentityStore';
 
 export { isGenericFamilyLabel } from './productIdentityGenericLabel';
 
@@ -56,6 +59,54 @@ export type ResolveIdentityInput = {
   lineTotal?: number | null;
   evidence?: ResolveIdentityEvidence;
 };
+
+/** @internal H8.1 test-only stem-phase / fuzzy structural counters. */
+export type ResolveIdentityStemPhaseStats = {
+  catalogLists: number;
+  stemCandidateChecks: number;
+  candidateStemComputations: number;
+  stemIndexLookups: number;
+  stemIndexedCandidateChecks: number;
+  fuzzyCandidateChecks: number;
+};
+
+export type ResolveIdentityOptions = {
+  /**
+   * @internal H8.1 — when false, phase 2b uses original linear catalog scan.
+   * Default / omitted = stem index.
+   */
+  __useMerchantProductStemIndexForTests?: boolean;
+  /** @internal H8.1 operation-count seam. */
+  __stemPhaseStatsForTests?: ResolveIdentityStemPhaseStats | null;
+};
+
+/**
+ * @internal Baseline phase-2b candidate discovery: linear catalog scan + stem
+ * equality. Does not apply structural/compat gates (resolver still does).
+ */
+export function __baselineStemEqualCandidatesForTests(
+  catalog: readonly MerchantProductRecord[],
+  inquiryStem: string,
+  stats?: Pick<
+    ResolveIdentityStemPhaseStats,
+    'stemCandidateChecks' | 'candidateStemComputations'
+  > | null
+): MerchantProductRecord[] {
+  const out: MerchantProductRecord[] = [];
+  if (inquiryStem.length < 2) return out;
+  for (const candidate of catalog) {
+    if (stats) {
+      stats.stemCandidateChecks += 1;
+      stats.candidateStemComputations += 1;
+    }
+    const candStem = buildIdentityNameStem(
+      merchantProductIdentityStemSource(candidate)
+    );
+    if (!candStem || candStem !== inquiryStem) continue;
+    out.push(candidate);
+  }
+  return out;
+}
 
 export type FuzzyCandidate = {
   merchantProductId: string;
@@ -194,8 +245,12 @@ export function isUnknownMerchantScopeKey(merchantKey: string | null | undefined
 
 export function resolveReceiptItemIdentity(
   input: ResolveIdentityInput,
-  store: ProductIdentityStore
+  store: ProductIdentityStore,
+  options?: ResolveIdentityOptions
 ): ResolveIdentityResult {
+  const stats = options?.__stemPhaseStatsForTests ?? null;
+  const useStemIndex = options?.__useMerchantProductStemIndexForTests !== false;
+
   const merchantKey = scopeMerchantKeyForIdentity(input.merchantKey, input.receiptId);
   const rawName = typeof input.rawName === 'string' ? input.rawName : '';
   const norm = normalizeProductForIdentity(rawName);
@@ -288,6 +343,7 @@ export function resolveReceiptItemIdentity(
     }
   }
 
+  if (stats) stats.catalogLists += 1;
   const catalog = store.listMerchantProducts(merchantKey);
 
   const inquiryStem = buildIdentityNameStem(
@@ -339,14 +395,25 @@ export function resolveReceiptItemIdentity(
   // 2b) Exact identity stem + compatible attributes (same merchant).
   // Bridges unit aliases like 1L ↔ 1000ml without fuzzy merge.
   // Underspecified anchors must NOT bridge conflicting specified variants.
+  // H8.1: insertion-order stem index replaces full-catalog stem discovery;
+  // downstream structural/compat gates and first-winner semantics unchanged.
   if (inquiryStem.length >= 2) {
-    for (const candidate of catalog) {
-      const candStem = buildIdentityNameStem(
-        candidate.normalizedName ||
-          candidate.canonicalDisplayName ||
-          candidate.comparisonKey
-      );
-      if (!candStem || candStem !== inquiryStem) continue;
+    const stemCandidates = useStemIndex
+      ? (() => {
+          if (stats) stats.stemIndexLookups += 1;
+          return store.findMerchantProductsByNameStem(merchantKey, inquiryStem);
+        })()
+      : __baselineStemEqualCandidatesForTests(catalog, inquiryStem, stats);
+
+    for (const candidate of stemCandidates) {
+      if (stats) {
+        if (useStemIndex) stats.stemIndexedCandidateChecks += 1;
+        else {
+          // baseline path already counted equality checks in oracle helper
+        }
+      }
+      // Indexed path: stem equality already applied; still run gates in order.
+      // Baseline path: helper already filtered by stem equality.
       const candAttrs = candidate.attributes ?? emptyProductAttributes();
       if (!stemStructuralEvidenceBalanced(attributes, candAttrs)) {
         conflictsRejected.push({
@@ -436,6 +503,7 @@ export function resolveReceiptItemIdentity(
   // 5) Same-merchant fuzzy only
   let bestAuto: { merchant: MerchantProductRecord; score: number } | null = null;
   for (const candidate of catalog) {
+    if (stats) stats.fuzzyCandidateChecks += 1;
     const score = combinedNameSimilarityAtOrAbovePotential(
       norm.comparisonKey,
       candidate.comparisonKey,

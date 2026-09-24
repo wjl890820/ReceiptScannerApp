@@ -11,6 +11,7 @@ import {
   scopeMerchantKeyForIdentity,
   type ResolveIdentityInput,
 } from './productIdentityResolver';
+import { buildIdentityNameStem } from './productIdentityNameStem';
 import {
   createMemoryProductIdentityStore,
   deterministicMerchantProductId,
@@ -48,6 +49,23 @@ function createLinearReferenceStore(diagnostics?: {
         }
       }
       return null;
+    },
+
+    findMerchantProductsByNameStem(merchantKey, stem) {
+      if (!stem) return [];
+      const rows: MerchantProductRecord[] = [];
+      for (const row of merchants.values()) {
+        if (diagnostics) diagnostics.globalMerchantProductVisits += 1;
+        if (row.merchantKey !== merchantKey) continue;
+        const candStem = buildIdentityNameStem(
+          row.normalizedName ||
+            row.canonicalDisplayName ||
+            row.comparisonKey ||
+            ''
+        );
+        if (candStem && candStem === stem) rows.push(row);
+      }
+      return rows;
     },
 
     upsertMerchantProduct(input) {
