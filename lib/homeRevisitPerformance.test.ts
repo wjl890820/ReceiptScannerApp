@@ -115,7 +115,7 @@ describe('Home refresh production wiring', () => {
   });
 
   it('coalesces focus and pathname through one coordinator', () => {
-    expect(homeSource).toContain("requestVisibleRefresh('pathname')");
+    expect(homeSource).toContain("requestVisibleRefreshGated('pathname')");
     expect(homeSource).toContain('markHomeHidden');
     expect(homeSource).toContain('dispose');
     expect(homeSource).toContain('canApply');

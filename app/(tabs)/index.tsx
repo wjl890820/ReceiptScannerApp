@@ -69,6 +69,14 @@ import {
 } from '@/lib/homeRefreshState';
 import { createHomeRefreshCoordinator } from '@/lib/homeRefreshCoordinator';
 import {
+  armHomeAuthColdDeferral,
+  isCurrentHomeLifecycleInstance,
+  shouldDeferOwnerDependentHomeRefresh,
+} from '@/lib/homeAuthColdGate';
+import {
+  getAuthSessionLifecycleRevision,
+} from '@/lib/anonAuth';
+import {
   beginHomeRefreshTimingCapture,
   logHomeRefreshCoordinatorEvent,
   measureHomeRefreshStage,
@@ -609,6 +617,17 @@ export default function HomeScreen() {
   );
 
   const homeRefreshCoordinatorRef = useRef(createHomeCoordinator());
+  /**
+   * H5.1a — immutable lifecycle identity for THIS Home instance.
+   * Captured during render via useRef initializer; NEVER overwritten from live
+   * revision in effects (that was the A-level race).
+   */
+  const homeInstanceLifecycleRevisionRef = useRef(
+    getAuthSessionLifecycleRevision()
+  );
+  const authColdDeferUnsubRef = useRef<(() => void) | null>(null);
+  /** Auth became stable while Home was hidden — cold once on next visibility. */
+  const pendingAuthStableColdRef = useRef(false);
 
   const ensureHomeCoordinator = useCallback(() => {
     if (
@@ -620,12 +639,98 @@ export default function HomeScreen() {
     return homeRefreshCoordinatorRef.current;
   }, [createHomeCoordinator]);
 
+  const clearAuthColdDeferral = useCallback(() => {
+    if (authColdDeferUnsubRef.current) {
+      authColdDeferUnsubRef.current();
+      authColdDeferUnsubRef.current = null;
+    }
+  }, []);
+
+  const launchDeferredAuthStableCold = useCallback(() => {
+    clearAuthColdDeferral();
+    const expected = homeInstanceLifecycleRevisionRef.current;
+    // Obsolete keyed instance — never retain pending or start work.
+    if (!isCurrentHomeLifecycleInstance(expected)) {
+      pendingAuthStableColdRef.current = false;
+      return;
+    }
+    if (!homeWasVisibleRef.current) {
+      pendingAuthStableColdRef.current = true;
+      return;
+    }
+    const coordinator = ensureHomeCoordinator();
+    if (coordinator.isDisposed()) return;
+    // Recheck immediately before coordinator request (no stale earlier check).
+    if (!isCurrentHomeLifecycleInstance(expected)) {
+      pendingAuthStableColdRef.current = false;
+      return;
+    }
+    // Deferred initial load remains semantically cold (not a focus revisit).
+    coordinator.requestVisibleRefresh('cold');
+  }, [clearAuthColdDeferral, ensureHomeCoordinator]);
+
+  /**
+   * H5.1/H5.1a: lifecycle fence + auth-initializing deferral before any
+   * owner-dependent visibility refresh reaches the coordinator.
+   */
+  const requestVisibleRefreshGated = useCallback(
+    (trigger: 'focus' | 'pathname' | 'cold') => {
+      const expected = homeInstanceLifecycleRevisionRef.current;
+      // A-level fence: obsolete Home after live revision bump must not work.
+      if (!isCurrentHomeLifecycleInstance(expected)) {
+        clearAuthColdDeferral();
+        pendingAuthStableColdRef.current = false;
+        return;
+      }
+
+      const coordinator = ensureHomeCoordinator();
+
+      if (!shouldDeferOwnerDependentHomeRefresh()) {
+        clearAuthColdDeferral();
+        // Recheck fence immediately before any coordinator request.
+        if (!isCurrentHomeLifecycleInstance(expected)) {
+          pendingAuthStableColdRef.current = false;
+          return;
+        }
+        if (
+          pendingAuthStableColdRef.current &&
+          !hasCompleteSnapshotRef.current
+        ) {
+          pendingAuthStableColdRef.current = false;
+          if (!isCurrentHomeLifecycleInstance(expected)) return;
+          coordinator.requestVisibleRefresh('cold');
+          return;
+        }
+        pendingAuthStableColdRef.current = false;
+        if (!isCurrentHomeLifecycleInstance(expected)) return;
+        coordinator.requestVisibleRefresh(trigger);
+        return;
+      }
+
+      // Auth still initializing — do not start doomed heavy work.
+      // Pass THIS instance's immutable revision (not a later live observation).
+      if (!authColdDeferUnsubRef.current) {
+        authColdDeferUnsubRef.current = armHomeAuthColdDeferral({
+          expectedLifecycleRevision: expected,
+          onStableSameInstance: launchDeferredAuthStableCold,
+        });
+      }
+    },
+    [
+      clearAuthColdDeferral,
+      ensureHomeCoordinator,
+      launchDeferredAuthStableCold,
+    ]
+  );
+
   useEffect(() => {
     const coordinator = ensureHomeCoordinator();
     return () => {
+      clearAuthColdDeferral();
+      pendingAuthStableColdRef.current = false;
       coordinator.dispose();
     };
-  }, [ensureHomeCoordinator]);
+  }, [ensureHomeCoordinator, clearAuthColdDeferral]);
 
   // Tab-level focus (History/Analysis ↔ Home, first mount).
   useFocusEffect(
@@ -635,9 +740,8 @@ export default function HomeScreen() {
         name: 'focus',
         screen: 'home',
       });
-      const coordinator = ensureHomeCoordinator();
       const trigger = hasCompleteSnapshotRef.current ? 'focus' : 'cold';
-      coordinator.requestVisibleRefresh(trigger);
+      requestVisibleRefreshGated(trigger);
       return () => {
         recordDiagnosticEvent({
           category: 'lifecycle',
@@ -645,7 +749,7 @@ export default function HomeScreen() {
           screen: 'home',
         });
       };
-    }, [ensureHomeCoordinator])
+    }, [requestVisibleRefreshGated])
   );
 
   // Root-stack visibility: /shopping-list and /product/* return to Home without
@@ -653,7 +757,6 @@ export default function HomeScreen() {
   // Same visibility epoch coalesces focus+pathname even if pathname arrives after
   // the heavy run has already started (no trailing for visibility duplicates).
   useEffect(() => {
-    const coordinator = ensureHomeCoordinator();
     const visible = isHomeRoutePath(pathname);
     if (visible && !homeWasVisibleRef.current) {
       recordDiagnosticEvent({
@@ -662,7 +765,7 @@ export default function HomeScreen() {
         screen: 'home',
         meta: { via: 'pathname' },
       });
-      coordinator.requestVisibleRefresh('pathname');
+      requestVisibleRefreshGated('pathname');
     } else if (!visible && homeWasVisibleRef.current) {
       recordDiagnosticEvent({
         category: 'lifecycle',
@@ -670,10 +773,10 @@ export default function HomeScreen() {
         screen: 'home',
         meta: { via: 'pathname' },
       });
-      coordinator.markHomeHidden();
+      ensureHomeCoordinator().markHomeHidden();
     }
     homeWasVisibleRef.current = visible;
-  }, [pathname, ensureHomeCoordinator]);
+  }, [pathname, ensureHomeCoordinator, requestVisibleRefreshGated]);
 
   // 点击“继续审核”：始终先刷新最新 pending 状态，再据此决定导航（点击时二次校验）
   const handleContinueReview = useCallback(async () => {
