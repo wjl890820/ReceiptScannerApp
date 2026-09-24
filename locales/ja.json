@@ -71,7 +71,8 @@
         "add": "追加",
         "added": "リストに追加済み",
         "addA11y": "{name}を買い物リストに追加",
-        "addedA11y": "{name}は買い物リストに追加済み"
+        "addedA11y": "{name}は買い物リストに追加済み",
+        "lastPurchased": "最終購入 {date}"
       },
       "profile": {
         "title": "買い物プロフィール",

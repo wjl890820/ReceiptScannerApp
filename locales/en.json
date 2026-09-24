@@ -71,7 +71,8 @@
         "add": "Add",
         "added": "On List",
         "addA11y": "Add {name} to shopping list",
-        "addedA11y": "{name} is already on the shopping list"
+        "addedA11y": "{name} is already on the shopping list",
+        "lastPurchased": "Last bought {date}"
       },
       "profile": {
         "title": "Shopping Profile",

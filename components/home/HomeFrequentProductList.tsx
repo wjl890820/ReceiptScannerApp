@@ -9,6 +9,7 @@ import {
 } from '@/components/MerunoGroupedList';
 import { MerunoText } from '@/components/primitives/MerunoText';
 import type { MilestoneFrequentProduct } from '@/lib/engagementMilestones';
+import { formatHomeFrequentLastPurchasedLabel } from '@/lib/homeFrequentProductRecency';
 import { t } from '@/lib/i18n';
 import { formatFrequentProductLabel } from '@/lib/milestonePresentation';
 import {
@@ -51,6 +52,10 @@ export function HomeFrequentProductList({
         const showAdd =
           trusted && typeof onAddToShoppingList === 'function';
         const canAdd = showAdd && !alreadyAdded && !addBusy;
+        const lastPurchasedLabel = formatHomeFrequentLastPurchasedLabel(
+          product.lastPurchasedAt,
+          t
+        );
 
         return (
           <MerunoGroupedRow
@@ -108,6 +113,15 @@ export function HomeFrequentProductList({
                             })}`
                           : ''}
                       </MerunoText>
+                      {lastPurchasedLabel ? (
+                        <MerunoText
+                          role="meta"
+                          tone="secondary"
+                          style={styles.productMeta}
+                        >
+                          {lastPurchasedLabel}
+                        </MerunoText>
+                      ) : null}
                     </View>
                     <MerunoDisclosureIndicator
                       kind="crossEntity"
