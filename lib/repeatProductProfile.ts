@@ -376,17 +376,87 @@ function observationsFromProductRows(
   return out;
 }
 
-function qualifiedRowsForMerchantProduct(
+/**
+ * Baseline MP membership predicate (H7.2 authority).
+ * Target-independent parts may move into index construction; target equality
+ * remains the Map key.
+ */
+function isEligibleRepeatMerchantProductObservation(
+  row: QualifiedIdentityObservation,
+  supportedReceiptIds: ReadonlySet<string>
+): boolean {
+  return (
+    isRepeatMerchantProductObservation(row) &&
+    supportedReceiptIds.has(row.receiptId)
+  );
+}
+
+/**
+ * Original O(M×N) filter — retained as the semantic baseline / test oracle.
+ * Production MP profiles use {@link buildRepeatMerchantProductObservationIndex}.
+ */
+export function __baselineQualifiedRowsForMerchantProductForTests(
   qualified: readonly QualifiedIdentityObservation[],
   merchantProductId: string,
   supportedReceiptIds: ReadonlySet<string>
 ): QualifiedIdentityObservation[] {
   return qualified.filter(
     (row) =>
-      isRepeatMerchantProductObservation(row) &&
-      row.merchantProductId === merchantProductId &&
-      supportedReceiptIds.has(row.receiptId)
+      isEligibleRepeatMerchantProductObservation(row, supportedReceiptIds) &&
+      row.merchantProductId === merchantProductId
   );
+}
+
+export type RepeatMerchantProductObservationIndexStats = {
+  /** Rows visited during one forward index build (≈ N). */
+  indexRowVisits: number;
+  /** Bucket lookups performed by the caller (typically ≈ M). */
+  bucketLookups: number;
+};
+
+const EMPTY_MP_OBSERVATIONS: readonly QualifiedIdentityObservation[] =
+  Object.freeze([]);
+
+/**
+ * Exact, order-preserving MP observation index for Repeat post-identity profiles.
+ * One forward pass over `rows`; append-only buckets (no Set, no per-bucket sort).
+ * Pure per-call structure — no module/owner/generation cache.
+ */
+export function buildRepeatMerchantProductObservationIndex(
+  rows: readonly QualifiedIdentityObservation[],
+  supportedReceiptIds: ReadonlySet<string>,
+  stats?: RepeatMerchantProductObservationIndexStats | null
+): Map<string, QualifiedIdentityObservation[]> {
+  const index = new Map<string, QualifiedIdentityObservation[]>();
+  let visits = 0;
+  for (const row of rows) {
+    visits += 1;
+    if (!isEligibleRepeatMerchantProductObservation(row, supportedReceiptIds)) {
+      continue;
+    }
+    const key = row.merchantProductId;
+    const bucket = index.get(key);
+    if (bucket) {
+      bucket.push(row);
+    } else {
+      index.set(key, [row]);
+    }
+  }
+  if (stats) {
+    stats.indexRowVisits = visits;
+  }
+  return index;
+}
+
+function lookupRepeatMerchantProductObservations(
+  index: Map<string, QualifiedIdentityObservation[]>,
+  merchantProductId: string,
+  stats?: RepeatMerchantProductObservationIndexStats | null
+): readonly QualifiedIdentityObservation[] {
+  if (stats) {
+    stats.bucketLookups += 1;
+  }
+  return index.get(merchantProductId) ?? EMPTY_MP_OBSERVATIONS;
 }
 
 /**
@@ -414,6 +484,15 @@ export function buildRepeatProductProfiles(
      * Ignored when purchaseOccurrenceIndex is provided.
      */
     occurrencePreparedEvidence?: CanonicalPurchaseOccurrencePreparedEvidence | null;
+    /**
+     * @internal H7.2 test seam. When false, MP membership uses the original
+     * repeated filter (baseline oracle). Default / omitted = exact index.
+     */
+    __useMerchantProductObservationIndexForTests?: boolean;
+    /**
+     * @internal H7.2 operation-count seam for the MP membership stage only.
+     */
+    __mpObservationIndexStatsForTests?: RepeatMerchantProductObservationIndexStats | null;
   }
 ): RepeatProductProfile[] {
   const supported = filterV1SupportedReceipts(analyticsReceipts as ReceiptRow[]);
@@ -540,13 +619,36 @@ export function buildRepeatProductProfiles(
   // that may have been inflated by family_only / family_spec rows).
   const safeMpIds = new Set(safeQualified.map((row) => row.merchantProductId));
   const groupByKey = new Map(groups.map((group) => [group.key, group]));
-  for (const mpId of [...safeMpIds].sort((left, right) => left.localeCompare(right))) {
+  const useMpIndex =
+    options?.__useMerchantProductObservationIndexForTests !== false;
+  const mpIndexStats = options?.__mpObservationIndexStatsForTests ?? null;
+  if (mpIndexStats) {
+    mpIndexStats.indexRowVisits = 0;
+    mpIndexStats.bucketLookups = 0;
+  }
+  const mpObservationIndex = useMpIndex
+    ? buildRepeatMerchantProductObservationIndex(
+        safeQualified,
+        supportedReceiptIds,
+        mpIndexStats
+      )
+    : null;
+
+  for (const mpId of [...safeMpIds].sort((left, right) =>
+    left.localeCompare(right)
+  )) {
     if (suppressedMemberMerchantProductIds.has(mpId)) continue;
-    const rows = qualifiedRowsForMerchantProduct(
-      safeQualified,
-      mpId,
-      supportedReceiptIds
-    );
+    const rows = useMpIndex
+      ? lookupRepeatMerchantProductObservations(
+          mpObservationIndex!,
+          mpId,
+          mpIndexStats
+        )
+      : __baselineQualifiedRowsForMerchantProductForTests(
+          safeQualified,
+          mpId,
+          supportedReceiptIds
+        );
     if (rows.length === 0) continue;
     const group = groupByKey.get(mpId);
     const displayName =
