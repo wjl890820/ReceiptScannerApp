@@ -1,8 +1,15 @@
 /**
  * Cloud user_receipts row → local receipts insert values.
  * JSON TEXT columns must pass through unchanged (no parse/stringify).
+ *
+ * Explicit malformed cloud transaction_time_precision rejects the row
+ * (do not persist as migration-compatible unknown).
  */
-import { inferReceiptTransactionTimePrecision } from './dateParser';
+import {
+  classifyPersistedPrecisionToken,
+  columnPrecisionPresenceOf,
+  resolveTransactionTimePrecisionAuthority,
+} from './receiptTransactionTimePrecisionAuthority';
 
 export type CloudUserReceiptRow = {
   id: string;
@@ -129,40 +136,32 @@ export function mapCloudReceiptToLocalInsert(
     params.fallbackClientUpdatedAtMs ??
     createdAt;
 
-  let transactionTimePrecision =
-    typeof cloud.transaction_time_precision === 'string' &&
-    ['second', 'minute', 'date', 'unknown'].includes(
-      cloud.transaction_time_precision
-    )
-      ? cloud.transaction_time_precision
-      : 'unknown';
-  if (transactionTimePrecision === 'unknown') {
-    try {
-      const analysis = JSON.parse(cloud.analysis_json) as Record<string, unknown>;
-      const dateText =
-        (typeof analysis.transactionDate === 'string' &&
-          analysis.transactionDate.trim()) ||
-        (typeof analysis.transaction_date === 'string' &&
-          analysis.transaction_date.trim()) ||
-        (typeof analysis.transactionAt === 'string' &&
-          analysis.transactionAt.trim()) ||
-        (typeof analysis.purchasedAt === 'string' &&
-          analysis.purchasedAt.trim()) ||
-        (typeof analysis.datetime === 'string' && analysis.datetime.trim()) ||
-        null;
-      if (dateText) {
-        const inferred = inferReceiptTransactionTimePrecision(dateText);
-        if (inferred !== 'unknown') transactionTimePrecision = inferred;
-      }
-    } catch {
-      // keep unknown
-    }
+  const transactionAt = isoToMs(cloud.transaction_at ?? null);
+  const precisionPresence = columnPrecisionPresenceOf(cloud);
+  const rawPrecision = (cloud as { transaction_time_precision?: unknown })
+    .transaction_time_precision;
+  const classified = classifyPersistedPrecisionToken(
+    rawPrecision,
+    precisionPresence
+  );
+  if (classified.state === 'invalid') {
+    throw new Error(
+      'Cannot restore receipt with malformed transaction_time_precision'
+    );
   }
+  const transactionTimePrecision = resolveTransactionTimePrecisionAuthority({
+    columnPrecision: rawPrecision,
+    columnPrecisionPresence: precisionPresence,
+    transactionAtMs: transactionAt,
+    analysisJson: cloud.analysis_json,
+    merchantRaw: cloud.merchant_raw,
+    merchantNormalized: cloud.merchant_normalized,
+  });
 
   return {
     id: cloud.id.trim(),
     created_at: createdAt,
-    transaction_at: isoToMs(cloud.transaction_at ?? null),
+    transaction_at: transactionAt,
     transaction_time_precision: transactionTimePrecision,
     scanned_at: isoToMs(cloud.scanned_at ?? null),
     image_uri: '',

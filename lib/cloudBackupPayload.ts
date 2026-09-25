@@ -1,7 +1,16 @@
 /**
  * Map local ReceiptRow → cloud user_receipts upsert payload.
  * JSON TEXT columns must be passed through unchanged (no parse/stringify).
+ *
+ * transaction_time_precision: uploads the safe A1-resolved authority value.
+ * Explicit malformed local tokens reject the payload (do not coerce to unknown).
  */
+import {
+  classifyPersistedPrecisionToken,
+  columnPrecisionPresenceOf,
+  resolveTransactionTimePrecisionAuthority,
+} from './receiptTransactionTimePrecisionAuthority';
+
 export type LocalReceiptBackupSource = {
   id: string;
   user_id: string | null | undefined;
@@ -96,6 +105,27 @@ export function buildCloudUserReceiptUpsertPayload(
       ? Number(row.client_updated_at)
       : fallbackClientUpdatedAtMs;
 
+  const precisionPresence = columnPrecisionPresenceOf(row);
+  const rawPrecision = (row as { transaction_time_precision?: unknown })
+    .transaction_time_precision;
+  const classified = classifyPersistedPrecisionToken(
+    rawPrecision,
+    precisionPresence
+  );
+  if (classified.state === 'invalid') {
+    throw new Error(
+      'Cannot backup receipt with malformed transaction_time_precision'
+    );
+  }
+  const transactionTimePrecision = resolveTransactionTimePrecisionAuthority({
+    columnPrecision: rawPrecision,
+    columnPrecisionPresence: precisionPresence,
+    transactionAtMs: row.transaction_at ?? null,
+    analysisJson: row.analysis_json,
+    merchantRaw: row.merchant_raw,
+    merchantNormalized: row.merchant_normalized,
+  });
+
   return {
     id: row.id,
     user_id: userId,
@@ -111,13 +141,7 @@ export function buildCloudUserReceiptUpsertPayload(
       typeof row.source === 'string' && row.source.trim() ? row.source.trim() : null,
     created_at: msToIso(row.created_at) || new Date(0).toISOString(),
     transaction_at: msToIso(row.transaction_at ?? null),
-    transaction_time_precision:
-      typeof row.transaction_time_precision === 'string' &&
-      ['second', 'minute', 'date', 'unknown'].includes(
-        row.transaction_time_precision
-      )
-        ? row.transaction_time_precision
-        : 'unknown',
+    transaction_time_precision: transactionTimePrecision,
     scanned_at: msToIso(row.scanned_at ?? null),
     merchant_raw: row.merchant_raw ?? null,
     merchant_normalized: row.merchant_normalized ?? null,
@@ -164,3 +188,18 @@ export function assertNoImageUriInPayload(payload: Record<string, unknown>): voi
     throw new Error('Cloud backup payload must not include image_uri');
   }
 }
+
+/**
+ * Columns required to construct LocalReceiptBackupSource for cloud upsert.
+ * Must include transaction_time_precision so local provenance is not dropped.
+ */
+export const BACKUP_SELECT_COLUMNS = `
+  id, user_id, installation_id, transaction_source, source,
+  created_at, transaction_at, transaction_time_precision, scanned_at,
+  merchant_raw, merchant_normalized, merchant_type,
+  store_raw, store_normalized,
+  total, tax, COALESCE(tax_is_known, 0) as tax_is_known, currency,
+  analysis_json, recognition_snapshot_json, user_items_json,
+  COALESCE(user_edited, 0) as user_edited,
+  final_total, final_category, note, ocr_request_id, client_updated_at
+`;

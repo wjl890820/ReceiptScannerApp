@@ -14,6 +14,7 @@ import { getAuthState, subscribeAuthState, type AuthState } from './anonAuth';
 import { bootstrapOwnedReceiptBackupIntents } from './cloudBackupBootstrap';
 import {
   assertNoImageUriInPayload,
+  BACKUP_SELECT_COLUMNS,
   buildCloudUserReceiptUpsertPayload,
   type LocalReceiptBackupSource,
 } from './cloudBackupPayload';
@@ -27,6 +28,8 @@ import {
   type SyncOutboxRow,
   updateSyncOutboxRetryIfCurrent,
 } from './syncOutbox';
+
+export { BACKUP_SELECT_COLUMNS } from './cloudBackupPayload';
 
 export type CloudBackupFlushResult = {
   ran: boolean;
@@ -54,17 +57,6 @@ let _unsubscribeAuth: (() => void) | null = null;
 let _appStateSub: { remove: () => void } | null = null;
 let _retryTimer: ReturnType<typeof setTimeout> | null = null;
 let _lastAppState: string | null = null;
-
-const BACKUP_SELECT_COLUMNS = `
-  id, user_id, installation_id, transaction_source, source,
-  created_at, transaction_at, scanned_at,
-  merchant_raw, merchant_normalized, merchant_type,
-  store_raw, store_normalized,
-  total, tax, COALESCE(tax_is_known, 0) as tax_is_known, currency,
-  analysis_json, recognition_snapshot_json, user_items_json,
-  COALESCE(user_edited, 0) as user_edited,
-  final_total, final_category, note, ocr_request_id, client_updated_at
-`;
 
 async function loadLocalReceiptForBackup(
   db: SQLite.SQLiteDatabase,
