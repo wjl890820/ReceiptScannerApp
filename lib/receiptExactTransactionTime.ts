@@ -1,6 +1,6 @@
 import type { ReceiptRow } from './db';
 import {
-  inferReceiptTransactionTimePrecision,
+  parseReceiptDateTimeWithPrecision,
   type ReceiptTransactionPrecision,
 } from './dateParser';
 
@@ -13,71 +13,232 @@ const PRECISION_VALUES = new Set<ReceiptTransactionPrecision>([
   'unknown',
 ]);
 
+const STRUCTURED_DATE_KEYS = [
+  'transactionDate',
+  'transaction_date',
+  'transactionAt',
+  'purchasedAt',
+  'datetime',
+] as const;
+
 export function hasValidTransactionAt(receipt: ReceiptRow): boolean {
   const value = receipt.transaction_at;
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-function readStructuredTransactionDateText(
-  receipt: ReceiptRow
-): string | null {
-  try {
-    const parsed = JSON.parse(receipt.analysis_json || '{}');
-    if (!parsed || typeof parsed !== 'object') return null;
-    const analysis = parsed as Record<string, unknown>;
-    for (const key of [
-      'transactionDate',
-      'transaction_date',
-      'transactionAt',
-      'purchasedAt',
-      'datetime',
-    ]) {
-      const value = analysis[key];
-      if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-  } catch {
-    return null;
-  }
-  return null;
+function isPrecisionValue(
+  value: unknown
+): value is ReceiptTransactionPrecision {
+  return (
+    typeof value === 'string' &&
+    PRECISION_VALUES.has(value as ReceiptTransactionPrecision)
+  );
 }
 
-function readStoredPrecision(
-  receipt: ReceiptRow
-): ReceiptTransactionPrecision | null {
-  const raw = receipt.transaction_time_precision;
-  if (typeof raw === 'string' && PRECISION_VALUES.has(raw as ReceiptTransactionPrecision)) {
-    return raw as ReceiptTransactionPrecision;
+/**
+ * DB column provenance — must not collapse missing and invalid.
+ * Storage contract writes exact lowercase tokens; no trim/case normalize.
+ */
+type ColumnPrecisionRead =
+  | { state: 'missing' }
+  | { state: 'valid'; value: ReceiptTransactionPrecision }
+  | { state: 'invalid' };
+
+/**
+ * Analysis_json.transaction_time_precision — absent vs valid vs invalid.
+ * Explicit invalid (incl. null when key exists) fails closed.
+ */
+type AnalysisPrecisionRead =
+  | { state: 'absent' }
+  | { state: 'valid'; value: ReceiptTransactionPrecision }
+  | { state: 'invalid' };
+
+function readColumnPrecision(receipt: ReceiptRow): ColumnPrecisionRead {
+  if (
+    !Object.prototype.hasOwnProperty.call(receipt, 'transaction_time_precision')
+  ) {
+    return { state: 'missing' };
   }
+  const raw = (receipt as { transaction_time_precision?: unknown })
+    .transaction_time_precision;
+  // Genuine legacy absence: null / undefined on the row.
+  if (raw === null || raw === undefined) {
+    return { state: 'missing' };
+  }
+  if (isPrecisionValue(raw)) {
+    return { state: 'valid', value: raw };
+  }
+  // Explicit malformed persisted token (e.g. "SECOND", "", 123).
+  return { state: 'invalid' };
+}
+
+type AnalysisJsonRead = {
+  analysisPrecision: AnalysisPrecisionRead;
+  structuredDateText: string | null;
+  merchantHint: string | null;
+};
+
+function readAnalysisJson(receipt: ReceiptRow): AnalysisJsonRead {
+  const empty: AnalysisJsonRead = {
+    analysisPrecision: { state: 'absent' },
+    structuredDateText: null,
+    merchantHint: null,
+  };
   try {
     const parsed = JSON.parse(receipt.analysis_json || '{}');
-    const value =
-      parsed && typeof parsed === 'object'
-        ? (parsed as Record<string, unknown>).transaction_time_precision
-        : null;
+    if (!parsed || typeof parsed !== 'object') return empty;
+    const analysis = parsed as Record<string, unknown>;
+
+    let analysisPrecision: AnalysisPrecisionRead = { state: 'absent' };
     if (
-      typeof value === 'string' &&
-      PRECISION_VALUES.has(value as ReceiptTransactionPrecision)
+      Object.prototype.hasOwnProperty.call(
+        analysis,
+        'transaction_time_precision'
+      )
     ) {
-      return value as ReceiptTransactionPrecision;
+      const rawPrecision = analysis.transaction_time_precision;
+      analysisPrecision = isPrecisionValue(rawPrecision)
+        ? { state: 'valid', value: rawPrecision }
+        : { state: 'invalid' };
     }
+
+    let structuredDateText: string | null = null;
+    for (const key of STRUCTURED_DATE_KEYS) {
+      const value = analysis[key];
+      if (typeof value === 'string' && value.trim()) {
+        structuredDateText = value.trim();
+        break;
+      }
+    }
+
+    const rawMerchant =
+      analysis.merchant ||
+      analysis.merchant_normalized ||
+      analysis.merchantNormalized;
+    const merchantHint =
+      typeof rawMerchant === 'string' && rawMerchant.trim()
+        ? rawMerchant.trim()
+        : null;
+
+    return {
+      analysisPrecision,
+      structuredDateText,
+      merchantHint,
+    };
   } catch {
-    // ignore
+    return empty;
+  }
+}
+
+function resolveMerchantHint(
+  receipt: ReceiptRow,
+  analysisMerchant: string | null
+): string | null {
+  if (analysisMerchant) return analysisMerchant;
+  if (
+    typeof receipt.merchant_raw === 'string' &&
+    receipt.merchant_raw.trim()
+  ) {
+    return receipt.merchant_raw.trim();
+  }
+  if (
+    typeof receipt.merchant_normalized === 'string' &&
+    receipt.merchant_normalized.trim()
+  ) {
+    return receipt.merchant_normalized.trim();
   }
   return null;
 }
 
 /**
+ * Attempt legacy reconstruction from structured date text when the DB column
+ * is unknown/missing and analysis did not persist an explicit precision key.
+ * Accepts only exact reparse equality with transaction_at.
+ */
+function reconstructLegacyPrecision(
+  receipt: ReceiptRow,
+  dateText: string,
+  merchantHint: string | null
+): ReceiptTransactionPrecision {
+  if (!hasValidTransactionAt(receipt)) return 'unknown';
+  try {
+    const parsed = parseReceiptDateTimeWithPrecision(dateText, {
+      fallbackToNow: false,
+      merchant: merchantHint,
+    });
+    const parsedMs = parsed.ms;
+    if (
+      typeof parsedMs !== 'number' ||
+      !Number.isFinite(parsedMs) ||
+      parsedMs <= 0
+    ) {
+      return 'unknown';
+    }
+    if (parsedMs !== receipt.transaction_at) {
+      return 'unknown';
+    }
+    return parsed.precision;
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
  * Resolve durable transaction-time precision.
- * Prefer persisted column / analysis field; else reconstruct from structured
- * date text in analysis_json. Never infer from epoch second==0.
+ *
+ * DB column authority:
+ * - second | minute | date → return immediately
+ * - unknown | missing → continue to analysis / legacy reconstruction
+ * - invalid explicit token → unknown (no analysis, no reconstruction)
+ *
+ * Never infer precision from epoch second==0 / % 60000 / % 1000.
  */
 export function resolveReceiptTransactionTimePrecision(
   receipt: ReceiptRow
 ): ReceiptTransactionPrecision {
-  const stored = readStoredPrecision(receipt);
-  if (stored) return stored;
-  const text = readStructuredTransactionDateText(receipt);
-  if (text) return inferReceiptTransactionTimePrecision(text);
+  const column = readColumnPrecision(receipt);
+
+  if (column.state === 'valid') {
+    if (
+      column.value === 'second' ||
+      column.value === 'minute' ||
+      column.value === 'date'
+    ) {
+      return column.value;
+    }
+    // valid unknown — fall through to analysis / reconstruction
+  } else if (column.state === 'invalid') {
+    // Explicit malformed persisted provenance — fail closed.
+    return 'unknown';
+  }
+  // missing or valid unknown
+
+  const analysis = readAnalysisJson(receipt);
+
+  if (analysis.analysisPrecision.state === 'valid') {
+    return analysis.analysisPrecision.value;
+  }
+  if (analysis.analysisPrecision.state === 'invalid') {
+    // Explicit invalid analysis provenance — fail closed, no reconstruction.
+    return 'unknown';
+  }
+
+  // Legacy reconstruction: DB unknown|missing, analysis key absent, text present.
+  const mayReconstruct =
+    column.state === 'missing' ||
+    (column.state === 'valid' && column.value === 'unknown');
+  if (
+    mayReconstruct &&
+    analysis.analysisPrecision.state === 'absent' &&
+    analysis.structuredDateText
+  ) {
+    return reconstructLegacyPrecision(
+      receipt,
+      analysis.structuredDateText,
+      resolveMerchantHint(receipt, analysis.merchantHint)
+    );
+  }
+
   return 'unknown';
 }
 
