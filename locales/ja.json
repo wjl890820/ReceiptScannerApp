@@ -59,7 +59,9 @@
         "openProductDetailA11y": "{name}の商品詳細を表示",
         "add": "追加",
         "addA11y": "{name}を買い物リストに追加",
-        "added": "追加済み"
+        "added": "追加済み",
+        "approaching": "いつもの購入時期が近づいています",
+        "likelyDue": "いつもの購入時期です"
       },
       "frequent": {
         "title": "よく買う商品",

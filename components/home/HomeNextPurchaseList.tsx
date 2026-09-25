@@ -14,6 +14,7 @@ import {
   formatNextPurchaseMedianDaysForDisplay,
   type NextPurchaseCandidate,
 } from '@/lib/nextPurchaseCandidates';
+import { formatNextPurchaseReadinessLabel } from '@/lib/nextPurchaseReadinessPresentation';
 import {
   SHOPPING_LIST_QUANTITY_MAX,
   shoppingListIdentityKey,
@@ -48,6 +49,10 @@ export function HomeNextPurchaseList({
           medianDays,
           daysSince,
         });
+        const readinessLabel = formatNextPurchaseReadinessLabel(
+          candidate.state,
+          t
+        );
         const pressable = typeof onPress === 'function';
         const identity =
           candidate.identityKind === 'merchant_product' ||
@@ -112,6 +117,15 @@ export function HomeNextPurchaseList({
                         >
                           {candidate.displayName}
                         </MerunoText>
+                        {readinessLabel ? (
+                          <MerunoText
+                            role="meta"
+                            tone="secondary"
+                            style={styles.meta}
+                          >
+                            {readinessLabel}
+                          </MerunoText>
+                        ) : null}
                         <MerunoText
                           role="meta"
                           tone="secondary"
@@ -148,6 +162,15 @@ export function HomeNextPurchaseList({
                     >
                       {candidate.displayName}
                     </MerunoText>
+                    {readinessLabel ? (
+                      <MerunoText
+                        role="meta"
+                        tone="secondary"
+                        style={styles.meta}
+                      >
+                        {readinessLabel}
+                      </MerunoText>
+                    ) : null}
                     <MerunoText
                       role="meta"
                       tone="secondary"

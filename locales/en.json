@@ -59,7 +59,9 @@
         "openProductDetailA11y": "View product details for {name}",
         "add": "Add",
         "addA11y": "Add {name} to shopping list",
-        "added": "Added"
+        "added": "Added",
+        "approaching": "Approaching your usual purchase time",
+        "likelyDue": "Around your usual purchase time"
       },
       "frequent": {
         "title": "Frequent Products",

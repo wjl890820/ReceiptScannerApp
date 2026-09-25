@@ -59,7 +59,9 @@
         "openProductDetailA11y": "查看{name}的商品详情",
         "add": "添加",
         "addA11y": "将{name}加入购物清单",
-        "added": "已添加"
+        "added": "已添加",
+        "approaching": "接近你通常购买的时间",
+        "likelyDue": "到了你通常购买的时间"
       },
       "frequent": {
         "title": "常购商品",
