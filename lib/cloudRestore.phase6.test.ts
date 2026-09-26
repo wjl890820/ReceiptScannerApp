@@ -171,6 +171,9 @@ function createRestoreDb(opts?: {
           transaction_source,
           ocr_request_id,
           client_updated_at,
+          verified_purchase_occurrence_id,
+          verified_purchase_occurrence_source,
+          verified_purchase_occurrence_verified_at,
         ] = params as unknown[];
         receipts.set(String(id), {
           id,
@@ -201,6 +204,12 @@ function createRestoreDb(opts?: {
           transaction_source,
           ocr_request_id,
           client_updated_at,
+          verified_purchase_occurrence_id:
+            verified_purchase_occurrence_id ?? null,
+          verified_purchase_occurrence_source:
+            verified_purchase_occurrence_source ?? null,
+          verified_purchase_occurrence_verified_at:
+            verified_purchase_occurrence_verified_at ?? null,
         });
         return { changes: 1 };
       }

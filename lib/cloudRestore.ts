@@ -64,7 +64,10 @@ const CLOUD_SELECT = `
   total, tax, tax_is_known, currency,
   analysis_json, recognition_snapshot_json, user_items_json,
   user_edited, final_total, final_category, note,
-  ocr_request_id, client_updated_at, deleted_at
+  ocr_request_id, client_updated_at, deleted_at,
+  verified_purchase_occurrence_id,
+  verified_purchase_occurrence_source,
+  verified_purchase_occurrence_verified_at
 `.replace(/\s+/g, ' ').trim();
 
 const INSERT_RESTORE_SQL = `
@@ -77,8 +80,11 @@ const INSERT_RESTORE_SQL = `
     analysis_json, recognition_snapshot_json,
     user_edited, final_total, final_category, note, user_items_json,
     user_id, installation_id, transaction_source, ocr_request_id,
-    client_updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    client_updated_at,
+    verified_purchase_occurrence_id,
+    verified_purchase_occurrence_source,
+    verified_purchase_occurrence_verified_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 function insertParams(row: LocalRestoredReceiptInsert): SQLite.SQLiteBindValue[] {
@@ -111,6 +117,9 @@ function insertParams(row: LocalRestoredReceiptInsert): SQLite.SQLiteBindValue[]
     row.transaction_source,
     row.ocr_request_id,
     row.client_updated_at,
+    row.verified_purchase_occurrence_id,
+    row.verified_purchase_occurrence_source,
+    row.verified_purchase_occurrence_verified_at,
   ];
 }
 

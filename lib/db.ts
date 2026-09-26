@@ -111,6 +111,16 @@ export type ReceiptRow = {
   ocr_request_id?: string | null;
   /** P0 Phase 5: local backup-version/audit timestamp (ms) */
   client_updated_at?: number | null;
+
+  /**
+   * A2.1 verified purchase occurrence membership (nullable bundle).
+   * All three NULL = unassigned; all three valid = assigned; partial is invalid.
+   * Unused by analytics until A2.2.
+   */
+  verified_purchase_occurrence_id?: string | null;
+  verified_purchase_occurrence_source?: string | null;
+  /** Epoch ms — verification audit time, not purchase time. */
+  verified_purchase_occurrence_verified_at?: number | null;
 };
 
 /** 列表用：不含 image_uri，减少内存/IO（历史列表不展示缩略图） */
@@ -588,6 +598,36 @@ async function initIfNeeded() {
           if (!e?.message?.includes('duplicate column')) throw e;
         }
       }
+
+      // A2.1: verified purchase occurrence membership (nullable triple; no backfill).
+      if (!columnNames.has('verified_purchase_occurrence_id')) {
+        try {
+          await db.runAsync(
+            `ALTER TABLE receipts ADD COLUMN verified_purchase_occurrence_id TEXT`
+          );
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('verified_purchase_occurrence_source')) {
+        try {
+          await db.runAsync(
+            `ALTER TABLE receipts ADD COLUMN verified_purchase_occurrence_source TEXT`
+          );
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+      if (!columnNames.has('verified_purchase_occurrence_verified_at')) {
+        try {
+          await db.runAsync(
+            `ALTER TABLE receipts ADD COLUMN verified_purchase_occurrence_verified_at INTEGER`
+          );
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+
       try {
         await db.execAsync(
           `CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id)`

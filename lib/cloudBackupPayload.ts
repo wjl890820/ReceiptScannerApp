@@ -10,6 +10,10 @@ import {
   columnPrecisionPresenceOf,
   resolveTransactionTimePrecisionAuthority,
 } from './receiptTransactionTimePrecisionAuthority';
+import {
+  classifyVerifiedPurchaseOccurrenceBundle,
+  verifiedAtMsToIso,
+} from './verifiedPurchaseOccurrenceProvenance';
 
 export type LocalReceiptBackupSource = {
   id: string;
@@ -40,6 +44,9 @@ export type LocalReceiptBackupSource = {
   note?: string | null;
   ocr_request_id?: string | null;
   client_updated_at?: number | null;
+  verified_purchase_occurrence_id?: string | null;
+  verified_purchase_occurrence_source?: string | null;
+  verified_purchase_occurrence_verified_at?: number | null;
 };
 
 export type CloudUserReceiptUpsertPayload = {
@@ -72,6 +79,9 @@ export type CloudUserReceiptUpsertPayload = {
   ocr_request_id: string | null;
   client_updated_at: string;
   deleted_at: null;
+  verified_purchase_occurrence_id: string | null;
+  verified_purchase_occurrence_source: string | null;
+  verified_purchase_occurrence_verified_at: string | null;
 };
 
 function msToIso(ms: number | null | undefined): string | null {
@@ -126,6 +136,31 @@ export function buildCloudUserReceiptUpsertPayload(
     merchantNormalized: row.merchant_normalized,
   });
 
+  const verifiedBundle = classifyVerifiedPurchaseOccurrenceBundle({
+    occurrenceId: row.verified_purchase_occurrence_id,
+    source: row.verified_purchase_occurrence_source,
+    verifiedAt: row.verified_purchase_occurrence_verified_at,
+  });
+  if (verifiedBundle.state === 'invalid') {
+    throw new Error(
+      `Cannot backup receipt with malformed verified purchase occurrence: ${verifiedBundle.reason}`
+    );
+  }
+  const verifiedCloud =
+    verifiedBundle.state === 'assigned'
+      ? {
+          verified_purchase_occurrence_id: verifiedBundle.value.occurrenceId,
+          verified_purchase_occurrence_source: verifiedBundle.value.source,
+          verified_purchase_occurrence_verified_at: verifiedAtMsToIso(
+            verifiedBundle.value.verifiedAt
+          ),
+        }
+      : {
+          verified_purchase_occurrence_id: null,
+          verified_purchase_occurrence_source: null,
+          verified_purchase_occurrence_verified_at: null,
+        };
+
   return {
     id: row.id,
     user_id: userId,
@@ -179,6 +214,7 @@ export function buildCloudUserReceiptUpsertPayload(
         : null,
     client_updated_at: msToIso(clientUpdatedAtMs) || new Date().toISOString(),
     deleted_at: null,
+    ...verifiedCloud,
   };
 }
 
@@ -201,5 +237,8 @@ export const BACKUP_SELECT_COLUMNS = `
   total, tax, COALESCE(tax_is_known, 0) as tax_is_known, currency,
   analysis_json, recognition_snapshot_json, user_items_json,
   COALESCE(user_edited, 0) as user_edited,
-  final_total, final_category, note, ocr_request_id, client_updated_at
+  final_total, final_category, note, ocr_request_id, client_updated_at,
+  verified_purchase_occurrence_id,
+  verified_purchase_occurrence_source,
+  verified_purchase_occurrence_verified_at
 `;

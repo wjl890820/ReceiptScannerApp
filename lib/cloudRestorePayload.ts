@@ -10,6 +10,10 @@ import {
   columnPrecisionPresenceOf,
   resolveTransactionTimePrecisionAuthority,
 } from './receiptTransactionTimePrecisionAuthority';
+import {
+  classifyVerifiedPurchaseOccurrenceBundle,
+  parseVerifiedPurchaseOccurrenceCloudTimestamp,
+} from './verifiedPurchaseOccurrenceProvenance';
 
 export type CloudUserReceiptRow = {
   id: string;
@@ -40,6 +44,9 @@ export type CloudUserReceiptRow = {
   ocr_request_id?: string | null;
   client_updated_at?: string | null;
   deleted_at?: string | null;
+  verified_purchase_occurrence_id?: string | null;
+  verified_purchase_occurrence_source?: string | null;
+  verified_purchase_occurrence_verified_at?: string | null;
 };
 
 export type LocalRestoredReceiptInsert = {
@@ -71,6 +78,9 @@ export type LocalRestoredReceiptInsert = {
   transaction_source: string;
   ocr_request_id: string | null;
   client_updated_at: number;
+  verified_purchase_occurrence_id: string | null;
+  verified_purchase_occurrence_source: string | null;
+  verified_purchase_occurrence_verified_at: number | null;
 };
 
 function isoToMs(iso: string | null | undefined): number | null {
@@ -158,6 +168,43 @@ export function mapCloudReceiptToLocalInsert(
     merchantNormalized: cloud.merchant_normalized,
   });
 
+  const cloudVerifiedAtRaw = cloud.verified_purchase_occurrence_verified_at;
+  let verifiedAtMs: number | null = null;
+  // Only null / undefined / absent count as absent. Explicit "" / "   " must throw.
+  if (cloudVerifiedAtRaw != null) {
+    try {
+      verifiedAtMs =
+        parseVerifiedPurchaseOccurrenceCloudTimestamp(cloudVerifiedAtRaw);
+    } catch {
+      throw new Error(
+        'Cannot restore receipt with malformed verified_purchase_occurrence_verified_at'
+      );
+    }
+  }
+  const verifiedBundle = classifyVerifiedPurchaseOccurrenceBundle({
+    occurrenceId: cloud.verified_purchase_occurrence_id,
+    source: cloud.verified_purchase_occurrence_source,
+    verifiedAt: verifiedAtMs,
+  });
+  if (verifiedBundle.state === 'invalid') {
+    throw new Error(
+      `Cannot restore receipt with malformed verified purchase occurrence: ${verifiedBundle.reason}`
+    );
+  }
+  const verifiedLocal =
+    verifiedBundle.state === 'assigned'
+      ? {
+          verified_purchase_occurrence_id: verifiedBundle.value.occurrenceId,
+          verified_purchase_occurrence_source: verifiedBundle.value.source,
+          verified_purchase_occurrence_verified_at:
+            verifiedBundle.value.verifiedAt,
+        }
+      : {
+          verified_purchase_occurrence_id: null,
+          verified_purchase_occurrence_source: null,
+          verified_purchase_occurrence_verified_at: null,
+        };
+
   return {
     id: cloud.id.trim(),
     created_at: createdAt,
@@ -214,5 +261,6 @@ export function mapCloudReceiptToLocalInsert(
         ? cloud.ocr_request_id.trim()
         : null,
     client_updated_at: clientUpdatedAt,
+    ...verifiedLocal,
   };
 }
