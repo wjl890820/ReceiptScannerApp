@@ -8,6 +8,7 @@
 
 import type * as SQLite from 'expo-sqlite';
 
+import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
 import {
   generateSyncIntentId,
   replaceSyncOutboxIntent,
@@ -140,7 +141,9 @@ export async function assignVerifiedPurchaseOccurrenceWithDb(
     suppliedOccurrenceId = params.occurrenceId;
   }
 
-  let result: AssignVerifiedPurchaseOccurrenceResult | null = null;
+  const outcome: {
+    result: AssignVerifiedPurchaseOccurrenceResult | null;
+  } = { result: null };
 
   await db.withExclusiveTransactionAsync(async (txn) => {
     const placeholders = uniqueIds.map(() => '?').join(',');
@@ -253,7 +256,7 @@ export async function assignVerifiedPurchaseOccurrenceWithDb(
     }
 
     if (toAssign.length === 0) {
-      result = {
+      outcome.result = {
         occurrenceId: targetId,
         source: existingSourceForG ?? params.source,
         changedReceiptIds: [],
@@ -300,7 +303,7 @@ export async function assignVerifiedPurchaseOccurrenceWithDb(
       });
     }
 
-    result = {
+    outcome.result = {
       occurrenceId: targetId,
       source: params.source,
       changedReceiptIds: toAssign.map((m) => m.id),
@@ -308,12 +311,17 @@ export async function assignVerifiedPurchaseOccurrenceWithDb(
     };
   });
 
-  if (!result) {
+  if (!outcome.result) {
     throw new VerifiedPurchaseOccurrenceAssignError(
       'assignment transaction produced no result'
     );
   }
-  return result;
+  if (outcome.result.changedReceiptIds.length > 0) {
+    invalidateAnalyticsReceiptSelection(
+      'verified_purchase_occurrence_assigned'
+    );
+  }
+  return outcome.result;
 }
 
 export type {

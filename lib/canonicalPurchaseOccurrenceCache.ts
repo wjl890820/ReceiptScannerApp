@@ -36,7 +36,7 @@ import type { ReceiptRow } from './db';
 import { logger } from './logger';
 
 export const CANONICAL_PURCHASE_OCCURRENCE_CACHE_VERSION =
-  'meruno-canonical-purchase-occurrence-index-v1' as const;
+  'meruno-canonical-purchase-occurrence-index-v2' as const;
 
 /** Soft bound — a few owner/generation/set variants per session. */
 export const CANONICAL_PURCHASE_OCCURRENCE_CACHE_MAX_ENTRIES = 8;

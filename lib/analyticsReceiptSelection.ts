@@ -15,6 +15,7 @@ import {
   type AnalysisDDuplicateGroup,
 } from './analysisDDuplicateAudit';
 import type { ReceiptRow } from './db';
+import { classifyVerifiedPurchaseOccurrenceBundle } from './verifiedPurchaseOccurrenceProvenance';
 
 export type AnalyticsReceiptSelectionOpts = {
   /** Future KEEP_SEPARATE — never drop these receipt ids from analytics. */
@@ -95,6 +96,35 @@ export function indexHighConfidenceDuplicateGroupsByReceiptId(
   return byReceiptId;
 }
 
+function assignedVerifiedPurchaseOccurrenceId(
+  row: ReceiptRow | undefined
+): string | null {
+  if (!row) return null;
+  const state = classifyVerifiedPurchaseOccurrenceBundle({
+    occurrenceId: row.verified_purchase_occurrence_id,
+    source: row.verified_purchase_occurrence_source,
+    verifiedAt: row.verified_purchase_occurrence_verified_at,
+  });
+  return state.state === 'assigned' ? state.value.occurrenceId : null;
+}
+
+/**
+ * HC exclusion must not erase an explicit verified occurrence.
+ * Different verified IDs, or a verified member behind an unassigned
+ * representative, stay in the analytics universe for canonical truth.
+ */
+function verifiedBoundaryBlocksHcExclusion(
+  representative: ReceiptRow | undefined,
+  member: ReceiptRow | undefined
+): boolean {
+  const memberVerifiedId = assignedVerifiedPurchaseOccurrenceId(member);
+  if (!memberVerifiedId) return false;
+  const representativeVerifiedId =
+    assignedVerifiedPurchaseOccurrenceId(representative);
+  if (!representativeVerifiedId) return true;
+  return memberVerifiedId !== representativeVerifiedId;
+}
+
 /**
  * Build caller-independent analytics selection decision (expensive O(n²) work).
  */
@@ -103,6 +133,7 @@ export function buildAnalyticsReceiptSelectionDecision(
   opts?: AnalyticsReceiptSelectionOpts
 ): AnalyticsReceiptSelectionDecision {
   const keepSeparateReceiptIds = opts?.keepSeparateReceiptIds ?? new Set<string>();
+  const receiptById = new Map(receipts.map((row) => [row.id, row]));
   const summaries = receipts.map(summarizeReceiptForDuplicateAudit);
   const highConfidenceDuplicateGroups =
     buildHighConfidenceDuplicateGroups(summaries, receipts);
@@ -113,22 +144,27 @@ export function buildAnalyticsReceiptSelectionDecision(
   const excluded = new Set<string>();
 
   for (const g of highConfidenceDuplicateGroups) {
-    const extras = Math.max(0, g.receiptIds.length - 1);
-    if (g.confidence === 'CONTENT_EXACT_DUPLICATE') {
-      contentExactDuplicateExtras += extras;
-    } else if (
-      g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' ||
-      g.confidence === 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE' ||
-      g.confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
-    ) {
-      reconciledStructuralExactDuplicateExtras += extras;
-    } else {
-      structuralExactDuplicateExtras += extras;
-    }
+    const representative = receiptById.get(g.representativeReceiptId);
     for (const id of g.receiptIds) {
       if (id === g.representativeReceiptId) continue;
-      if (keepSeparateReceiptIds.has(id)) continue;
-      excluded.add(id);
+      const keptSeparate = keepSeparateReceiptIds.has(id);
+      const blocked = verifiedBoundaryBlocksHcExclusion(
+        representative,
+        receiptById.get(id)
+      );
+      if (blocked) continue;
+      if (!keptSeparate) excluded.add(id);
+      if (g.confidence === 'CONTENT_EXACT_DUPLICATE') {
+        contentExactDuplicateExtras += 1;
+      } else if (
+        g.confidence === 'RECONCILED_STRUCTURAL_EXACT_DUPLICATE' ||
+        g.confidence === 'RECONCILED_DISCOUNT_SHAPE_EQUIVALENT_DUPLICATE' ||
+        g.confidence === 'RECONCILED_STRUCTURAL_QUANTITY_NOISE_DUPLICATE'
+      ) {
+        reconciledStructuralExactDuplicateExtras += 1;
+      } else {
+        structuralExactDuplicateExtras += 1;
+      }
     }
   }
 

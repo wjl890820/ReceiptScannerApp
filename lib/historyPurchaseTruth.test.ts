@@ -783,8 +783,8 @@ describe('History screen wiring (purchase truth)', () => {
     expect(src).toContain('listAllReceiptsForCurrentOwnerPurchaseTruth');
     expect(src).not.toContain('duplicateGroups');
     expect(src).toContain('projectHistorySearchToPurchaseTruth');
-    expect(src).toContain('listReceipts');
-    expect(src).toContain('HISTORY_PURCHASE_TRUTH_LOAD_LIMIT');
+    expect(src).not.toContain('listReceipts(');
+    expect(src).not.toContain('HISTORY_PURCHASE_TRUTH_LOAD_LIMIT');
     expect(src).not.toMatch(/listReceiptsForList\(/);
   });
 

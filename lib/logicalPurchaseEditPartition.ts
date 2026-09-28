@@ -5,9 +5,8 @@
  * high-confidence duplicate groups before any DB mutation.
  */
 
-import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import type { ReceiptRow } from './db';
-import { expandHistoryPurchaseEditIds } from './historyPurchaseTruth';
+import { buildEffectivePurchaseTruth } from './purchaseTruthPartition';
 
 export class LogicalPurchaseEditPartitionError extends Error {
   constructor(message: string) {
@@ -24,13 +23,10 @@ export function deriveExactLogicalPurchaseMemberSet(
   anchorReceiptId: string,
   storedReceipts: readonly ReceiptRow[]
 ): string[] {
-  const selection = selectAnalyticsReceipts([...storedReceipts]);
-  return sortedExactMemberSet(
-    expandHistoryPurchaseEditIds(
-      anchorReceiptId,
-      selection.highConfidenceDuplicateGroups
-    )
-  );
+  const truth = buildEffectivePurchaseTruth(storedReceipts);
+  const purchase = truth.purchaseByReceiptId.get(anchorReceiptId);
+  if (!purchase) return sortedExactMemberSet([anchorReceiptId]);
+  return sortedExactMemberSet(purchase.memberReceiptIds);
 }
 
 export function applyLogicalPurchaseEditOverlay(

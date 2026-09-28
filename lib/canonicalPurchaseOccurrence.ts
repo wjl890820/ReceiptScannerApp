@@ -10,10 +10,14 @@
  *   RECONCILED) or exact same transaction_at + strong name-compatible basket.
  * - Basket similarity may corroborate; it must NEVER create identity when
  *   timestamps are missing or disagree (null-tx / cross-year).
- * - No durable scan-lineage / duplicate_of field exists on ReceiptRow today —
- *   relaxed timestamp recovery therefore FAIL CLOSED (do not invent provenance).
+ * - Verified purchase occurrence ids are explicit truth: same valid id is one
+ *   atomic seed (hard positive); different valid ids never merge (hard negative).
+ *   Malformed provenance is not trusted lineage. Unassigned receipts still use
+ *   conservative derived evidence only.
+ * - Relaxed timestamps (minute / date / unknown) still fail closed for derived
+ *   merges. Verified provenance does not loosen those thresholds.
  * - Grouping is complete-link so a generic merchant cannot bridge conflicting
- *   specific branches.
+ *   specific branches, and an unassigned receipt cannot bridge two verified ids.
  *
  * Representation is separate from grouping: aggregate lines within one receipt,
  * then pick ONE representative across rescan ids — never sum money or quantity
@@ -22,6 +26,7 @@
 
 import type { AnalysisDDuplicateReceiptSummary } from './analysisDDuplicateAudit';
 import type { ReceiptRow } from './db';
+import { classifyVerifiedPurchaseOccurrenceBundle } from './verifiedPurchaseOccurrenceProvenance';
 import {
   pickBestRepresentativeReceiptId,
   type RepresentativeQualitySummary,
@@ -30,13 +35,29 @@ import { tokyoClockParts } from './tokyoClock';
 
 export type CanonicalPurchaseOccurrenceGroup = {
   occurrenceId: string;
+  /**
+   * Collision-safe map key. Never persisted.
+   * verified:<durable id> or derived:<legacy receipt id>.
+   */
+  occurrenceKey: string;
   receiptIds: readonly string[];
   representativeReceiptId: string;
+  /**
+   * Set when this occurrence is anchored by a durable verified purchase
+   * occurrence id. Absent for purely derived groups.
+   */
+  verifiedPurchaseOccurrenceId?: string;
 };
 
 export type CanonicalPurchaseOccurrenceIndex = {
-  /** receiptId → stable occurrence id (lexicographically smallest member). */
+  /**
+   * receiptId → collision-safe occurrence key
+   * (`verified:<id>` or `derived:<receiptId>`).
+   * Group.occurrenceId still exposes the semantic id.
+   */
   occurrenceIdByReceiptId: ReadonlyMap<string, string>;
+  /** Alias of occurrenceIdByReceiptId. */
+  occurrenceKeyByReceiptId: ReadonlyMap<string, string>;
   /** occurrenceId → deterministic representative receipt id. */
   representativeReceiptIdByOccurrenceId: ReadonlyMap<string, string>;
   /** receiptId → representative of its occurrence (identity for reps). */
@@ -319,50 +340,173 @@ export function evaluateCanonicalPurchaseOccurrencePair(
  * When `pairQualified` is provided (prepared evidence), cross-cluster checks use
  * that Boolean relation and do not re-run evaluateCanonicalPurchaseOccurrencePair.
  */
-function clusterCompleteLink(
-  ids: readonly string[],
-  byId: ReadonlyMap<string, AnalysisDDuplicateReceiptSummary>,
-  pairQualified?: (a: string, b: string) => boolean
-): string[][] {
-  const clusters: string[][] = ids.map((id) => [id]);
-  const clusterIndex = new Map<string, number>();
-  for (let i = 0; i < ids.length; i += 1) {
-    clusterIndex.set(ids[i]!, i);
+function assignedVerifiedOccurrenceId(
+  receipt: ReceiptRow | null | undefined
+): string | null {
+  if (!receipt) return null;
+  const state = classifyVerifiedPurchaseOccurrenceBundle({
+    occurrenceId: receipt.verified_purchase_occurrence_id,
+    source: receipt.verified_purchase_occurrence_source,
+    verifiedAt: receipt.verified_purchase_occurrence_verified_at,
+  });
+  return state.state === 'assigned' ? state.value.occurrenceId : null;
+}
+
+/**
+ * Invalid / partial provenance is not a hard-positive seed.
+ * Those receipts stay independent observations and may only merge later
+ * through existing derived complete-link evidence.
+ */
+function verifiedIdByReceiptIdFromRows(
+  receiptById: ReadonlyMap<string, ReceiptRow>
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [id, receipt] of receiptById) {
+    const verifiedId = assignedVerifiedOccurrenceId(receipt);
+    if (verifiedId) out.set(id, verifiedId);
   }
+  return out;
+}
 
-  const isPair = (idA: string, idB: string): boolean => {
-    if (pairQualified) return pairQualified(idA, idB);
-    return evaluateCanonicalPurchaseOccurrencePair(
-      byId.get(idA)!,
-      byId.get(idB)!
+function seedClustersForOccurrence(
+  ids: readonly string[],
+  verifiedIdByReceiptId: ReadonlyMap<string, string>
+): string[][] {
+  if (verifiedIdByReceiptId.size === 0) {
+    return ids.map((id) => [id]);
+  }
+  const byVerified = new Map<string, string[]>();
+  for (const id of ids) {
+    const verifiedId = verifiedIdByReceiptId.get(id);
+    if (!verifiedId) continue;
+    let group = byVerified.get(verifiedId);
+    if (!group) {
+      group = [];
+      byVerified.set(verifiedId, group);
+    }
+    group.push(id);
+  }
+  const seeds: string[][] = [];
+  for (const verifiedId of [...byVerified.keys()].sort((a, b) =>
+    a.localeCompare(b)
+  )) {
+    seeds.push(
+      [...byVerified.get(verifiedId)!].sort((a, b) => a.localeCompare(b))
     );
-  };
+  }
+  for (const id of ids) {
+    if (!verifiedIdByReceiptId.has(id)) seeds.push([id]);
+  }
+  return seeds;
+}
 
-  const edges: Array<[string, string]> = [];
-  for (let i = 0; i < ids.length; i += 1) {
-    for (let j = i + 1; j < ids.length; j += 1) {
-      const a = ids[i]!;
-      const b = ids[j]!;
-      if (isPair(a, b)) {
-        edges.push([a, b]);
-      }
+function clusterVerifiedId(
+  cluster: readonly string[],
+  verifiedIdByReceiptId: ReadonlyMap<string, string>
+): string | null {
+  let found: string | null = null;
+  for (const id of cluster) {
+    const verifiedId = verifiedIdByReceiptId.get(id);
+    if (!verifiedId) continue;
+    if (found && found !== verifiedId) return found;
+    found = verifiedId;
+  }
+  return found;
+}
+
+type OccurrenceClusterState = {
+  members: string[];
+  verifiedId: string | null;
+};
+
+function mergeSortedReceiptIds(
+  left: readonly string[],
+  right: readonly string[]
+): string[] {
+  const out: string[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < left.length && j < right.length) {
+    const cmp = left[i]!.localeCompare(right[j]!);
+    if (cmp <= 0) {
+      out.push(left[i]!);
+      i += 1;
+    } else {
+      out.push(right[j]!);
+      j += 1;
     }
   }
-  edges.sort(
-    (a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1])
-  );
+  while (i < left.length) {
+    out.push(left[i]!);
+    i += 1;
+  }
+  while (j < right.length) {
+    out.push(right[j]!);
+    j += 1;
+  }
+  return out;
+}
 
-  for (const [a, b] of edges) {
+function qualifiedPairEdges(
+  qualifiedPairs: ReadonlyMap<string, ReadonlySet<string>>
+): Array<[string, string]> {
+  const edges: Array<[string, string]> = [];
+  for (const [lo, his] of qualifiedPairs) {
+    for (const hi of his) edges.push([lo, hi]);
+  }
+  edges.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  return edges;
+}
+
+function qualifiedPairContains(
+  qualifiedPairs: ReadonlyMap<string, ReadonlySet<string>>,
+  idA: string,
+  idB: string
+): boolean {
+  const pair = canonicalizeOccurrencePairIds(idA, idB);
+  if (!pair) return false;
+  return qualifiedPairs.get(pair[0])?.has(pair[1]) === true;
+}
+
+/**
+ * Complete-link over already-qualified pairs only.
+ * Absence from qualifiedPairs is incompatible. Verified seed identity is
+ * cached on the cluster and is not re-derived by scanning members.
+ */
+function clusterCompleteLink(
+  ids: readonly string[],
+  qualifiedPairs: ReadonlyMap<string, ReadonlySet<string>>,
+  verifiedIdByReceiptId?: ReadonlyMap<string, string>
+): string[][] {
+  const verifiedIds = verifiedIdByReceiptId ?? new Map<string, string>();
+  const seeds = seedClustersForOccurrence(ids, verifiedIds);
+  const clusters: OccurrenceClusterState[] = seeds.map((members) => ({
+    members,
+    verifiedId: clusterVerifiedId(members, verifiedIds),
+  }));
+  const clusterIndex = new Map<string, number>();
+  for (let i = 0; i < clusters.length; i += 1) {
+    for (const id of clusters[i]!.members) clusterIndex.set(id, i);
+  }
+
+  for (const [a, b] of qualifiedPairEdges(qualifiedPairs)) {
     const ia = clusterIndex.get(a);
     const ib = clusterIndex.get(b);
     if (ia == null || ib == null || ia === ib) continue;
 
     const clusterA = clusters[ia]!;
     const clusterB = clusters[ib]!;
+    if (
+      clusterA.verifiedId &&
+      clusterB.verifiedId &&
+      clusterA.verifiedId !== clusterB.verifiedId
+    ) {
+      continue;
+    }
     let compatible = true;
-    for (const idA of clusterA) {
-      for (const idB of clusterB) {
-        if (!isPair(idA, idB)) {
+    for (const idA of clusterA.members) {
+      for (const idB of clusterB.members) {
+        if (!qualifiedPairContains(qualifiedPairs, idA, idB)) {
           compatible = false;
           break;
         }
@@ -371,20 +515,29 @@ function clusterCompleteLink(
     }
     if (!compatible) continue;
 
-    const merged = [...clusterA, ...clusterB].sort((x, y) =>
-      x.localeCompare(y)
-    );
-    clusters[ia] = merged;
-    for (const id of clusterB) {
-      clusterIndex.set(id, ia);
-    }
-    clusters[ib] = [];
+    const merged = mergeSortedReceiptIds(clusterA.members, clusterB.members);
+    clusters[ia] = {
+      members: merged,
+      verifiedId: clusterA.verifiedId ?? clusterB.verifiedId,
+    };
+    for (const id of clusterB.members) clusterIndex.set(id, ia);
+    clusters[ib] = { members: [], verifiedId: null };
   }
 
   return clusters
-    .filter((c) => c.length > 0)
-    .map((c) => [...c].sort((x, y) => x.localeCompare(y)))
+    .filter((cluster) => cluster.members.length > 0)
+    .map((cluster) => cluster.members)
     .sort((a, b) => a[0]!.localeCompare(b[0]!));
+}
+
+export function canonicalOccurrenceKey(input: {
+  verifiedPurchaseOccurrenceId?: string | null;
+  derivedReceiptId: string;
+}): string {
+  if (input.verifiedPurchaseOccurrenceId) {
+    return `verified:${input.verifiedPurchaseOccurrenceId}`;
+  }
+  return `derived:${input.derivedReceiptId}`;
 }
 
 function toQualitySummary(
@@ -525,17 +678,6 @@ function buildExactOccurrencePairCandidates(
   return candidatePairs;
 }
 
-function isExactOccurrencePairCandidate(
-  candidatePairs: ReadonlyMap<string, ReadonlySet<string>>,
-  idA: string,
-  idB: string
-): boolean {
-  const pair = canonicalizeOccurrencePairIds(idA, idB);
-  if (!pair) return false;
-  const [lo, hi] = pair;
-  return candidatePairs.get(lo)?.has(hi) === true;
-}
-
 function countNestedPairEntries(
   pairs: ReadonlyMap<string, ReadonlySet<string>>
 ): number {
@@ -626,30 +768,23 @@ function prepareNormalizedCanonicalPurchaseOccurrenceEvidence(
 
   const qualifiedPairs = new Map<string, Set<string>>();
   let pairEvaluationCount = 0;
-  // Preserve baseline i<j visitation order over localeCompare-sorted ids.
-  for (let i = 0; i < ids.length; i += 1) {
-    for (let j = i + 1; j < ids.length; j += 1) {
-      const idA = ids[i]!;
-      const idB = ids[j]!;
-      if (!isExactOccurrencePairCandidate(candidatePairs, idA, idB)) {
-        continue;
+  const candidateEdges = qualifiedPairEdges(candidatePairs);
+  for (const [idA, idB] of candidateEdges) {
+    pairEvaluationCount += 1;
+    if (
+      evaluateCanonicalPurchaseOccurrencePair(
+        summariesByReceiptId.get(idA)!,
+        summariesByReceiptId.get(idB)!
+      )
+    ) {
+      const pair = canonicalizeOccurrencePairIds(idA, idB)!;
+      const [lo, hi] = pair;
+      let bucket = qualifiedPairs.get(lo);
+      if (!bucket) {
+        bucket = new Set();
+        qualifiedPairs.set(lo, bucket);
       }
-      pairEvaluationCount += 1;
-      if (
-        evaluateCanonicalPurchaseOccurrencePair(
-          summariesByReceiptId.get(idA)!,
-          summariesByReceiptId.get(idB)!
-        )
-      ) {
-        const pair = canonicalizeOccurrencePairIds(idA, idB)!;
-        const [lo, hi] = pair;
-        let bucket = qualifiedPairs.get(lo);
-        if (!bucket) {
-          bucket = new Set();
-          qualifiedPairs.set(lo, bucket);
-        }
-        bucket.add(hi);
-      }
+      bucket.add(hi);
     }
   }
 
@@ -706,10 +841,12 @@ function buildCanonicalPurchaseOccurrenceIndexFromPreparedUnchecked(
   }
   const ids = [...byId.keys()].sort((a, b) => a.localeCompare(b));
 
-  const pairQualified = (a: string, b: string): boolean =>
-    isPreparedOccurrencePairQualified(preparedEvidence, a, b);
-
-  const clusters = clusterCompleteLink(ids, byId, pairQualified);
+  const verifiedIdByReceiptId = verifiedIdByReceiptIdFromRows(receiptById);
+  const clusters = clusterCompleteLink(
+    ids,
+    preparedEvidence.qualifiedPairs,
+    verifiedIdByReceiptId
+  );
 
   const occurrenceIdByReceiptId = new Map<string, string>();
   const representativeReceiptIdByOccurrenceId = new Map<string, string>();
@@ -717,29 +854,42 @@ function buildCanonicalPurchaseOccurrenceIndexFromPreparedUnchecked(
   const groups: CanonicalPurchaseOccurrenceGroup[] = [];
 
   for (const members of clusters) {
-    const occurrenceId = members[0]!;
+    const verifiedPurchaseOccurrenceId = clusterVerifiedId(
+      members,
+      verifiedIdByReceiptId
+    );
+    const occurrenceKey = canonicalOccurrenceKey({
+      verifiedPurchaseOccurrenceId,
+      derivedReceiptId: members[0]!,
+    });
+    const occurrenceId = verifiedPurchaseOccurrenceId ?? members[0]!;
     const representativeReceiptId = pickOccurrenceRepresentativeReceiptId(
       members,
       byId,
       receiptById
     );
     for (const id of members) {
-      occurrenceIdByReceiptId.set(id, occurrenceId);
+      occurrenceIdByReceiptId.set(id, occurrenceKey);
       representativeReceiptIdByReceiptId.set(id, representativeReceiptId);
     }
     representativeReceiptIdByOccurrenceId.set(
-      occurrenceId,
+      occurrenceKey,
       representativeReceiptId
     );
     groups.push({
       occurrenceId,
+      occurrenceKey,
       receiptIds: members,
       representativeReceiptId,
+      ...(verifiedPurchaseOccurrenceId
+        ? { verifiedPurchaseOccurrenceId }
+        : {}),
     });
   }
 
   return {
     occurrenceIdByReceiptId,
+    occurrenceKeyByReceiptId: occurrenceIdByReceiptId,
     representativeReceiptIdByOccurrenceId,
     representativeReceiptIdByReceiptId,
     groups,
@@ -792,6 +942,7 @@ export function buildCanonicalPurchaseOccurrenceIndex(
 export function emptyCanonicalPurchaseOccurrenceIndex(): CanonicalPurchaseOccurrenceIndex {
   return {
     occurrenceIdByReceiptId: new Map(),
+    occurrenceKeyByReceiptId: new Map(),
     representativeReceiptIdByOccurrenceId: new Map(),
     representativeReceiptIdByReceiptId: new Map(),
     groups: [],

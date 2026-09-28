@@ -80,24 +80,29 @@ function restrictOccurrenceIndexToReceiptIds(
     if (members.length === 0) continue;
     groups.push({
       occurrenceId: group.occurrenceId,
+      occurrenceKey: group.occurrenceKey,
       receiptIds: members,
       representativeReceiptId: group.representativeReceiptId,
+      ...(group.verifiedPurchaseOccurrenceId
+        ? { verifiedPurchaseOccurrenceId: group.verifiedPurchaseOccurrenceId }
+        : {}),
     });
     for (const id of members) {
-      occurrenceIdByReceiptId.set(id, group.occurrenceId);
+      occurrenceIdByReceiptId.set(id, group.occurrenceKey);
       representativeReceiptIdByReceiptId.set(
         id,
         group.representativeReceiptId
       );
     }
     representativeReceiptIdByOccurrenceId.set(
-      group.occurrenceId,
+      group.occurrenceKey,
       group.representativeReceiptId
     );
   }
 
   return {
     occurrenceIdByReceiptId,
+    occurrenceKeyByReceiptId: occurrenceIdByReceiptId,
     representativeReceiptIdByOccurrenceId,
     representativeReceiptIdByReceiptId,
     groups,

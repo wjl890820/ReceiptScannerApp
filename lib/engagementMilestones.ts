@@ -18,6 +18,10 @@ import {
 } from './receiptOwnershipScope';
 import { jstCalendarDayStartMs } from './dateParser';
 import type { ReceiptRow } from './db';
+import {
+  verifiedPurchaseOccurrenceAliasedColumnsSql,
+  verifiedPurchaseOccurrenceColumnsSql,
+} from './receiptVerifiedPurchaseOccurrenceSelect';
 import { readWithAnalyticsGeneration } from './analyticsReceiptReadProvenance';
 import { getAnalyticsReceiptSelectionDataGeneration } from './analyticsReceiptSelectionCache';
 
@@ -211,6 +215,9 @@ export type EngagementReceipt = V1SupportedReceiptSource & {
   user_edited?: number | null;
   note?: string | null;
   analysis_json?: string | null;
+  verified_purchase_occurrence_id?: string | null;
+  verified_purchase_occurrence_source?: string | null;
+  verified_purchase_occurrence_verified_at?: number | null;
 };
 
 export type EngagementProductRow = ProductPriceHistoryRow &
@@ -1038,7 +1045,8 @@ export async function loadEngagementOwnerReceiptsWithDb(
        final_total,
        user_items_json,
        COALESCE(user_edited, 0) AS user_edited,
-       note
+       note,
+       ${verifiedPurchaseOccurrenceColumnsSql()}
      FROM receipts
      WHERE ${ownerScope.receiptWhereSql}
      ORDER BY COALESCE(transaction_at, created_at) ASC, id ASC`,
@@ -1356,7 +1364,8 @@ export function buildEngagementProductInsightSelectSql(options: {
        receipts.final_total AS receiptFinalTotal,
        receipts.tax AS receiptTax,
        COALESCE(receipts.tax_is_known, 0) AS receiptTaxIsKnown,
-       receipts.currency AS receiptCurrency
+       receipts.currency AS receiptCurrency,
+       ${verifiedPurchaseOccurrenceAliasedColumnsSql('receipts')}
      FROM receipt_items
      INNER JOIN receipts ON receipts.id = receipt_items.receipt_id
      WHERE ${options.itemWhereSql}

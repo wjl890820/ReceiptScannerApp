@@ -174,6 +174,12 @@ describe('tabFocusDataGenerations', () => {
           highConfidenceDuplicateGroups: [],
           keepSeparateReceiptIds: new Set(),
         },
+        universeReceipts: [],
+        effective: {
+          purchases: [],
+          purchaseByReceiptId: new Map(),
+          selection: {} as never,
+        },
       },
     });
     invalidateAnalyticsReceiptSelection('receipt_deleted');

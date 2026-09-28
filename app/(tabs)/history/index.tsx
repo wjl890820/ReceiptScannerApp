@@ -24,7 +24,7 @@ import {
   MerunoGroupedRow,
 } from '@/components/MerunoGroupedList';
 import { MerchantIdentityTile } from '@/components/MerchantIdentityTile';
-import { deleteReceipts, getReceiptsDatabase, listAllReceiptsForCurrentOwnerPurchaseTruth, listReceipts, type ReceiptListRow } from '@/lib/db';
+import { deleteReceipts, getReceiptsDatabase, listAllReceiptsForCurrentOwnerPurchaseTruth, type ReceiptListRow } from '@/lib/db';
 import { formatJPY } from '@/lib/formatJPY';
 import { formatProductPriceAmount } from '@/lib/productPricePresentation';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -36,7 +36,6 @@ import {
 } from '@/lib/historyPresentation';
 import {
   buildHistoryPurchaseTruthView,
-  HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
   projectHistorySearchToPurchaseTruth,
   resolveHistoryPurchaseDeleteIds,
 } from '@/lib/historyPurchaseTruth';
@@ -200,7 +199,7 @@ export default function HistoryScreen() {
       }
 
       const listStarted = Date.now();
-      const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+      const stored = await listAllReceiptsForCurrentOwnerPurchaseTruth();
       const receiptLoadMs = Date.now() - listStarted;
       if (
         !shouldApplyAsyncRequestGeneration(
@@ -335,7 +334,7 @@ export default function HistoryScreen() {
       // Ensure purchase-truth groups exist for projection (fresh load if needed).
       let truth = purchaseTruthRef.current;
       if (!truth) {
-        const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+        const stored = await listAllReceiptsForCurrentOwnerPurchaseTruth();
         truth = buildHistoryPurchaseTruthView(stored);
         purchaseTruthRef.current = truth;
         setRows(truth.visibleRows);
@@ -352,7 +351,11 @@ export default function HistoryScreen() {
           itemResults: withProvenance as HistoryProjectedItemSearchResult[],
           receiptResults: outcome.receiptResults as ReceiptListRow[],
         },
-        truth.selection
+        truth.selection,
+        {
+          effective: truth.effective,
+          universeReceipts: truth.universeReceipts,
+        }
       );
 
       lastCompletedNormalizedQueryRef.current = outcome.normalizedQuery;

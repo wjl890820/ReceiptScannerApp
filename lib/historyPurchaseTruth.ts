@@ -15,8 +15,17 @@ import {
 } from './analyticsReceiptSelection';
 import { selectAnalyticsReceiptsCached } from './analyticsReceiptSelectionCache';
 import type { ReceiptListRow, ReceiptRow } from './db';
+import { classifyVerifiedPurchaseOccurrenceBundle } from './verifiedPurchaseOccurrenceProvenance';
+import {
+  buildEffectivePurchaseTruth,
+  buildPurchaseTruthPartition,
+  type EffectivePurchaseTruth,
+} from './purchaseTruthPartition';
 
-/** Load enough stored rows so same-purchase duplicate groups stay intact. */
+/**
+ * Former raw-receipt cap. History purchase truth must not be built from a
+ * newest-N slice; pagination applies only after purchase reduction.
+ */
 export const HISTORY_PURCHASE_TRUTH_LOAD_LIMIT = 2000;
 
 export type HistoryPurchaseTruthView = {
@@ -25,6 +34,9 @@ export type HistoryPurchaseTruthView = {
   /** Raw stored count before purchase projection. */
   storedCount: number;
   selection: AnalyticsReceiptSelection;
+  /** Built from the exhaustive stored universe passed to this view. */
+  effective: EffectivePurchaseTruth;
+  universeReceipts: readonly ReceiptRow[];
 };
 
 export function receiptRowToListRow(row: ReceiptRow): ReceiptListRow {
@@ -66,10 +78,24 @@ export function buildHistoryPurchaseTruthView(
   } else {
     selection = selectAnalyticsReceipts([...storedReceipts]);
   }
+  const effective = buildEffectivePurchaseTruth(storedReceipts, { selection });
+  const byId = new Map(storedReceipts.map((row) => [row.id, row]));
+  const seenRepresentatives = new Set<string>();
+  const visibleRows: ReceiptListRow[] = [];
+  for (const row of selection.analyticsReceipts) {
+    const purchase = effective.purchaseByReceiptId.get(row.id);
+    const representativeId = purchase?.representativeReceiptId ?? row.id;
+    if (seenRepresentatives.has(representativeId)) continue;
+    seenRepresentatives.add(representativeId);
+    const representative = byId.get(representativeId) ?? row;
+    visibleRows.push(receiptRowToListRow(representative));
+  }
   return {
-    visibleRows: selection.analyticsReceipts.map(receiptRowToListRow),
+    visibleRows,
     storedCount: storedReceipts.length,
     selection,
+    effective,
+    universeReceipts: storedReceipts,
   };
 }
 
@@ -104,6 +130,56 @@ export function resolvePurchaseRepresentativeReceiptId(
  * When the user deletes visible purchase(s), expand to all confirmed
  * high-confidence duplicate members so the purchase cannot resurrect.
  */
+function assignedVerifiedPurchaseOccurrenceId(
+  row: ReceiptRow | undefined
+): string | null {
+  if (!row) return null;
+  const state = classifyVerifiedPurchaseOccurrenceBundle({
+    occurrenceId: row.verified_purchase_occurrence_id,
+    source: row.verified_purchase_occurrence_source,
+    verifiedAt: row.verified_purchase_occurrence_verified_at,
+  });
+  return state.state === 'assigned' ? state.value.occurrenceId : null;
+}
+
+/**
+ * Same valid verified occurrence id is one logical purchase.
+ * Derived HC ids are kept only when they do not carry a different verified id.
+ * No verified provenance → return the HC expansion unchanged.
+ */
+export function expandLogicalPurchaseIdsWithVerifiedOccurrence(
+  selectedIds: readonly string[],
+  hcExpandedIds: readonly string[],
+  storedReceipts: readonly ReceiptRow[]
+): string[] {
+  const byId = new Map(storedReceipts.map((row) => [row.id, row]));
+  const verifiedIds = new Set<string>();
+  for (const id of selectedIds) {
+    const verifiedId = assignedVerifiedPurchaseOccurrenceId(byId.get(id));
+    if (verifiedId) verifiedIds.add(verifiedId);
+  }
+  if (verifiedIds.size === 0) {
+    const filtered = hcExpandedIds.filter((id) => {
+      const verifiedId = assignedVerifiedPurchaseOccurrenceId(byId.get(id));
+      return !verifiedId;
+    });
+    if (filtered.length === hcExpandedIds.length) return [...hcExpandedIds];
+    return filtered;
+  }
+  const out = new Set<string>();
+  for (const row of storedReceipts) {
+    const verifiedId = assignedVerifiedPurchaseOccurrenceId(row);
+    if (verifiedId && verifiedIds.has(verifiedId)) out.add(row.id);
+  }
+  for (const id of hcExpandedIds) {
+    const verifiedId = assignedVerifiedPurchaseOccurrenceId(byId.get(id));
+    if (verifiedId) continue;
+    out.add(id);
+  }
+  for (const id of selectedIds) out.add(id);
+  return [...out].sort((a, b) => a.localeCompare(b));
+}
+
 export function expandHistoryPurchaseDeleteIds(
   selectedPurchaseReceiptIds: readonly string[],
   groups: readonly AnalysisDDuplicateGroup[]
@@ -156,7 +232,24 @@ export function resolveHistoryPurchaseDeleteIds(
     }
   }
 
-  return expandHistoryPurchaseDeleteIds(selectedPurchaseReceiptIds, groups);
+  const truth = buildEffectivePurchaseTruth(storedReceipts, { selection });
+  const anyVerifiedActive = selectedPurchaseReceiptIds.some(
+    (id) => truth.purchaseByReceiptId.get(id)?.verifiedActive === true
+  );
+  if (!anyVerifiedActive) {
+    return expandHistoryPurchaseDeleteIds(selectedPurchaseReceiptIds, groups);
+  }
+
+  const out = new Set<string>();
+  for (const id of selectedPurchaseReceiptIds) {
+    const purchase = truth.purchaseByReceiptId.get(id);
+    if (purchase) {
+      for (const memberId of purchase.memberReceiptIds) out.add(memberId);
+    } else {
+      out.add(id);
+    }
+  }
+  return [...out].sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -170,11 +263,15 @@ export function resolveHistoryPurchaseDetailReceiptId(
   if (!storedReceipts.some((row) => row.id === capturedReceiptId)) {
     return null;
   }
-  const selection = selectAnalyticsReceipts([...storedReceipts]);
-  return resolvePurchaseRepresentativeReceiptId(
-    capturedReceiptId,
-    selection.highConfidenceDuplicateGroups
-  );
+  const truth = buildEffectivePurchaseTruth(storedReceipts);
+  const purchase = truth.purchaseByReceiptId.get(capturedReceiptId);
+  if (!purchase?.verifiedActive) {
+    return resolvePurchaseRepresentativeReceiptId(
+      capturedReceiptId,
+      truth.selection.highConfidenceDuplicateGroups
+    );
+  }
+  return purchase.representativeReceiptId;
 }
 
 /**
@@ -199,11 +296,15 @@ export function resolveHistoryPurchaseEditMemberIds(
   targetReceiptId: string,
   storedReceipts: readonly ReceiptRow[]
 ): string[] {
-  const selection = selectAnalyticsReceipts([...storedReceipts]);
-  return expandHistoryPurchaseEditIds(
-    targetReceiptId,
-    selection.highConfidenceDuplicateGroups
-  );
+  const truth = buildEffectivePurchaseTruth(storedReceipts);
+  const purchase = truth.purchaseByReceiptId.get(targetReceiptId);
+  if (!purchase?.verifiedActive) {
+    return expandHistoryPurchaseEditIds(
+      targetReceiptId,
+      truth.selection.highConfidenceDuplicateGroups
+    );
+  }
+  return [...purchase.memberReceiptIds].sort((a, b) => a.localeCompare(b));
 }
 
 export type HistorySearchProjectionInput = {
@@ -211,9 +312,66 @@ export type HistorySearchProjectionInput = {
   receiptResults: readonly ReceiptListRow[];
 };
 
+function projectHistorySearchFromEffectiveTruth<
+  TItem extends { receiptId: string },
+>(
+  input: {
+    itemResults: readonly TItem[];
+    receiptResults: readonly ReceiptListRow[];
+  },
+  projection: {
+    effective: EffectivePurchaseTruth;
+    universeReceipts: readonly ReceiptRow[];
+  }
+): { itemResults: TItem[]; receiptResults: ReceiptListRow[] } {
+  const byId = new Map(
+    projection.universeReceipts.map((row) => [row.id, receiptRowToListRow(row)])
+  );
+  const representativeIdFor = (receiptId: string): string | null =>
+    projection.effective.purchaseByReceiptId.get(receiptId)
+      ?.representativeReceiptId ?? null;
+
+  const seenReceipts = new Set<string>();
+  const receiptResults: ReceiptListRow[] = [];
+  for (const row of input.receiptResults) {
+    const repId = representativeIdFor(row.id);
+    if (!repId || seenReceipts.has(repId)) continue;
+    seenReceipts.add(repId);
+    const projected = byId.get(repId);
+    if (projected) receiptResults.push(projected);
+  }
+
+  const seenItems = new Set<string>();
+  const itemResults: TItem[] = [];
+  for (const item of input.itemResults) {
+    const repId = representativeIdFor(item.receiptId);
+    if (!repId) continue;
+    const displayName = String(
+      (item as { displayName?: string }).displayName ?? ''
+    );
+    const sourceIndex = String(
+      (item as { sourceIndex?: number }).sourceIndex ?? ''
+    );
+    const itemId = String((item as { itemId?: string }).itemId ?? '');
+    const dedupeKey =
+      displayName || sourceIndex
+        ? `${repId}::${displayName}::${sourceIndex}`
+        : `${repId}::${itemId || JSON.stringify(item)}`;
+    if (seenItems.has(dedupeKey)) continue;
+    seenItems.add(dedupeKey);
+    itemResults.push(
+      item.receiptId === repId ? item : { ...item, receiptId: repId }
+    );
+  }
+
+  return { itemResults, receiptResults };
+}
+
 /**
  * Search operates on purchase truth: excluded extras map to their
  * representative; duplicate receipt hits appear once.
+ * When exhaustive effective truth is supplied, ids outside that universe are
+ * omitted rather than shown as raw receipt identity.
  */
 export function projectHistorySearchToPurchaseTruth<
   TItem extends { receiptId: string },
@@ -222,27 +380,41 @@ export function projectHistorySearchToPurchaseTruth<
     itemResults: readonly TItem[];
     receiptResults: readonly ReceiptListRow[];
   },
-  selection: AnalyticsReceiptSelection
+  selection: AnalyticsReceiptSelection,
+  projection?: {
+    effective: EffectivePurchaseTruth;
+    universeReceipts: readonly ReceiptRow[];
+  }
 ): { itemResults: TItem[]; receiptResults: ReceiptListRow[] } {
+  if (projection) {
+    return projectHistorySearchFromEffectiveTruth(input, projection);
+  }
   const groups = selection.highConfidenceDuplicateGroups;
-  const byId = new Map(
-    selection.analyticsReceipts.map((row) => [row.id, receiptRowToListRow(row)])
+  const partition = buildPurchaseTruthPartition(selection.analyticsReceipts);
+  const repByReceipt = partition.index.representativeReceiptIdByReceiptId;
+  const repRows = new Map(
+    selection.analyticsReceipts
+      .filter((row) => partition.representativeReceiptIds.includes(row.id))
+      .map((row) => [row.id, receiptRowToListRow(row)])
   );
 
   const seenReceipts = new Set<string>();
   const receiptResults: ReceiptListRow[] = [];
   for (const row of input.receiptResults) {
-    const repId = resolvePurchaseRepresentativeReceiptId(row.id, groups);
+    const hcRep = resolvePurchaseRepresentativeReceiptId(row.id, groups);
+    const repId = repByReceipt.get(hcRep) ?? repByReceipt.get(row.id) ?? hcRep;
     if (seenReceipts.has(repId)) continue;
     seenReceipts.add(repId);
-    const projected = byId.get(repId) ?? { ...row, id: repId };
+    const projected = repRows.get(repId) ?? { ...row, id: repId };
     receiptResults.push(projected);
   }
 
   const seenItems = new Set<string>();
   const itemResults: TItem[] = [];
   for (const item of input.itemResults) {
-    const repId = resolvePurchaseRepresentativeReceiptId(item.receiptId, groups);
+    const hcRep = resolvePurchaseRepresentativeReceiptId(item.receiptId, groups);
+    const repId =
+      repByReceipt.get(hcRep) ?? repByReceipt.get(item.receiptId) ?? hcRep;
     // Across duplicate scans, item row ids differ — collapse by display identity.
     const displayName = String(
       (item as { displayName?: string }).displayName ?? ''

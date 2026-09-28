@@ -1,4 +1,5 @@
 import type { ReceiptRow } from './db';
+import { classifyVerifiedPurchaseOccurrenceBundle } from './verifiedPurchaseOccurrenceProvenance';
 import type { EngagementProductRow } from './engagementMilestones';
 import {
   buildReceiptShoppingSummary,
@@ -260,6 +261,42 @@ export function buildHomeProgressiveExperience(
   ).experience;
 }
 
+function receiptHasAssignedVerifiedOccurrence(row: ReceiptRow): boolean {
+  return (
+    classifyVerifiedPurchaseOccurrenceBundle({
+      occurrenceId: row.verified_purchase_occurrence_id,
+      source: row.verified_purchase_occurrence_source,
+      verifiedAt: row.verified_purchase_occurrence_verified_at,
+    }).state === 'assigned'
+  );
+}
+
+/**
+ * Collapse only verified-active occurrences. Unrelated receipts stay as
+ * individual legacy Home inputs, including when another purchase is verified.
+ */
+function projectHomePurchaseReceipts(receipts: ReceiptRow[]): ReceiptRow[] {
+  if (!receipts.some(receiptHasAssignedVerifiedOccurrence)) return receipts;
+  const { buildEffectivePurchaseTruth } =
+    require('./purchaseTruthPartition') as typeof import('./purchaseTruthPartition');
+  const truth = buildEffectivePurchaseTruth(receipts);
+  const byId = new Map(receipts.map((row) => [row.id, row]));
+  const seenVerified = new Set<string>();
+  const out: ReceiptRow[] = [];
+  for (const row of receipts) {
+    const purchase = truth.purchaseByReceiptId.get(row.id);
+    if (!purchase?.verifiedActive) {
+      out.push(row);
+      continue;
+    }
+    if (seenVerified.has(purchase.representativeReceiptId)) continue;
+    seenVerified.add(purchase.representativeReceiptId);
+    const representative = byId.get(purchase.representativeReceiptId);
+    if (representative) out.push(representative);
+  }
+  return out;
+}
+
 /**
  * Same as {@link buildHomeProgressiveExperience} plus uncapped Repeat profiles
  * for focus dirty-skip Next Purchase reproject.
@@ -275,11 +312,12 @@ export function buildHomeProgressiveExperienceBundle(
   occurrencePreparedEvidence?: import('./canonicalPurchaseOccurrence').CanonicalPurchaseOccurrencePreparedEvidence | null
 ): HomeProgressiveExperienceBuildResult {
   const supportedReceipts = filterV1SupportedReceipts(receipts);
+  const purchaseReceipts = projectHomePurchaseReceipts(supportedReceipts);
   const localCount = countSupportedReceipts(receipts);
   const status =
     evaluation?.status ?? getEngagementMilestoneStatus(localCount);
   const stage = resolveProgressiveHomeStage(status.supportedReceiptCount);
-  const latestReceipt = [...supportedReceipts].sort(
+  const latestReceipt = [...purchaseReceipts].sort(
     (left, right) =>
       receiptTimestamp(right) - receiptTimestamp(left) ||
       right.id.localeCompare(left.id)
@@ -289,7 +327,7 @@ export function buildHomeProgressiveExperienceBundle(
     : null;
   const recentInsight =
     status.supportedReceiptCount >= 3
-      ? buildThreeReceiptMilestone(supportedReceipts)
+      ? buildThreeReceiptMilestone(purchaseReceipts)
       : null;
   const currentResult = evaluation?.currentResult ?? null;
   // Stage gate unchanged (frequent | profile). Data source = long-term SSOT.

@@ -1706,27 +1706,132 @@ function buildPairRelation(
 }
 
 /**
- * High-confidence duplicate groups with ALL-PAIRS compatibility (A1.3.1).
+ * Proven superset of pairs that can satisfy buildPairRelation.
+ *
+ * CONTENT_EXACT requires a shared non-empty contentFingerprint.
+ * STRUCTURAL_EXACT, RECONCILED_STRUCTURAL_EXACT, DISCOUNT_SHAPE,
+ * SEMANTIC_RESCAN, and QUANTITY_NOISE all require both sides
+ * hasExactTransactionTime and the same transactionAt.
+ * A pair outside both families is incompatible under the current predicates.
+ */
+function enumerateHighConfidenceCandidatePairs(
+  sortedIds: readonly string[],
+  byId: ReadonlyMap<string, AnalysisDDuplicateReceiptSummary>
+): Array<[string, string]> {
+  const seen = new Set<string>();
+  const pairs: Array<[string, string]> = [];
+  const addGroup = (group: readonly string[]) => {
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const key = pairKey(group[i]!, group[j]!);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const left = group[i]! <= group[j]! ? group[i]! : group[j]!;
+        const right = left === group[i]! ? group[j]! : group[i]!;
+        pairs.push([left, right]);
+      }
+    }
+  };
+
+  const byFingerprint = new Map<string, string[]>();
+  for (const id of sortedIds) {
+    const fingerprint = byId.get(id)!.contentFingerprint;
+    if (!fingerprint) continue;
+    let group = byFingerprint.get(fingerprint);
+    if (!group) {
+      group = [];
+      byFingerprint.set(fingerprint, group);
+    }
+    group.push(id);
+  }
+  for (const group of byFingerprint.values()) {
+    if (group.length >= 2) addGroup(group);
+  }
+
+  const byExactTransactionAt = new Map<number, string[]>();
+  for (const id of sortedIds) {
+    const summary = byId.get(id)!;
+    if (!summary.hasExactTransactionTime || summary.transactionAt == null) {
+      continue;
+    }
+    let group = byExactTransactionAt.get(summary.transactionAt);
+    if (!group) {
+      group = [];
+      byExactTransactionAt.set(summary.transactionAt, group);
+    }
+    group.push(id);
+  }
+  for (const group of byExactTransactionAt.values()) {
+    if (group.length >= 2) addGroup(group);
+  }
+
+  pairs.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  return pairs;
+}
+
+/**
+ * High-confidence duplicate groups with complete-link compatibility (A1.3.1).
  * Never forms a group solely from transitive Union-Find connectivity.
+ *
+ * Pair enumeration is the proven candidate superset above. `pairOracle:
+ * 'all-pairs'` is TEST-ONLY and preserves the previous exhaustive traversal.
  *
  * Optional `receipts` enables full representative quality SSOT scoring.
  */
-export function buildHighConfidenceDuplicateGroups(
+/** TEST-ONLY exhaustive all-pairs reference. Not a production entry point. */
+export function __buildHighConfidenceDuplicateGroupsAllPairsForTests(
   summaries: AnalysisDDuplicateReceiptSummary[],
   receipts?: readonly ReceiptRow[]
+): AnalysisDDuplicateGroup[] {
+  return buildHighConfidenceDuplicateGroups(summaries, receipts, 'all-pairs');
+}
+
+export function buildHighConfidenceDuplicateGroups(
+  summaries: AnalysisDDuplicateReceiptSummary[],
+  receipts?: readonly ReceiptRow[],
+  pairOracle?: 'all-pairs'
 ): AnalysisDDuplicateGroup[] {
   const receiptById = new Map((receipts ?? []).map((r) => [r.id, r]));
   const byId = new Map(summaries.map((s) => [s.receiptId, s]));
   const sortedIds = [...byId.keys()].sort((a, b) => a.localeCompare(b));
 
   const relationByPair = new Map<string, InternalPairRelation>();
-  for (let i = 0; i < sortedIds.length; i += 1) {
-    for (let j = i + 1; j < sortedIds.length; j += 1) {
-      const a = byId.get(sortedIds[i]!)!;
-      const b = byId.get(sortedIds[j]!)!;
-      const rel = buildPairRelation(a, b);
+  if (pairOracle === 'all-pairs') {
+    for (let i = 0; i < sortedIds.length; i += 1) {
+      for (let j = i + 1; j < sortedIds.length; j += 1) {
+        const a = byId.get(sortedIds[i]!)!;
+        const b = byId.get(sortedIds[j]!)!;
+        const rel = buildPairRelation(a, b);
+        if (!rel) continue;
+        relationByPair.set(pairKey(a.receiptId, b.receiptId), rel);
+      }
+    }
+  } else {
+    for (const [idA, idB] of enumerateHighConfidenceCandidatePairs(
+      sortedIds,
+      byId
+    )) {
+      const rel = buildPairRelation(byId.get(idA)!, byId.get(idB)!);
       if (!rel) continue;
-      relationByPair.set(pairKey(a.receiptId, b.receiptId), rel);
+      relationByPair.set(pairKey(idA, idB), rel);
+    }
+  }
+
+  const neighborLists = new Map<string, string[]>();
+  if (pairOracle !== 'all-pairs') {
+    for (const key of relationByPair.keys()) {
+      const splitAt = key.indexOf('\u001f');
+      const left = key.slice(0, splitAt);
+      const right = key.slice(splitAt + 1);
+      const leftList = neighborLists.get(left);
+      if (leftList) leftList.push(right);
+      else neighborLists.set(left, [right]);
+      const rightList = neighborLists.get(right);
+      if (rightList) rightList.push(left);
+      else neighborLists.set(right, [left]);
+    }
+    for (const list of neighborLists.values()) {
+      list.sort((a, b) => a.localeCompare(b));
     }
   }
 
@@ -1737,7 +1842,9 @@ export function buildHighConfidenceDuplicateGroups(
   for (const seed of sortedIds) {
     if (assigned.has(seed)) continue;
     const cluster = [seed];
-    for (const candidate of sortedIds) {
+    const candidateIds =
+      pairOracle === 'all-pairs' ? sortedIds : (neighborLists.get(seed) ?? []);
+    for (const candidate of candidateIds) {
       if (candidate === seed || assigned.has(candidate)) continue;
       const compatible = cluster.every((member) =>
         relationByPair.has(pairKey(member, candidate))

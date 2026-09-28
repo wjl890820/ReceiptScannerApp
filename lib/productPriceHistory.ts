@@ -9,6 +9,7 @@ import type {
   ReceiptAmountBasisAssessment,
 } from './analysisFoundation/types';
 import { initIfNeeded } from './db';
+import { verifiedPurchaseOccurrenceAliasedColumnsSql } from './receiptVerifiedPurchaseOccurrenceSelect';
 import type { ReceiptRow } from './db';
 import {
   buildCanonicalPurchaseOccurrenceIndex,
@@ -229,6 +230,10 @@ export type ProductPriceHistoryRow = {
   /** Distinct from occurredAt when transaction_at is null. */
   receiptTransactionAt?: number | null;
   receiptCreatedAt?: number | null;
+  /** Copied onto synthesized receipts so canonical occurrence can see lineage. */
+  verifiedPurchaseOccurrenceId?: string | null;
+  verifiedPurchaseOccurrenceSource?: string | null;
+  verifiedPurchaseOccurrenceVerifiedAt?: number | null;
 };
 
 export type ProductPriceHistoryDatabase = {
@@ -465,6 +470,10 @@ function synthesizeReceiptRowsForOccurrenceIndex(
       final_category: null,
       note: null,
       user_items_json: row.receiptUserItemsJson ?? null,
+      verified_purchase_occurrence_id: row.verifiedPurchaseOccurrenceId ?? null,
+      verified_purchase_occurrence_source: row.verifiedPurchaseOccurrenceSource ?? null,
+      verified_purchase_occurrence_verified_at:
+        row.verifiedPurchaseOccurrenceVerifiedAt ?? null,
     });
   }
   return [...byId.values()];
@@ -2258,7 +2267,8 @@ const PRICE_HISTORY_SELECT_SQL = `
     COALESCE(receipts.tax_is_known, 0) AS receiptTaxIsKnown,
     receipts.currency AS receiptCurrency,
     receipts.transaction_at AS receiptTransactionAt,
-    receipts.created_at AS receiptCreatedAt
+    receipts.created_at AS receiptCreatedAt,
+    ${verifiedPurchaseOccurrenceAliasedColumnsSql('receipts')}
   FROM receipt_items
   INNER JOIN receipts ON receipts.id = receipt_items.receipt_id`;
 

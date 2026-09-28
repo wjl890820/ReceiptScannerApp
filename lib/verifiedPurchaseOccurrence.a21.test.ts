@@ -562,14 +562,14 @@ describe('A2.1 backup / restore transport', () => {
     expect(apple).not.toContain('mapCloudReceiptToLocalInsert');
   });
 
-  it('analytics occurrence modules unchanged by A2.1 storage', () => {
-    expect(read('lib/canonicalPurchaseOccurrence.ts')).not.toContain(
+  it('analytics occurrence modules: verified truth is selection + canonical, not duplicate evidence', () => {
+    expect(read('lib/canonicalPurchaseOccurrence.ts')).toContain(
+      'verified_purchase_occurrence'
+    );
+    expect(read('lib/analyticsReceiptSelection.ts')).toContain(
       'verified_purchase_occurrence'
     );
     expect(read('lib/analysisDDuplicateAudit.ts')).not.toContain(
-      'verified_purchase_occurrence'
-    );
-    expect(read('lib/analyticsReceiptSelection.ts')).not.toContain(
       'verified_purchase_occurrence'
     );
   });

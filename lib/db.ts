@@ -2,6 +2,7 @@
 import * as SQLite from 'expo-sqlite';
 import { nanoid } from 'nanoid/non-secure';
 import { listReceiptsForListParams } from './receiptListQuery';
+import { verifiedPurchaseOccurrenceColumnsSql } from './receiptVerifiedPurchaseOccurrenceSelect';
 import { type MerchantType } from './merchantType';
 import {
   clearReceiptItemIndex,
@@ -1265,7 +1266,8 @@ async function listReceiptRowsWithDb(
       final_category,
       note,
       user_items_json,
-      transaction_source
+      transaction_source,
+      ${verifiedPurchaseOccurrenceColumnsSql()}
     FROM receipts
     WHERE ${scope.receiptWhereSql}
     ORDER BY COALESCE(transaction_at, created_at) DESC
@@ -1363,7 +1365,8 @@ export async function listReceiptsForList(
       final_total,
       final_category,
       note,
-      user_items_json
+      user_items_json,
+      ${verifiedPurchaseOccurrenceColumnsSql()}
     FROM receipts
     ${composed.whereClause}
     ORDER BY ${orderBy}
@@ -1463,7 +1466,8 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       final_total,
       final_category,
       note,
-      user_items_json
+      user_items_json,
+      ${verifiedPurchaseOccurrenceColumnsSql()}
     FROM receipts
     WHERE id = ?
       AND ${scope.receiptWhereSql}
@@ -1878,7 +1882,8 @@ async function readOwnerScopedReceiptRowsForPurchaseTruth(
       final_total,
       final_category,
       note,
-      user_items_json
+      user_items_json,
+      ${verifiedPurchaseOccurrenceColumnsSql()}
     FROM receipts
     WHERE ${scope.receiptWhereSql}
     ORDER BY COALESCE(transaction_at, created_at) DESC

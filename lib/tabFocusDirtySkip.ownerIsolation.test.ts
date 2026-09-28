@@ -98,6 +98,12 @@ function emptyHistoryTruth() {
       highConfidenceDuplicateGroups: [],
       keepSeparateReceiptIds: new Set<string>(),
     },
+    universeReceipts: [],
+    effective: {
+      purchases: [],
+      purchaseByReceiptId: new Map(),
+      selection: {} as never,
+    },
   };
 }
 

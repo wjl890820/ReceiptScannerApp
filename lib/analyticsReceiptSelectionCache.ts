@@ -52,7 +52,7 @@ function runSelectDirect(
  * v2 = decision-only cache (no caller receipt arrays).
  */
 export const ANALYTICS_RECEIPT_SELECTION_CACHE_VERSION =
-  'meruno-analytics-receipt-selection-decision-v2' as const;
+  'meruno-analytics-receipt-selection-decision-v3' as const;
 
 export type AnalyticsReceiptSelectionInvalidationReason =
   | 'receipt_saved'

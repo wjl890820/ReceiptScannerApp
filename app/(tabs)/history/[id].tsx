@@ -27,12 +27,10 @@ import {
   getReceipt,
   getReceiptsDatabase,
   listAllReceiptsForCurrentOwnerPurchaseTruth,
-  listReceipts,
   updateLogicalPurchaseItemEdit,
   type ReceiptRow,
 } from '@/lib/db';
 import {
-  HISTORY_PURCHASE_TRUTH_LOAD_LIMIT,
   resolveHistoryPurchaseDetailReceiptId,
   resolveHistoryPurchaseDeleteIds,
   resolveHistoryPurchaseEditMemberIds,
@@ -521,7 +519,7 @@ export default function ReceiptDetailScreen() {
         }
       }
 
-      const stored = await listReceipts(HISTORY_PURCHASE_TRUTH_LOAD_LIMIT);
+      const stored = await listAllReceiptsForCurrentOwnerPurchaseTruth();
       const memberIds = resolveHistoryPurchaseEditMemberIds(receipt.id, stored);
       await updateLogicalPurchaseItemEdit({
         memberReceiptIds: memberIds,
