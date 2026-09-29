@@ -14,7 +14,6 @@ import {
   replaceSyncOutboxIntent,
 } from './syncOutbox';
 import {
-  classifyVerifiedPurchaseOccurrenceBundle,
   generateVerifiedPurchaseOccurrenceId,
   isDurableEpochMs,
   isValidVerifiedPurchaseOccurrenceId,
@@ -22,6 +21,7 @@ import {
   type VerifiedPurchaseOccurrenceProvenance,
   type VerifiedPurchaseOccurrenceSource,
 } from './verifiedPurchaseOccurrenceProvenance';
+import { evaluateVerifiedPurchaseOccurrenceAssignment } from './verifiedPurchaseOccurrencePlan';
 
 export class VerifiedPurchaseOccurrenceAssignError extends Error {
   constructor(message: string) {
@@ -50,15 +50,6 @@ export type AssignVerifiedPurchaseOccurrenceResult = {
   source: VerifiedPurchaseOccurrenceSource;
   changedReceiptIds: string[];
   unchangedReceiptIds: string[];
-};
-
-type LoadedMember = {
-  id: string;
-  user_id: string | null;
-  verified_purchase_occurrence_id: string | null;
-  verified_purchase_occurrence_source: string | null;
-  verified_purchase_occurrence_verified_at: number | null;
-  bundle: ReturnType<typeof classifyVerifiedPurchaseOccurrenceBundle>;
 };
 
 function hasOwnParam<K extends string>(
@@ -168,104 +159,49 @@ export async function assignVerifiedPurchaseOccurrenceWithDb(
       [...uniqueIds, userId]
     );
 
-    if ((rows ?? []).length !== uniqueIds.length) {
-      const found = new Set((rows ?? []).map((r) => r.id));
-      const missing = uniqueIds.filter((id) => !found.has(id));
-      throw new VerifiedPurchaseOccurrenceAssignError(
-        `missing or wrong-owner receipts: ${missing.join(', ')}`
-      );
-    }
-
-    const members: LoadedMember[] = (rows ?? []).map((row) => {
-      const bundle = classifyVerifiedPurchaseOccurrenceBundle({
-        occurrenceId: row.verified_purchase_occurrence_id,
-        source: row.verified_purchase_occurrence_source,
-        verifiedAt: row.verified_purchase_occurrence_verified_at,
-      });
-      return {
-        id: row.id,
-        user_id: row.user_id,
-        verified_purchase_occurrence_id: row.verified_purchase_occurrence_id,
-        verified_purchase_occurrence_source:
-          row.verified_purchase_occurrence_source,
-        verified_purchase_occurrence_verified_at:
-          row.verified_purchase_occurrence_verified_at,
-        bundle,
-      };
+    const decision = evaluateVerifiedPurchaseOccurrenceAssignment({
+      requestedReceiptIds: uniqueIds,
+      foundRows: rows ?? [],
+      suppliedOccurrenceId,
+      fallbackSource: params.source,
     });
 
-    for (const member of members) {
-      if (member.bundle.state === 'invalid') {
-        throw new VerifiedPurchaseOccurrenceAssignError(
-          `malformed verified provenance on receipt ${member.id}: ${member.bundle.reason}`
-        );
-      }
-    }
-
-    const assignedIds = new Set<string>();
-    let existingSourceForG: VerifiedPurchaseOccurrenceSource | null = null;
-    for (const member of members) {
-      if (member.bundle.state === 'assigned') {
-        assignedIds.add(member.bundle.value.occurrenceId);
-        if (existingSourceForG == null) {
-          existingSourceForG = member.bundle.value.source;
-        }
-      }
-    }
-
-    let targetId: string;
-    if (suppliedOccurrenceId != null) {
-      targetId = suppliedOccurrenceId;
-    } else if (assignedIds.size === 0) {
-      targetId = generateVerifiedPurchaseOccurrenceId();
-    } else if (assignedIds.size === 1) {
-      targetId = [...assignedIds][0]!;
-    } else {
+    if (decision.status === 'BLOCK_MISSING_RECEIPT') {
       throw new VerifiedPurchaseOccurrenceAssignError(
-        'conflicting verified_purchase_occurrence_id among members'
+        `missing or wrong-owner receipts: ${decision.missingReceiptIds.join(', ')}`
       );
     }
-
-    for (const member of members) {
-      if (
-        member.bundle.state === 'assigned' &&
-        member.bundle.value.occurrenceId !== targetId
-      ) {
+    if (decision.status === 'BLOCK_INVALID_PROVENANCE') {
+      throw new VerifiedPurchaseOccurrenceAssignError(
+        `malformed verified provenance on receipt ${decision.receiptId}: ${decision.reason}`
+      );
+    }
+    if (decision.status === 'BLOCK_CONFLICT') {
+      if (decision.conflict === 'multiple_existing_ids') {
         throw new VerifiedPurchaseOccurrenceAssignError(
-          `receipt ${member.id} already assigned to a different occurrence`
+          'conflicting verified_purchase_occurrence_id among members'
         );
       }
+      throw new VerifiedPurchaseOccurrenceAssignError(
+        `receipt ${decision.receiptId} already assigned to a different occurrence`
+      );
     }
-
-    const toAssign: LoadedMember[] = [];
-    const unchanged: string[] = [];
-    for (const member of members) {
-      if (
-        member.bundle.state === 'assigned' &&
-        member.bundle.value.occurrenceId === targetId
-      ) {
-        unchanged.push(member.id);
-      } else if (member.bundle.state === 'unassigned') {
-        toAssign.push(member);
-      } else {
-        // Defensive: assigned-to-other already rejected; invalid already rejected.
-        throw new VerifiedPurchaseOccurrenceAssignError(
-          `unexpected membership state for receipt ${member.id}`
-        );
-      }
-    }
-
-    if (toAssign.length === 0) {
+    if (decision.status === 'ALREADY_ASSIGNED') {
       outcome.result = {
-        occurrenceId: targetId,
-        source: existingSourceForG ?? params.source,
+        occurrenceId: decision.occurrenceId,
+        source: decision.source,
         changedReceiptIds: [],
-        unchangedReceiptIds: unchanged,
+        unchangedReceiptIds: decision.unchangedReceiptIds,
       };
       return;
     }
 
-    for (const member of toAssign) {
+    const targetId =
+      decision.status === 'READY_CREATE_NEW'
+        ? generateVerifiedPurchaseOccurrenceId()
+        : decision.occurrenceId;
+
+    for (const memberId of decision.toAssignReceiptIds) {
       const updateResult = await txn.runAsync(
         `
         UPDATE receipts
@@ -285,17 +221,17 @@ export async function assignVerifiedPurchaseOccurrenceWithDb(
           params.source,
           verifiedAtForNew,
           now,
-          member.id,
+          memberId,
           userId,
         ]
       );
       if ((updateResult?.changes ?? 0) !== 1) {
         throw new VerifiedPurchaseOccurrenceAssignError(
-          `stale verified membership state for receipt ${member.id}`
+          `stale verified membership state for receipt ${memberId}`
         );
       }
       await replaceSyncOutboxIntent(txn, {
-        receiptId: member.id,
+        receiptId: memberId,
         userId,
         operation: 'upsert',
         intentId: generateSyncIntentId(),
@@ -306,8 +242,8 @@ export async function assignVerifiedPurchaseOccurrenceWithDb(
     outcome.result = {
       occurrenceId: targetId,
       source: params.source,
-      changedReceiptIds: toAssign.map((m) => m.id),
-      unchangedReceiptIds: unchanged,
+      changedReceiptIds: decision.toAssignReceiptIds,
+      unchangedReceiptIds: decision.unchangedReceiptIds,
     };
   });
 
