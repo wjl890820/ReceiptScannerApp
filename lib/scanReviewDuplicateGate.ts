@@ -4,10 +4,11 @@ import {
   type HighConfidenceDuplicateReceiptGroupMembership,
 } from './analyticsReceiptSelection';
 import { getReceipt, listReceiptsForAnalysis, type ReceiptRow } from './db';
+import { evaluateExactTransactionReceiptCollision } from './receiptExactTransactionCollision';
 import {
-  evaluateExactTransactionReceiptCollision,
-  type ExactTransactionReceiptCollision,
-} from './receiptExactTransactionCollision';
+  evaluateMinuteStrictRescanAdvisory,
+  MINUTE_STRICT_ADVISORY_MATCH_KIND,
+} from './scanReviewMinuteStrictAdvisory';
 import { projectReceiptSaveMaterialEvidence } from './receiptSaveProjection';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 
@@ -20,6 +21,10 @@ export type ScanReviewDuplicateGateContext = {
   >;
 };
 
+export type ScanReviewDuplicateMatchKind =
+  | 'SECOND_EXACT'
+  | typeof MINUTE_STRICT_ADVISORY_MATCH_KIND;
+
 export type ScanReviewDuplicateGateMatch = {
   existingReceiptId: string;
   evidenceKey: string;
@@ -28,6 +33,8 @@ export type ScanReviewDuplicateGateMatch = {
   total: number;
   currency: string;
   itemCount: number;
+  /** SECOND_EXACT is durable-clock collision. MINUTE_STRICT_ADVISORY is warning-only. */
+  matchKind: ScanReviewDuplicateMatchKind;
 };
 
 export type ScanReviewDuplicateGateLifecycle = {
@@ -121,7 +128,12 @@ export function buildTransientScanReviewReceipt(input: {
 
 type CollisionDestination = {
   destination: ReceiptRow;
-  collision: ExactTransactionReceiptCollision;
+  storeHintLeft: string | null;
+  storeHintRight: string | null;
+  evidenceKey: string;
+  transactionAt: number;
+  itemCount: number;
+  matchKind: ScanReviewDuplicateMatchKind;
 };
 
 function resolveStoredDestination(
@@ -139,7 +151,9 @@ function compareCollisionDestinations(
 ): number {
   const createdDelta = left.destination.created_at - right.destination.created_at;
   if (createdDelta !== 0) return createdDelta;
-  return left.destination.id.localeCompare(right.destination.id);
+  if (left.destination.id < right.destination.id) return -1;
+  if (left.destination.id > right.destination.id) return 1;
+  return 0;
 }
 
 /**
@@ -165,25 +179,45 @@ export function evaluateScanReviewDuplicateGate(
       transientReceipt,
       stored
     );
-    if (!collision.collided) continue;
+    const advisory = collision.collided
+      ? null
+      : evaluateMinuteStrictRescanAdvisory(transientReceipt, stored);
+    const hit: Omit<CollisionDestination, 'destination'> | null = collision.collided
+      ? {
+          storeHintLeft: collision.storeHintLeft,
+          storeHintRight: collision.storeHintRight,
+          evidenceKey: collision.evidenceKey,
+          transactionAt: collision.transactionAt,
+          itemCount: collision.itemCount,
+          matchKind: 'SECOND_EXACT',
+        }
+      : advisory?.matched
+        ? {
+            storeHintLeft: advisory.storeHintLeft,
+            storeHintRight: advisory.storeHintRight,
+            evidenceKey: advisory.evidenceKey,
+            transactionAt: advisory.transactionAt,
+            itemCount: advisory.itemCount,
+            matchKind: MINUTE_STRICT_ADVISORY_MATCH_KIND,
+          }
+        : null;
+    if (!hit) continue;
     if (draftStoreHint === undefined) {
-      draftStoreHint = collision.storeHintLeft;
+      draftStoreHint = hit.storeHintLeft;
     }
-    if (collision.storeHintRight) {
-      observedStoreHints.add(collision.storeHintRight);
+    if (hit.storeHintRight) {
+      observedStoreHints.add(hit.storeHintRight);
     }
     const destination = resolveStoredDestination(stored, context);
     if (!destination || destination.id === transientReceipt.id) continue;
-    matches.push({ destination, collision });
+    matches.push({ destination, ...hit });
   }
 
   if (matches.length === 0) return null;
 
   const branchAmbiguous = observedStoreHints.size > 1;
   const draftHasNoStoreHint = !draftStoreHint;
-  const genericMatches = matches.filter(
-    (match) => match.collision.storeHintRight == null
-  );
+  const genericMatches = matches.filter((match) => match.storeHintRight == null);
 
   let candidates = matches;
   if (branchAmbiguous) {
@@ -206,12 +240,13 @@ export function evaluateScanReviewDuplicateGate(
 
   return {
     existingReceiptId: selected.destination.id,
-    evidenceKey: selected.collision.evidenceKey,
+    evidenceKey: selected.evidenceKey,
     merchantDisplay,
-    transactionAt: selected.collision.transactionAt,
+    transactionAt: selected.transactionAt,
     total: selected.destination.total,
     currency: selected.destination.currency,
-    itemCount: selected.collision.itemCount,
+    itemCount: selected.itemCount,
+    matchKind: selected.matchKind,
   };
 }
 
