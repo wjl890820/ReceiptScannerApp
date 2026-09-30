@@ -23,8 +23,16 @@ import { deriveRetailerIdentity } from './retailerIdentity';
 export const MINUTE_STRICT_ADVISORY_MATCH_KIND =
   'MINUTE_STRICT_ADVISORY' as const;
 
+export const MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND =
+  'MINUTE_SINGLE_NAME_DRIFT_ADVISORY' as const;
+
+export const MINUTE_SINGLE_NAME_DRIFT_MIN_ITEM_COUNT = 5;
+
 export const MINUTE_STRICT_RESCAN_ADVISORY_VERSION =
   'meruno-minute-strict-rescan-advisory-v1' as const;
+
+export const MINUTE_SINGLE_NAME_DRIFT_ADVISORY_VERSION =
+  'meruno-minute-single-name-drift-advisory-v1' as const;
 
 export type MinuteStrictAdvisoryRejectReason =
   | 'same_receipt'
@@ -420,6 +428,138 @@ export function evaluateMinuteStrictRescanAdvisory(
     total: leftTotalUnits,
     currency: leftCurrency,
     itemCount: leftBasket.length,
+    storeHintLeft: merchant.storeHintLeft,
+    storeHintRight: merchant.storeHintRight,
+  };
+}
+
+export type MinuteSingleNameDriftRejectReason =
+  | MinuteStrictAdvisoryRejectReason
+  | 'strict_already_matched'
+  | 'item_count'
+  | 'quantity_mismatch'
+  | 'amount_mismatch'
+  | 'name_drift_count';
+
+export type MinuteSingleNameDriftAdvisoryResult =
+  | {
+      matched: true;
+      reason: typeof MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND;
+      evidenceKey: string;
+      leftReceiptId: string;
+      rightReceiptId: string;
+      transactionAt: number;
+      total: number;
+      currency: string;
+      itemCount: number;
+      exactNameMatchCount: number;
+      nameMismatchCount: 1;
+      nameMismatchIndex: number;
+      storeHintLeft: string | null;
+      storeHintRight: string | null;
+    }
+  | {
+      matched: false;
+      reason: MinuteSingleNameDriftRejectReason;
+    };
+
+function rejectDrift(
+  reason: MinuteSingleNameDriftRejectReason
+): MinuteSingleNameDriftAdvisoryResult {
+  return { matched: false, reason };
+}
+
+/**
+ * Scan-review warning when a minute-strict pair differs by exactly one
+ * canonical item name. Names are not compared for similarity.
+ * Runs only after Tier 2 reports basket_mismatch.
+ */
+export function evaluateMinuteSingleNameDriftRescanAdvisory(
+  left: ReceiptRow,
+  right: ReceiptRow
+): MinuteSingleNameDriftAdvisoryResult {
+  const strict = evaluateMinuteStrictRescanAdvisory(left, right);
+  if (strict.matched) return rejectDrift('strict_already_matched');
+  if (strict.reason !== 'basket_mismatch') return rejectDrift(strict.reason);
+
+  const leftBasket = readStrictAdvisoryBasket(left);
+  const rightBasket = readStrictAdvisoryBasket(right);
+  if (!leftBasket || !rightBasket) return rejectDrift('basket_invalid');
+  if (
+    leftBasket.length !== rightBasket.length ||
+    leftBasket.length < MINUTE_SINGLE_NAME_DRIFT_MIN_ITEM_COUNT
+  ) {
+    return rejectDrift('item_count');
+  }
+
+  let nameMismatchCount = 0;
+  let nameMismatchIndex = -1;
+  for (let index = 0; index < leftBasket.length; index += 1) {
+    const leftLine = leftBasket[index]!;
+    const rightLine = rightBasket[index]!;
+    if (leftLine.quantity !== rightLine.quantity) return rejectDrift('quantity_mismatch');
+    if (leftLine.lineAmountYen !== rightLine.lineAmountYen) {
+      return rejectDrift('amount_mismatch');
+    }
+    if (leftLine.nameCanonical !== rightLine.nameCanonical) {
+      nameMismatchCount += 1;
+      nameMismatchIndex = index;
+    }
+  }
+  if (nameMismatchCount !== 1 || nameMismatchIndex < 0) {
+    return rejectDrift('name_drift_count');
+  }
+
+  const merchant = merchantRelation(left, right);
+  if (!merchant.ok) return rejectDrift(merchant.reason);
+  const leftCurrency = normalizeShadowCurrency(left);
+  const rightCurrency = normalizeShadowCurrency(right);
+  if (
+    !isShadowAuthorizingCurrency(leftCurrency) ||
+    !isShadowAuthorizingCurrency(rightCurrency)
+  ) {
+    return rejectDrift('currency_not_supported');
+  }
+  if (leftCurrency !== rightCurrency) return rejectDrift('currency_mismatch');
+  const totalYen = exactPositiveIntegerYen(left.total);
+  const otherTotalYen = exactPositiveIntegerYen(right.total);
+  if (totalYen == null || otherTotalYen == null) return rejectDrift('total_invalid');
+  if (totalYen !== otherTotalYen) return rejectDrift('total_mismatch');
+  if (left.tax_is_known !== 1 || right.tax_is_known !== 1) {
+    return rejectDrift('tax_not_known');
+  }
+  const taxYen = exactIntegerYen(left.tax);
+  const otherTaxYen = exactIntegerYen(right.tax);
+  if (taxYen == null || otherTaxYen == null) return rejectDrift('tax_invalid');
+  if (taxYen !== otherTaxYen) return rejectDrift('tax_mismatch');
+
+  return {
+    matched: true,
+    reason: MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND,
+    evidenceKey: JSON.stringify([
+      MINUTE_SINGLE_NAME_DRIFT_ADVISORY_VERSION,
+      merchant.merchantKey,
+      left.transaction_at,
+      leftCurrency,
+      totalYen,
+      taxYen,
+      nameMismatchIndex,
+      leftBasket.map((row, index) => [
+        row.nameCanonical,
+        rightBasket[index]!.nameCanonical,
+        row.quantity,
+        row.lineAmountYen,
+      ]),
+    ]),
+    leftReceiptId: left.id,
+    rightReceiptId: right.id,
+    transactionAt: left.transaction_at as number,
+    total: totalYen,
+    currency: leftCurrency,
+    itemCount: leftBasket.length,
+    exactNameMatchCount: leftBasket.length - 1,
+    nameMismatchCount: 1,
+    nameMismatchIndex,
     storeHintLeft: merchant.storeHintLeft,
     storeHintRight: merchant.storeHintRight,
   };

@@ -6,7 +6,9 @@ import {
 import { getReceipt, listReceiptsForAnalysis, type ReceiptRow } from './db';
 import { evaluateExactTransactionReceiptCollision } from './receiptExactTransactionCollision';
 import {
+  evaluateMinuteSingleNameDriftRescanAdvisory,
   evaluateMinuteStrictRescanAdvisory,
+  MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND,
   MINUTE_STRICT_ADVISORY_MATCH_KIND,
 } from './scanReviewMinuteStrictAdvisory';
 import { projectReceiptSaveMaterialEvidence } from './receiptSaveProjection';
@@ -23,7 +25,8 @@ export type ScanReviewDuplicateGateContext = {
 
 export type ScanReviewDuplicateMatchKind =
   | 'SECOND_EXACT'
-  | typeof MINUTE_STRICT_ADVISORY_MATCH_KIND;
+  | typeof MINUTE_STRICT_ADVISORY_MATCH_KIND
+  | typeof MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND;
 
 export type ScanReviewDuplicateGateMatch = {
   existingReceiptId: string;
@@ -33,7 +36,10 @@ export type ScanReviewDuplicateGateMatch = {
   total: number;
   currency: string;
   itemCount: number;
-  /** SECOND_EXACT is durable-clock collision. MINUTE_STRICT_ADVISORY is warning-only. */
+  /**
+   * SECOND_EXACT is the second-precision collision.
+   * The minute kinds are Scan Review warnings only.
+   */
   matchKind: ScanReviewDuplicateMatchKind;
 };
 
@@ -145,10 +151,24 @@ function resolveStoredDestination(
   return context.receiptById.get(membership.representativeReceiptId) ?? null;
 }
 
+function duplicateEvidenceRank(kind: ScanReviewDuplicateMatchKind): number {
+  switch (kind) {
+    case 'SECOND_EXACT':
+      return 0;
+    case 'MINUTE_STRICT_ADVISORY':
+      return 1;
+    case 'MINUTE_SINGLE_NAME_DRIFT_ADVISORY':
+      return 2;
+  }
+}
+
 function compareCollisionDestinations(
   left: CollisionDestination,
   right: CollisionDestination
 ): number {
+  const rankDelta =
+    duplicateEvidenceRank(left.matchKind) - duplicateEvidenceRank(right.matchKind);
+  if (rankDelta !== 0) return rankDelta;
   const createdDelta = left.destination.created_at - right.destination.created_at;
   if (createdDelta !== 0) return createdDelta;
   if (left.destination.id < right.destination.id) return -1;
@@ -182,6 +202,10 @@ export function evaluateScanReviewDuplicateGate(
     const advisory = collision.collided
       ? null
       : evaluateMinuteStrictRescanAdvisory(transientReceipt, stored);
+    const nameDrift =
+      advisory && !advisory.matched
+        ? evaluateMinuteSingleNameDriftRescanAdvisory(transientReceipt, stored)
+        : null;
     const hit: Omit<CollisionDestination, 'destination'> | null = collision.collided
       ? {
           storeHintLeft: collision.storeHintLeft,
@@ -200,7 +224,16 @@ export function evaluateScanReviewDuplicateGate(
             itemCount: advisory.itemCount,
             matchKind: MINUTE_STRICT_ADVISORY_MATCH_KIND,
           }
-        : null;
+        : nameDrift?.matched
+          ? {
+              storeHintLeft: nameDrift.storeHintLeft,
+              storeHintRight: nameDrift.storeHintRight,
+              evidenceKey: nameDrift.evidenceKey,
+              transactionAt: nameDrift.transactionAt,
+              itemCount: nameDrift.itemCount,
+              matchKind: MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND,
+            }
+          : null;
     if (!hit) continue;
     if (draftStoreHint === undefined) {
       draftStoreHint = hit.storeHintLeft;
