@@ -147,7 +147,9 @@ function assertSelectOnly(sql: string): void {
   }
 }
 
-function assertExactReceiptIds(receiptIds: readonly string[]): string[] {
+export function assertExactVerifiedOccurrenceReceiptIds(
+  receiptIds: readonly string[]
+): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of receiptIds) {
@@ -321,7 +323,7 @@ export async function dryRunVerifiedPurchaseOccurrenceRepairWithDb(
       'unsupported verified_purchase_occurrence_source'
     );
   }
-  const receiptIds = assertExactReceiptIds(params.receiptIds);
+  const receiptIds = assertExactVerifiedOccurrenceReceiptIds(params.receiptIds);
   const verifiedAt =
     params.nowMs === undefined ? Date.now() : params.nowMs;
   if (!isDurableEpochMs(verifiedAt)) {

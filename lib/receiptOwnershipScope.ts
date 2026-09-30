@@ -163,6 +163,19 @@ export function buildOwnerScopedInventoryPredicates(ownerKey: string): {
   };
 }
 
+/**
+ * User id from a ready user-owner scope.
+ * Installation scopes and unavailable scopes return null.
+ */
+export function userIdFromReadyOwnerScope(
+  scope: LocalReceiptOwnerScope
+): string | null {
+  if (scope.status !== 'ready') return null;
+  const parsed = parseOwnerKey(scope.ownerKey);
+  if (!parsed || parsed.kind !== 'user') return null;
+  return parsed.id;
+}
+
 export async function resolveCurrentLocalReceiptOwnerScope(): Promise<LocalReceiptOwnerScope> {
   return resolveCurrentLocalReceiptOwnerScopeAttempt(0);
 }

@@ -1378,14 +1378,25 @@ export default function SettingsScreen() {
           <Text style={styles.devSectionLabel}>Internal / Validation</Text>
           <View style={styles.group}>
             {showAnalysisDDiagnostics ? (
-              <SettingsRow
-                title="Analysis D Diagnostics"
-                subtitle="Read-only real-data validation report"
-                onPress={() =>
-                  router.push('/analysis-d-diagnostics' as Href)
-                }
-                accessibilityLabel="Analysis D Diagnostics"
-              />
+              <>
+                <SettingsRow
+                  title="Analysis D Diagnostics"
+                  subtitle="Read-only real-data validation report"
+                  onPress={() =>
+                    router.push('/analysis-d-diagnostics' as Href)
+                  }
+                  accessibilityLabel="Analysis D Diagnostics"
+                />
+                <View style={styles.separator} />
+                <SettingsRow
+                  title="Verified Occurrence Repair"
+                  subtitle="Exact-ID dry run, then user-verified assignment"
+                  onPress={() =>
+                    router.push('/verified-occurrence-repair' as Href)
+                  }
+                  accessibilityLabel="Verified Occurrence Repair"
+                />
+              </>
             ) : null}
             {showAnalysisDDiagnostics && showExperimentSnapshot ? (
               <View style={styles.separator} />
