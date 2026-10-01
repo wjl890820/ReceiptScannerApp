@@ -34,6 +34,18 @@ export const MINUTE_STRICT_RESCAN_ADVISORY_VERSION =
 export const MINUTE_SINGLE_NAME_DRIFT_ADVISORY_VERSION =
   'meruno-minute-single-name-drift-advisory-v2' as const;
 
+export const MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND =
+  'MINUTE_MULTI_NAME_DRIFT_ADVISORY' as const;
+
+export const MINUTE_MULTI_NAME_DRIFT_ADVISORY_VERSION =
+  'meruno-minute-multi-name-drift-advisory-v1' as const;
+
+export const MINUTE_MULTI_NAME_DRIFT_MIN_ITEM_COUNT = 10;
+
+/** Inclusive genuine-name bounds. Whitespace-only rows are not genuine. */
+export const MINUTE_MULTI_NAME_DRIFT_MIN_GENUINE = 2;
+export const MINUTE_MULTI_NAME_DRIFT_MAX_GENUINE = 3;
+
 export type MinuteStrictAdvisoryRejectReason =
   | 'same_receipt'
   | 'unsupported_transaction_source'
@@ -581,6 +593,158 @@ export function evaluateMinuteSingleNameDriftRescanAdvisory(
   };
 }
 
+export type MinuteMultiNameDriftRejectReason =
+  | MinuteSingleNameDriftRejectReason
+  | 'single_name_already_matched'
+  | 'genuine_name_count'
+  | 'aligned_name_support';
+
+export type MinuteMultiNameDriftAdvisoryResult =
+  | {
+      matched: true;
+      reason: typeof MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND;
+      evidenceKey: string;
+      leftReceiptId: string;
+      rightReceiptId: string;
+      transactionAt: number;
+      total: number;
+      currency: string;
+      itemCount: number;
+      strictNameMatchCount: number;
+      whitespaceOnlyDifferenceCount: number;
+      genuineNameMismatchCount: number;
+      genuineNameMismatchIndices: number[];
+      alignedNameSupportCount: number;
+      storeHintLeft: string | null;
+      storeHintRight: string | null;
+    }
+  | {
+      matched: false;
+      reason: MinuteMultiNameDriftRejectReason;
+    };
+
+function rejectMulti(
+  reason: MinuteMultiNameDriftRejectReason
+): MinuteMultiNameDriftAdvisoryResult {
+  return { matched: false, reason };
+}
+
+/**
+ * Lower-confidence scan-review warning for two or three genuine name drifts.
+ * Requires itemCount >= 10 and aligned-name support of at least 3/4.
+ * Whitespace-only rows support alignment and are not genuine drifts.
+ * Runs only after Tier 3 reports name_drift_count.
+ */
+export function evaluateMinuteMultiNameDriftRescanAdvisory(
+  left: ReceiptRow,
+  right: ReceiptRow
+): MinuteMultiNameDriftAdvisoryResult {
+  const single = evaluateMinuteSingleNameDriftRescanAdvisory(left, right);
+  if (single.matched) return rejectMulti('single_name_already_matched');
+  if (single.reason !== 'name_drift_count') return rejectMulti(single.reason);
+
+  const leftBasket = readStrictAdvisoryBasket(left);
+  const rightBasket = readStrictAdvisoryBasket(right);
+  if (!leftBasket || !rightBasket) return rejectMulti('basket_invalid');
+  if (
+    leftBasket.length !== rightBasket.length ||
+    leftBasket.length < MINUTE_MULTI_NAME_DRIFT_MIN_ITEM_COUNT
+  ) {
+    return rejectMulti('item_count');
+  }
+
+  let strictNameMatchCount = 0;
+  let whitespaceOnlyDifferenceCount = 0;
+  const genuineNameMismatchIndices: number[] = [];
+  for (let index = 0; index < leftBasket.length; index += 1) {
+    const leftLine = leftBasket[index]!;
+    const rightLine = rightBasket[index]!;
+    if (leftLine.quantity !== rightLine.quantity) return rejectMulti('quantity_mismatch');
+    if (leftLine.lineAmountYen !== rightLine.lineAmountYen) {
+      return rejectMulti('amount_mismatch');
+    }
+    if (leftLine.nameCanonical === rightLine.nameCanonical) {
+      strictNameMatchCount += 1;
+      continue;
+    }
+    if (
+      whitespaceInsensitiveAdvisoryName(leftLine.nameCanonical) ===
+      whitespaceInsensitiveAdvisoryName(rightLine.nameCanonical)
+    ) {
+      whitespaceOnlyDifferenceCount += 1;
+      continue;
+    }
+    genuineNameMismatchIndices.push(index);
+  }
+  const genuineNameMismatchCount = genuineNameMismatchIndices.length;
+  if (
+    genuineNameMismatchCount < MINUTE_MULTI_NAME_DRIFT_MIN_GENUINE ||
+    genuineNameMismatchCount > MINUTE_MULTI_NAME_DRIFT_MAX_GENUINE
+  ) {
+    return rejectMulti('genuine_name_count');
+  }
+  const alignedNameSupportCount = strictNameMatchCount + whitespaceOnlyDifferenceCount;
+  if (alignedNameSupportCount * 4 < leftBasket.length * 3) {
+    return rejectMulti('aligned_name_support');
+  }
+
+  const merchant = merchantRelation(left, right);
+  if (!merchant.ok) return rejectMulti(merchant.reason);
+  const leftCurrency = normalizeShadowCurrency(left);
+  const rightCurrency = normalizeShadowCurrency(right);
+  if (
+    !isShadowAuthorizingCurrency(leftCurrency) ||
+    !isShadowAuthorizingCurrency(rightCurrency)
+  ) {
+    return rejectMulti('currency_not_supported');
+  }
+  if (leftCurrency !== rightCurrency) return rejectMulti('currency_mismatch');
+  const totalYen = exactPositiveIntegerYen(left.total);
+  const otherTotalYen = exactPositiveIntegerYen(right.total);
+  if (totalYen == null || otherTotalYen == null) return rejectMulti('total_invalid');
+  if (totalYen !== otherTotalYen) return rejectMulti('total_mismatch');
+  if (left.tax_is_known !== 1 || right.tax_is_known !== 1) {
+    return rejectMulti('tax_not_known');
+  }
+  const taxYen = exactIntegerYen(left.tax);
+  const otherTaxYen = exactIntegerYen(right.tax);
+  if (taxYen == null || otherTaxYen == null) return rejectMulti('tax_invalid');
+  if (taxYen !== otherTaxYen) return rejectMulti('tax_mismatch');
+
+  return {
+    matched: true,
+    reason: MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND,
+    evidenceKey: JSON.stringify([
+      MINUTE_MULTI_NAME_DRIFT_ADVISORY_VERSION,
+      merchant.merchantKey,
+      left.transaction_at,
+      leftCurrency,
+      totalYen,
+      taxYen,
+      genuineNameMismatchIndices,
+      leftBasket.map((row, index) => [
+        row.nameCanonical,
+        rightBasket[index]!.nameCanonical,
+        row.quantity,
+        row.lineAmountYen,
+      ]),
+    ]),
+    leftReceiptId: left.id,
+    rightReceiptId: right.id,
+    transactionAt: left.transaction_at as number,
+    total: totalYen,
+    currency: leftCurrency,
+    itemCount: leftBasket.length,
+    strictNameMatchCount,
+    whitespaceOnlyDifferenceCount,
+    genuineNameMismatchCount,
+    genuineNameMismatchIndices,
+    alignedNameSupportCount,
+    storeHintLeft: merchant.storeHintLeft,
+    storeHintRight: merchant.storeHintRight,
+  };
+}
+
 export const SCAN_REVIEW_DUPLICATE_CANDIDATE_DIAG_EVENT =
   'scan_review_duplicate_candidate_diag' as const;
 
@@ -588,6 +752,7 @@ export type ScanReviewDuplicateCandidateMatchKind =
   | 'SECOND_EXACT'
   | typeof MINUTE_STRICT_ADVISORY_MATCH_KIND
   | typeof MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND
+  | typeof MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND
   | 'none';
 
 /**
@@ -676,12 +841,15 @@ export function diagnoseMinuteDuplicateCandidate(input: {
   right: ReceiptRow;
   strict: MinuteStrictRescanAdvisoryResult;
   drift: MinuteSingleNameDriftAdvisoryResult | null;
+  multi?: MinuteMultiNameDriftAdvisoryResult | null;
 }): ScanReviewDuplicateCandidateDiag {
   const matchKind: ScanReviewDuplicateCandidateMatchKind = input.strict.matched
     ? MINUTE_STRICT_ADVISORY_MATCH_KIND
     : input.drift?.matched
       ? MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND
-      : 'none';
+      : input.multi?.matched
+        ? MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND
+        : 'none';
   const diag: ScanReviewDuplicateCandidateDiag = {
     event: SCAN_REVIEW_DUPLICATE_CANDIDATE_DIAG_EVENT,
     candidateReceiptId: input.right.id,

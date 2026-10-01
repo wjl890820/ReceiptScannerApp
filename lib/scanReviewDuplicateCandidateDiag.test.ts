@@ -259,7 +259,9 @@ describe('scan review duplicate candidate diagnostics', () => {
         items: baseLines(12).map((row, index) => {
           if (index === 1) return { ...row, name: 'synthdrink 1.5' };
           if (index === 3) return { ...row, name: 'abc123' };
+          if (index === 5) return { ...row, name: 'token-right-b' };
           if (index === 8) return { ...row, name: 'completely-different-token' };
+          if (index === 10) return { ...row, name: 'token-right-d' };
           return row;
         }),
       }),
@@ -269,7 +271,9 @@ describe('scan review duplicate candidate diagnostics', () => {
       items: baseLines(12).map((row, index) => {
         if (index === 1) return { ...row, name: 'synth drink 1.5' };
         if (index === 3) return { ...row, name: 'abc-123' };
+        if (index === 5) return { ...row, name: 'token-left-b' };
         if (index === 8) return { ...row, name: 'synth-line-seven' };
+        if (index === 10) return { ...row, name: 'token-left-d' };
         return row;
       }),
       id: 'syn-diag-two-left',
@@ -279,7 +283,7 @@ describe('scan review duplicate candidate diagnostics', () => {
       driftReason: 'name_drift_count',
       matchKind: 'none',
       firstMismatchIndex: 3,
-      nameMismatchCount: 2,
+      nameMismatchCount: 4,
       whitespaceOnlyDifferenceCount: 1,
     });
     assertCurrentDiagClean();

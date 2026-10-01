@@ -8,10 +8,13 @@ import { evaluateExactTransactionReceiptCollision } from './receiptExactTransact
 import { recordDiagnosticEvent } from './internalDiagnostics';
 import {
   diagnoseMinuteDuplicateCandidate,
+  evaluateMinuteMultiNameDriftRescanAdvisory,
   evaluateMinuteSingleNameDriftRescanAdvisory,
   evaluateMinuteStrictRescanAdvisory,
+  MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND,
   MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND,
   MINUTE_STRICT_ADVISORY_MATCH_KIND,
+  type MinuteMultiNameDriftAdvisoryResult,
   type MinuteSingleNameDriftAdvisoryResult,
   type MinuteStrictRescanAdvisoryResult,
   type ScanReviewDuplicateCandidateDiag,
@@ -31,7 +34,8 @@ export type ScanReviewDuplicateGateContext = {
 export type ScanReviewDuplicateMatchKind =
   | 'SECOND_EXACT'
   | typeof MINUTE_STRICT_ADVISORY_MATCH_KIND
-  | typeof MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND;
+  | typeof MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND
+  | typeof MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND;
 
 export type ScanReviewDuplicateGateMatch = {
   existingReceiptId: string;
@@ -164,6 +168,8 @@ function duplicateEvidenceRank(kind: ScanReviewDuplicateMatchKind): number {
       return 1;
     case 'MINUTE_SINGLE_NAME_DRIFT_ADVISORY':
       return 2;
+    case 'MINUTE_MULTI_NAME_DRIFT_ADVISORY':
+      return 3;
   }
 }
 
@@ -207,10 +213,17 @@ function recordMinuteDuplicateCandidateDiag(
   left: ReceiptRow,
   right: ReceiptRow,
   strict: MinuteStrictRescanAdvisoryResult,
-  drift: MinuteSingleNameDriftAdvisoryResult | null
+  drift: MinuteSingleNameDriftAdvisoryResult | null,
+  multi: MinuteMultiNameDriftAdvisoryResult | null
 ): void {
   try {
-    const diag = diagnoseMinuteDuplicateCandidate({ left, right, strict, drift });
+    const diag = diagnoseMinuteDuplicateCandidate({
+      left,
+      right,
+      strict,
+      drift,
+      multi,
+    });
     recordDiagnosticEvent({
       category: 'coordinator',
       name: diag.event,
@@ -252,8 +265,18 @@ export function evaluateScanReviewDuplicateGate(
       advisory && !advisory.matched
         ? evaluateMinuteSingleNameDriftRescanAdvisory(transientReceipt, stored)
         : null;
+    const multiName =
+      nameDrift && !nameDrift.matched && nameDrift.reason === 'name_drift_count'
+        ? evaluateMinuteMultiNameDriftRescanAdvisory(transientReceipt, stored)
+        : null;
     if (advisory) {
-      recordMinuteDuplicateCandidateDiag(transientReceipt, stored, advisory, nameDrift);
+      recordMinuteDuplicateCandidateDiag(
+        transientReceipt,
+        stored,
+        advisory,
+        nameDrift,
+        multiName
+      );
     }
     const hit: Omit<CollisionDestination, 'destination'> | null = collision.collided
       ? {
@@ -282,7 +305,16 @@ export function evaluateScanReviewDuplicateGate(
               itemCount: nameDrift.itemCount,
               matchKind: MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND,
             }
-          : null;
+          : multiName?.matched
+            ? {
+                storeHintLeft: multiName.storeHintLeft,
+                storeHintRight: multiName.storeHintRight,
+                evidenceKey: multiName.evidenceKey,
+                transactionAt: multiName.transactionAt,
+                itemCount: multiName.itemCount,
+                matchKind: MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND,
+              }
+            : null;
     if (!hit) continue;
     if (draftStoreHint === undefined) {
       draftStoreHint = hit.storeHintLeft;
