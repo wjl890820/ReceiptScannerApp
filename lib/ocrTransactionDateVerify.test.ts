@@ -5,6 +5,8 @@ import {
   acceptVerifierTransactionDate,
   applyTransactionDateVerification,
   isCostcoForDateVerification,
+  normalizeReceiptDateTimeForVerify,
+  parseReceiptDateTimeForVerify,
   requiresTransactionDateVerification,
   resolveFinalTransactionDate,
 } from '../supabase/functions/ocr-receipt/transactionDateVerify';
@@ -263,6 +265,207 @@ describe('B3 transactionDate verification', () => {
     expect(isCostcoForDateVerification('COSTCO WHOLESALE', [])).toBe(true);
     expect(isCostcoForDateVerification('コストコ', [])).toBe(true);
   });
+});
+
+describe('Edge datetime parser parity with client weekday wrappers', () => {
+  const tokyo1132 = Date.parse('2026-07-20T11:32:00+09:00');
+  const tokyoMidnight = Date.parse('2026-07-20T00:00:00+09:00');
+  const merchant = 'synth-market';
+
+  it('Receipt087 〈月〉 keeps Tokyo 11:32 and does not force verification', () => {
+    const raw = '2026年 7月20日〈月〉11:32';
+    expect(normalizeReceiptDateTimeForVerify(raw)).toBe('2026-07-20 11:32');
+    expect(parseReceiptDateTimeForVerify(raw, merchant, NOW_MS)).toBe(tokyo1132);
+    expect(parseReceiptDateTimeForVerify(raw, merchant, NOW_MS)).not.toBe(tokyoMidnight);
+    expect(
+      requiresTransactionDateVerification(merchant, raw, [], NOW_MS)
+    ).toBe(false);
+
+    const resolved = resolveFinalTransactionDate({
+      verificationRequired: false,
+      primaryDate: raw,
+      verifierCallSucceeded: false,
+      merchant,
+      nowMs: NOW_MS,
+    });
+    expect(resolved.finalTransactionDate).toBe(raw);
+    expect(resolved.shouldCache).toBe(true);
+  });
+
+  it.each([
+    '2026年7月20日(月)11:32',
+    '2026年7月20日（ 火 ）11:32',
+    '2026年7月20日〈水〉11:32',
+    '2026年7月20日<木>11:32',
+    '2026年7月20日(金)11:32',
+    '2026年7月20日（土）11:32',
+    '2026年7月20日〈日〉11:32',
+  ])('strips paired weekday wrapper %s', (raw) => {
+    expect(normalizeReceiptDateTimeForVerify(raw)).toBe('2026-07-20 11:32');
+    expect(parseReceiptDateTimeForVerify(raw, merchant, NOW_MS)).toBe(tokyo1132);
+  });
+
+  it.each([
+    '2026年7月20日〈商品〉11:32',
+    '2026年7月20日(123)11:32',
+    '2026年7月20日(月〉11:32',
+    '2026年7月20日〈月)11:32',
+    '2026年7月20日〈11:32〉',
+  ])('fails closed on an unconsumed minute clock: %s', (raw) => {
+    expect(normalizeReceiptDateTimeForVerify(raw)).toBe('');
+    const parsed = parseReceiptDateTimeForVerify(raw, merchant, NOW_MS);
+    expect(parsed).toBeNull();
+    expect(parsed).not.toBe(tokyoMidnight);
+    expect(acceptVerifierTransactionDate(raw, merchant, NOW_MS)).toBeNull();
+  });
+
+  it('fails closed on an unconsumed second clock', () => {
+    const raw = '2026年7月20日〈商品〉11:32:45';
+    expect(normalizeReceiptDateTimeForVerify(raw)).toBe('');
+    const parsed = parseReceiptDateTimeForVerify(raw, merchant, NOW_MS);
+    expect(parsed).toBeNull();
+    expect(parsed).not.toBe(tokyoMidnight);
+    expect(parsed).not.toBe(Date.parse('2026-07-20T11:32:45+09:00'));
+  });
+
+  it.each(['2026年7月20日', '2026年7月20日〈商品〉', '2026年7月20日 abc'])(
+    'keeps clock-free Japanese text as date-only midnight: %s',
+    (raw) => {
+      expect(normalizeReceiptDateTimeForVerify(raw)).toBe('2026-07-20 00:00');
+      expect(parseReceiptDateTimeForVerify(raw, merchant, NOW_MS)).toBe(tokyoMidnight);
+      expect(
+        requiresTransactionDateVerification(merchant, raw, [], NOW_MS)
+      ).toBe(false);
+    }
+  );
+
+  it('keeps plain slash, hyphen, and second-precision forms', () => {
+    expect(normalizeReceiptDateTimeForVerify('2026/07/20 11:32')).toBe('2026-07-20 11:32');
+    expect(parseReceiptDateTimeForVerify('2026/07/20 11:32', merchant, NOW_MS)).toBe(
+      tokyo1132
+    );
+    expect(normalizeReceiptDateTimeForVerify('2026-07-20 11:32')).toBe('2026-07-20 11:32');
+    expect(normalizeReceiptDateTimeForVerify('2026年7月20日 11:32:45')).toBe(
+      '2026-07-20 11:32:45'
+    );
+    expect(parseReceiptDateTimeForVerify('2026年7月20日 11:32:45', merchant, NOW_MS)).toBe(
+      Date.parse('2026-07-20T11:32:45+09:00')
+    );
+    expect(normalizeReceiptDateTimeForVerify('2026/ 2/21(土) 12:28')).toBe(
+      '2026-02-21 12:28'
+    );
+  });
+
+  it('does not strip a wrapper that contains more than one weekday', () => {
+    const raw = '2026年7月20日〈月火〉11:32';
+    expect(normalizeReceiptDateTimeForVerify(raw)).toBe('');
+    const parsed = parseReceiptDateTimeForVerify(raw, merchant, NOW_MS);
+    expect(parsed).toBeNull();
+    expect(parsed).not.toBe(tokyoMidnight);
+  });
+
+  it.each([
+    '2026年7月20日〈商品〉11:32',
+    '2026年7月20日〈商品〉11:32:45',
+  ])('requires verification for malformed explicit-clock primary: %s', (raw) => {
+    expect(requiresTransactionDateVerification(merchant, raw, [], NOW_MS)).toBe(true);
+  });
+
+  it('uses a valid verifier when the primary explicit clock is malformed', async () => {
+    const primary = '2026年7月20日〈商品〉11:32';
+    const verifierDate = '2026-07-20 11:32';
+    const verifyFn = jest.fn().mockResolvedValue({ transactionDate: verifierDate });
+
+    const out = await applyTransactionDateVerification({
+      merchant,
+      primaryDate: primary,
+      nowMs: NOW_MS,
+      verifyFn,
+    });
+    expect(out.verificationRequired).toBe(true);
+    expect(out.verifierCalled).toBe(true);
+    expect(verifyFn).toHaveBeenCalledTimes(1);
+    expect(out.finalTransactionDate).toBe(verifierDate);
+    expect(out.finalTransactionDate).not.toBe('2026-07-20 00:00');
+    expect(out.shouldCache).toBe(true);
+    expect(parseReceiptDateTimeForVerify(String(out.finalTransactionDate), merchant, NOW_MS)).toBe(
+      tokyo1132
+    );
+
+    expect(
+      resolveFinalTransactionDate({
+        verificationRequired: true,
+        primaryDate: primary,
+        verifierDate,
+        verifierCallSucceeded: true,
+        merchant,
+        nowMs: NOW_MS,
+      })
+    ).toEqual({
+      finalTransactionDate: verifierDate,
+      shouldCache: true,
+      acceptOutcome: 'accepted',
+    });
+  });
+
+  it('rejects a malformed verifier when the primary explicit clock is malformed', () => {
+    const primary = '2026年7月20日〈商品〉11:32';
+    const verifierDate = '2026年7月20日〈商品〉11:32';
+    const resolved = resolveFinalTransactionDate({
+      verificationRequired: true,
+      primaryDate: primary,
+      verifierDate,
+      verifierCallSucceeded: true,
+      merchant,
+      nowMs: NOW_MS,
+    });
+    expect(resolved).toEqual({
+      finalTransactionDate: null,
+      shouldCache: false,
+      acceptOutcome: 'unparseable',
+    });
+    expect(resolved.finalTransactionDate).not.toBe('2026-07-20 00:00');
+    expect(parseReceiptDateTimeForVerify(primary, merchant, NOW_MS)).toBeNull();
+    expect(parseReceiptDateTimeForVerify(verifierDate, merchant, NOW_MS)).toBeNull();
+  });
+
+  it('does not cache when verifier lookup fails for a malformed primary', async () => {
+    const primary = '2026年7月20日〈商品〉11:32';
+    const verifyFn = jest.fn().mockRejectedValue(new Error('upstream 503'));
+    const out = await applyTransactionDateVerification({
+      merchant,
+      primaryDate: primary,
+      nowMs: NOW_MS,
+      verifyFn,
+    });
+    expect(out.verificationRequired).toBe(true);
+    expect(out.verifierCalled).toBe(true);
+    expect(out.finalTransactionDate).toBeNull();
+    expect(out.shouldCache).toBe(false);
+
+    expect(
+      resolveFinalTransactionDate({
+        verificationRequired: true,
+        primaryDate: primary,
+        verifierDate: null,
+        verifierCallSucceeded: false,
+        merchant,
+        nowMs: NOW_MS,
+      })
+    ).toEqual({
+      finalTransactionDate: null,
+      shouldCache: false,
+      acceptOutcome: 'api_failure',
+    });
+  });
+
+  it.each(['2026/07/20', '2026-07-20'])(
+    'keeps slash and hyphen date-only forms at Tokyo midnight: %s',
+    (raw) => {
+      expect(normalizeReceiptDateTimeForVerify(raw)).toBe('2026-07-20 00:00');
+      expect(parseReceiptDateTimeForVerify(raw, merchant, NOW_MS)).toBe(tokyoMidnight);
+    }
+  );
 });
 
 describe('B3 Edge contract (source)', () => {

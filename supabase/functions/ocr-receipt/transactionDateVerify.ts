@@ -62,6 +62,82 @@ function isAmbiguousSlashMonthDay(month: number, day: number): boolean {
   return month >= 1 && month <= 12 && day >= 1 && day <= 12;
 }
 
+const JP_WEEKDAY_CHAR = '[月火水木金土日]';
+
+/**
+ * Paired wrappers that delimit exactly one Japanese weekday.
+ * Mixed pairs and any other bracket contents stay in place.
+ * Local port of the client dateParser weekday strip — Edge must not import it.
+ */
+const JP_WEEKDAY_WRAPPERS: readonly (readonly [string, string])[] = [
+  ['(', ')'],
+  ['（', '）'],
+  ['〈', '〉'],
+  ['<', '>'],
+];
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripDelimitedJapaneseWeekday(input: string): string {
+  let s = input;
+  for (const [open, close] of JP_WEEKDAY_WRAPPERS) {
+    const pattern = new RegExp(
+      `${escapeRegExpLiteral(open)}\\s*${JP_WEEKDAY_CHAR}\\s*${escapeRegExpLiteral(close)}`,
+      'g'
+    );
+    s = s.replace(pattern, ' ');
+  }
+  return s;
+}
+
+/**
+ * Same clock grammar as client inferReceiptTransactionTimePrecision.
+ * Used only to detect a visible minute/second clock the JP date match did not consume.
+ */
+function inferEdgeSourceTimePrecision(
+  dateTimeStr: string
+): 'second' | 'minute' | 'date' | 'unknown' {
+  const trimmed = dateTimeStr.trim();
+  if (!trimmed) return 'unknown';
+
+  if (
+    /(\d{1,2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:\s|$|Z|[+-]\d{2}:\d{2})/.test(
+      trimmed
+    ) ||
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(trimmed)
+  ) {
+    return 'second';
+  }
+
+  if (
+    /(\d{4}).{0,12}(\d{1,2}).{0,12}(\d{1,2}).{0,12}(\d{1,2}):(\d{2})(?!\d|:)/.test(
+      trimmed
+    ) ||
+    /^\d{1,2}\/\d{1,2}(?:\/\d{4})?\s+\d{1,2}:\d{2}(?!\d|:)/.test(trimmed) ||
+    /^\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}$/.test(trimmed)
+  ) {
+    return 'minute';
+  }
+
+  if (
+    /^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(trimmed) ||
+    /^\d{4}\s*[\/\-.]\s*\d{1,2}\s*[\/\-.]\s*\d{1,2}$/.test(trimmed) ||
+    /^\d{1,2}\s*\/\s*\d{1,2}\s*\/\s*\d{4}$/.test(trimmed) ||
+    /^\d{4}-\d{1,2}-\d{1,2}$/.test(trimmed)
+  ) {
+    return 'date';
+  }
+
+  return 'unknown';
+}
+
+function japaneseSourceHasUnconsumedClock(source: string): boolean {
+  const precision = inferEdgeSourceTimePrecision(source);
+  return precision === 'minute' || precision === 'second';
+}
+
 /** Deterministic receipt date normalization (subset of client dateParser). */
 export function normalizeReceiptDateTimeForVerify(
   input: string,
@@ -69,13 +145,17 @@ export function normalizeReceiptDateTimeForVerify(
 ): string {
   if (!input || typeof input !== 'string') return '';
   let s = input.trim().replace(/\u3000/g, ' ');
-  s = s.replace(/[（(][月火水木金土日][)）]/g, ' ').trim();
+  s = stripDelimitedJapaneseWeekday(s).trim();
   s = s.replace(/\s+/g, ' ');
 
   const jp = s.match(
     /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/
   );
   if (jp) {
+    const clockConsumed = jp[4] != null;
+    if (!clockConsumed && japaneseSourceHasUnconsumedClock(s)) {
+      return '';
+    }
     return formatNormalized(jp[1], jp[2], jp[3], jp[4] ?? '0', jp[5] ?? '0', jp[6]);
   }
 
@@ -172,7 +252,7 @@ export function parseReceiptDateTimeForVerify(
   const normalized = normalizeReceiptDateTimeForVerify(trimmed, { allowAmbiguousMdy });
   const workStr =
     normalized ||
-    trimmed.replace(/[（(][月火水木金土日][)）]/g, ' ').replace(/\s+/g, ' ').trim();
+    stripDelimitedJapaneseWeekday(trimmed).replace(/\s+/g, ' ').trim();
 
   const withTime = workStr.match(
     /^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/
