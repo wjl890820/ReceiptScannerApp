@@ -86,13 +86,47 @@ export function inferReceiptTransactionTimePrecision(
   return 'unknown';
 }
 
+const JP_WEEKDAY_CHAR = '[月火水木金土日]';
+
+/**
+ * Paired wrappers that delimit exactly one Japanese weekday.
+ * Mixed pairs and any other bracket contents stay in place.
+ */
+const JP_WEEKDAY_WRAPPERS: readonly (readonly [string, string])[] = [
+  ['(', ')'],
+  ['（', '）'],
+  ['〈', '〉'],
+  ['<', '>'],
+];
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Replace a delimited weekday token with a space.
+ * Does not remove arbitrary bracketed text such as product codes or clocks.
+ */
+function stripDelimitedJapaneseWeekday(input: string): string {
+  let s = input;
+  for (const [open, close] of JP_WEEKDAY_WRAPPERS) {
+    const pattern = new RegExp(
+      `${escapeRegExpLiteral(open)}\\s*${JP_WEEKDAY_CHAR}\\s*${escapeRegExpLiteral(close)}`,
+      'g'
+    );
+    s = s.replace(pattern, ' ');
+  }
+  return s;
+}
+
 /**
  * Strip weekday markers / full-width spaces and normalize JP / slash / dash forms
  * into "YYYY-MM-DD HH:mm" when possible. Returns '' only when unusable.
  *
  * OCR may insert spaces around separators (e.g. "2026/ 2/21") and optional
- * JP weekday annotations between date and time ((土) / （土）). Those are
- * normalized deterministically — no fuzzy guessing.
+ * JP weekday annotations between date and time. Supported wrappers are
+ * (曜), （曜）, 〈曜〉, and <曜>. Those are normalized deterministically —
+ * no fuzzy guessing, and no general bracket deletion.
  */
 export function normalizeReceiptDateTime(
   input: string,
@@ -101,7 +135,7 @@ export function normalizeReceiptDateTime(
   if (!input || typeof input !== 'string') return '';
   let s = input.trim().replace(/\u3000/g, ' ');
   // Remove recognized JP weekday markers only; leave a space so date|time stay split.
-  s = s.replace(/[（(][月火水木金土日][)）]/g, ' ').trim();
+  s = stripDelimitedJapaneseWeekday(s).trim();
   s = s.replace(/\s+/g, ' ');
 
   // YYYY年M月D日[ HH:mm[:ss]]
@@ -109,6 +143,12 @@ export function normalizeReceiptDateTime(
     /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/
   );
   if (jp) {
+    const clockConsumed = jp[4] != null;
+    // The date portion can match while an explicit clock sits behind junk.
+    // Do not materialize that as date-only midnight.
+    if (!clockConsumed && japaneseSourceHasUnconsumedClock(s)) {
+      return '';
+    }
     return formatNormalized(
       jp[1],
       jp[2],
@@ -155,6 +195,15 @@ export function normalizeReceiptDateTime(
   }
 
   return '';
+}
+
+/**
+ * True when the existing clock grammar sees HH:mm / HH:mm:ss that the
+ * Japanese date match did not capture. Date-only text stays false.
+ */
+function japaneseSourceHasUnconsumedClock(source: string): boolean {
+  const precision = inferReceiptTransactionTimePrecision(source);
+  return precision === 'minute' || precision === 'second';
 }
 
 function formatNormalized(
@@ -269,7 +318,7 @@ export function parseReceiptDateTimeWithPrecision(
   const normalized = normalizeReceiptDateTime(trimmed, { allowAmbiguousMdy });
   const workStr =
     normalized ||
-    trimmed.replace(/[（(][月火水木金土日][)）]/g, ' ').replace(/\s+/g, ' ').trim();
+    stripDelimitedJapaneseWeekday(trimmed).replace(/\s+/g, ' ').trim();
 
   // Prefer precision from normalized form when source had seconds / minute / date.
   const normalizedPrecision = inferReceiptTransactionTimePrecision(

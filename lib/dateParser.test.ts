@@ -80,6 +80,99 @@ describe('receipt datetime parsing', () => {
     expectLocalParts(ts!, 2025, 12, 20, 19, 9);
   });
 
+  describe('Japanese weekday wrappers keep the printed clock', () => {
+    const tokyo1132 = Date.parse('2026-07-20T11:32:00+09:00');
+
+    it.each([
+      '2026年7月20日 11:32',
+      '2026年7月20日(月)11:32',
+      '2026年7月20日（月）11:32',
+      '2026年 7月20日〈月〉11:32',
+      '2026年7月20日<月>11:32',
+      '2026年7月20日〈 火 〉11:32',
+      '2026/07/20 11:32',
+      '2026-07-20 11:32',
+    ])('parses %s as 2026-07-20 11:32 minute precision', (raw) => {
+      expect(normalizeReceiptDateTime(raw)).toBe('2026-07-20 11:32');
+      const parsed = parseReceiptDateTimeWithPrecision(raw, {
+        fallbackToNow: false,
+        nowMs: NOW_MS,
+      });
+      expect(parsed.ms).toBe(tokyo1132);
+      expect(parsed.precision).toBe('minute');
+      expectLocalParts(parsed.ms!, 2026, 7, 20, 11, 32);
+    });
+
+    it('keeps date-only Japanese dates at local midnight with date precision', () => {
+      const raw = '2026年7月20日';
+      expect(normalizeReceiptDateTime(raw)).toBe('2026-07-20 00:00');
+      const parsed = parseReceiptDateTimeWithPrecision(raw, {
+        fallbackToNow: false,
+        nowMs: NOW_MS,
+      });
+      expect(parsed.precision).toBe('date');
+      expect(parsed.ms).toBe(Date.parse('2026-07-20T00:00:00+09:00'));
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }).formatToParts(new Date(parsed.ms!));
+      const get = (type: string) =>
+        Number(parts.find((part) => part.type === type)?.value);
+      expect(get('year')).toBe(2026);
+      expect(get('month')).toBe(7);
+      expect(get('day')).toBe(20);
+      expect(get('hour')).toBe(0);
+      expect(get('minute')).toBe(0);
+    });
+
+    it.each([
+      '2026年7月20日〈商品〉11:32',
+      '2026年7月20日(123)11:32',
+      '2026年7月20日〈11:32〉',
+      '2026年7月20日(月〉11:32',
+    ])('fails closed when an explicit clock is not consumed: %s', (raw) => {
+      expect(normalizeReceiptDateTime(raw)).toBe('');
+      expect(
+        parseReceiptDateTimeWithPrecision(raw, {
+          fallbackToNow: false,
+          nowMs: NOW_MS,
+        })
+      ).toEqual({ ms: null, precision: 'minute' });
+    });
+
+    it('fails closed when an unconsumed clock includes seconds', () => {
+      const raw = '2026年7月20日〈商品〉11:32:45';
+      expect(normalizeReceiptDateTime(raw)).toBe('');
+      expect(
+        parseReceiptDateTimeWithPrecision(raw, {
+          fallbackToNow: false,
+          nowMs: NOW_MS,
+        })
+      ).toEqual({ ms: null, precision: 'second' });
+    });
+
+    it.each(['2026年7月20日〈商品〉', '2026年7月20日 abc'])(
+      'keeps a clock-free Japanese suffix as date-only midnight: %s',
+      (raw) => {
+        expect(normalizeReceiptDateTime(raw)).toBe('2026-07-20 00:00');
+        expect(
+          parseReceiptDateTimeWithPrecision(raw, {
+            fallbackToNow: false,
+            nowMs: NOW_MS,
+          })
+        ).toEqual({
+          ms: Date.parse('2026-07-20T00:00:00+09:00'),
+          precision: 'date',
+        });
+      }
+    );
+  });
+
   it('parses YYYY/MM/DD(曜) HH:mm', () => {
     const ts = parseReceiptDateTime('2025/12/20(土) 18:17', {
       nowMs: NOW_MS,

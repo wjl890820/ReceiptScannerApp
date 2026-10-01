@@ -101,4 +101,53 @@ describe('receiptSaveProjection', () => {
     });
     expect(result.transactionAt).toBe(1_782_791_700_000);
   });
+
+  it('keeps a printed minute when a corner-bracket weekday sits before the clock', () => {
+    const result = projectReceiptSaveMaterialEvidence({
+      analysis: {
+        merchant: 'synth-market',
+        transactionDate: '2026年 7月20日〈月〉11:32',
+        total: 480,
+        tax: 35,
+        tax_is_known: true,
+        currency: 'JPY',
+        items: [
+          { name: 'synth item', quantity: 1, lineTotal: 480, unitPrice: 480 },
+        ],
+      },
+      reviewedSave: true,
+    });
+    expect(result.transactionAt).toBe(Date.parse('2026-07-20T11:32:00+09:00'));
+    expect(result.transactionTimePrecision).toBe('minute');
+    expect(result.transactionSource).toBe('receipt_ocr');
+    expect(result.persistedAnalysis.transactionDate).toBe(
+      '2026年 7月20日〈月〉11:32'
+    );
+    expect(result.persistedAnalysis.transaction_time_precision).toBe('minute');
+  });
+
+  it('does not persist midnight when an explicit clock sits behind unsupported text', () => {
+    const midnight = Date.parse('2026-07-20T00:00:00+09:00');
+    const result = projectReceiptSaveMaterialEvidence({
+      analysis: {
+        merchant: 'synth-market',
+        transactionDate: '2026年7月20日〈商品〉11:32',
+        total: 480,
+        tax: 35,
+        tax_is_known: true,
+        currency: 'JPY',
+        items: [
+          { name: 'synth item', quantity: 1, lineTotal: 480, unitPrice: 480 },
+        ],
+      },
+      reviewedSave: true,
+    });
+    expect(result.transactionAt).toBeNull();
+    expect(result.transactionAt).not.toBe(midnight);
+    expect(result.transactionTimePrecision).toBe('minute');
+    expect(
+      result.transactionAt === midnight &&
+        result.transactionTimePrecision === 'minute'
+    ).toBe(false);
+  });
 });
