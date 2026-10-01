@@ -18,11 +18,6 @@ import {
 } from './analyticsReceiptSelection';
 import type { ReceiptRow } from './db';
 import {
-  getDiagnosticSnapshot,
-  internalDiagnostics,
-} from './internalDiagnostics';
-import { setInternalDiagnosticsEnabledForTests } from './internalDiagnosticsGate';
-import {
   buildTransientScanReviewReceipt,
   evaluateScanReviewDuplicateGate,
   type ScanReviewDuplicateGateContext,
@@ -31,7 +26,6 @@ import {
   evaluateMinuteMultiNameDriftRescanAdvisory,
   evaluateMinuteSingleNameDriftRescanAdvisory,
   evaluateMinuteStrictRescanAdvisory,
-  SCAN_REVIEW_DUPLICATE_CANDIDATE_DIAG_EVENT,
 } from './scanReviewMinuteStrictAdvisory';
 
 const MERCHANT = 'synth-market-diag';
@@ -118,16 +112,6 @@ function pair(leftItems: readonly unknown[], rightItems: readonly unknown[], id 
 }
 
 describe('minute multi-name drift advisory', () => {
-  beforeEach(() => {
-    setInternalDiagnosticsEnabledForTests(true);
-    internalDiagnostics.resetForTests(undefined, { hydrated: true });
-  });
-
-  afterEach(() => {
-    setInternalDiagnosticsEnabledForTests(null);
-    internalDiagnostics.resetForTests(undefined, { hydrated: true });
-  });
-
   it('P1 matches 8 exact, 1 whitespace, and 3 genuine drifts on 12 rows', () => {
     const leftItems = withNames(12, {
       2: 'synth drink 1.5',
@@ -166,16 +150,17 @@ describe('minute multi-name drift advisory', () => {
       expect(JSON.stringify(metadata)).not.toContain('synth drink');
       expect(JSON.stringify(metadata)).not.toContain('token-left');
     }
-    expect(gateFor(left, [right])?.matchKind).toBe('MINUTE_MULTI_NAME_DRIFT_ADVISORY');
-    const event = getDiagnosticSnapshot().events.find(
-      (entry) => entry.name === SCAN_REVIEW_DUPLICATE_CANDIDATE_DIAG_EVENT
-    );
-    expect(event?.meta?.matchKind).toBe('MINUTE_MULTI_NAME_DRIFT_ADVISORY');
-    const payload = JSON.stringify(event);
-    expect(payload).not.toContain('synth drink');
-    expect(payload).not.toContain(MERCHANT);
-    expect(payload).not.toContain('file://');
-    expect(Object.keys(event?.meta ?? {}).length).toBeLessThanOrEqual(24);
+    const gate = gateFor(left, [right]);
+    expect(gate).toEqual({
+      existingReceiptId: 'syn-multi-right',
+      evidenceKey: multi.matched ? multi.evidenceKey : '',
+      merchantDisplay: MERCHANT,
+      transactionAt: left.transaction_at,
+      total: TOTAL,
+      currency: 'JPY',
+      itemCount: 12,
+      matchKind: 'MINUTE_MULTI_NAME_DRIFT_ADVISORY',
+    });
   });
 
   it('P2 and P3 match the other eligible support shapes', () => {

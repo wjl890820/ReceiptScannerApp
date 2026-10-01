@@ -5,19 +5,13 @@ import {
 } from './analyticsReceiptSelection';
 import { getReceipt, listReceiptsForAnalysis, type ReceiptRow } from './db';
 import { evaluateExactTransactionReceiptCollision } from './receiptExactTransactionCollision';
-import { recordDiagnosticEvent } from './internalDiagnostics';
 import {
-  diagnoseMinuteDuplicateCandidate,
   evaluateMinuteMultiNameDriftRescanAdvisory,
   evaluateMinuteSingleNameDriftRescanAdvisory,
   evaluateMinuteStrictRescanAdvisory,
   MINUTE_MULTI_NAME_DRIFT_ADVISORY_MATCH_KIND,
   MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND,
   MINUTE_STRICT_ADVISORY_MATCH_KIND,
-  type MinuteMultiNameDriftAdvisoryResult,
-  type MinuteSingleNameDriftAdvisoryResult,
-  type MinuteStrictRescanAdvisoryResult,
-  type ScanReviewDuplicateCandidateDiag,
 } from './scanReviewMinuteStrictAdvisory';
 import { projectReceiptSaveMaterialEvidence } from './receiptSaveProjection';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
@@ -187,54 +181,6 @@ function compareCollisionDestinations(
   return 0;
 }
 
-function diagnosticMeta(
-  diag: ScanReviewDuplicateCandidateDiag
-): Record<string, string | number | null> {
-  const meta: Record<string, string | number | null> = {
-    event: diag.event,
-    candidateReceiptId: diag.candidateReceiptId,
-    strictReason: diag.strictReason,
-    matchKind: diag.matchKind,
-    itemCountLeft: diag.itemCountLeft,
-    itemCountRight: diag.itemCountRight,
-  };
-  if (diag.driftReason != null) meta.driftReason = diag.driftReason;
-  if (diag.firstMismatchIndex != null) meta.firstMismatchIndex = diag.firstMismatchIndex;
-  if (diag.nameMismatchCount != null) meta.nameMismatchCount = diag.nameMismatchCount;
-  if (diag.whitespaceOnlyDifferenceCount != null) {
-    meta.whitespaceOnlyDifferenceCount = diag.whitespaceOnlyDifferenceCount;
-  }
-  if (diag.basketInvalidSide != null) meta.basketInvalidSide = diag.basketInvalidSide;
-  return meta;
-}
-
-/** Best-effort. Never changes the gate result. */
-function recordMinuteDuplicateCandidateDiag(
-  left: ReceiptRow,
-  right: ReceiptRow,
-  strict: MinuteStrictRescanAdvisoryResult,
-  drift: MinuteSingleNameDriftAdvisoryResult | null,
-  multi: MinuteMultiNameDriftAdvisoryResult | null
-): void {
-  try {
-    const diag = diagnoseMinuteDuplicateCandidate({
-      left,
-      right,
-      strict,
-      drift,
-      multi,
-    });
-    recordDiagnosticEvent({
-      category: 'coordinator',
-      name: diag.event,
-      screen: 'scan-review',
-      meta: diagnosticMeta(diag),
-    });
-  } catch {
-    // Diagnostics must not affect duplicate selection.
-  }
-}
-
 /**
  * O(n) comparison of one transient review against an already-loaded context.
  *
@@ -269,15 +215,6 @@ export function evaluateScanReviewDuplicateGate(
       nameDrift && !nameDrift.matched && nameDrift.reason === 'name_drift_count'
         ? evaluateMinuteMultiNameDriftRescanAdvisory(transientReceipt, stored)
         : null;
-    if (advisory) {
-      recordMinuteDuplicateCandidateDiag(
-        transientReceipt,
-        stored,
-        advisory,
-        nameDrift,
-        multiName
-      );
-    }
     const hit: Omit<CollisionDestination, 'destination'> | null = collision.collided
       ? {
           storeHintLeft: collision.storeHintLeft,
