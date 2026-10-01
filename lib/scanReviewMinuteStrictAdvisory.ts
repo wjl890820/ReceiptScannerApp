@@ -32,7 +32,7 @@ export const MINUTE_STRICT_RESCAN_ADVISORY_VERSION =
   'meruno-minute-strict-rescan-advisory-v1' as const;
 
 export const MINUTE_SINGLE_NAME_DRIFT_ADVISORY_VERSION =
-  'meruno-minute-single-name-drift-advisory-v1' as const;
+  'meruno-minute-single-name-drift-advisory-v2' as const;
 
 export type MinuteStrictAdvisoryRejectReason =
   | 'same_receipt'
@@ -77,6 +77,11 @@ export type MinuteStrictRescanAdvisoryResult =
 /** Same trim/case/whitespace rule as canonicalizeReceiptItemName. */
 function canonicalizeAdvisoryItemName(raw: string): string {
   return raw.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Tier 3 only. Removes spaces after canonicalization. Does not fold punctuation or characters. */
+function whitespaceInsensitiveAdvisoryName(nameCanonical: string): string {
+  return nameCanonical.replace(/\s+/g, '');
 }
 
 const ADVISORY_AMOUNT_KEYS = ['lineTotal', 'line_total', 'amount'] as const;
@@ -471,7 +476,9 @@ function rejectDrift(
 
 /**
  * Scan-review warning when a minute-strict pair differs by exactly one
- * canonical item name. Names are not compared for similarity.
+ * true item name. Internal whitespace is formatting-only and does not
+ * consume that budget. Punctuation, characters, and digits still do.
+ * Names are not compared for similarity.
  * Runs only after Tier 2 reports basket_mismatch.
  */
 export function evaluateMinuteSingleNameDriftRescanAdvisory(
@@ -494,6 +501,7 @@ export function evaluateMinuteSingleNameDriftRescanAdvisory(
 
   let nameMismatchCount = 0;
   let nameMismatchIndex = -1;
+  let exactNameMatchCount = 0;
   for (let index = 0; index < leftBasket.length; index += 1) {
     const leftLine = leftBasket[index]!;
     const rightLine = rightBasket[index]!;
@@ -501,10 +509,18 @@ export function evaluateMinuteSingleNameDriftRescanAdvisory(
     if (leftLine.lineAmountYen !== rightLine.lineAmountYen) {
       return rejectDrift('amount_mismatch');
     }
-    if (leftLine.nameCanonical !== rightLine.nameCanonical) {
-      nameMismatchCount += 1;
-      nameMismatchIndex = index;
+    if (leftLine.nameCanonical === rightLine.nameCanonical) {
+      exactNameMatchCount += 1;
+      continue;
     }
+    if (
+      whitespaceInsensitiveAdvisoryName(leftLine.nameCanonical) ===
+      whitespaceInsensitiveAdvisoryName(rightLine.nameCanonical)
+    ) {
+      continue;
+    }
+    nameMismatchCount += 1;
+    nameMismatchIndex = index;
   }
   if (nameMismatchCount !== 1 || nameMismatchIndex < 0) {
     return rejectDrift('name_drift_count');
@@ -557,7 +573,7 @@ export function evaluateMinuteSingleNameDriftRescanAdvisory(
     total: totalYen,
     currency: leftCurrency,
     itemCount: leftBasket.length,
-    exactNameMatchCount: leftBasket.length - 1,
+    exactNameMatchCount,
     nameMismatchCount: 1,
     nameMismatchIndex,
     storeHintLeft: merchant.storeHintLeft,

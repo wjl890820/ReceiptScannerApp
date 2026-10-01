@@ -298,6 +298,205 @@ describe('minute single-name drift advisory', () => {
     }
   });
 
+  it('treats internal whitespace as formatting and still budgets one true name drift', () => {
+    const leftItems = baseLines(12).map((row, index) => {
+      if (index === 2) return { ...row, name: 'synth drink 1.5' };
+      if (index === 6) return { ...row, name: 'synth-line-seven' };
+      return row;
+    });
+    const rightItems = baseLines(12).map((row, index) => {
+      if (index === 2) return { ...row, name: 'synthdrink 1.5' };
+      if (index === 6) return { ...row, name: 'completely-different-token' };
+      return row;
+    });
+    const left = draftFrom({ items: leftItems, id: 'syn-ws-left' });
+    const right = storedFrom(draftFrom({ items: rightItems }), 'syn-ws-right');
+    const strict = evaluateMinuteStrictRescanAdvisory(left, right);
+    expect(strict.matched).toBe(false);
+    if (!strict.matched) expect(strict.reason).toBe('basket_mismatch');
+    const drift = evaluateMinuteSingleNameDriftRescanAdvisory(left, right);
+    expect(drift.matched).toBe(true);
+    if (drift.matched) {
+      expect(drift.nameMismatchCount).toBe(1);
+      expect(drift.nameMismatchIndex).toBe(6);
+      expect(drift.exactNameMatchCount).toBe(10);
+      expect(drift.evidenceKey).toContain('synth drink 1.5');
+      expect(drift.evidenceKey).toContain('synthdrink 1.5');
+      expect(drift.evidenceKey).toContain('meruno-minute-single-name-drift-advisory-v2');
+    }
+    expect(gateFor(left, [right])?.matchKind).toBe('MINUTE_SINGLE_NAME_DRIFT_ADVISORY');
+
+    const spaceOnlyLeft = draftFrom({
+      items: baseLines(12).map((row, index) =>
+        index === 2 ? { ...row, name: 'synth drink 1.5' } : row
+      ),
+      id: 'syn-ws-only-left',
+    });
+    const spaceOnlyRight = storedFrom(
+      draftFrom({
+        items: baseLines(12).map((row, index) =>
+          index === 2 ? { ...row, name: 'synthdrink 1.5' } : row
+        ),
+      }),
+      'syn-ws-only'
+    );
+    const spaceStrict = evaluateMinuteStrictRescanAdvisory(spaceOnlyLeft, spaceOnlyRight);
+    expect(spaceStrict.matched).toBe(false);
+    if (!spaceStrict.matched) expect(spaceStrict.reason).toBe('basket_mismatch');
+    const spaceDrift = evaluateMinuteSingleNameDriftRescanAdvisory(
+      spaceOnlyLeft,
+      spaceOnlyRight
+    );
+    expect(spaceDrift.matched).toBe(false);
+    if (!spaceDrift.matched) expect(spaceDrift.reason).toBe('name_drift_count');
+    expect(gateFor(spaceOnlyLeft, [spaceOnlyRight])).toBeNull();
+
+    const fiveLeftItems = baseLines(5).map((row, index) =>
+      index === 1 ? { ...row, name: 'synth pack 2' } : row
+    );
+    const fiveRightItems = baseLines(5).map((row, index) => {
+      if (index === 1) return { ...row, name: 'synthpack 2' };
+      if (index === 4) return { ...row, name: 'completely-different-token' };
+      return row;
+    });
+    const fiveDrift = evaluateMinuteSingleNameDriftRescanAdvisory(
+      draftFrom({ items: fiveLeftItems, id: 'syn-ws-five' }),
+      storedFrom(draftFrom({ items: fiveRightItems }), 'syn-ws-five-hist')
+    );
+    expect(fiveDrift.matched).toBe(true);
+    if (fiveDrift.matched) {
+      expect(fiveDrift.itemCount).toBe(5);
+      expect(fiveDrift.nameMismatchCount).toBe(1);
+      expect(fiveDrift.nameMismatchIndex).toBe(4);
+    }
+  });
+
+  it('still counts punctuation, characters, and digits as true name drifts', () => {
+    function pair(leftName: string, rightName: string, id: string) {
+      const leftItems = baseLines(12).map((row, index) =>
+        index === 3 ? { ...row, name: leftName } : row
+      );
+      const rightItems = baseLines(12).map((row, index) => {
+        if (index === 1) return { ...row, name: 'synth gap 2' };
+        if (index === 3) return { ...row, name: rightName };
+        return row;
+      });
+      const left = draftFrom({
+        items: leftItems.map((row, index) =>
+          index === 1 ? { ...row, name: 'synthgap 2' } : row
+        ),
+        id: `${id}-left`,
+      });
+      const right = storedFrom(draftFrom({ items: rightItems }), `${id}-right`);
+      return evaluateMinuteSingleNameDriftRescanAdvisory(left, right);
+    }
+
+    for (const [leftName, rightName, id] of [
+      ['abc-123', 'abc123', 'syn-punct'],
+      ['synth-char-a', 'synth-char-b', 'syn-char'],
+      ['1.5', '1.6', 'syn-digit'],
+    ] as const) {
+      const drift = pair(leftName, rightName, id);
+      expect(drift.matched).toBe(true);
+      if (drift.matched) expect(drift.nameMismatchIndex).toBe(3);
+    }
+
+    const twoGenuine = evaluateMinuteSingleNameDriftRescanAdvisory(
+      draftFrom({
+        items: baseLines(12).map((row, index) => {
+          if (index === 1) return { ...row, name: 'synth gap 2' };
+          if (index === 3) return { ...row, name: 'abc-123' };
+          if (index === 8) return { ...row, name: 'synth 1.5' };
+          return row;
+        }),
+        id: 'syn-two-left',
+      }),
+      storedFrom(
+        draftFrom({
+          items: baseLines(12).map((row, index) => {
+            if (index === 1) return { ...row, name: 'synthgap 2' };
+            if (index === 3) return { ...row, name: 'abc123' };
+            if (index === 8) return { ...row, name: 'synth 1.6' };
+            return row;
+          }),
+        }),
+        'syn-two-right'
+      )
+    );
+    expect(twoGenuine.matched).toBe(false);
+    if (!twoGenuine.matched) expect(twoGenuine.reason).toBe('name_drift_count');
+
+    const amountDrift = evaluateMinuteSingleNameDriftRescanAdvisory(
+      draftFrom({
+        items: baseLines(12).map((row, index) =>
+          index === 2 ? { ...row, name: 'synth drink 1.5' } : row
+        ),
+        id: 'syn-ws-amount-left',
+      }),
+      storedFrom(
+        draftFrom({
+          items: baseLines(12).map((row, index) =>
+            index === 2
+              ? { ...row, name: 'synthdrink 1.5', lineTotal: row.lineTotal + 1 }
+              : row
+          ),
+        }),
+        'syn-ws-amount-right'
+      )
+    );
+    expect(amountDrift.matched).toBe(false);
+    if (!amountDrift.matched) expect(amountDrift.reason).toBe('amount_mismatch');
+
+    const quantityDrift = evaluateMinuteSingleNameDriftRescanAdvisory(
+      draftFrom({
+        items: baseLines(12).map((row, index) =>
+          index === 2 ? { ...row, name: 'synth drink 1.5' } : row
+        ),
+        id: 'syn-ws-qty-left',
+      }),
+      storedFrom(
+        draftFrom({
+          items: baseLines(12).map((row, index) =>
+            index === 2 ? { ...row, name: 'synthdrink 1.5', quantity: 2 } : row
+          ),
+        }),
+        'syn-ws-qty-right'
+      )
+    );
+    expect(quantityDrift.matched).toBe(false);
+    if (!quantityDrift.matched) expect(quantityDrift.reason).toBe('quantity_mismatch');
+
+    const reordered = [...baseLines(12)].reverse().map((row, index) =>
+      index === 0 ? { ...row, name: 'synth drink 1.5' } : row
+    );
+    const reorderDrift = evaluateMinuteSingleNameDriftRescanAdvisory(
+      draftFrom({ items: baseLines(12), id: 'syn-ws-order-left' }),
+      storedFrom(draftFrom({ items: reordered }), 'syn-ws-order-right')
+    );
+    expect(reorderDrift.matched).toBe(false);
+
+    const shortDrift = evaluateMinuteSingleNameDriftRescanAdvisory(
+      draftFrom({
+        items: baseLines(4).map((row, index) =>
+          index === 1 ? { ...row, name: 'synth drink 1.5' } : row
+        ),
+        id: 'syn-ws-short-left',
+      }),
+      storedFrom(
+        draftFrom({
+          items: baseLines(4).map((row, index) => {
+            if (index === 1) return { ...row, name: 'synthdrink 1.5' };
+            if (index === 3) return { ...row, name: 'completely-different-token' };
+            return row;
+          }),
+        }),
+        'syn-ws-short-right'
+      )
+    );
+    expect(shortDrift.matched).toBe(false);
+    if (!shortDrift.matched) expect(shortDrift.reason).toBe('item_count');
+  });
+
   it('N20 keeps an exact-name pair on the strict advisory', () => {
     const strict = evaluateMinuteStrictRescanAdvisory(draft, saved);
     expect(strict.matched).toBe(true);
@@ -368,7 +567,7 @@ describe('minute single-name drift advisory', () => {
       'utf8'
     );
     expect(source).toContain('evaluateMinuteSingleNameDriftRescanAdvisory');
-    expect(source).toContain('meruno-minute-single-name-drift-advisory-v1');
+    expect(source).toContain('meruno-minute-single-name-drift-advisory-v2');
     expect(source).not.toMatch(
       /levenshtein|editDistance|assignVerifiedPurchaseOccurrence|requestCloudBackupFlush|getSupabaseClient|\bUPDATE\s+receipts\b/i
     );
