@@ -38,6 +38,10 @@ import {
 import { LogicalPurchaseEditPartitionError } from '@/lib/logicalPurchaseEditPartition';
 import { formatDate } from '@/lib/formatDate';
 import { formatJPY } from '@/lib/formatJPY';
+import {
+  categoryDisplayPercent,
+  sumCategoryDisplayAmounts,
+} from '@/lib/historyDetailCategoryShare';
 import { t } from '@/lib/i18n';
 import { navigateBackOrHistory } from '@/lib/navigationBack';
 import {
@@ -270,6 +274,11 @@ export default function ReceiptDetailScreen() {
     }
     return buildCategorySummary(displayAnalysis, __DEV__ ? { source } : undefined);
   }, [displayAnalysis, receipt]);
+
+  const categoryDisplayTotal = useMemo(
+    () => sumCategoryDisplayAmounts(categorySummary),
+    [categorySummary]
+  );
 
   const merchant =
     receipt?.merchant_raw ||
@@ -691,11 +700,7 @@ export default function ReceiptDetailScreen() {
                 <CategoryRatioRow
                   category={x.category}
                   amount={formatJPY(x.amount)}
-                  percent={
-                    displayTotal > 0
-                      ? Math.max(0, (x.amount / displayTotal) * 100)
-                      : 0
-                  }
+                  percent={categoryDisplayPercent(x.amount, categoryDisplayTotal)}
                 />
               </MerunoGroupedRow>
             ))
