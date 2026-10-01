@@ -580,3 +580,143 @@ export function evaluateMinuteSingleNameDriftRescanAdvisory(
     storeHintRight: merchant.storeHintRight,
   };
 }
+
+export const SCAN_REVIEW_DUPLICATE_CANDIDATE_DIAG_EVENT =
+  'scan_review_duplicate_candidate_diag' as const;
+
+export type ScanReviewDuplicateCandidateMatchKind =
+  | 'SECOND_EXACT'
+  | typeof MINUTE_STRICT_ADVISORY_MATCH_KIND
+  | typeof MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND
+  | 'none';
+
+/**
+ * Structural diagnostic for one stored candidate that reached minute-advisory
+ * evaluation. It does not decide the gate match and never includes names,
+ * amounts, merchant text, or images.
+ */
+export type ScanReviewDuplicateCandidateDiag = {
+  event: typeof SCAN_REVIEW_DUPLICATE_CANDIDATE_DIAG_EVENT;
+  candidateReceiptId: string;
+  strictReason: string;
+  driftReason: string | null;
+  matchKind: ScanReviewDuplicateCandidateMatchKind;
+  itemCountLeft: number;
+  itemCountRight: number;
+  firstMismatchIndex?: number;
+  nameMismatchCount?: number;
+  whitespaceOnlyDifferenceCount?: number;
+  basketInvalidSide?: 'left' | 'right' | 'both';
+};
+
+function advisoryItemCount(receipt: ReceiptRow): number {
+  const items = advisoryItemRows(receipt);
+  return items ? items.length : -1;
+}
+
+function basketInvalidSide(
+  left: ReceiptRow,
+  right: ReceiptRow
+): 'left' | 'right' | 'both' | 'none' {
+  const leftBasket = readStrictAdvisoryBasket(left);
+  const rightBasket = readStrictAdvisoryBasket(right);
+  if (!leftBasket && !rightBasket) return 'both';
+  if (!leftBasket) return 'left';
+  if (!rightBasket) return 'right';
+  return 'none';
+}
+
+function alignedBasketStructure(
+  leftBasket: readonly AdvisoryBasketLine[],
+  rightBasket: readonly AdvisoryBasketLine[]
+): {
+  firstQuantityIndex: number;
+  firstAmountIndex: number;
+  firstTrueNameIndex: number;
+  nameMismatchCount: number;
+  whitespaceOnlyDifferenceCount: number;
+} {
+  let firstQuantityIndex = -1;
+  let firstAmountIndex = -1;
+  let firstTrueNameIndex = -1;
+  let nameMismatchCount = 0;
+  let whitespaceOnlyDifferenceCount = 0;
+  const limit = Math.min(leftBasket.length, rightBasket.length);
+  for (let index = 0; index < limit; index += 1) {
+    const leftLine = leftBasket[index]!;
+    const rightLine = rightBasket[index]!;
+    if (leftLine.quantity !== rightLine.quantity && firstQuantityIndex < 0) {
+      firstQuantityIndex = index;
+    }
+    if (leftLine.lineAmountYen !== rightLine.lineAmountYen && firstAmountIndex < 0) {
+      firstAmountIndex = index;
+    }
+    if (leftLine.nameCanonical === rightLine.nameCanonical) continue;
+    if (
+      whitespaceInsensitiveAdvisoryName(leftLine.nameCanonical) ===
+      whitespaceInsensitiveAdvisoryName(rightLine.nameCanonical)
+    ) {
+      whitespaceOnlyDifferenceCount += 1;
+      continue;
+    }
+    nameMismatchCount += 1;
+    if (firstTrueNameIndex < 0) firstTrueNameIndex = index;
+  }
+  return {
+    firstQuantityIndex,
+    firstAmountIndex,
+    firstTrueNameIndex,
+    nameMismatchCount,
+    whitespaceOnlyDifferenceCount,
+  };
+}
+
+export function diagnoseMinuteDuplicateCandidate(input: {
+  left: ReceiptRow;
+  right: ReceiptRow;
+  strict: MinuteStrictRescanAdvisoryResult;
+  drift: MinuteSingleNameDriftAdvisoryResult | null;
+}): ScanReviewDuplicateCandidateDiag {
+  const matchKind: ScanReviewDuplicateCandidateMatchKind = input.strict.matched
+    ? MINUTE_STRICT_ADVISORY_MATCH_KIND
+    : input.drift?.matched
+      ? MINUTE_SINGLE_NAME_DRIFT_ADVISORY_MATCH_KIND
+      : 'none';
+  const diag: ScanReviewDuplicateCandidateDiag = {
+    event: SCAN_REVIEW_DUPLICATE_CANDIDATE_DIAG_EVENT,
+    candidateReceiptId: input.right.id,
+    strictReason: input.strict.reason,
+    driftReason: input.drift ? input.drift.reason : null,
+    matchKind,
+    itemCountLeft: advisoryItemCount(input.left),
+    itemCountRight: advisoryItemCount(input.right),
+  };
+  if (
+    input.strict.reason === 'basket_invalid' ||
+    input.drift?.reason === 'basket_invalid'
+  ) {
+    const side = basketInvalidSide(input.left, input.right);
+    if (side !== 'none') diag.basketInvalidSide = side;
+  }
+  const driftReason = input.drift?.reason;
+  if (
+    driftReason === 'quantity_mismatch' ||
+    driftReason === 'amount_mismatch' ||
+    driftReason === 'name_drift_count'
+  ) {
+    const leftBasket = readStrictAdvisoryBasket(input.left);
+    const rightBasket = readStrictAdvisoryBasket(input.right);
+    if (leftBasket && rightBasket) {
+      const structure = alignedBasketStructure(leftBasket, rightBasket);
+      diag.nameMismatchCount = structure.nameMismatchCount;
+      diag.whitespaceOnlyDifferenceCount = structure.whitespaceOnlyDifferenceCount;
+      diag.firstMismatchIndex =
+        driftReason === 'quantity_mismatch'
+          ? structure.firstQuantityIndex
+          : driftReason === 'amount_mismatch'
+            ? structure.firstAmountIndex
+            : structure.firstTrueNameIndex;
+    }
+  }
+  return diag;
+}
