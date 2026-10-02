@@ -2440,4 +2440,209 @@ describe('G4-2B personal_product price history', () => {
       expect(result.rows).toHaveLength(2);
     });
   });
+
+  describe('personal price exclusion union', () => {
+    function withInventoryExcluded(
+      resolved: Awaited<ReturnType<typeof buildPersonalProductionFixture>>['resolved'],
+      ids: ReadonlySet<string>
+    ) {
+      return {
+        ...resolved,
+        inventory: {
+          ...resolved.inventory,
+          excludedDuplicateReceiptIds: ids,
+        },
+      };
+    }
+
+    function authorizedPriceRows() {
+      return [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+        trustedPersonalPriceRow('r-dup', 'r-dup:0', 259_200_000, 110, 'aeon'),
+        trustedPersonalPriceRow('r-other', 'r-other:0', 345_600_000, 80, 'seven'),
+      ];
+    }
+
+    it('caller-only exclusion drops that receipt and keeps the same-merchant sibling', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(
+        withInventoryExcluded(resolved, new Set()),
+        authorizedPriceRows(),
+        { excludedReceiptIds: new Set(['r-york']) }
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows.map((row) => row.receiptId)).toEqual([
+        'r-aeon',
+        'r-dup',
+      ]);
+      expect(result.rows.some((row) => row.receiptId === 'r-other')).toBe(false);
+    });
+
+    it('inventory-only exclusion drops that receipt', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(
+        withInventoryExcluded(resolved, new Set(['r-york'])),
+        authorizedPriceRows(),
+        { excludedReceiptIds: new Set() }
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows.map((row) => row.receiptId)).toEqual([
+        'r-aeon',
+        'r-dup',
+      ]);
+    });
+
+    it('unions caller and inventory exclusions', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(
+        withInventoryExcluded(resolved, new Set(['r-york'])),
+        authorizedPriceRows(),
+        { excludedReceiptIds: new Set(['r-aeon']) }
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows.map((row) => row.receiptId)).toEqual(['r-dup']);
+    });
+
+    it('overlap of the same receipt id excludes it once', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(
+        withInventoryExcluded(resolved, new Set(['r-york'])),
+        authorizedPriceRows(),
+        { excludedReceiptIds: new Set(['r-york']) }
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows.map((row) => row.receiptId)).toEqual([
+        'r-aeon',
+        'r-dup',
+      ]);
+    });
+
+    it('empty exclusion sets keep every authorized price row', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const result = selectAuthorizedPersonalProductPriceRows(
+        withInventoryExcluded(resolved, new Set()),
+        authorizedPriceRows()
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.rows.map((row) => row.receiptId)).toEqual([
+        'r-aeon',
+        'r-dup',
+        'r-york',
+      ]);
+    });
+
+    it('caller exclusion does not hide a mismatched itemId', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const rows = [
+        trustedPersonalPriceRow('r-aeon', ' r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      ];
+      expect(selectAuthorizedPersonalProductPriceRows(resolved, rows)).toEqual({
+        ok: false,
+        reason: 'membership_inconsistent',
+      });
+      expect(
+        selectAuthorizedPersonalProductPriceRows(resolved, rows, {
+          excludedReceiptIds: new Set(['r-aeon']),
+        })
+      ).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('caller exclusion does not hide a merchant product outside the member set', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const yorkKey = 'r-york:0';
+      const yorkItem = resolved.inventory.itemsByRowKey.get(yorkKey)!;
+      const brokenItems = new Map(resolved.inventory.itemsByRowKey);
+      brokenItems.set(yorkKey, {
+        ...yorkItem,
+        merchantProductId: 'mp_outside',
+      });
+      const broken = {
+        ...resolved,
+        inventory: { ...resolved.inventory, itemsByRowKey: brokenItems },
+      };
+      const rows = [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+        trustedPersonalPriceRow('r-york', 'r-york:0', 172_800_000, 120, 'york'),
+      ];
+      expect(selectAuthorizedPersonalProductPriceRows(broken, rows)).toEqual({
+        ok: false,
+        reason: 'membership_inconsistent',
+      });
+      expect(
+        selectAuthorizedPersonalProductPriceRows(broken, rows, {
+          excludedReceiptIds: new Set(['r-york']),
+        })
+      ).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('caller exclusion does not hide a missing queried authorized row', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const rows = [
+        trustedPersonalPriceRow('r-aeon', 'r-aeon:0', 86_400_000, 100, 'aeon'),
+      ];
+      expect(selectAuthorizedPersonalProductPriceRows(resolved, rows)).toEqual({
+        ok: false,
+        reason: 'membership_inconsistent',
+      });
+      expect(
+        selectAuthorizedPersonalProductPriceRows(resolved, rows, {
+          excludedReceiptIds: new Set(['r-york']),
+        })
+      ).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+
+    it('caller exclusion does not hide a missing inventory membership', async () => {
+      const { resolved } = await buildPersonalProductionFixture();
+      const { selectAuthorizedPersonalProductPriceRows } = await import(
+        './productPriceHistory'
+      );
+      const brokenItems = new Map(resolved.inventory.itemsByRowKey);
+      brokenItems.delete('r-york:0');
+      const broken = {
+        ...withInventoryExcluded(resolved, new Set()),
+        inventory: {
+          ...resolved.inventory,
+          excludedDuplicateReceiptIds: new Set<string>(),
+          itemsByRowKey: brokenItems,
+        },
+      };
+      const result = selectAuthorizedPersonalProductPriceRows(
+        broken,
+        authorizedPriceRows(),
+        { excludedReceiptIds: new Set(['r-york']) }
+      );
+      expect(result).toEqual({ ok: false, reason: 'membership_inconsistent' });
+    });
+  });
 });

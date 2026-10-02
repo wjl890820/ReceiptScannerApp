@@ -346,7 +346,10 @@ export type SelectAuthorizedPersonalProductPriceRowsResult =
 
 export function selectAuthorizedPersonalProductPriceRows(
   resolved: ResolvedPersonalProductTarget,
-  rows: readonly ProductPriceHistoryRow[]
+  rows: readonly ProductPriceHistoryRow[],
+  options: {
+    excludedReceiptIds?: ReadonlySet<string> | null;
+  } = {}
 ): SelectAuthorizedPersonalProductPriceRowsResult {
   const memberSet = new Set(resolved.memberMerchantProductIds);
   const expectedRetainedKeys = retainedAuthorizedRowKeys(resolved);
@@ -398,7 +401,16 @@ export function selectAuthorizedPersonalProductPriceRows(
     selected.push(queriedRow);
   }
 
-  return { ok: true, rows: selected };
+  // Caller occurrence exclusions are output filtering only. They must not
+  // skip the inventory-exclusion and membership checks above.
+  const callerExcluded = options.excludedReceiptIds;
+  if (!callerExcluded || callerExcluded.size === 0) {
+    return { ok: true, rows: selected };
+  }
+  return {
+    ok: true,
+    rows: selected.filter((row) => !callerExcluded.has(row.receiptId)),
+  };
 }
 
 type PriceDimension = 'volume' | 'weight' | 'count';
@@ -2484,7 +2496,9 @@ function applyIdentityG3Gates(
 async function loadPersonalProductPriceHistoryWithDb(
   db: ProductPriceHistoryDatabase,
   target: Extract<ProductDetailTarget, { type: 'personal_product' }>,
-  options: BuildProductPriceHistoryOptions = {}
+  options: BuildProductPriceHistoryOptions & {
+    excludedReceiptIds?: ReadonlySet<string>;
+  } = {}
 ): Promise<ProductPriceHistoryResult> {
   const resolveResult =
     options.personalProductContext &&
@@ -2517,7 +2531,9 @@ async function loadPersonalProductPriceHistoryWithDb(
     predicates.params
   );
 
-  const selection = selectAuthorizedPersonalProductPriceRows(resolved, rows);
+  const selection = selectAuthorizedPersonalProductPriceRows(resolved, rows, {
+    excludedReceiptIds: options.excludedReceiptIds,
+  });
   if (!selection.ok) {
     return failClosedPersonalProductPriceResult(target);
   }

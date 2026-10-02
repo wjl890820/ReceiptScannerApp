@@ -19,6 +19,12 @@ import type { ReceiptRow } from './db';
 import { applyOccurrenceRepresentativeUniverse } from './canonicalPurchaseOccurrence';
 import { selectAnalyticsReceipts } from './analyticsReceiptSelection';
 import { loadPersonalProductDetailDataWithDb } from './productDetailPersonalLoader';
+import {
+  loadProductPriceHistoryWithDb,
+  type ProductPriceHistoryDatabase,
+  type ProductPriceHistoryRow,
+} from './productPriceHistory';
+import type { PersonalProductInventoryItem } from './personalProductEndpointInventory';
 
 const DAY = 86_400_000;
 const TX_A = Date.parse('2026-06-30T13:36:46+09:00');
@@ -154,6 +160,8 @@ function makeReceipt(
     createdAt: number;
     transactionAt: number;
     total?: number;
+    merchantRaw?: string;
+    merchantNormalized?: string;
     items?: Array<{ name: string; quantity: number; lineTotal: number }>;
   }
 ): ReceiptRow {
@@ -161,21 +169,23 @@ function makeReceipt(
     { name: 'Personal Cola', quantity: 1, lineTotal: 10 },
   ];
   const total = opts.total ?? items.reduce((s, i) => s + i.lineTotal, 0);
+  const merchantRaw = opts.merchantRaw ?? 'Store';
+  const merchantNormalized = opts.merchantNormalized ?? 'store';
   return {
     id,
     created_at: opts.createdAt,
     transaction_at: opts.transactionAt,
     transaction_time_precision: 'second',
     image_uri: '',
-    merchant_raw: 'Store',
-    merchant_normalized: 'store',
+    merchant_raw: merchantRaw,
+    merchant_normalized: merchantNormalized,
     merchant_type: 'supermarket',
     total,
     tax: 0,
     tax_is_known: 1,
     currency: 'USD',
     analysis_json: JSON.stringify({
-      merchant: 'Store',
+      merchant: merchantRaw,
       total,
       tax: 0,
       tax_is_known: true,
@@ -434,5 +444,161 @@ describe('R6 personal_product Product Detail exclusion union', () => {
     expect(seen).toHaveLength(2);
     expect(seen[0]!.has('nonrep-b')).toBe(true);
     expect(seen[1]!.has('nonrep-b')).toBe(true);
+  });
+
+  it('R6 caller occurrence exclusion keeps one price point when inventory exclusions are empty', async () => {
+    const basket = [{ name: 'Personal Cola', quantity: 1, lineTotal: 10 }];
+    const receipts = [
+      makeReceipt('rep-a', {
+        createdAt: 1,
+        transactionAt: TX_A,
+        total: 10,
+        merchantRaw: '業務スーパー',
+        merchantNormalized: '業務スーパー',
+        items: basket,
+      }),
+      makeReceipt('nonrep-b', {
+        createdAt: 2,
+        transactionAt: TX_A,
+        total: 10,
+        merchantRaw: '業務スーパー 一吉店',
+        merchantNormalized: '業務スーパー 一吉店',
+        items: basket,
+      }),
+    ];
+    const selection = selectAnalyticsReceipts(receipts);
+    expect(selection.excludedDuplicateReceiptIds.size).toBe(0);
+    expect([...selection.excludedDuplicateReceiptIds]).toEqual([]);
+    const universe = applyOccurrenceRepresentativeUniverse(
+      selection.analyticsReceipts,
+      selection.excludedDuplicateReceiptIds
+    );
+    expect(universe.representativeReceipts).toHaveLength(1);
+    const repId = universe.representativeReceipts[0]!.id;
+    const nonRepId = repId === 'rep-a' ? 'nonrep-b' : 'rep-a';
+    expect(universe.excludedReceiptIds.has(nonRepId)).toBe(true);
+    expect(selection.excludedDuplicateReceiptIds.has(nonRepId)).toBe(false);
+
+    const inventoryItem = (receiptId: string): PersonalProductInventoryItem => ({
+      receiptId,
+      itemId: `${receiptId}:0`,
+      sourceIndex: 0,
+      occurredAt: TX_A,
+      merchantProductId: 'mp-cola',
+      identityLevel: 'product_exact',
+      displayName: 'Personal Cola',
+      merchantName: 'Store',
+      rawName: 'Personal Cola',
+      merchantScopeKey: 'store',
+      skuKey: null,
+      brand: null,
+      attributes: null,
+    });
+    const base = resolvedFixture({
+      memberReceiptIds: ['rep-a', 'nonrep-b'],
+      inventoryExcluded: new Set(),
+    });
+    const resolved = {
+      ...base,
+      inventory: {
+        ...base.inventory,
+        itemsByRowKey: new Map([
+          ['rep-a:0', inventoryItem('rep-a')],
+          ['nonrep-b:0', inventoryItem('nonrep-b')],
+        ]),
+      },
+    };
+    expect(resolved.inventory.excludedDuplicateReceiptIds.size).toBe(0);
+
+    const historyRows = [
+      historyRow('rep-a', { purchasedAt: TX_A, lineTotal: 10, currency: 'USD' }),
+      historyRow('nonrep-b', { purchasedAt: TX_A, lineTotal: 10, currency: 'USD' }),
+    ];
+    const summary = await loadProductHistoryWithDb(
+      historyDb(historyRows),
+      { type: 'personal_product', key: 'mp-cola' },
+      {
+        personalProductContext: resolved,
+        excludedReceiptIds: universe.excludedReceiptIds,
+      }
+    );
+    expect(summary!.purchaseOccurrenceCount).toBe(1);
+    expect(summary!.recentPurchases.map((row) => row.receiptId)).toEqual([repId]);
+    const historyWithoutCaller = await loadProductHistoryWithDb(
+      historyDb(historyRows),
+      { type: 'personal_product', key: 'mp-cola' },
+      { personalProductContext: resolved }
+    );
+    expect(historyWithoutCaller!.purchaseOccurrenceCount).toBe(2);
+
+    const priceRow = (receiptId: string): ProductPriceHistoryRow => ({
+      receiptId,
+      itemId: `${receiptId}:0`,
+      sourceIndex: 0,
+      occurredAt: TX_A,
+      merchantRaw: 'Store',
+      merchantNormalized: 'store',
+      displayName: 'Personal Cola',
+      currency: 'JPY',
+      lineTotal: 100,
+      purchaseQuantity: 1,
+      skuKey: null,
+      productFamilyKey: null,
+      volumeBaseMl: null,
+      weightBaseG: null,
+      countBase: null,
+      grossLineAmount: 100,
+      effectiveLineAmount: 100,
+      discountAllocated: 0,
+      amountProvenance: 'ocr_observed',
+      itemAmountEvidenceState: 'coherent',
+      evidenceCaptureVersion: 1,
+      priceObservationVersion: 1,
+      receiptAnalysisJson: JSON.stringify({
+        items: [{ name: 'Personal Cola', lineTotal: 100, quantity: 1 }],
+        evidenceCaptureVersion: 1,
+        reconciliation: { ok: true },
+        amount_mismatch: false,
+      }),
+      receiptTaxIsKnown: 1,
+      receiptTotal: 100,
+      receiptTax: 8,
+      receiptCurrency: 'JPY',
+    });
+    const priceDb: ProductPriceHistoryDatabase = {
+      async getAllAsync(source) {
+        if (/receipts\.user_id = \?/i.test(source)) {
+          return [priceRow('rep-a'), priceRow('nonrep-b')] as never;
+        }
+        return [] as never;
+      },
+    };
+
+    const withoutCaller = await loadProductPriceHistoryWithDb(
+      priceDb,
+      { type: 'personal_product', key: 'mp-cola' },
+      {
+        personalProductContext: resolved,
+        excludedReceiptIds: selection.excludedDuplicateReceiptIds,
+      }
+    );
+    const withCaller = await loadProductPriceHistoryWithDb(
+      priceDb,
+      { type: 'personal_product', key: 'mp-cola' },
+      {
+        personalProductContext: resolved,
+        excludedReceiptIds: universe.excludedReceiptIds,
+      }
+    );
+
+    expect(resolved.inventory.excludedDuplicateReceiptIds.size).toBe(0);
+    expect(withoutCaller.points.map((point) => point.receiptId).sort()).toEqual([
+      'nonrep-b',
+      'rep-a',
+    ]);
+    expect(withCaller.points).toHaveLength(1);
+    expect(withCaller.points[0]!.receiptId).toBe(repId);
+    expect(withCaller.observations.map((row) => row.receiptId)).not.toContain(nonRepId);
+    expect(withCaller.points[0]!.priceValue).toBe(100);
   });
 });
