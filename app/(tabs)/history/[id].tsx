@@ -42,6 +42,11 @@ import {
   categoryDisplayPercent,
   sumCategoryDisplayAmounts,
 } from '@/lib/historyDetailCategoryShare';
+import {
+  buildHistoryDetailCategorySummary,
+  historyDetailDisplayItemSource,
+  selectHistoryDetailDisplayItems,
+} from '@/lib/historyDetailDisplaySource';
 import { t } from '@/lib/i18n';
 import { navigateBackOrHistory } from '@/lib/navigationBack';
 import {
@@ -113,17 +118,6 @@ function safeParseAnalysis(json: string | null): ReceiptAnalysis | null {
   }
 }
 
-function safeParseItems(json: string | null): ReceiptItem[] | null {
-  if (!json) return null;
-  try {
-    const arr = JSON.parse(json);
-    if (!Array.isArray(arr)) return null;
-    return arr as ReceiptItem[];
-  } catch {
-    return null;
-  }
-}
-
 function toNum(v: any, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
@@ -132,48 +126,6 @@ function toNum(v: any, fallback = 0) {
 function round0(n: number) {
   // 日元不需要小数；如果以后要支持小数，改这里即可
   return Math.round(n);
-}
-
-/** Amount for summary: shared analytics resolver (user override > effective > gross). */
-function itemLineAmountForSummary(it: any): number {
-  const amount = itemAmountForAnalytics(it);
-  if (amount > 0) return round0(amount);
-  const qRaw = toNum(it.quantity, 0);
-  const q = qRaw > 0 ? qRaw : 1;
-  const up = toNum(it.unitPrice ?? it.unit_price, 0);
-  return up > 0 ? round0(up * q) : 0;
-}
-
-/**
- * 分类汇总：信任已落库的语义分类（兼容旧 enum / 店铺词）。
- * 不得在 stored=uncategorized 时用商品名再发明一个不同类别。
- */
-function buildCategorySummary(
-  analysis: ReceiptAnalysis | { items: ReceiptItem[] } | null,
-  debug?: { source: string }
-): { category: string; amount: number }[] {
-  const map = new Map<string, number>();
-  if (!analysis?.items?.length) return [];
-
-  for (const it of analysis.items) {
-    const status = (it as any).classification_status as string | undefined;
-    if (status !== undefined && status !== 'ok' && status !== 'fallback') continue;
-    const rawCat =
-      (typeof (it as any).category === 'string' && (it as any).category) ||
-      (typeof (it as any).categoryKey === 'string' && (it as any).categoryKey) ||
-      '';
-    const cat = normalizePersistedProductCategory(rawCat, typeof it.name === 'string' ? it.name : undefined);
-    const amt = itemLineAmountForSummary(it);
-    map.set(cat, (map.get(cat) ?? 0) + amt);
-  }
-
-  const arr = Array.from(map.entries()).map(([category, amount]) => ({ category, amount }));
-  arr.sort((a, b) => b.amount - a.amount);
-  if (__DEV__ && debug) {
-    // eslint-disable-next-line no-console
-    console.log('[Detail][CategorySummary] summary', arr);
-  }
-  return arr;
 }
 
 export default function ReceiptDetailScreen() {
@@ -250,11 +202,10 @@ export default function ReceiptDetailScreen() {
   // 优先使用 user_items_json，否则使用 analysis.items
   const displayItems = useMemo(() => {
     if (!receipt) return [];
-    const userItems = safeParseItems(receipt.user_items_json);
-    if (userItems && userItems.length > 0) {
-      return userItems;
-    }
-    return analysis?.items ?? [];
+    return selectHistoryDetailDisplayItems({
+      userItemsJson: receipt.user_items_json,
+      analysisItems: analysis?.items,
+    });
   }, [receipt, analysis]);
 
   // 基于 displayItems 构建分类汇总和总额
@@ -266,14 +217,13 @@ export default function ReceiptDetailScreen() {
   }, [displayItems]);
 
   const categorySummary = useMemo(() => {
-    const userItems = receipt ? safeParseItems(receipt.user_items_json) : null;
-    const source =
-      userItems && userItems.length > 0 ? 'user_items_json' : 'analysis_json.items';
+    const source = historyDetailDisplayItemSource(receipt?.user_items_json);
+    const rows = buildHistoryDetailCategorySummary(displayAnalysis.items);
     if (__DEV__) {
-      // eslint-disable-next-line no-console
       console.log('[Detail][CategorySummary] source', source, 'items', displayAnalysis.items.length);
+      console.log('[Detail][CategorySummary] summary', rows);
     }
-    return buildCategorySummary(displayAnalysis, __DEV__ ? { source } : undefined);
+    return rows;
   }, [displayAnalysis, receipt]);
 
   const categoryDisplayTotal = useMemo(
