@@ -1961,12 +1961,15 @@ export function emitAp3CandidateFunnel(funnel: Ap3CandidateFunnelCounts): void {
     screen: 'analysis',
     meta: pickMeta(funnel, FUNNEL_MP_MONETARY_LAYER_KEYS),
   });
-  recordDiagnosticEvent({
-    category: 'timing',
-    name: 'ap3_candidate_funnel_mp_tax_provenance_shape',
-    screen: 'analysis',
-    meta: pickMeta(funnel, FUNNEL_MP_TAX_PROVENANCE_KEYS),
-  });
+  // Tax-provenance companion: never emit when Analysis-D tax diagnostics are OFF.
+  if (shouldRecordAp3TaxProvenanceDiagnostics()) {
+    recordDiagnosticEvent({
+      category: 'timing',
+      name: 'ap3_candidate_funnel_mp_tax_provenance_shape',
+      screen: 'analysis',
+      meta: pickMeta(funnel, FUNNEL_MP_TAX_PROVENANCE_KEYS),
+    });
+  }
   // Neither-close companion: never emit when Analysis-D OFF (avoid all-zero B2).
   if (shouldRecordAp3NeitherCloseDiagnostics()) {
     recordDiagnosticEvent({

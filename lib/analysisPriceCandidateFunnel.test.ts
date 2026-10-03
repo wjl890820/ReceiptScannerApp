@@ -662,7 +662,10 @@ describe('AP-3 candidate funnel production path', () => {
     const events = getDiagnosticSnapshot().events.filter((e) =>
       e.name.startsWith('ap3_candidate_funnel')
     );
-    expect(events.length).toBe(10);
+    expect(events.length).toBe(9);
+    expect(events.map((e) => e.name)).not.toContain(
+      'ap3_candidate_funnel_mp_tax_provenance_shape'
+    );
     const payload = JSON.stringify(events);
     expect(payload).not.toMatch(/sku-[a-z0-9-]{4,}|mp-[a-z0-9-]{4,}/i);
     expect(payload).not.toMatch(/"displayName"|"merchantRaw"|¥[0-9]/);
@@ -1045,7 +1048,9 @@ describe('AP-3 MP history comparability breakdown', () => {
         observations: [obs(false, ['legacy_unbackfilled', 'missing_observation'])],
       }),
     });
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(true);
     emitAp3CandidateFunnel(funnel);
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(null);
     const summary = getDiagnosticSnapshot().events.find(
       (e) => e.name === 'ap3_candidate_funnel_mp_history_summary'
     );
@@ -2254,6 +2259,63 @@ describe('AP-3 MP tax provenance shape (tax_untrusted cohort)', () => {
     expect(taxShape).toBeTruthy();
     expect(Object.keys(taxShape?.meta ?? {}).length).toBe(23);
     expect(taxShape?.meta?.mpTaxObservationCount).toBe(1);
+  });
+
+  it('gate — nonzero tax provenance is omitted when Analysis-D is off and emitted when on', () => {
+    const funnel = recordTax({
+      rows: [
+        taxRow('r1', {
+          receiptTax: 80,
+          receiptTaxIsKnown: 1,
+          receiptAnalysisJson: JSON.stringify({ tax: 80, tax_is_known: true }),
+        }),
+      ],
+      observations: [taxObs('r1')],
+      assessments: [taxAssessment('r1', ['tax_untrusted'])],
+    });
+    expect(funnel.mpTaxObservationCount).toBeGreaterThan(0);
+    expect(funnel.mpTaxPersistedKnown1).toBeGreaterThan(0);
+
+    setAp3NeitherCloseDiagnosticsEnabledForTests(false);
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(false);
+    emitAp3CandidateFunnel(funnel);
+    const disabledEvents = getDiagnosticSnapshot().events;
+    const disabledMain = disabledEvents.find((e) => e.name === 'ap3_candidate_funnel');
+    expect(disabledMain).toBeTruthy();
+    expect(
+      disabledEvents.filter(
+        (e) => e.name === 'ap3_candidate_funnel_mp_tax_provenance_shape'
+      )
+    ).toHaveLength(0);
+    expect(
+      disabledEvents.some(
+        (e) => e.name === 'ap3_candidate_funnel_mp_neither_close_shape'
+      )
+    ).toBe(false);
+
+    clearDiagnostics();
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(true);
+    emitAp3CandidateFunnel(funnel);
+    const enabledEvents = getDiagnosticSnapshot().events;
+    const enabledMain = enabledEvents.find((e) => e.name === 'ap3_candidate_funnel');
+    const taxEvents = enabledEvents.filter(
+      (e) => e.name === 'ap3_candidate_funnel_mp_tax_provenance_shape'
+    );
+    expect(taxEvents).toHaveLength(1);
+    expect(Object.keys(taxEvents[0]!.meta ?? {}).length).toBe(23);
+    expect(taxEvents[0]!.meta?.mpTaxObservationCount).toBe(
+      funnel.mpTaxObservationCount
+    );
+    expect(taxEvents[0]!.meta?.mpTaxPersistedKnown1).toBe(funnel.mpTaxPersistedKnown1);
+    expect(enabledMain?.meta).toEqual(disabledMain?.meta);
+    expect(
+      enabledEvents.some(
+        (e) => e.name === 'ap3_candidate_funnel_mp_neither_close_shape'
+      )
+    ).toBe(false);
+
+    setAp3NeitherCloseDiagnosticsEnabledForTests(null);
+    setAp3TaxProvenanceDiagnosticsEnabledForTests(true);
   });
 
   it('A2 — shared memo: two MP targets, same receipt → parse/resolve once', () => {
