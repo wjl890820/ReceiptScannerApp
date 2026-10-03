@@ -38,6 +38,7 @@ import {
 } from '@/lib/userCorrections';
 import { applyUserLineAmountEdit, invalidateProductCouponOwnershipMetadata } from '@/lib/receiptDiscountAllocation';
 import { mergeReviewSnapshotPreservingEvidence } from '@/lib/receiptPrintedEvidence';
+import { materializeScanReviewItemCategorySemantics } from '@/lib/reviewCategorySemantics';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
 import { getCategoryLabel } from '@/lib/categoryPalette';
 import { getCurrentLocale, t } from '@/lib/i18n';
@@ -564,7 +565,15 @@ export default function ScanReviewScreen() {
       refreshDeterministicProductAttributesFromCurrentName(identified);
       // Drop stale semantic evidence when name/merchant/deterministic attrs changed.
       bindMerchantAndInvalidateSemanticCache(identified, merchant.trim() || null);
-      return identified;
+      return materializeScanReviewItemCategorySemantics(identified, {
+        isUserAdded,
+        recognitionCategory: (s as { category?: unknown }).category,
+        recognitionItemName:
+          typeof (s as { name?: unknown }).name === 'string'
+            ? (s as { name: string }).name
+            : undefined,
+        finalCategory: line.category,
+      });
     });
   }, [lineItems, merchant, snapshot]);
 

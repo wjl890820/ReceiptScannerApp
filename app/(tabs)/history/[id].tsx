@@ -67,6 +67,7 @@ import { getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
 import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
+import { materializeHistoryEditedItemCategorySemantics } from '@/lib/reviewCategorySemantics';
 import {
   UI_COLORS,
   UI_LAYOUT,
@@ -460,6 +461,12 @@ export default function ReceiptDetailScreen() {
         ? { quantityUserEdited: true }
         : {}),
     } as ReceiptItem & Record<string, unknown>;
+
+    nextItem = materializeHistoryEditedItemCategorySemantics(nextItem, {
+      storedCategory: existingItem.category,
+      itemName: typeof existingItem.name === 'string' ? existingItem.name : undefined,
+      finalCategory,
+    });
 
     nextItem = applyItemFieldCorrections(nextItem, [
       quantityCorrectionInput({
