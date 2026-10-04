@@ -18,9 +18,10 @@ import {
   resolveDiscountOwnership,
   type DiscountOwnershipResolution,
 } from './analysisFoundation/discountOwnership';
-import type {
-  DiscountableItem,
-  DiscountLine,
+import {
+  ownershipBaseIdentityKey,
+  type DiscountableItem,
+  type DiscountLine,
 } from './receiptDiscountAllocation';
 
 export type CurrentItemMonetaryTruthSource = {
@@ -61,11 +62,22 @@ function parseUserItemsPresent(
 function readAnalysisItems(analysis: AnalysisObject): DiscountableItem[] {
   const raw = analysis.items;
   if (!Array.isArray(raw)) return [];
-  return raw.map((row) =>
-    row && typeof row === 'object'
-      ? ({ ...(row as DiscountableItem) } as DiscountableItem)
-      : ({} as DiscountableItem)
-  );
+  return raw.map((row) => projectAnalysisItemForMonetaryRecovery(row));
+}
+
+/**
+ * Ownership reads camelCase lineTotal. A null camelCase field is missing
+ * evidence, so a finite snake_case gross is copied onto the working item.
+ * Explicit 0 stays 0 and is never replaced by line_total.
+ */
+function projectAnalysisItemForMonetaryRecovery(row: unknown): DiscountableItem {
+  if (!row || typeof row !== 'object') return {};
+  const item = { ...(row as DiscountableItem) };
+  if (finiteNumber(item.lineTotal) == null) {
+    const snake = finiteNumber(item.line_total);
+    if (snake != null) item.lineTotal = snake;
+  }
+  return item;
 }
 
 function readAnalysisDiscounts(analysis: AnalysisObject): DiscountLine[] {
@@ -247,7 +259,130 @@ export type ProductRowMonetaryFields = {
   lineTotal?: number | null;
   receiptAnalysisJson?: string | null;
   receiptUserItemsJson?: string | null;
+  /** Indexed identity. Compared to the original analysis item, not the recovered tuple. */
+  displayName?: string | null;
+  rawName?: string | null;
+  purchaseQuantity?: number | null;
 };
+
+function finiteNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function positiveFinite(value: unknown): number | null {
+  const n = finiteNumber(value);
+  return n != null && n > 0 ? n : null;
+}
+
+function indexedRowIdentityName(row: ProductRowMonetaryFields): string {
+  const display = typeof row.displayName === 'string' ? row.displayName.trim() : '';
+  if (display) return display;
+  const raw = typeof row.rawName === 'string' ? row.rawName.trim() : '';
+  return raw;
+}
+
+/**
+ * CamelCase lineTotal wins when it is real numeric evidence, including 0.
+ * Null, undefined, NaN, and Infinity are missing and may fall through to line_total.
+ */
+export function originalGrossForCorrespondence(
+  item: DiscountableItem
+): number | null {
+  const camel = finiteNumber(item.lineTotal);
+  if (camel != null) return camel;
+  return finiteNumber(item.line_total);
+}
+
+/**
+ * Correspondence-only amount. Same precedence as itemAmountForAnalytics,
+ * without coercing null to 0.
+ */
+export function originalAnalyticsAmountForCorrespondence(
+  item: DiscountableItem
+): number | null {
+  const gross = originalGrossForCorrespondence(item);
+  if (item.amountUserEdited === true) return gross;
+  if (originalEffectiveIsStaleAlias(item)) return gross;
+  const effective = finiteNumber(item.effectiveLineTotal);
+  if (effective != null) return effective;
+  return gross;
+}
+
+function originalEffectiveIsStaleAlias(item: DiscountableItem): boolean {
+  const allocated = finiteNumber(item.discountAllocated);
+  if (allocated != null && allocated !== 0) return false;
+  const camel = finiteNumber(item.lineTotal);
+  const effective = finiteNumber(item.effectiveLineTotal);
+  if (camel == null || effective == null || camel === effective) return false;
+  const snake = finiteNumber(item.line_total);
+  return snake != null && snake === effective && camel !== snake;
+}
+
+/**
+ * Prove this indexed row is still the original analysis item at sourceIndex.
+ * Monetary recovery may change gross/discount/effective afterwards; those
+ * recovered fields are not used as identity evidence.
+ * Missing proof skips the overlay. A disagreement skips the overlay.
+ */
+function rowCorrespondsToOriginalAnalysisItem(
+  row: ProductRowMonetaryFields,
+  originalItems: readonly DiscountableItem[],
+  recoveredCount: number
+): boolean {
+  const sourceIndex = row.sourceIndex;
+  if (
+    typeof sourceIndex !== 'number' ||
+    !Number.isInteger(sourceIndex) ||
+    sourceIndex < 0 ||
+    sourceIndex >= originalItems.length ||
+    sourceIndex >= recoveredCount
+  ) {
+    return false;
+  }
+
+  const original = originalItems[sourceIndex];
+  if (!original) return false;
+
+  const indexedName = indexedRowIdentityName(row);
+  const originalName =
+    typeof original.name === 'string' ? original.name.trim() : '';
+  if (!indexedName || !originalName) return false;
+  const indexedKey = ownershipBaseIdentityKey(indexedName);
+  const originalKey = ownershipBaseIdentityKey(originalName);
+  if (!indexedKey || !originalKey || indexedKey !== originalKey) return false;
+
+  const indexedQty = positiveFinite(row.purchaseQuantity);
+  const originalQty = positiveFinite(
+    (original as { quantity?: unknown }).quantity ??
+      (original as { purchase_quantity?: unknown }).purchase_quantity
+  );
+  if (
+    indexedQty != null &&
+    originalQty != null &&
+    indexedQty !== originalQty
+  ) {
+    return false;
+  }
+
+  const originalGross = originalGrossForCorrespondence(original);
+  const rowGross = finiteNumber(row.grossLineAmount);
+  if (rowGross != null && (originalGross == null || rowGross !== originalGross)) {
+    return false;
+  }
+
+  const rowLineTotal = finiteNumber(row.lineTotal);
+  if (rowLineTotal != null) {
+    const originalAnalytics = originalAnalyticsAmountForCorrespondence(original);
+    const matchesGross = originalGross != null && rowLineTotal === originalGross;
+    const matchesAnalytics =
+      originalAnalytics != null && rowLineTotal === originalAnalytics;
+    if (!matchesGross && !matchesAnalytics) return false;
+  }
+
+  return true;
+}
 
 /**
  * Observational overlay for indexed product rows (receipt_items + analysis_json).
@@ -259,23 +394,34 @@ export function enrichProductRowsWithCurrentItemMonetaryTruth<
 >(rows: readonly T[]): T[] {
   if (rows.length === 0) return [];
 
-  const byReceipt = new Map<string, T[]>();
-  for (const row of rows) {
+  type IndexedRow = { row: T; originalIndex: number };
+  const result = new Array<T>(rows.length);
+  const byReceipt = new Map<string, IndexedRow[]>();
+
+  for (let originalIndex = 0; originalIndex < rows.length; originalIndex++) {
+    const row = rows[originalIndex]!;
     const receiptId =
       typeof row.receiptId === 'string' ? row.receiptId.trim() : '';
-    if (!receiptId) continue;
+    if (!receiptId) {
+      result[originalIndex] = row;
+      continue;
+    }
     const list = byReceipt.get(receiptId) ?? [];
-    list.push(row);
+    list.push({ row, originalIndex });
     byReceipt.set(receiptId, list);
   }
 
-  const out: T[] = [];
   for (const [, group] of byReceipt) {
-    const sample = group[0]!;
+    const sample = group[0]!.row;
+    const keepGroup = () => {
+      for (const entry of group) result[entry.originalIndex] = entry.row;
+    };
     if (parseUserItemsPresent(sample.receiptUserItemsJson)) {
-      out.push(...group);
+      keepGroup();
       continue;
     }
+    const analysis = parseAnalysisObject(sample.receiptAnalysisJson);
+    const originalItems = analysis ? readAnalysisItems(analysis) : [];
     const resolved = resolveCurrentAnalysisItemMonetaryTruth(
       sample.receiptAnalysisJson
     );
@@ -283,20 +429,31 @@ export function enrichProductRowsWithCurrentItemMonetaryTruth<
       resolved.ownershipStatus !== 'reallocated_with_evidence' &&
       resolved.ownershipStatus !== 'persisted_resolved'
     ) {
-      out.push(...group);
+      keepGroup();
       continue;
     }
 
-    for (const row of group) {
+    for (const entry of group) {
+      const row = entry.row;
+      if (
+        !rowCorrespondsToOriginalAnalysisItem(
+          row,
+          originalItems,
+          resolved.items.length
+        )
+      ) {
+        result[entry.originalIndex] = row;
+        continue;
+      }
       const recovered = resolved.items[row.sourceIndex];
       if (!recovered) {
-        out.push(row);
+        result[entry.originalIndex] = row;
         continue;
       }
       const discountAllocated = Number(recovered.discountAllocated);
       const effectiveLineTotal = Number(recovered.effectiveLineTotal);
       if (!Number.isFinite(discountAllocated) || !Number.isFinite(effectiveLineTotal)) {
-        out.push(row);
+        result[entry.originalIndex] = row;
         continue;
       }
       const recoveredGross = Number(recovered.lineTotal);
@@ -306,12 +463,12 @@ export function enrichProductRowsWithCurrentItemMonetaryTruth<
           ? row.grossLineAmount
           : Number.NaN;
       if (!Number.isFinite(gross) || gross < 0) {
-        out.push(row);
+        result[entry.originalIndex] = row;
         continue;
       }
       // Fail-closed if recovered effective does not match gross + discount.
       if (Math.abs(effectiveLineTotal - (gross + discountAllocated)) > 0.01) {
-        out.push(row);
+        result[entry.originalIndex] = row;
         continue;
       }
       if (
@@ -319,27 +476,18 @@ export function enrichProductRowsWithCurrentItemMonetaryTruth<
         row.effectiveLineAmount === effectiveLineTotal &&
         row.grossLineAmount === gross
       ) {
-        out.push(row);
+        result[entry.originalIndex] = row;
         continue;
       }
-      out.push({
+      result[entry.originalIndex] = {
         ...row,
         // Canonical gross may be lifted from inline-original structured evidence.
         grossLineAmount: gross,
         discountAllocated,
         effectiveLineAmount: effectiveLineTotal,
-      });
+      };
     }
   }
 
-  // Preserve caller order.
-  if (out.length !== rows.length) {
-    return [...rows];
-  }
-  const byKey = new Map(
-    out.map((row) => [`${row.receiptId}:${row.sourceIndex}`, row] as const)
-  );
-  return rows.map(
-    (row) => byKey.get(`${row.receiptId}:${row.sourceIndex}`) ?? row
-  );
+  return result;
 }

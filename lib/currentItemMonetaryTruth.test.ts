@@ -10,6 +10,8 @@ import { getReceiptItems } from './receiptItems';
 import {
   applyCurrentItemMonetaryTruthToAnalysisItems,
   enrichProductRowsWithCurrentItemMonetaryTruth,
+  originalAnalyticsAmountForCorrespondence,
+  originalGrossForCorrespondence,
   resolveCurrentAnalysisItemMonetaryTruth,
 } from './currentItemMonetaryTruth';
 import { buildProductPriceHistory } from './productPriceHistory';
@@ -1100,6 +1102,686 @@ describe('Receipt063 SEIYU inline markdown monetary recovery', () => {
       grossLineAmount: 651,
       effectiveLineAmount: 553,
       discountAllocated: -98,
+    });
+  });
+});
+
+const B6_NAMES = {
+  a: 'B6りんごジュース',
+  b: 'B6ブレッド',
+  c: 'B6せっけん',
+} as const;
+
+function b6AnalysisJson(): string {
+  return analysisJson({
+    items: [
+      { name: B6_NAMES.a, quantity: 1, lineTotal: 400, line_total: 400 },
+      { name: B6_NAMES.b, quantity: 2, lineTotal: 250, line_total: 250 },
+      { name: B6_NAMES.c, quantity: 1, lineTotal: 180, line_total: 180 },
+    ],
+    discounts: [
+      { label: '**値引**', amount: -40, adjacentPrecedingItemIndex: 1 },
+    ],
+    total: 790,
+    tax: 0,
+  });
+}
+
+function b6Row(
+  partial: Partial<ProductPriceHistoryRow> &
+    Pick<ProductPriceHistoryRow, 'sourceIndex' | 'displayName'>
+): ProductPriceHistoryRow {
+  return makeRow({
+    receiptId: 'b6-overlay',
+    purchaseQuantity: 1,
+    receiptAnalysisJson: b6AnalysisJson(),
+    receiptTotal: 790,
+    receiptTax: 0,
+    ...partial,
+  });
+}
+
+describe('sourceIndex correspondence before monetary overlay', () => {
+  it('contiguous correspondence still recovers the adjacent discount onto B', () => {
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([
+      b6Row({
+        sourceIndex: 0,
+        displayName: B6_NAMES.a,
+        purchaseQuantity: 1,
+        grossLineAmount: 400,
+        effectiveLineAmount: 400,
+        discountAllocated: 0,
+        lineTotal: 400,
+      }),
+      b6Row({
+        sourceIndex: 1,
+        displayName: B6_NAMES.b,
+        purchaseQuantity: 2,
+        grossLineAmount: 250,
+        effectiveLineAmount: 250,
+        discountAllocated: 0,
+        lineTotal: 250,
+      }),
+      b6Row({
+        sourceIndex: 2,
+        displayName: B6_NAMES.c,
+        purchaseQuantity: 1,
+        grossLineAmount: 180,
+        effectiveLineAmount: 180,
+        discountAllocated: 0,
+        lineTotal: 180,
+      }),
+    ]);
+
+    expect(enriched.map((row) => row.displayName)).toEqual([
+      B6_NAMES.a,
+      B6_NAMES.b,
+      B6_NAMES.c,
+    ]);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 400,
+      discountAllocated: 0,
+      effectiveLineAmount: 400,
+    });
+    expect(enriched[1]).toMatchObject({
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+    expect(enriched[2]).toMatchObject({
+      grossLineAmount: 180,
+      discountAllocated: 0,
+      effectiveLineAmount: 180,
+    });
+  });
+
+  it('reordered sourceIndex leaves Product Price History rows unchanged', () => {
+    const rows = [
+      b6Row({
+        sourceIndex: 2,
+        displayName: B6_NAMES.a,
+        grossLineAmount: 400,
+        effectiveLineAmount: 400,
+        discountAllocated: 0,
+        lineTotal: 400,
+      }),
+      b6Row({
+        sourceIndex: 0,
+        displayName: B6_NAMES.b,
+        purchaseQuantity: 2,
+        grossLineAmount: 250,
+        effectiveLineAmount: 210,
+        discountAllocated: -40,
+        lineTotal: 210,
+      }),
+      b6Row({
+        sourceIndex: 1,
+        displayName: B6_NAMES.c,
+        grossLineAmount: 180,
+        effectiveLineAmount: 180,
+        discountAllocated: 0,
+        lineTotal: 180,
+      }),
+    ];
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth(rows);
+    expect(enriched.map((row) => ({
+      name: row.displayName,
+      sourceIndex: row.sourceIndex,
+      gross: row.grossLineAmount,
+      discount: row.discountAllocated,
+      effective: row.effectiveLineAmount,
+    }))).toEqual([
+      { name: B6_NAMES.a, sourceIndex: 2, gross: 400, discount: 0, effective: 400 },
+      { name: B6_NAMES.b, sourceIndex: 0, gross: 250, discount: -40, effective: 210 },
+      { name: B6_NAMES.c, sourceIndex: 1, gross: 180, discount: 0, effective: 180 },
+    ]);
+  });
+
+  it('gapped sourceIndex does not give B the monetary truth at index 2', () => {
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([
+      b6Row({
+        sourceIndex: 0,
+        displayName: B6_NAMES.a,
+        grossLineAmount: 400,
+        effectiveLineAmount: 400,
+        discountAllocated: 0,
+        lineTotal: 400,
+      }),
+      b6Row({
+        sourceIndex: 2,
+        displayName: B6_NAMES.b,
+        purchaseQuantity: 2,
+        grossLineAmount: 250,
+        effectiveLineAmount: 210,
+        discountAllocated: -40,
+        lineTotal: 210,
+      }),
+      b6Row({
+        sourceIndex: 3,
+        displayName: B6_NAMES.c,
+        grossLineAmount: 180,
+        effectiveLineAmount: 180,
+        discountAllocated: 0,
+        lineTotal: 180,
+      }),
+    ]);
+    expect(enriched[0]).toMatchObject({
+      displayName: B6_NAMES.a,
+      grossLineAmount: 400,
+      discountAllocated: 0,
+      effectiveLineAmount: 400,
+    });
+    expect(enriched[1]).toMatchObject({
+      displayName: B6_NAMES.b,
+      sourceIndex: 2,
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+    expect(enriched[2]).toMatchObject({
+      displayName: B6_NAMES.c,
+      sourceIndex: 3,
+      grossLineAmount: 180,
+      discountAllocated: 0,
+      effectiveLineAmount: 180,
+    });
+  });
+
+  it('in-range sourceIndex with a different name does not overlay', () => {
+    const row = b6Row({
+      sourceIndex: 1,
+      displayName: B6_NAMES.a,
+      purchaseQuantity: 2,
+      grossLineAmount: 250,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toMatchObject({
+      displayName: B6_NAMES.a,
+      grossLineAmount: 250,
+      discountAllocated: 0,
+      effectiveLineAmount: 250,
+    });
+  });
+
+  it('duplicate sourceIndex keeps each input row and enriches only the match', () => {
+    const rowA = b6Row({
+      itemId: 'row-A',
+      sourceIndex: 0,
+      displayName: B6_NAMES.a,
+      purchaseQuantity: 1,
+      grossLineAmount: 400,
+      effectiveLineAmount: 400,
+      discountAllocated: 0,
+      lineTotal: 400,
+    });
+    const rowB = b6Row({
+      itemId: 'row-B',
+      sourceIndex: 1,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: 250,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+    });
+    const rowC = b6Row({
+      itemId: 'row-C',
+      sourceIndex: 1,
+      displayName: B6_NAMES.c,
+      purchaseQuantity: 1,
+      grossLineAmount: 180,
+      effectiveLineAmount: 180,
+      discountAllocated: 0,
+      lineTotal: 180,
+    });
+    const input = [rowA, rowB, rowC];
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth(input);
+
+    expect(input).toEqual([rowA, rowB, rowC]);
+    expect(enriched).toHaveLength(3);
+    expect(enriched.map((row) => row.itemId)).toEqual(['row-A', 'row-B', 'row-C']);
+    expect(enriched[0]).toBe(rowA);
+    expect(enriched[1]).not.toBe(rowB);
+    expect(enriched[1]).not.toBe(rowC);
+    expect(enriched[2]).toBe(rowC);
+    expect(enriched[1]).toMatchObject({
+      itemId: 'row-B',
+      displayName: B6_NAMES.b,
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+    expect(rowB).toMatchObject({
+      discountAllocated: 0,
+      effectiveLineAmount: 250,
+    });
+    expect(enriched[2]).toMatchObject({
+      itemId: 'row-C',
+      displayName: B6_NAMES.c,
+      grossLineAmount: 180,
+      discountAllocated: 0,
+      effectiveLineAmount: 180,
+    });
+  });
+
+  it('duplicate sourceIndex can enrich the later matching row only', () => {
+    const rowB = b6Row({
+      itemId: 'row-B',
+      sourceIndex: 1,
+      displayName: B6_NAMES.a,
+      purchaseQuantity: 2,
+      grossLineAmount: 250,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+    });
+    const rowC = b6Row({
+      itemId: 'row-C',
+      sourceIndex: 1,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: 250,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([rowB, rowC]);
+    expect(enriched[0]).toBe(rowB);
+    expect(enriched[1]).not.toBe(rowC);
+    expect(enriched[0]).toMatchObject({
+      itemId: 'row-B',
+      displayName: B6_NAMES.a,
+      discountAllocated: 0,
+      effectiveLineAmount: 250,
+    });
+    expect(enriched[1]).toMatchObject({
+      itemId: 'row-C',
+      displayName: B6_NAMES.b,
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+  });
+
+  it('null gross evidence still recovers the adjacent discount', () => {
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([
+      b6Row({
+        sourceIndex: 1,
+        displayName: B6_NAMES.b,
+        purchaseQuantity: 2,
+        grossLineAmount: null,
+        effectiveLineAmount: 250,
+        discountAllocated: 0,
+        lineTotal: 250,
+      }),
+    ]);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+  });
+
+  it('omitted gross evidence recovers the same way as null', () => {
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([
+      b6Row({
+        sourceIndex: 1,
+        displayName: B6_NAMES.b,
+        purchaseQuantity: 2,
+        grossLineAmount: undefined,
+        effectiveLineAmount: 250,
+        discountAllocated: 0,
+        lineTotal: 250,
+      }),
+    ]);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+  });
+
+  it('explicit zero gross stays zero evidence and does not recover', () => {
+    const row = b6Row({
+      sourceIndex: 1,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: 0,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toBe(row);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 0,
+      discountAllocated: 0,
+      effectiveLineAmount: 250,
+    });
+  });
+
+  it('interleaved receipt ids keep caller order', () => {
+    const receiptTwo = analysisJson({
+      items: [
+        { name: B6_NAMES.a, quantity: 1, lineTotal: 400, line_total: 400 },
+        { name: B6_NAMES.b, quantity: 2, lineTotal: 250, line_total: 250 },
+      ],
+      discounts: [
+        { label: '**値引**', amount: -15, adjacentPrecedingItemIndex: 1 },
+      ],
+      total: 635,
+      tax: 0,
+    });
+    const rows = [
+      b6Row({
+        itemId: 'r1-A',
+        receiptId: 'r1',
+        sourceIndex: 0,
+        displayName: B6_NAMES.a,
+        grossLineAmount: 400,
+        effectiveLineAmount: 400,
+        discountAllocated: 0,
+        lineTotal: 400,
+      }),
+      b6Row({
+        itemId: 'r2-A',
+        receiptId: 'r2',
+        sourceIndex: 0,
+        displayName: B6_NAMES.a,
+        grossLineAmount: 400,
+        effectiveLineAmount: 400,
+        discountAllocated: 0,
+        lineTotal: 400,
+        receiptAnalysisJson: receiptTwo,
+      }),
+      b6Row({
+        itemId: 'r1-B',
+        receiptId: 'r1',
+        sourceIndex: 1,
+        displayName: B6_NAMES.b,
+        purchaseQuantity: 2,
+        grossLineAmount: 250,
+        effectiveLineAmount: 250,
+        discountAllocated: 0,
+        lineTotal: 250,
+      }),
+      b6Row({
+        itemId: 'r2-B',
+        receiptId: 'r2',
+        sourceIndex: 1,
+        displayName: B6_NAMES.b,
+        purchaseQuantity: 2,
+        grossLineAmount: 250,
+        effectiveLineAmount: 250,
+        discountAllocated: 0,
+        lineTotal: 250,
+        receiptAnalysisJson: receiptTwo,
+      }),
+    ];
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth(rows);
+    expect(enriched.map((row) => row.itemId)).toEqual([
+      'r1-A',
+      'r2-A',
+      'r1-B',
+      'r2-B',
+    ]);
+    expect(enriched.map((row) => row.receiptId)).toEqual(['r1', 'r2', 'r1', 'r2']);
+    expect(enriched[2]).toMatchObject({
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+    expect(enriched[3]).toMatchObject({
+      discountAllocated: -15,
+      effectiveLineAmount: 235,
+    });
+  });
+
+  it('null original effective does not authorize a caller lineTotal of 0', () => {
+    const analysis = analysisJson({
+      items: [
+        {
+          name: B6_NAMES.b,
+          quantity: 2,
+          lineTotal: 250,
+          line_total: 250,
+          effectiveLineTotal: null,
+        },
+      ],
+      discounts: [
+        { label: '**値引**', amount: -40, adjacentPrecedingItemIndex: 0 },
+      ],
+      total: 210,
+      tax: 0,
+    });
+    const row = b6Row({
+      sourceIndex: 0,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: null,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 0,
+      receiptAnalysisJson: analysis,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toBe(row);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: null,
+      lineTotal: 0,
+      discountAllocated: 0,
+      effectiveLineAmount: 250,
+    });
+  });
+
+  it('null camelCase gross falls through to line_total and still recovers', () => {
+    const analysis = analysisJson({
+      items: [
+        {
+          name: B6_NAMES.b,
+          quantity: 2,
+          lineTotal: null,
+          line_total: 250,
+          effectiveLineTotal: null,
+        },
+      ],
+      discounts: [
+        { label: '**値引**', amount: -40, adjacentPrecedingItemIndex: 0 },
+      ],
+      total: 210,
+      tax: 0,
+    });
+    const row = b6Row({
+      sourceIndex: 0,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: null,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+      receiptAnalysisJson: analysis,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+    expect(originalGrossForCorrespondence({
+      lineTotal: null,
+      line_total: 250,
+    })).toBe(250);
+  });
+
+  it('explicit camelCase 0 stays 0 and does not fall through to line_total', () => {
+    expect(originalGrossForCorrespondence({
+      lineTotal: 0,
+      line_total: 250,
+    })).toBe(0);
+    const analysis = analysisJson({
+      items: [
+        {
+          name: B6_NAMES.b,
+          quantity: 2,
+          lineTotal: 0,
+          line_total: 250,
+          effectiveLineTotal: null,
+        },
+      ],
+      discounts: [
+        { label: '**値引**', amount: -40, adjacentPrecedingItemIndex: 0 },
+      ],
+      total: 210,
+      tax: 0,
+    });
+    const row = b6Row({
+      sourceIndex: 0,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: null,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+      receiptAnalysisJson: analysis,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toBe(row);
+    expect(enriched[0].lineTotal).toBe(250);
+    expect(enriched[0].discountAllocated).toBe(0);
+  });
+
+  it('explicit effective zero matches a caller lineTotal of 0', () => {
+    expect(originalAnalyticsAmountForCorrespondence({
+      lineTotal: 250,
+      line_total: 250,
+      effectiveLineTotal: 0,
+    })).toBe(0);
+    const analysis = analysisJson({
+      items: [
+        {
+          name: B6_NAMES.b,
+          quantity: 2,
+          lineTotal: 250,
+          line_total: 250,
+          effectiveLineTotal: 0,
+        },
+      ],
+      discounts: [
+        { label: '**値引**', amount: -40, adjacentPrecedingItemIndex: 0 },
+      ],
+      total: 210,
+      tax: 0,
+    });
+    const row = b6Row({
+      sourceIndex: 0,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: 250,
+      effectiveLineAmount: 0,
+      discountAllocated: 0,
+      lineTotal: 0,
+      receiptAnalysisJson: analysis,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+  });
+
+  it('missing effective and missing caller lineTotal do not match as zero', () => {
+    expect(originalAnalyticsAmountForCorrespondence({
+      lineTotal: 250,
+      effectiveLineTotal: null,
+    })).toBe(250);
+    const analysis = analysisJson({
+      items: [
+        {
+          name: B6_NAMES.b,
+          quantity: 2,
+          lineTotal: 250,
+          line_total: 250,
+          effectiveLineTotal: null,
+        },
+      ],
+      discounts: [
+        { label: '**値引**', amount: -40, adjacentPrecedingItemIndex: 0 },
+      ],
+      total: 210,
+      tax: 0,
+    });
+    const row = b6Row({
+      sourceIndex: 0,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: null,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: null,
+      receiptAnalysisJson: analysis,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+  });
+
+  it('NaN and Infinity are not monetary anchors', () => {
+    expect(originalAnalyticsAmountForCorrespondence({
+      lineTotal: 250,
+      effectiveLineTotal: Number.NaN,
+    })).toBe(250);
+    expect(originalAnalyticsAmountForCorrespondence({
+      lineTotal: 250,
+      effectiveLineTotal: Number.POSITIVE_INFINITY,
+    })).toBe(250);
+    expect(originalGrossForCorrespondence({
+      lineTotal: Number.NaN,
+      line_total: 250,
+    })).toBe(250);
+    expect(originalGrossForCorrespondence({
+      lineTotal: Number.POSITIVE_INFINITY,
+      line_total: 180,
+    })).toBe(180);
+    const row = b6Row({
+      sourceIndex: 1,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 2,
+      grossLineAmount: Number.POSITIVE_INFINITY,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: Number.NaN,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toMatchObject({
+      grossLineAmount: 250,
+      discountAllocated: -40,
+      effectiveLineAmount: 210,
+    });
+  });
+
+  it('quantity mismatch blocks overlay even when name and gross match', () => {
+    const row = b6Row({
+      sourceIndex: 1,
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 9,
+      grossLineAmount: 250,
+      effectiveLineAmount: 250,
+      discountAllocated: 0,
+      lineTotal: 250,
+    });
+    const enriched = enrichProductRowsWithCurrentItemMonetaryTruth([row]);
+    expect(enriched[0]).toMatchObject({
+      displayName: B6_NAMES.b,
+      purchaseQuantity: 9,
+      grossLineAmount: 250,
+      discountAllocated: 0,
+      effectiveLineAmount: 250,
     });
   });
 });
