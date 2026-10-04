@@ -5,6 +5,40 @@ function source(relativePath: string): string {
   return fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
 }
 
+/** Drop line comments and block comments. Not a JavaScript parser. */
+function stripComments(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.startsWith('//', i)) {
+      const newline = text.indexOf('\n', i);
+      i = newline < 0 ? text.length : newline;
+      continue;
+    }
+    if (text.startsWith('/*', i)) {
+      const end = text.indexOf('*/', i + 2);
+      i = end < 0 ? text.length : end + 1;
+      continue;
+    }
+    out += text[i];
+  }
+  return out;
+}
+
+function firstCallArguments(text: string, name: string): string | null {
+  const code = stripComments(text);
+  const match = new RegExp(`\\b${name}\\s*\\(`).exec(code);
+  if (!match) return null;
+  let depth = 1;
+  const start = match.index + match[0].length;
+  let i = start;
+  while (i < code.length && depth > 0) {
+    if (code[i] === '(') depth += 1;
+    else if (code[i] === ')') depth -= 1;
+    i += 1;
+  }
+  return code.slice(start, i - 1);
+}
+
 function showDuplicateGatePresentation(
   match: { evidenceKey: string } | null,
   dismissedEvidenceKey: string | null
@@ -50,6 +84,25 @@ describe('duplicate rescan trust presentation integration', () => {
     expect(card).not.toContain('This receipt may');
     expect(card).not.toContain('saveReceipt');
     expect(card).not.toContain('deleteReceipt');
+  });
+
+  it('builds the transient receipt from reviewed duplicateGateAnalysis', () => {
+    const args = firstCallArguments(screen, 'buildTransientScanReviewReceipt');
+    const compact = args?.replace(/\s+/g, '') ?? '';
+    expect(compact).toContain('analysis:duplicateGateAnalysis');
+    expect(compact).not.toContain('analysis:snapshot');
+    expect(compact).not.toContain('analysis:draft.recognitionSnapshot');
+
+    const commented = firstCallArguments(
+      '// buildTransientScanReviewReceipt({ analysis: duplicateGateAnalysis })',
+      'buildTransientScanReviewReceipt'
+    );
+    expect(commented).toBeNull();
+    const snapshotCall = firstCallArguments(
+      'buildTransientScanReviewReceipt({ analysis: snapshot })',
+      'buildTransientScanReviewReceipt'
+    );
+    expect(snapshotCall?.replace(/\s+/g, '')).toContain('analysis:snapshot');
   });
 
   it('debounces material evidence and guards draft generation/unmount updates', () => {
