@@ -31,6 +31,7 @@ import {
   pickBestRepresentativeReceiptId,
   type RepresentativeQualitySummary,
 } from './receiptRepresentativeQuality';
+import { compareStableString } from './stableStringOrder';
 import { tokyoClockParts } from './tokyoClock';
 
 export type CanonicalPurchaseOccurrenceGroup = {
@@ -116,9 +117,9 @@ export function __resetLastCanonicalPurchaseOccurrencePrepareStatsForTests(): vo
 /**
  * Canonical orientation for one unordered pair of opaque receipt IDs.
  *
- * Pair identity is exact and locale-independent. Complete-link edge processing
- * deliberately keeps its existing localeCompare ordering; this helper is only
- * the storage/lookup authority for qualifiedPairs.
+ * Pair identity is exact code-point order. Complete-link edge processing uses
+ * the same order. This helper is only the storage/lookup authority for
+ * qualifiedPairs.
  */
 function canonicalizeOccurrencePairIds(
   receiptIdA: string,
@@ -387,11 +388,9 @@ function seedClustersForOccurrence(
     group.push(id);
   }
   const seeds: string[][] = [];
-  for (const verifiedId of [...byVerified.keys()].sort((a, b) =>
-    a.localeCompare(b)
-  )) {
+  for (const verifiedId of [...byVerified.keys()].sort(compareStableString)) {
     seeds.push(
-      [...byVerified.get(verifiedId)!].sort((a, b) => a.localeCompare(b))
+      [...byVerified.get(verifiedId)!].sort(compareStableString)
     );
   }
   for (const id of ids) {
@@ -427,7 +426,7 @@ function mergeSortedReceiptIds(
   let i = 0;
   let j = 0;
   while (i < left.length && j < right.length) {
-    const cmp = left[i]!.localeCompare(right[j]!);
+    const cmp = compareStableString(left[i]!, right[j]!);
     if (cmp <= 0) {
       out.push(left[i]!);
       i += 1;
@@ -454,7 +453,9 @@ function qualifiedPairEdges(
   for (const [lo, his] of qualifiedPairs) {
     for (const hi of his) edges.push([lo, hi]);
   }
-  edges.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  edges.sort(
+    (a, b) => compareStableString(a[0], b[0]) || compareStableString(a[1], b[1])
+  );
   return edges;
 }
 
@@ -527,7 +528,7 @@ function clusterCompleteLink(
   return clusters
     .filter((cluster) => cluster.members.length > 0)
     .map((cluster) => cluster.members)
-    .sort((a, b) => a[0]!.localeCompare(b[0]!));
+    .sort((a, b) => compareStableString(a[0]!, b[0]!));
 }
 
 export function canonicalOccurrenceKey(input: {
@@ -709,9 +710,7 @@ export function __prepareCanonicalPurchaseOccurrenceEvidenceAllPairsForTests(
       summarizeReceiptForDuplicateAudit(receipt)
     );
   }
-  const ids = [...summariesByReceiptId.keys()].sort((a, b) =>
-    a.localeCompare(b)
-  );
+  const ids = [...summariesByReceiptId.keys()].sort(compareStableString);
   const qualifiedPairs = new Map<string, Set<string>>();
   for (let i = 0; i < ids.length; i += 1) {
     for (let j = i + 1; j < ids.length; j += 1) {
@@ -756,9 +755,7 @@ function prepareNormalizedCanonicalPurchaseOccurrenceEvidence(
     summarizeCount += 1;
   }
 
-  const ids = [...summariesByReceiptId.keys()].sort((a, b) =>
-    a.localeCompare(b)
-  );
+  const ids = [...summariesByReceiptId.keys()].sort(compareStableString);
   const theoreticalPairCount = (ids.length * (ids.length - 1)) / 2;
   const candidatePairs = buildExactOccurrencePairCandidates(
     ids,
@@ -839,7 +836,7 @@ function buildCanonicalPurchaseOccurrenceIndexFromPreparedUnchecked(
   for (const id of receiptById.keys()) {
     byId.set(id, preparedEvidence.summariesByReceiptId.get(id)!);
   }
-  const ids = [...byId.keys()].sort((a, b) => a.localeCompare(b));
+  const ids = [...byId.keys()].sort(compareStableString);
 
   const verifiedIdByReceiptId = verifiedIdByReceiptIdFromRows(receiptById);
   const clusters = clusterCompleteLink(
@@ -1018,7 +1015,7 @@ export function retainOccurrenceRepresentativeReceipts(
     const row = byId.get(group.representativeReceiptId);
     if (row) out.push(row);
   }
-  return out.sort((a, b) => a.id.localeCompare(b.id));
+  return out.sort((a, b) => compareStableString(a.id, b.id));
 }
 
 /**

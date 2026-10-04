@@ -18,6 +18,7 @@
 
 import type { ReceiptRow } from './db';
 import { getReceiptItems } from './receiptItems';
+import { compareStableString } from './stableStringOrder';
 
 /**
  * Minimal summary fields required for representative scoring.
@@ -158,7 +159,7 @@ export function pickBestRepresentativeReceiptId(
     if (qa !== qb) return qb - qa;
 
     if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
-    return a.receiptId.localeCompare(b.receiptId);
+    return compareStableString(a.receiptId, b.receiptId);
   });
   return sorted[0]!.receiptId;
 }

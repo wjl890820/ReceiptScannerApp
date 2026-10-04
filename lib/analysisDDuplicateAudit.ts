@@ -92,6 +92,7 @@ import {
   resolveReceiptTransactionTimePrecision,
 } from './receiptExactTransactionTime';
 import { deriveRetailerIdentity } from './retailerIdentity';
+import { compareStableString } from './stableStringOrder';
 
 export const ANALYSIS_D_DUPLICATE_AUDIT_VERSION =
   'meruno-analysis-d-duplicate-audit-v10' as const;
@@ -812,7 +813,7 @@ export function canonicalStructuralQtyAmountVector(
     const leftAmount = roundMoney(left.lineAmount);
     const rightAmount = roundMoney(right.lineAmount);
     if (leftAmount !== rightAmount) {
-      return leftAmount.localeCompare(rightAmount);
+      return compareStableString(leftAmount, rightAmount);
     }
     return left.quantity - right.quantity;
   });

@@ -221,8 +221,8 @@ describe('H2.1a — pair canonicalization and duplicate-ID hardening', () => {
     const index = buildCanonicalPurchaseOccurrenceIndex([lower, upper]);
     expect(index.groups).toHaveLength(1);
     expect(index.groups[0]!.receiptIds).toEqual([
-      'a-receipt',
       'Z-receipt',
+      'a-receipt',
     ]);
   });
 
