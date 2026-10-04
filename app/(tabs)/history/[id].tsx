@@ -67,27 +67,15 @@ import { learnFromUserEdit } from '@/lib/receiptEnricher';
 import { upsertProductDictionary } from '@/lib/productDictionary';
 import { upsertProductNameAlias } from '@/lib/productAlias';
 import { PRODUCT_CATEGORIES, normalizePersistedProductCategory, type ProductCategory } from '@/lib/productCategory';
-import { stampUserClassificationProvenance } from '@/lib/productTaxonomy';
 import { getCategoryLabel, getItemTagDisplay } from '@/lib/categoryPalette';
 import { normalizeReceiptItemName } from '@/lib/productNormalizer';
 import { mapLegacyCategoryToV1, buildAnalysisTags } from '@/lib/categoryTaxonomyV1';
-import { applyProductIdentityToItem } from '@/lib/receiptItemIdentity';
-import { materializeHistoryEditedItemCategorySemantics } from '@/lib/reviewCategorySemantics';
+import { prepareHistoryItemEdit } from '@/lib/historyItemEdit';
 import {
   UI_COLORS,
   UI_LAYOUT,
   UI_RADIUS,
 } from '@/lib/uiTokens';
-import {
-  applyUserLineAmountEdit,
-  itemAmountForAnalytics,
-} from '@/lib/receiptDiscountAllocation';
-import {
-  amountCorrectionInput,
-  applyItemFieldCorrections,
-  categoryCorrectionInput,
-  quantityCorrectionInput,
-} from '@/lib/userCorrections';
 
 // ====== 解析后的结构（和 Home 里的分析结构保持一致）======
 type ReceiptItem = {
@@ -375,12 +363,6 @@ export default function ReceiptDetailScreen() {
     const updatedItems = [...displayItems];
     const existingItem = updatedItems[editingItemIndex] as ReceiptItem & Record<string, unknown>;
     const finalCategory = (draftCategory.trim() || 'uncategorized') as ProductCategory;
-    const beforeQuantity = Number(existingItem.quantity);
-    const beforeAmount = itemAmountForAnalytics(existingItem as any);
-    const beforeCategory =
-      typeof existingItem.category === 'string' && existingItem.category.trim()
-        ? existingItem.category.trim()
-        : 'uncategorized';
     const itemSourceIndex =
       typeof (existingItem as any).review_source_index === 'number'
         ? (existingItem as any).review_source_index
@@ -388,100 +370,58 @@ export default function ReceiptDetailScreen() {
           ? (existingItem as any).source_index
           : editingItemIndex;
 
-    const withIdentity = applyProductIdentityToItem({
-      ...existingItem,
-      quantity: round0(quantity),
-      category: finalCategory,
-    }, {
-      finalName: existingItem.name,
+    const prepared = prepareHistoryItemEdit({
+      existingItem,
       finalCategory,
+      quantity,
+      lineTotal,
       merchantName: receipt.merchant_raw,
-      classificationBrand: (existingItem as any).brand,
-      useExistingClassificationEvidence: true,
+      itemSourceIndex,
     });
-    // Keep user-layer money fields coherent so analytics prefers the edit (not stale effective).
-    let nextItem = {
-      ...applyUserLineAmountEdit(
-        withIdentity as ReceiptItem & Record<string, unknown>,
-        round0(lineTotal)
-      ),
-      ...stampUserClassificationProvenance(),
-      ...(round0(quantity) !==
-      (Number.isFinite(beforeQuantity) && beforeQuantity > 0 ? beforeQuantity : 1)
-        ? { quantityUserEdited: true }
-        : {}),
-    } as ReceiptItem & Record<string, unknown>;
-
-    nextItem = materializeHistoryEditedItemCategorySemantics(nextItem, {
-      storedCategory: existingItem.category,
-      itemName: typeof existingItem.name === 'string' ? existingItem.name : undefined,
-      finalCategory,
-    });
-
-    nextItem = applyItemFieldCorrections(nextItem, [
-      quantityCorrectionInput({
-        beforeQuantity: Number.isFinite(beforeQuantity) && beforeQuantity > 0 ? beforeQuantity : 1,
-        afterQuantity: round0(quantity),
-        previouslyUserEdited: (existingItem as any).quantityUserEdited === true,
-        itemSourceIndex,
-      }),
-      amountCorrectionInput({
-        beforeAmount: Number.isFinite(beforeAmount) ? Math.round(beforeAmount) : 0,
-        afterAmount: round0(lineTotal),
-        previouslyUserEdited: (existingItem as any).amountUserEdited === true,
-        itemSourceIndex,
-      }),
-      categoryCorrectionInput({
-        beforeCategory,
-        afterCategory: finalCategory,
-        beforeItem: existingItem as {
-          classification_source?: unknown;
-          classification_version?: unknown;
-          taxonomy_version?: unknown;
-        },
-        itemSourceIndex,
-      }),
-    ]);
-
-    updatedItems[editingItemIndex] = nextItem;
+    updatedItems[editingItemIndex] = prepared.nextItem as ReceiptItem;
 
     try {
       setSavingItem(true);
-      
-      // 学习用户编辑的分类
-      const editedItem = updatedItems[editingItemIndex];
-      if (editedItem && editedItem.name && editedItem.category) {
-        await learnFromUserEdit(
-          editedItem.name,
-          editedItem.category,
-          receipt?.merchant_raw ?? null
-        );
-        // Also write into product_dictionary (highest trust: user edit)
-        try {
-          const norm = normalizeReceiptItemName(editedItem.name);
-          const v1 = mapLegacyCategoryToV1(editedItem.category);
-          await upsertProductDictionary({
-            normalized_name: norm.normalized_name,
-            canonical_name: editedItem.name.trim(),
-            category_main: v1.main,
-            category_sub: v1.sub,
-            analysis_tags: buildAnalysisTags(v1),
-            source_type: 'manual',
-            confidence: 1.0,
-            minConfidenceToWrite: 0,
-          });
-          await upsertProductNameAlias({
-            alias_normalized: norm.normalized_name,
-            merchant_hint: receipt?.merchant_raw ?? null,
-            canonical_name: editedItem.name.trim(),
-            category_main: v1.main,
-            category_sub: v1.sub,
-            analysis_tags: buildAnalysisTags(v1),
-            confidence: 1.0,
-            source: 'manual',
-          });
-        } catch {
-          // ignore
+
+      // Category mapping, dictionary, and self-alias are category confirmation.
+      // This editor does not rename the item, so they follow this edit's category change.
+      if (prepared.categoryChangedThisEdit) {
+        const editedName =
+          typeof prepared.nextItem.name === 'string' ? prepared.nextItem.name : '';
+        const editedCategory =
+          typeof prepared.nextItem.category === 'string' ? prepared.nextItem.category : '';
+        if (editedName && editedCategory) {
+          await learnFromUserEdit(
+            editedName,
+            editedCategory,
+            receipt?.merchant_raw ?? null
+          );
+          try {
+            const norm = normalizeReceiptItemName(editedName);
+            const v1 = mapLegacyCategoryToV1(editedCategory);
+            await upsertProductDictionary({
+              normalized_name: norm.normalized_name,
+              canonical_name: editedName.trim(),
+              category_main: v1.main,
+              category_sub: v1.sub,
+              analysis_tags: buildAnalysisTags(v1),
+              source_type: 'manual',
+              confidence: 1.0,
+              minConfidenceToWrite: 0,
+            });
+            await upsertProductNameAlias({
+              alias_normalized: norm.normalized_name,
+              merchant_hint: receipt?.merchant_raw ?? null,
+              canonical_name: editedName.trim(),
+              category_main: v1.main,
+              category_sub: v1.sub,
+              analysis_tags: buildAnalysisTags(v1),
+              confidence: 1.0,
+              source: 'manual',
+            });
+          } catch {
+            // ignore
+          }
         }
       }
 

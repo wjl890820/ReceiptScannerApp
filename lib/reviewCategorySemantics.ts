@@ -68,6 +68,22 @@ export function historyEditorDisplayedCategory(
 }
 
 /**
+ * True only when this history edit's category differs from the category
+ * the editor showed for the persisted item. Legacy tokens that normalize
+ * to that display are not a new category edit.
+ */
+export function historyItemCategoryChangedThisEdit(input: {
+  storedCategory: unknown;
+  itemName?: string;
+  finalCategory: string;
+}): boolean {
+  return (
+    input.finalCategory !==
+    historyEditorDisplayedCategory(input.storedCategory, input.itemName)
+  );
+}
+
+/**
  * History item save. Quantity/amount edits keep the displayed category, so
  * legacy raw values that normalize to that display must not rebuild semantics.
  */
