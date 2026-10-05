@@ -2,7 +2,7 @@
 // AI classification client via Supabase Edge Function
 // Handles timeout, retry, error handling, and graceful degradation
 
-import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
+import { getSupabaseUrl, getSupabaseAnonKey, isSupportedSupabaseClientApiKey } from './env';
 import { getCategoryAiTimeoutMs, getCategoryAiRetries } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
@@ -108,16 +108,11 @@ export async function classifyViaEdgeFunction(
     return null;
   }
 
-  if (!isJwtLike(supabaseAnonKey)) {
+  if (!isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
     if (__DEV__) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
-      );
+      console.warn('[Env] Supabase client API key is unsupported');
     }
-    throw new Error(
-      'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
-    );
+    throw new Error('Supabase client API key is unsupported');
   }
 
   const edgeFunctionUrl = `${supabaseUrl}/functions/v1/classify-item`;
@@ -132,7 +127,6 @@ export async function classifyViaEdgeFunction(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     apikey: supabaseAnonKey,
-    Authorization: `Bearer ${supabaseAnonKey}`,
   };
 
   const doFetch = async (attempt: number): Promise<AiClassifyResult | null> => {

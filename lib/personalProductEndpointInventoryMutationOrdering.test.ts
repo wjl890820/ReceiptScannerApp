@@ -101,6 +101,7 @@ jest.mock('./env', () => ({
   getSupabaseUrl: () => 'https://example.supabase.co',
   getSupabaseAnonKey: () => 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.x',
   isJwtLike: () => true,
+  isSupportedSupabaseClientApiKey: () => true,
 }));
 
 jest.mock('./ownershipAdoptionOrchestrator', () => ({

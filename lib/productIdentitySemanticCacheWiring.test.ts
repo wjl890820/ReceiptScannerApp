@@ -19,6 +19,7 @@ jest.mock('./env', () => ({
   getSupabaseUrl: () => 'https://example.supabase.co',
   getSupabaseAnonKey: () => 'eyJhbGciOi.fake.payload',
   isJwtLike: () => true,
+  isSupportedSupabaseClientApiKey: () => true,
   getCategoryBatchAiTimeoutMs: () => 9000,
   getCategoryBatchAiMaxItems: () => 40,
   getOcrGeminiModel: () => 'gemini-3.5-flash-lite',

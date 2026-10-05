@@ -92,11 +92,24 @@ export function getSupabaseAnonKey(): string {
 }
 
 /**
- * 判断 key 是否为 JWT 形态（eyJ 开头且含 .），用于区分 Legacy anon key 与 publishable key。
- * 若用户误填 sb_publishable_... 会导致 Edge Functions 401 Invalid JWT。
+ * JWT shape check for user access tokens.
+ * Not a project API-key check: publishable keys are not JWTs, and a service-role
+ * JWT is also shaped like this. Use isSupportedSupabaseClientApiKey for client keys.
  */
 export function isJwtLike(key: string | undefined): boolean {
   return typeof key === 'string' && key.startsWith('eyJ') && key.includes('.');
+}
+
+export {
+  configuredExpoSupabaseAnonKey,
+  embeddableSupabaseClientApiKey,
+  isSupportedSupabaseClientApiKey,
+} from './supabaseClientApiKey';
+
+/** Test-only: env URL/key are cached after the first read. */
+export function __resetSupabaseConfigForTests(): void {
+  _supabaseCached = null;
+  _supabaseConfigLogged = false;
 }
 
 /**

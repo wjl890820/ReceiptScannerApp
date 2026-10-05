@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import { getSupabaseAnonKey, getSupabaseUrl, isJwtLike } from './env';
+import { getSupabaseAnonKey, getSupabaseUrl, isSupportedSupabaseClientApiKey } from './env';
 
 let _client: SupabaseClient | null = null;
 let _appStateSubscribed = false;
@@ -36,7 +36,7 @@ export function getSupabaseClient(): SupabaseClient | null {
 
   const url = getSupabaseUrl();
   const anonKey = getSupabaseAnonKey();
-  if (!url || !anonKey || !isJwtLike(anonKey)) {
+  if (!url || !anonKey || !isSupportedSupabaseClientApiKey(anonKey)) {
     return null;
   }
 

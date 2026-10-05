@@ -15,6 +15,7 @@ import {
   type OCRRequest,
   type OCRContext,
 } from './core.ts';
+import { legacyOcrProjectApiKeyMatches } from './publishableKeys.ts';
 
 const REQUEST_TIMEOUT_MS = parseInt(Deno.env.get('REQUEST_TIMEOUT_MS') || '25000', 10);
 const DENO_TESTING = Deno.env.get('DENO_TESTING') === '1';
@@ -103,15 +104,9 @@ function authenticateRequest(
     }
   }
 
-  // Check apikey path
+  // Check apikey path. Authorization is optional for this anonymous path.
   if (apiKey) {
-    const validKeys = [
-      Deno.env.get('SUPABASE_ANON_KEY'),
-      Deno.env.get('SUPABASE_PUBLISHABLE_KEY'),
-      Deno.env.get('SUPABASE_PUBLISHABLE_ANON_KEY'),
-    ].filter((k) => k && k.length > 0);
-
-    if (validKeys.includes(apiKey)) {
+    if (legacyOcrProjectApiKeyMatches(apiKey, Deno.env)) {
       return { authenticated: true };
     }
     return {

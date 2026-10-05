@@ -43,7 +43,7 @@ import {
   INSTALLATION_ID_STORAGE_KEY,
 } from './installationId';
 import { registerInstallationForUser } from './installationRegistration';
-import { resolveOcrAuthorizationBearer } from './ocrAuthHeaders';
+import { resolveOcrUserAccessToken } from './ocrAuthHeaders';
 import { parseProvenanceFeatureFlags } from '../supabase/functions/ocr-receipt/ocrProvenance';
 import { resolveVerifiedUserId } from '../supabase/functions/ocr-receipt/verifyAuthUser';
 import { normalizeOcrAnalysis } from './receiptOcrNormalize';
@@ -214,8 +214,8 @@ describe('Anonymous auth lifecycle', () => {
     expect(state.status).toBe('unavailable');
     expect(state.userId).toBeNull();
     expect(getAccessTokenIfReady()).toBeNull();
-    // OCR bearer falls back to anon key
-    await expect(resolveOcrAuthorizationBearer('eyJ.anon.key')).resolves.toBe('eyJ.anon.key');
+    // No user JWT: do not send the project key as Authorization.
+    expect(resolveOcrUserAccessToken('eyJ.anon.key')).toBeNull();
   });
 
   it('5 — persisted session reused after restart abstraction', async () => {

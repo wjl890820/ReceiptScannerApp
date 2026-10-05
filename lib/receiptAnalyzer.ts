@@ -18,8 +18,9 @@ import {
   getGeminiApiKey,
   getOcrGeminiModel,
   isDevDirectGeminiEnabled,
+  isSupportedSupabaseClientApiKey,
 } from './env';
-import { resolveOcrAuthorizationBearer } from './ocrAuthHeaders';
+import { formatSupabaseEdgeAuthFailure, resolveOcrUserAccessToken } from './ocrAuthHeaders';
 import { extractOcrRequestIdFromEdgeResponse } from './ocrRequestId';
 
 export {
@@ -155,6 +156,10 @@ async function analyzeReceiptImageViaEdgeFunction(
     throw new Error('Supabase Anon Key 未配置（请检查 .env / app.config.js / expo start -c）');
   }
 
+  if (!isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
+    throw new Error('Supabase client API key is unsupported');
+  }
+
   // 1) 图片读取/预处理
   const tPre0 = nowMs();
   const base64 = await compressToJpegBase64(uri);
@@ -188,13 +193,15 @@ async function analyzeReceiptImageViaEdgeFunction(
     language,
   };
 
-  const authorization = await resolveOcrAuthorizationBearer(supabaseAnonKey);
-  const headers = {
+  const userAccessToken = resolveOcrUserAccessToken(supabaseAnonKey);
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${authorization}`,
     apikey: supabaseAnonKey,
     'x-device-id': deviceId,
-  } as const;
+  };
+  if (userAccessToken) {
+    headers.Authorization = `Bearer ${userAccessToken}`;
+  }
 
   // 2) OCR 请求发出前
   const tOcr0 = nowMs();
@@ -251,6 +258,19 @@ async function analyzeReceiptImageViaEdgeFunction(
   }
 
   const responseText = await response.text();
+
+  if (response.status === 401) {
+    if (__DEV__) {
+      console.log('[ReceiptAnalyzer][OCR] Response <- Edge', {
+        url: edgeFunctionUrl,
+        status: response.status,
+        ok: response.ok,
+        bodySnippet: '<redacted>',
+      });
+    }
+    throw new Error(formatSupabaseEdgeAuthFailure(responseText));
+  }
+
   let responseData: any;
 
   // 4) OCR 结果解析完成

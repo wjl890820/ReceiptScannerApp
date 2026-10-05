@@ -1,6 +1,8 @@
 // 确保 dotenv 配置在顶部执行
 require('dotenv').config();
 
+const { configuredExpoSupabaseAnonKey } = require('./lib/supabaseClientApiKey');
+
 /** Semver x.y.z：仅递增 patch（如 1.0.4 → 1.0.5） */
 function bumpPatchVersion(version) {
   const s = String(version ?? '1.0.0').trim();
@@ -83,7 +85,7 @@ export default ({ config }) => {
     extra: {
       ...(config.extra ?? {}),
       SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL,
-      SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY,
+      SUPABASE_ANON_KEY: configuredExpoSupabaseAnonKey(process.env),
       // GEMINI_API_KEY 已移除：客户端不再需要，OCR 通过 Supabase Edge Function 处理
       // 仅开发调试时可通过 DEV_DIRECT_GEMINI=true 启用直连 Gemini fallback
       DEV_DIRECT_GEMINI: process.env.DEV_DIRECT_GEMINI || 'false',

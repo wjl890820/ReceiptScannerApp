@@ -301,7 +301,7 @@ export function getAuthState(): AuthState {
 
 /**
  * Access token if already authenticated — does not trigger sign-in.
- * OCR may use this; falls back to anon key when null.
+ * OCR may use this. A missing token stays anonymous and is not replaced by the project key.
  */
 export function getAccessTokenIfReady(): string | null {
   if (_state.status !== 'authenticated') return null;

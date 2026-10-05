@@ -9,6 +9,7 @@ jest.mock('./env', () => ({
   getSupabaseUrl: () => '',
   getSupabaseAnonKey: () => '',
   isJwtLike: () => false,
+  isSupportedSupabaseClientApiKey: () => false,
   getCategoryBatchAiTimeoutMs: () => 9000,
   getCategoryBatchAiMaxItems: () => 40,
 }));

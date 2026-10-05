@@ -1,7 +1,7 @@
 // lib/feedbackService.ts
 // Submit feedback via Supabase Edge Function
 
-import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
+import { getSupabaseUrl, getSupabaseAnonKey, isSupportedSupabaseClientApiKey } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import Constants from 'expo-constants';
@@ -30,15 +30,11 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     throw new Error('Supabase 未配置');
   }
 
-  if (!isJwtLike(supabaseAnonKey)) {
+  if (!isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
     if (__DEV__) {
-      console.warn(
-        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
-      );
+      console.warn('[Env] Supabase client API key is unsupported');
     }
-    throw new Error(
-      'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
-    );
+    throw new Error('Supabase client API key is unsupported');
   }
 
   // A) 统一 URL
@@ -83,10 +79,9 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     receiptId: receiptId,
   };
 
-  // A) 统一 headers（必须包含所有字段）
+  // Anonymous project-key call. Authorization is reserved for a user access JWT.
   const headers = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${supabaseAnonKey}`,
     apikey: supabaseAnonKey,
     'x-device-id': deviceId,
     'x-client': 'app',

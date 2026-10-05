@@ -13,7 +13,7 @@
 //  - AI never overrides a non-uncategorized item (local learning / dictionary / rules win).
 //  - Failures/timeouts only console.warn (no redbox), never block saving.
 
-import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
+import { getSupabaseUrl, getSupabaseAnonKey, isSupportedSupabaseClientApiKey } from './env';
 import { getCategoryBatchAiTimeoutMs, getCategoryBatchAiMaxItems } from './env';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
@@ -427,7 +427,7 @@ export async function classifyItemsBatch(
 
   const supabaseUrl = getSupabaseUrl();
   const supabaseAnonKey = getSupabaseAnonKey();
-  if (!supabaseUrl || !supabaseAnonKey || !isJwtLike(supabaseAnonKey)) {
+  if (!supabaseUrl || !supabaseAnonKey || !isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
     if (__DEV__) console.warn('[CategoryBatchAI] missing/invalid Supabase config, skip batch AI');
     return null;
   }
@@ -470,7 +470,6 @@ export async function classifyItemsBatch(
       headers: {
         'Content-Type': 'application/json',
         apikey: supabaseAnonKey,
-        Authorization: `Bearer ${supabaseAnonKey}`,
         'x-device-id': deviceId,
         'x-client': 'app',
         'x-request-id': requestId,

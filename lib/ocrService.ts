@@ -6,8 +6,8 @@ import Constants from 'expo-constants';
 import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
-import { getSupabaseUrl, getSupabaseAnonKey, isJwtLike } from './env';
-import { resolveOcrAuthorizationBearer } from './ocrAuthHeaders';
+import { getSupabaseUrl, getSupabaseAnonKey, isSupportedSupabaseClientApiKey } from './env';
+import { formatSupabaseEdgeAuthFailure, resolveOcrUserAccessToken } from './ocrAuthHeaders';
 
 /**
  * Compress and encode image to base64
@@ -118,16 +118,14 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
     };
   }
 
-  if (!isJwtLike(supabaseAnonKey)) {
+  if (!isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
     if (__DEV__) {
-      console.warn(
-        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
-      );
+      console.warn('[Env] Supabase client API key is unsupported');
     }
     return {
       status: 401,
       body: {
-        error: 'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)',
+        error: 'Supabase client API key is unsupported',
       },
     };
   }
@@ -140,19 +138,27 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
   }
 
   try {
-    const authorization = await resolveOcrAuthorizationBearer(supabaseAnonKey);
+    const userAccessToken = resolveOcrUserAccessToken(supabaseAnonKey);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      apikey: supabaseAnonKey,
+      'x-device-id': deviceId,
+    };
+    if (userAccessToken) headers.Authorization = `Bearer ${userAccessToken}`;
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${authorization}`,
-        apikey: supabaseAnonKey,
-        'x-device-id': deviceId,
-      },
+      headers,
       body: JSON.stringify({ ping: true }),
     });
 
     const responseText = await response.text();
+    if (response.status === 401) {
+      return {
+        status: 401,
+        body: { error: formatSupabaseEdgeAuthFailure(responseText) },
+      };
+    }
+
     let responseData: any;
 
     try {
@@ -193,15 +199,11 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
     throw new Error('Supabase Anon Key 未配置（请检查 .env / app.config.js / expo start -c）');
   }
 
-  if (!isJwtLike(supabaseAnonKey)) {
+  if (!isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
     if (__DEV__) {
-      console.warn(
-        '[Env] Anon key 不是 JWT（你可能填了 publishable key），请去 Supabase Settings → API → Legacy anon key(eyJ...)'
-      );
+      console.warn('[Env] Supabase client API key is unsupported');
     }
-    throw new Error(
-      'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
-    );
+    throw new Error('Supabase client API key is unsupported');
   }
 
   // Compress and encode image
@@ -237,19 +239,24 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
   };
 
   try {
-    const authorization = await resolveOcrAuthorizationBearer(supabaseAnonKey);
+    const userAccessToken = resolveOcrUserAccessToken(supabaseAnonKey);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      apikey: supabaseAnonKey,
+      'x-device-id': deviceId,
+    };
+    if (userAccessToken) headers.Authorization = `Bearer ${userAccessToken}`;
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${authorization}`,
-        apikey: supabaseAnonKey,
-        'x-device-id': deviceId,
-      },
+      headers,
       body: JSON.stringify(requestBody),
     });
 
     const responseText = await response.text();
+    if (response.status === 401) {
+      throw new Error(formatSupabaseEdgeAuthFailure(responseText));
+    }
+
     let responseData: any;
 
     try {
@@ -260,11 +267,6 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
 
     if (!response.ok) {
       // Handle specific error codes
-      if (response.status === 401) {
-        throw new Error(
-          'Anon key 不是 JWT（你可能填了 publishable key），请到 Supabase 设置 → API → Legacy anon key (eyJ...)'
-        );
-      }
       if (response.status === 429) {
         const error: OCRServiceError = {
           code: 'RATE_LIMIT',

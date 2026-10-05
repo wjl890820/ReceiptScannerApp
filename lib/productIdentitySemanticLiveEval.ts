@@ -8,7 +8,7 @@ import {
   type NameInformativeness,
 } from './productIdentitySemanticGate';
 import type { SemanticShadowObservationResult } from './productIdentitySemanticShadowAudit';
-import { getSupabaseAnonKey, getSupabaseUrl, isJwtLike } from './env';
+import { getSupabaseAnonKey, getSupabaseUrl, isSupportedSupabaseClientApiKey } from './env';
 
 export type LiveEvalSample = {
   id: string;
@@ -146,7 +146,7 @@ export function canRunLiveSemanticEval(): boolean {
   if (process.env.RUN_SEMANTIC_LIVE_EVAL !== '1') return false;
   const url = getSupabaseUrl();
   const key = getSupabaseAnonKey();
-  return !!(url && key && isJwtLike(key));
+  return !!(url && key && isSupportedSupabaseClientApiKey(key));
 }
 
 export async function callSemanticEnrichLive(
@@ -154,7 +154,7 @@ export async function callSemanticEnrichLive(
 ): Promise<{ model: string | null; results: LiveEvalAiRow[]; raw: unknown }> {
   const supabaseUrl = getSupabaseUrl();
   const supabaseAnonKey = getSupabaseAnonKey();
-  if (!supabaseUrl || !supabaseAnonKey || !isJwtLike(supabaseAnonKey)) {
+  if (!supabaseUrl || !supabaseAnonKey || !isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
     throw new Error('Supabase config missing for live semantic eval');
   }
 
@@ -187,7 +187,6 @@ export async function callSemanticEnrichLive(
       headers: {
         'Content-Type': 'application/json',
         apikey: supabaseAnonKey,
-        Authorization: `Bearer ${supabaseAnonKey}`,
         'x-device-id': 'batch41-live-eval',
         'x-client': 'batch41-live-eval',
         'x-request-id': `batch41-live-${Date.now()}-${offset}`,
