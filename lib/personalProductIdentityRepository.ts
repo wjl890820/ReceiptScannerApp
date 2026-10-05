@@ -39,6 +39,12 @@ import {
 } from './personalProductIdentitySchema';
 import type { LocalOwnershipStamp } from './receiptOwnershipContext';
 import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
+import {
+  healPersonalDecisionBackupIfCleanInsideTransaction,
+  publishPersonalDecisionBackupInsideTransaction,
+  userIdFromPersonalDecisionOwnerKey,
+} from './personalDecisionCloudSync';
+import { withPersonalDecisionLocalMutationGate } from './personalDecisionLocalMutationGate';
 
 const DB_NAME = 'receipts_v2.db';
 
@@ -301,9 +307,11 @@ export async function recordPersonalProductIdentityDecisionWithDb(
     ok: false,
     code: 'decision_conflict',
   };
+  let scheduleBackup = false;
 
   try {
-    await db.withExclusiveTransactionAsync(async (txn) => {
+    await withPersonalDecisionLocalMutationGate(() =>
+      db.withExclusiveTransactionAsync(async (txn) => {
       const existingRows = await listPersonalProductIdentityDecisionsInTransaction(
         txn,
         ownerKey
@@ -367,7 +375,9 @@ export async function recordPersonalProductIdentityDecisionWithDb(
       }
 
       if (precheck.outcome === 'idempotent') {
+        await healPersonalDecisionBackupIfCleanInsideTransaction(txn, ownerKey);
         result = { ok: true, outcome: 'idempotent' };
+        scheduleBackup = userIdFromPersonalDecisionOwnerKey(ownerKey) != null;
         return;
       }
 
@@ -405,13 +415,22 @@ export async function recordPersonalProductIdentityDecisionWithDb(
           row.updated_at,
         ]
       );
+      await publishPersonalDecisionBackupInsideTransaction(txn, ownerKey);
       result = { ok: true, outcome: 'created' };
-    });
+      scheduleBackup = userIdFromPersonalDecisionOwnerKey(ownerKey) != null;
+      })
+    );
   } catch (error: unknown) {
     if (isPersonalProductIdentityDomainError(error)) {
       return result;
     }
     throw error;
+  }
+
+  if (scheduleBackup) {
+    void import('./cloudBackupWorker')
+      .then((mod) => mod.requestCloudBackupFlush())
+      .catch(() => undefined);
   }
 
   if (result.ok) {
@@ -500,6 +519,8 @@ export type {
 /** In-memory SQLite-compatible store for deterministic unit tests. */
 export function createMemoryPersonalProductIdentityDatabase(): PersonalProductIdentityDatabase & {
   rows: Map<string, PersonalProductIdentityDecisionRow>;
+  kv: Map<string, string>;
+  setKvWriteShouldFail(value: boolean): void;
   exclusiveTransactionCalls: number;
   nonExclusiveTransactionCalls: number;
   txnDb: PersonalProductIdentityDb & {
@@ -513,9 +534,11 @@ export function createMemoryPersonalProductIdentityDatabase(): PersonalProductId
   withTransactionAsync(task: () => Promise<void>): Promise<void>;
 } {
   const rows = new Map<string, PersonalProductIdentityDecisionRow>();
+  const kv = new Map<string, string>();
   let exclusiveTransactionCalls = 0;
   let nonExclusiveTransactionCalls = 0;
   let inExclusiveTransaction = false;
+  let kvWriteShouldFail = false;
 
   const rowKey = (ownerKey: string, leftId: string, rightId: string) =>
     `${ownerKey}\0${leftId}\0${rightId}`;
@@ -561,6 +584,14 @@ export function createMemoryPersonalProductIdentityDatabase(): PersonalProductId
       if (/THROW_TEST_ERROR/i.test(source)) {
         throw new Error('sqlite_unexpected_failure');
       }
+      if (/CREATE TABLE IF NOT EXISTS app_kv/i.test(source)) {
+        return { changes: 0 };
+      }
+      if (/INSERT OR REPLACE INTO app_kv/i.test(source)) {
+        if (kvWriteShouldFail) throw new Error('kv write failed');
+        kv.set(String(values[0]), String(values[1]));
+        return { changes: 1 };
+      }
       return { changes: 0 };
     },
     async getFirstAsync<T>(
@@ -579,6 +610,15 @@ export function createMemoryPersonalProductIdentityDatabase(): PersonalProductId
         const rightId = String(values[2]);
         const row = rows.get(rowKey(ownerKey, leftId, rightId));
         return (row as T) ?? null;
+      }
+      if (/FROM app_kv WHERE k = \?/i.test(source)) {
+        const key = String(values[0]);
+        return kv.has(key) ? ({ v: kv.get(key)! } as T) : null;
+      }
+      if (/COUNT\(\*\) AS c FROM personal_product_identity_decisions/i.test(source)) {
+        const ownerKey = String(values[0]);
+        const c = [...rows.values()].filter((row) => row.owner_key === ownerKey).length;
+        return { c } as T;
       }
       return null;
     },
@@ -625,6 +665,9 @@ export function createMemoryPersonalProductIdentityDatabase(): PersonalProductId
       },
     }),
     {
+      async execAsync() {
+        return;
+      },
       get selectCalls() {
         return txnMetrics.selectCalls;
       },
@@ -638,6 +681,10 @@ export function createMemoryPersonalProductIdentityDatabase(): PersonalProductId
 
   const api = {
     rows,
+    kv,
+    setKvWriteShouldFail(value: boolean) {
+      kvWriteShouldFail = value;
+    },
     txnDb,
     txnMetrics,
     get exclusiveTransactionCalls() {
@@ -656,6 +703,7 @@ export function createMemoryPersonalProductIdentityDatabase(): PersonalProductId
       const snapshot = new Map(
         [...rows.entries()].map(([key, value]) => [key, { ...value }])
       );
+      const kvSnapshot = new Map(kv);
       inExclusiveTransaction = true;
       txnMetrics.selectCalls = 0;
       txnMetrics.insertCalls = 0;
@@ -666,6 +714,8 @@ export function createMemoryPersonalProductIdentityDatabase(): PersonalProductId
         for (const [key, value] of snapshot) {
           rows.set(key, value);
         }
+        kv.clear();
+        for (const [key, value] of kvSnapshot) kv.set(key, value);
         throw error;
       } finally {
         inExclusiveTransaction = false;

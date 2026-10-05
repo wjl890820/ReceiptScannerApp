@@ -3,6 +3,10 @@ jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn(),
 }));
 
+jest.mock('./cloudBackupWorker', () => ({
+  requestCloudBackupFlush: jest.fn(),
+}));
+
 import { buildProductAttributes } from './productIdentityContract';
 import { ensureProductIdentityEntitySchema } from './productIdentityEntitySchema';
 import {
@@ -15,6 +19,12 @@ import {
   type PersonalProductCurrentEndpointSnapshot,
   type StoredPersonalProductIdentityDecision,
 } from './personalProductIdentityContract';
+import { requestCloudBackupFlush } from './cloudBackupWorker';
+import {
+  personalDecisionBackupBootstrapKvKey,
+  personalDecisionBackupDirtyKvKey,
+  personalDecisionBackupGenerationKvKey,
+} from './personalDecisionCloudSync';
 import { ensurePersonalProductIdentitySchema } from './personalProductIdentitySchema';
 import {
   PersonalProductIdentityDomainError,
@@ -848,6 +858,178 @@ describe('G4-1 personal product identity repository', () => {
       });
       expect(JSON.stringify(authority)).not.toContain('sku_key');
     });
+  });
+
+  it('metadata write failure rolls back the new decision', async () => {
+    const db = createMemoryPersonalProductIdentityDatabase();
+    db.setKvWriteShouldFail(true);
+    const a = endpoint('mp_a');
+    const b = endpoint('mp_b');
+    await expect(
+      recordPersonalProductIdentityDecisionWithDb(
+        db,
+        'user:test-owner',
+        a,
+        b,
+        'same_product',
+        { nowMs: NOW, currentEndpoints: endpointSnapshot(a, b) }
+      )
+    ).rejects.toThrow(/kv write failed/);
+    expect(db.rows.size).toBe(0);
+    expect(db.kv.size).toBe(0);
+  });
+
+  it('same decision keeps timestamps and republishes a lost sync signal', async () => {
+    const db = createMemoryPersonalProductIdentityDatabase();
+    const a = endpoint('mp_a');
+    const b = endpoint('mp_b');
+    const created = await recordPersonalProductIdentityDecisionWithDb(
+      db,
+      'user:test-owner',
+      a,
+      b,
+      'same_product',
+      { nowMs: NOW, currentEndpoints: endpointSnapshot(a, b) }
+    );
+    expect(created).toEqual({ ok: true, outcome: 'created' });
+    expect(db.kv.get('personal_decision_backup_dirty_v1:test-owner')).toBe('1');
+    expect(db.kv.get('personal_decision_backup_generation_v1:test-owner')).toBe('1');
+
+    const repeated = await recordPersonalProductIdentityDecisionWithDb(
+      db,
+      'user:test-owner',
+      b,
+      a,
+      'same_product',
+      { nowMs: NOW + 50, currentEndpoints: endpointSnapshot(a, b) }
+    );
+    expect(repeated).toEqual({ ok: true, outcome: 'idempotent' });
+    const row = [...db.rows.values()][0];
+    expect(db.rows.size).toBe(1);
+    expect(row?.created_at).toBe(NOW);
+    expect(row?.updated_at).toBe(NOW);
+    expect(db.kv.get('personal_decision_backup_generation_v1:test-owner')).toBe('1');
+    expect(db.kv.get('personal_decision_backup_dirty_v1:test-owner')).toBe('1');
+
+    db.kv.set('personal_decision_backup_dirty_v1:test-owner', '0');
+    db.kv.set('personal_decision_backup_bootstrap_v1:test-owner', '1');
+    const healed = await recordPersonalProductIdentityDecisionWithDb(
+      db,
+      'user:test-owner',
+      a,
+      b,
+      'same_product',
+      { nowMs: NOW + 80, currentEndpoints: endpointSnapshot(a, b) }
+    );
+    expect(healed).toEqual({ ok: true, outcome: 'idempotent' });
+    expect([...db.rows.values()][0]?.created_at).toBe(NOW);
+    expect([...db.rows.values()][0]?.updated_at).toBe(NOW);
+    expect(db.kv.get('personal_decision_backup_dirty_v1:test-owner')).toBe('1');
+    expect(db.kv.get('personal_decision_backup_generation_v1:test-owner')).toBe('2');
+
+    const installDb = createMemoryPersonalProductIdentityDatabase();
+    await recordPersonalProductIdentityDecisionWithDb(
+      installDb,
+      INSTALL_OWNER,
+      a,
+      b,
+      'unsure',
+      { nowMs: NOW, currentEndpoints: endpointSnapshot(a, b) }
+    );
+    expect(installDb.kv.size).toBe(0);
+    expect(installDb.rows.size).toBe(1);
+  });
+
+  it('rolls back a new decision when generation cannot advance safely', async () => {
+    const db = createMemoryPersonalProductIdentityDatabase();
+    const userId = 'test-owner';
+    db.kv.set(
+      personalDecisionBackupGenerationKvKey(userId),
+      String(Number.MAX_SAFE_INTEGER)
+    );
+    db.kv.set(personalDecisionBackupDirtyKvKey(userId), '0');
+    db.kv.set(personalDecisionBackupBootstrapKvKey(userId), '1');
+    (requestCloudBackupFlush as jest.Mock).mockClear();
+    const a = endpoint('mp_a');
+    const b = endpoint('mp_b');
+    await expect(
+      recordPersonalProductIdentityDecisionWithDb(
+        db,
+        OWNER,
+        a,
+        b,
+        'same_product',
+        { nowMs: NOW, currentEndpoints: endpointSnapshot(a, b) }
+      )
+    ).rejects.toThrow(/personal_decision_backup_generation_overflow/);
+    expect(db.rows.size).toBe(0);
+    expect(db.kv.get(personalDecisionBackupGenerationKvKey(userId))).toBe(
+      String(Number.MAX_SAFE_INTEGER)
+    );
+    expect(db.kv.get(personalDecisionBackupDirtyKvKey(userId))).toBe('0');
+    expect(db.kv.get(personalDecisionBackupBootstrapKvKey(userId))).toBe('1');
+    expect(requestCloudBackupFlush).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when republishing a lost signal would overflow generation', async () => {
+    const db = createMemoryPersonalProductIdentityDatabase();
+    const userId = 'test-owner';
+    const a = endpoint('mp_a');
+    const b = endpoint('mp_b');
+    const created = await recordPersonalProductIdentityDecisionWithDb(
+      db,
+      OWNER,
+      a,
+      b,
+      'same_product',
+      { nowMs: NOW, currentEndpoints: endpointSnapshot(a, b) }
+    );
+    expect(created).toEqual({ ok: true, outcome: 'created' });
+    await new Promise((resolve) => setImmediate(resolve));
+    db.kv.set(
+      personalDecisionBackupGenerationKvKey(userId),
+      String(Number.MAX_SAFE_INTEGER)
+    );
+    db.kv.set(personalDecisionBackupDirtyKvKey(userId), '0');
+    db.kv.set(personalDecisionBackupBootstrapKvKey(userId), '1');
+    (requestCloudBackupFlush as jest.Mock).mockClear();
+    await expect(
+      recordPersonalProductIdentityDecisionWithDb(
+        db,
+        OWNER,
+        a,
+        b,
+        'same_product',
+        { nowMs: NOW + 20, currentEndpoints: endpointSnapshot(a, b) }
+      )
+    ).rejects.toThrow(/personal_decision_backup_generation_overflow/);
+    const row = [...db.rows.values()][0];
+    expect(db.rows.size).toBe(1);
+    expect(row?.created_at).toBe(NOW);
+    expect(row?.updated_at).toBe(NOW);
+    expect(db.kv.get(personalDecisionBackupGenerationKvKey(userId))).toBe(
+      String(Number.MAX_SAFE_INTEGER)
+    );
+    expect(db.kv.get(personalDecisionBackupDirtyKvKey(userId))).toBe('0');
+    expect(db.kv.get(personalDecisionBackupBootstrapKvKey(userId))).toBe('1');
+    expect(requestCloudBackupFlush).not.toHaveBeenCalled();
+
+    db.kv.set(personalDecisionBackupDirtyKvKey(userId), '1');
+    const repeated = await recordPersonalProductIdentityDecisionWithDb(
+      db,
+      OWNER,
+      b,
+      a,
+      'same_product',
+      { nowMs: NOW + 40, currentEndpoints: endpointSnapshot(a, b) }
+    );
+    expect(repeated).toEqual({ ok: true, outcome: 'idempotent' });
+    expect([...db.rows.values()][0]?.created_at).toBe(NOW);
+    expect([...db.rows.values()][0]?.updated_at).toBe(NOW);
+    expect(db.kv.get(personalDecisionBackupGenerationKvKey(userId))).toBe(
+      String(Number.MAX_SAFE_INTEGER)
+    );
+    expect(db.kv.get(personalDecisionBackupDirtyKvKey(userId))).toBe('1');
   });
 
   it('domain error class is used for controlled rollback', () => {

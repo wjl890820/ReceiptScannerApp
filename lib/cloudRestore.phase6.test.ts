@@ -17,6 +17,14 @@ jest.mock('react-native', () => ({
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
 }));
 
+jest.mock('./personalDecisionCloudSync', () => {
+  const actual = jest.requireActual('./personalDecisionCloudSync');
+  return {
+    ...actual,
+    fetchAllActiveCloudPersonalDecisionsForUser: jest.fn(async () => []),
+  };
+});
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const map = new Map<string, string>();
   return {
@@ -126,6 +134,18 @@ function createRestoreDb(opts?: {
         for (const [k, v] of snapK) appKv.set(k, v);
         throw e;
       }
+    },
+    async withExclusiveTransactionAsync(
+      task: (txn: {
+        execAsync: () => Promise<void>;
+        getFirstAsync: <T>(sql: string) => Promise<T | null>;
+        getAllAsync: <T>() => Promise<T[]>;
+        runAsync: (sql: string, params?: unknown[]) => Promise<unknown>;
+      }) => Promise<void>
+    ) {
+      await db.withTransactionAsync(async () => {
+        await task(db);
+      });
     },
     async getFirstAsync<T>(sql: string): Promise<T | null> {
       if (/COUNT\(\*\) as c FROM receipts/i.test(sql)) {

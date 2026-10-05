@@ -8,6 +8,14 @@
 const fs = require('fs') as typeof import('fs');
 const path = require('path') as typeof import('path');
 
+jest.mock('./personalDecisionCloudSync', () => {
+  const actual = jest.requireActual('./personalDecisionCloudSync');
+  return {
+    ...actual,
+    fetchAllActiveCloudPersonalDecisionsForUser: jest.fn(async () => []),
+  };
+});
+
 jest.mock('expo-constants', () => ({
   __esModule: true,
   default: { expoConfig: { version: '1.0.0', extra: {} } },
@@ -529,6 +537,16 @@ describe('Receipt073 Round 4 mutation → inventory invalidation ordering', () =
       },
       async withTransactionAsync(fn: () => Promise<void>) {
         await fn();
+      },
+      async withExclusiveTransactionAsync(
+        task: (txn: {
+          runAsync: typeof mockDatabase.runAsync;
+          getFirstAsync: (sql: string, params?: unknown[]) => Promise<unknown>;
+          getAllAsync: (sql: string, params?: unknown[]) => Promise<unknown>;
+          execAsync: (sql: string) => Promise<void>;
+        }) => Promise<void>
+      ) {
+        await task(restoreDb);
       },
     };
 

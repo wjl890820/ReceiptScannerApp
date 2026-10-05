@@ -20,6 +20,7 @@ import {
 } from './cloudBackupPayload';
 import { isCloudBackupEnabled } from './env';
 import { getSupabaseClient } from './supabaseClient';
+import { syncPersonalDecisionBackup } from './personalDecisionCloudSync';
 import {
   clearSyncOutboxIntentIfCurrent,
   computeBackoffMs,
@@ -259,6 +260,13 @@ async function runFlushOnce(): Promise<CloudBackupFlushResult> {
     if (batchSucceeded === 0) break;
     // Partial page means no more due rows right now.
     if (due.length < CLOUD_BACKUP_BATCH_SIZE) break;
+  }
+
+  try {
+    await syncPersonalDecisionBackup(db, currentUserId);
+  } catch (e) {
+    // Decision durability is independent of receipt outbox success.
+    console.warn('[CloudBackup] personal decision sync failed (nonfatal):', e);
   }
 
   try {

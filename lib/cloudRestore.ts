@@ -1,7 +1,8 @@
 /**
  * P0 Phase 6 — safe cloud → local restore (no merge / Apple / re-upload loop).
  *
- * Allowed only when local receipts are empty and sync_outbox has no pending rows.
+ * Allowed only when local receipts, sync_outbox, and this account's personal
+ * decisions / unsynced decision state are empty.
  */
 import type * as SQLite from 'expo-sqlite';
 
@@ -20,6 +21,19 @@ import {
 import { getSupabaseClient } from './supabaseClient';
 import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
 import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
+import {
+  fetchAllActiveCloudPersonalDecisionsForUser,
+  isPersonalDecisionTableMissingError,
+  mapCloudPersonalDecisionToLocalInsert,
+  personalDecisionBackupBootstrapKvKey,
+  personalDecisionBackupDirtyKvKey,
+  personalDecisionBackupGenerationKvKey,
+  personalDecisionRestoreBlocked,
+  readPersonalDecisionRestoreBlocked,
+  type LocalPersonalDecisionBackupRow,
+} from './personalDecisionCloudSync';
+import { withPersonalDecisionLocalMutationGate } from './personalDecisionLocalMutationGate';
+import { ensurePersonalProductIdentitySchema } from './personalProductIdentitySchema';
 
 export const CLOUD_RESTORE_PAGE_SIZE = 200;
 
@@ -54,7 +68,27 @@ export type CloudRestoreDeps = {
     userId: string,
     pageSize: number
   ) => Promise<CloudUserReceiptRow[]>;
+  /** Test seam: replace paginated personal-decision fetch */
+  fetchActiveCloudDecisions?: (
+    userId: string
+  ) => Promise<Record<string, unknown>[]>;
+  /**
+   * Runs after the second fast eligibility check and before the local mutation gate.
+   * Production callers omit it.
+   */
+  beforeLocalMutationGate?: () => Promise<void>;
 };
+
+type RestoreSql = Pick<SQLite.SQLiteDatabase, 'getFirstAsync' | 'runAsync' | 'execAsync' | 'getAllAsync'>;
+
+class RestoreEligibilityRefusal extends Error {
+  constructor(
+    readonly restoreStatus: 'blocked_local_data_present' | 'blocked_pending_local_changes'
+  ) {
+    super(restoreStatus);
+    this.name = 'RestoreEligibilityRefusal';
+  }
+}
 
 const CLOUD_SELECT = `
   id, user_id, installation_id, transaction_source, social_source,
@@ -129,14 +163,14 @@ async function ensureAppKv(db: SQLite.SQLiteDatabase): Promise<void> {
   );
 }
 
-async function countLocalReceipts(db: SQLite.SQLiteDatabase): Promise<number> {
+async function countLocalReceipts(db: Pick<RestoreSql, 'getFirstAsync'>): Promise<number> {
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) as c FROM receipts`
   );
   return row?.c ?? 0;
 }
 
-async function countPendingOutbox(db: SQLite.SQLiteDatabase): Promise<number> {
+async function countPendingOutbox(db: Pick<RestoreSql, 'getFirstAsync'>): Promise<number> {
   const row = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) as c FROM sync_outbox`
   );
@@ -191,20 +225,74 @@ export async function fetchAllActiveCloudReceiptsForUser(
   return out;
 }
 
+const INSERT_PERSONAL_DECISION_SQL = `
+  INSERT INTO personal_product_identity_decisions (
+    owner_key,
+    left_merchant_product_id,
+    right_merchant_product_id,
+    left_merchant_scope_key,
+    right_merchant_scope_key,
+    left_comparison_key,
+    right_comparison_key,
+    left_structural_signature,
+    right_structural_signature,
+    identity_pipeline_version,
+    decision,
+    created_at,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`;
+
+function personalDecisionInsertParams(
+  row: LocalPersonalDecisionBackupRow
+): SQLite.SQLiteBindValue[] {
+  return [
+    row.owner_key,
+    row.left_merchant_product_id,
+    row.right_merchant_product_id,
+    row.left_merchant_scope_key,
+    row.right_merchant_scope_key,
+    row.left_comparison_key,
+    row.right_comparison_key,
+    row.left_structural_signature,
+    row.right_structural_signature,
+    row.identity_pipeline_version,
+    row.decision,
+    row.created_at,
+    row.updated_at,
+  ];
+}
+
+async function assertRestoreEligibleInTransaction(
+  txn: RestoreSql,
+  userId: string
+): Promise<void> {
+  if ((await countLocalReceipts(txn)) > 0) {
+    throw new RestoreEligibilityRefusal('blocked_local_data_present');
+  }
+  if ((await countPendingOutbox(txn)) > 0) {
+    throw new RestoreEligibilityRefusal('blocked_pending_local_changes');
+  }
+  if (await readPersonalDecisionRestoreBlocked(txn, userId)) {
+    throw new RestoreEligibilityRefusal('blocked_local_data_present');
+  }
+}
+
 async function materializeRestoreInTransaction(
   db: SQLite.SQLiteDatabase,
   rows: LocalRestoredReceiptInsert[],
+  decisions: LocalPersonalDecisionBackupRow[],
   userId: string,
-  nowMs: number
+  nowMs: number,
+  markDecisionBackupCurrent: boolean
 ): Promise<void> {
-  await ensureReceiptItemsSchema(db);
-  await ensureAppKv(db);
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await assertRestoreEligibleInTransaction(txn, userId);
 
-  await db.withTransactionAsync(async () => {
     for (const row of rows) {
-      await db.runAsync(INSERT_RESTORE_SQL, insertParams(row));
+      await txn.runAsync(INSERT_RESTORE_SQL, insertParams(row));
       await rebuildReceiptItemIndex(
-        db,
+        txn,
         {
           id: row.id,
           analysis_json: row.analysis_json,
@@ -214,20 +302,48 @@ async function materializeRestoreInTransaction(
       );
     }
 
+    for (const decision of decisions) {
+      await txn.runAsync(INSERT_PERSONAL_DECISION_SQL, personalDecisionInsertParams(decision));
+    }
+
+    if (markDecisionBackupCurrent) {
+      await txn.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
+        personalDecisionBackupBootstrapKvKey(userId),
+        '1',
+      ]);
+      await txn.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
+        personalDecisionBackupDirtyKvKey(userId),
+        '0',
+      ]);
+      await txn.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
+        personalDecisionBackupGenerationKvKey(userId),
+        '0',
+      ]);
+    }
+
     // Prevent Phase 5 bootstrap from treating restored rows as legacy unbacked-up data.
-    await db.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
+    await txn.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
       cloudBackupBootstrapKvKey(userId),
       '1',
     ]);
-    await db.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
+    await txn.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
       RESTORE_KV_LAST_AT,
       String(nowMs),
     ]);
-    await db.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
+    await txn.runAsync(`INSERT OR REPLACE INTO app_kv (k, v) VALUES (?, ?)`, [
       RESTORE_KV_LAST_USER,
       userId,
     ]);
   });
+}
+
+function localRestoreWriteFailure(error: unknown): CloudRestoreResult {
+  const message = error instanceof Error ? error.message : String(error || 'write_failed');
+  return {
+    status: 'write_failed',
+    restored: 0,
+    error: message || 'write_failed',
+  };
 }
 
 function resolveDeps(partial: Partial<CloudRestoreDeps>): CloudRestoreDeps {
@@ -238,6 +354,8 @@ function resolveDeps(partial: Partial<CloudRestoreDeps>): CloudRestoreDeps {
     pageSize: partial.pageSize ?? CLOUD_RESTORE_PAGE_SIZE,
     nowMs: partial.nowMs ?? (() => Date.now()),
     fetchActiveCloudReceipts: partial.fetchActiveCloudReceipts,
+    fetchActiveCloudDecisions: partial.fetchActiveCloudDecisions,
+    beforeLocalMutationGate: partial.beforeLocalMutationGate,
     getDb:
       partial.getDb ??
       (async () => {
@@ -275,6 +393,13 @@ export async function restoreCloudReceiptsForCurrentUser(
   if (pending > 0) {
     return { status: 'blocked_pending_local_changes', restored: 0 };
   }
+  try {
+    if (await personalDecisionRestoreBlocked(db, userId)) {
+      return { status: 'blocked_local_data_present', restored: 0 };
+    }
+  } catch (e: unknown) {
+    return localRestoreWriteFailure(e);
+  }
 
   if (!deps.getClient() && !deps.fetchActiveCloudReceipts) {
     return { status: 'client_unavailable', restored: 0 };
@@ -292,6 +417,29 @@ export async function restoreCloudReceiptsForCurrentUser(
       restored: 0,
       error: String(e?.message || e || 'fetch_failed'),
     };
+  }
+
+  let rawDecisions: Record<string, unknown>[] = [];
+  let decisionTablePresent = true;
+  try {
+    rawDecisions = deps.fetchActiveCloudDecisions
+      ? await deps.fetchActiveCloudDecisions(userId)
+      : await fetchAllActiveCloudPersonalDecisionsForUser(
+          userId,
+          deps.getClient
+        );
+  } catch (e: unknown) {
+    if (isPersonalDecisionTableMissingError(e)) {
+      decisionTablePresent = false;
+      rawDecisions = [];
+    } else {
+      const message = e instanceof Error ? e.message : String(e || 'fetch_failed');
+      return {
+        status: 'fetch_failed',
+        restored: 0,
+        error: message || 'fetch_failed',
+      };
+    }
   }
 
   const nowMs = deps.nowMs?.() ?? Date.now();
@@ -323,22 +471,61 @@ export async function restoreCloudReceiptsForCurrentUser(
     };
   }
 
-  // Re-check emptiness immediately before write (TOCTOU soft guard).
-  if ((await countLocalReceipts(db)) > 0) {
-    return { status: 'blocked_local_data_present', restored: 0 };
-  }
-  if ((await countPendingOutbox(db)) > 0) {
-    return { status: 'blocked_pending_local_changes', restored: 0 };
+  let mappedDecisions: LocalPersonalDecisionBackupRow[];
+  try {
+    const seenPairs = new Set<string>();
+    mappedDecisions = rawDecisions.map((row) => {
+      const decision = mapCloudPersonalDecisionToLocalInsert(row, userId);
+      const pairKey = `${decision.left_merchant_product_id}\0${decision.right_merchant_product_id}`;
+      if (seenPairs.has(pairKey)) {
+        throw new Error('Cloud personal decision pair is duplicated');
+      }
+      seenPairs.add(pairKey);
+      return decision;
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e || 'validation_failed');
+    return {
+      status: 'validation_failed',
+      restored: 0,
+      error: message || 'validation_failed',
+    };
   }
 
   try {
-    await materializeRestoreInTransaction(db, mapped, userId, nowMs);
-  } catch (e: any) {
-    return {
-      status: 'write_failed',
-      restored: 0,
-      error: String(e?.message || e || 'write_failed'),
-    };
+    // Schema DDL does not insert receipts, outbox rows, personal decisions, or sync keys.
+    await ensureReceiptItemsSchema(db);
+    await ensurePersonalProductIdentitySchema(db);
+    await ensureAppKv(db);
+
+    // Fast rejection. The transaction inside the gate repeats the same checks.
+    if ((await countLocalReceipts(db)) > 0) {
+      return { status: 'blocked_local_data_present', restored: 0 };
+    }
+    if ((await countPendingOutbox(db)) > 0) {
+      return { status: 'blocked_pending_local_changes', restored: 0 };
+    }
+    if (await readPersonalDecisionRestoreBlocked(db, userId)) {
+      return { status: 'blocked_local_data_present', restored: 0 };
+    }
+
+    if (deps.beforeLocalMutationGate) await deps.beforeLocalMutationGate();
+
+    await withPersonalDecisionLocalMutationGate(() =>
+      materializeRestoreInTransaction(
+        db,
+        mapped,
+        mappedDecisions,
+        userId,
+        nowMs,
+        decisionTablePresent
+      )
+    );
+  } catch (e: unknown) {
+    if (e instanceof RestoreEligibilityRefusal) {
+      return { status: e.restoreStatus, restored: 0 };
+    }
+    return localRestoreWriteFailure(e);
   }
 
   void import('./analysisPriceSessionCache')

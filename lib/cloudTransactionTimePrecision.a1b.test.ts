@@ -18,6 +18,14 @@ jest.mock('react-native', () => ({
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
 }));
 
+jest.mock('./personalDecisionCloudSync', () => {
+  const actual = jest.requireActual('./personalDecisionCloudSync');
+  return {
+    ...actual,
+    fetchAllActiveCloudPersonalDecisionsForUser: jest.fn(async () => []),
+  };
+});
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const map = new Map<string, string>();
   return {
