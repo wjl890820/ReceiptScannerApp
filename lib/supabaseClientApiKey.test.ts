@@ -9,6 +9,15 @@ jest.mock('@supabase/supabase-js', () => ({
     auth: {
       startAutoRefresh: jest.fn(),
       stopAutoRefresh: jest.fn(),
+      getSession: jest.fn(async () => {
+        const token = (globalThis as { __ocrServiceSessionToken?: string | null }).__ocrServiceSessionToken;
+        return {
+          data: {
+            session: token ? { access_token: token, user: { id: 'user-1' } } : null,
+          },
+          error: null,
+        };
+      }),
     },
   })),
 }));
@@ -41,6 +50,7 @@ jest.mock('./i18n', () => ({ getCurrentLocale: () => 'ja' }));
 jest.mock('./db', () => ({ listReceipts: async () => [] }));
 jest.mock('./anonAuth', () => ({
   getAccessTokenIfReady: jest.fn(() => null),
+  ensureAnonAuth: jest.fn(async () => ({ status: 'unavailable', accessToken: null })),
 }));
 
 import fs from 'fs';
@@ -111,7 +121,12 @@ function requestHeaders(call: unknown[]): Record<string, string> {
   return (call[1] as { headers: Record<string, string> }).headers;
 }
 
+function setOcrSessionToken(token: string | null): void {
+  (globalThis as { __ocrServiceSessionToken?: string | null }).__ocrServiceSessionToken = token;
+}
+
 beforeEach(() => {
+  setOcrSessionToken(null);
   (getAccessTokenIfReady as jest.Mock).mockReturnValue(null);
   delete process.env.RUN_SEMANTIC_LIVE_EVAL;
   (global as unknown as { fetch: jest.Mock }).fetch = jest.fn(async () =>
@@ -302,29 +317,33 @@ describe('user access token shape stays separate', () => {
 });
 
 describe('Edge callers', () => {
-  it('anonymous OCR sends apikey and omits Authorization', async () => {
+  it('OCR without a session does not call ocr-receipt-v2', async () => {
     useClientKey(PUBLISHABLE);
+    delete process.env.ENABLE_ANON_AUTH;
     const ping = await pingOcrEdge();
-    expect(ping.status).toBe(200);
+    expect(ping.status).toBe(401);
+    await expect(analyzeReceiptImageViaEdge('file://receipt.jpg')).rejects.toThrow(
+      /authentication failed/
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('signed-in OCR sends the user JWT to ocr-receipt-v2 and keeps the project key in apikey', async () => {
+    useClientKey(PUBLISHABLE);
+    (getAccessTokenIfReady as jest.Mock).mockReturnValue('eyJ.stale.cached');
+    setOcrSessionToken(userJwt);
+    await pingOcrEdge();
     const analysis = await analyzeReceiptImageViaEdge('file://receipt.jpg');
     expect(analysis.total).toBe(1);
     const fetchMock = global.fetch as jest.Mock;
-    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     for (const call of fetchMock.mock.calls) {
       const headers = requestHeaders(call);
+      expect(new URL(String(call[0])).pathname).toBe('/functions/v1/ocr-receipt-v2');
       expect(headers.apikey).toBe(PUBLISHABLE);
-      expect(headers.Authorization).toBeUndefined();
-      expect(String(call[0])).toContain('/functions/v1/ocr-receipt');
+      expect(headers.Authorization).toBe(`Bearer ${userJwt}`);
+      expect(headers.Authorization).not.toContain(PUBLISHABLE);
     }
-  });
-
-  it('signed-in OCR sends the user JWT and not the project key as Bearer', async () => {
-    useClientKey(PUBLISHABLE);
-    (getAccessTokenIfReady as jest.Mock).mockReturnValue(userJwt);
-    await pingOcrEdge();
-    const headers = requestHeaders((global.fetch as jest.Mock).mock.calls[0]);
-    expect(headers.apikey).toBe(PUBLISHABLE);
-    expect(headers.Authorization).toBe(`Bearer ${userJwt}`);
   });
 
   it('OCR does not fetch when the project key is a secret', async () => {
@@ -335,70 +354,124 @@ describe('Edge callers', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('sanitizes JSON, plain-text, HTML, and malformed HTTP 401 bodies', async () => {
+  it('sanitizes non-2xx Edge bodies and keeps a constrained error code', async () => {
     useClientKey(PUBLISHABLE);
+    (getAccessTokenIfReady as jest.Mock).mockReturnValue('eyJ.stale.cached');
+    setOcrSessionToken(userJwt);
+    const dev = (global as unknown as { __DEV__: boolean }).__DEV__;
+    (global as unknown as { __DEV__: boolean }).__DEV__ = true;
     const cases = [
       {
+        status: 401,
+        expect: /Supabase\/Edge authentication failed/,
         body: JSON.stringify({
           error: { code: 'UNAUTHORIZED', message: 'leaked sb_secret_should_not_surface' },
         }),
         code: '(UNAUTHORIZED)',
-        absent: ['sb_secret', 'leaked'],
+        absent: ['sb_secret', 'leaked', 'eyJ.stale.cached'],
       },
       {
-        body: JSON.stringify({ error: { message: 'raw credential sb_secret_should_not_surface' } }),
-        code: null,
-        absent: ['sb_secret', 'raw credential'],
-      },
-      {
+        status: 401,
+        expect: /Supabase\/Edge authentication failed/,
         body: 'plain-text 401 sb_secret_should_not_surface',
         code: null,
         absent: ['plain-text', 'sb_secret'],
       },
       {
+        status: 401,
+        expect: /Supabase\/Edge authentication failed/,
         body: '<html><body>sb_secret_should_not_surface</body></html>',
         code: null,
         absent: ['<html>', 'sb_secret'],
       },
       {
+        status: 404,
+        expect: /OCR service unavailable/,
+        body: JSON.stringify({
+          error: { code: 'NOT_FOUND', message: 'leaked sb_secret_should_not_surface' },
+        }),
+        code: '(NOT_FOUND)',
+        absent: ['sb_secret', 'leaked'],
+      },
+      {
+        status: 404,
+        expect: /OCR service unavailable/,
+        body: 'plain-text 404 sb_secret_should_not_surface',
+        code: null,
+        absent: ['plain-text', 'sb_secret'],
+      },
+      {
+        status: 404,
+        expect: /OCR service unavailable/,
+        body: '<html>sb_secret_should_not_surface</html>',
+        code: null,
+        absent: ['<html>', 'sb_secret'],
+      },
+      {
+        status: 404,
+        expect: /OCR service unavailable/,
         body: '{"error":',
         code: null,
         absent: ['{"error":', 'Unexpected', '无效 JSON'],
       },
+      {
+        status: 500,
+        expect: /OCR service request failed/,
+        body: JSON.stringify({
+          error: { code: 'SERVER_ERROR', message: 'leaked sb_secret_should_not_surface eyJ.leaked.token' },
+        }),
+        code: '(SERVER_ERROR)',
+        absent: ['sb_secret', 'leaked', 'eyJ.leaked.token'],
+      },
+      {
+        status: 500,
+        expect: /OCR service request failed/,
+        body: 'plain-text 500 sb_secret_should_not_surface',
+        code: null,
+        absent: ['plain-text', 'sb_secret'],
+      },
     ];
-    for (const item of cases) {
-      const logs: string[] = [];
-      const spy = jest.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
-        logs.push(args.map((part) => String(part)).join(' '));
-      });
-      const warn = jest.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
-        logs.push(args.map((part) => String(part)).join(' '));
-      });
-      const errorSpy = jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
-        logs.push(args.map((part) => String(part)).join(' '));
-      });
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        text: async () => item.body,
-      });
-      try {
-        await analyzeReceiptImageViaEdge('file://receipt.jpg');
-        throw new Error('expected authentication failure');
-      } catch (error) {
-        const message = (error as Error).message;
-        expect(message).toMatch(/Supabase\/Edge authentication failed/);
-        expect(message).not.toMatch(/publishable key/i);
-        if (item.code) expect(message).toContain(item.code);
-        else expect(message).not.toMatch(/\([A-Z][A-Z0-9_]{0,40}\)/);
-        for (const absent of item.absent) expect(message).not.toContain(absent);
-        expect(logs.join('\n')).not.toContain('sb_secret');
-        expect(logs.join('\n')).not.toContain(item.body);
-      } finally {
-        spy.mockRestore();
-        warn.mockRestore();
-        errorSpy.mockRestore();
+    try {
+      for (const item of cases) {
+        const logs: string[] = [];
+        const record = (...args: unknown[]) => {
+          logs.push(
+            args
+              .map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
+              .join(' ')
+          );
+        };
+        const spy = jest.spyOn(console, 'log').mockImplementation(record);
+        const warn = jest.spyOn(console, 'warn').mockImplementation(record);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(record);
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: false,
+          status: item.status,
+          text: async () => item.body,
+        });
+        try {
+          await analyzeReceiptImageViaEdge('file://receipt.jpg');
+          throw new Error('expected edge failure');
+        } catch (error) {
+          const message = (error as Error).message;
+          expect(message).toMatch(item.expect);
+          expect(message).not.toMatch(/publishable key/i);
+          if (item.code) expect(message).toContain(item.code);
+          else expect(message).not.toMatch(/\([A-Z][A-Z0-9_]{0,40}\)/);
+          for (const absent of item.absent) expect(message).not.toContain(absent);
+          const logged = logs.join('\n');
+          expect(logged).toContain('<redacted>');
+          expect(logged).not.toContain('sb_secret');
+          expect(logged).not.toContain(item.body);
+          expect(logged).not.toContain('eyJ.leaked.token');
+        } finally {
+          spy.mockRestore();
+          warn.mockRestore();
+          errorSpy.mockRestore();
+        }
       }
+    } finally {
+      (global as unknown as { __DEV__: boolean }).__DEV__ = dev;
     }
   });
 

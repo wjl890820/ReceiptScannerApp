@@ -7,7 +7,12 @@ import { getDeviceId } from './deviceId';
 import { getCurrentLocale } from './i18n';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 import { getSupabaseUrl, getSupabaseAnonKey, isSupportedSupabaseClientApiKey } from './env';
-import { formatSupabaseEdgeAuthFailure, resolveOcrUserAccessToken } from './ocrAuthHeaders';
+import {
+  ensureOcrUserAccessToken,
+  extractSafeEdgeErrorCode,
+  formatSupabaseEdgeHttpFailure,
+  SUPABASE_EDGE_AUTH_FAILURE_MESSAGE,
+} from './ocrAuthHeaders';
 
 /**
  * Compress and encode image to base64
@@ -131,20 +136,29 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
   }
 
   const deviceId = await getDeviceId();
-  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/ocr-receipt`;
+  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/ocr-receipt-v2`;
 
   if (__DEV__) {
     console.log('[OCR] Ping edge function');
   }
 
+  let userAccessToken: string;
   try {
-    const userAccessToken = resolveOcrUserAccessToken(supabaseAnonKey);
+    userAccessToken = await ensureOcrUserAccessToken(supabaseAnonKey);
+  } catch {
+    return {
+      status: 401,
+      body: { error: SUPABASE_EDGE_AUTH_FAILURE_MESSAGE },
+    };
+  }
+
+  try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       apikey: supabaseAnonKey,
+      Authorization: `Bearer ${userAccessToken}`,
       'x-device-id': deviceId,
     };
-    if (userAccessToken) headers.Authorization = `Bearer ${userAccessToken}`;
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers,
@@ -152,10 +166,13 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
     });
 
     const responseText = await response.text();
-    if (response.status === 401) {
+    if (!response.ok) {
+      if (__DEV__) {
+        console.log('[OCR] Edge non-2xx', { status: response.status, bodySnippet: '<redacted>' });
+      }
       return {
-        status: 401,
-        body: { error: formatSupabaseEdgeAuthFailure(responseText) },
+        status: response.status,
+        body: { error: formatSupabaseEdgeHttpFailure(response.status, responseText) },
       };
     }
 
@@ -206,6 +223,8 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
     throw new Error('Supabase client API key is unsupported');
   }
 
+  const userAccessToken = await ensureOcrUserAccessToken(supabaseAnonKey);
+
   // Compress and encode image
   const { base64, mimeType } = await compressToJpegBase64(uri);
 
@@ -218,7 +237,7 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
   const language = getCurrentLocale();
 
   // Prepare request
-  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/ocr-receipt`;
+  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/ocr-receipt-v2`;
   
   if (__DEV__) {
     console.log('[OCR] Analyzing receipt image');
@@ -239,13 +258,12 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
   };
 
   try {
-    const userAccessToken = resolveOcrUserAccessToken(supabaseAnonKey);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       apikey: supabaseAnonKey,
+      Authorization: `Bearer ${userAccessToken}`,
       'x-device-id': deviceId,
     };
-    if (userAccessToken) headers.Authorization = `Bearer ${userAccessToken}`;
     const response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers,
@@ -253,8 +271,15 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
     });
 
     const responseText = await response.text();
-    if (response.status === 401) {
-      throw new Error(formatSupabaseEdgeAuthFailure(responseText));
+    if (!response.ok) {
+      if (__DEV__) {
+        console.log('[OCR] Edge non-2xx', { status: response.status, bodySnippet: '<redacted>' });
+      }
+      const failure = new Error(formatSupabaseEdgeHttpFailure(response.status, responseText)) as Error & {
+        code?: string;
+      };
+      failure.code = extractSafeEdgeErrorCode(responseText) || 'OCR_REQUEST_FAILED';
+      throw failure;
     }
 
     let responseData: any;

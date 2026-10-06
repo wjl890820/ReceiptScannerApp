@@ -10,7 +10,7 @@ import { authoritativeReceiptTotal } from './scanReviewPresentation';
 
 const EDGE_OCR_PATH = path.resolve(
   __dirname,
-  '../supabase/functions/ocr-receipt/index.ts'
+  '../supabase/functions/ocr-receipt/handler.ts'
 );
 
 function readEdgeOcrSource(): string {

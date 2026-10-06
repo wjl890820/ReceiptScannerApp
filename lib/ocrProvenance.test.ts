@@ -16,16 +16,16 @@ import {
 } from '../supabase/functions/ocr-receipt/ocrProvenance';
 import { applyTransactionDateVerification } from '../supabase/functions/ocr-receipt/transactionDateVerify';
 
-const EDGE_OCR_PATH = path.resolve(
-  __dirname,
-  '../supabase/functions/ocr-receipt/index.ts'
-);
+const EDGE_OCR_PATHS = [
+  path.resolve(__dirname, '../supabase/functions/ocr-receipt/index.ts'),
+  path.resolve(__dirname, '../supabase/functions/ocr-receipt/handler.ts'),
+];
 const NOW_MS = Date.parse('2026-08-20T12:00:00+09:00');
 const REQUEST_ID = '11111111-2222-4333-8444-555555555555';
 const USER_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
 function readEdgeSource(): string {
-  return fs.readFileSync(EDGE_OCR_PATH, 'utf8');
+  return EDGE_OCR_PATHS.map((filePath) => fs.readFileSync(filePath, 'utf8')).join('\n');
 }
 
 describe('OCR provenance — feature flags', () => {

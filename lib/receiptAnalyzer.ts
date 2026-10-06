@@ -20,7 +20,11 @@ import {
   isDevDirectGeminiEnabled,
   isSupportedSupabaseClientApiKey,
 } from './env';
-import { formatSupabaseEdgeAuthFailure, resolveOcrUserAccessToken } from './ocrAuthHeaders';
+import {
+  ensureOcrUserAccessToken,
+  extractSafeEdgeErrorCode,
+  formatSupabaseEdgeHttpFailure,
+} from './ocrAuthHeaders';
 import { extractOcrRequestIdFromEdgeResponse } from './ocrRequestId';
 
 export {
@@ -142,7 +146,6 @@ async function compressToJpegBase64(uri: string): Promise<string> {
  */
 async function analyzeReceiptImageViaEdgeFunction(
   uri: string,
-  functionName: 'ocr-receipt' | 'ocr',
   trace?: ScanTrace
 ): Promise<AnalyzeReceiptOutcome> {
   const supabaseUrl = getSupabaseUrl();
@@ -159,6 +162,8 @@ async function analyzeReceiptImageViaEdgeFunction(
   if (!isSupportedSupabaseClientApiKey(supabaseAnonKey)) {
     throw new Error('Supabase client API key is unsupported');
   }
+
+  const userAccessToken = await ensureOcrUserAccessToken(supabaseAnonKey);
 
   // 1) 图片读取/预处理
   const tPre0 = nowMs();
@@ -178,10 +183,10 @@ async function analyzeReceiptImageViaEdgeFunction(
   const language = getCurrentLocale();
 
   // 准备请求
-  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/${functionName}`;
-  
+  const edgeFunctionUrl = `${supabaseUrl}/functions/v1/ocr-receipt-v2`;
+
   if (__DEV__) {
-    console.log(`[ReceiptAnalyzer] Calling Edge Function: ${functionName}`);
+    console.log('[ReceiptAnalyzer] Calling Edge Function: ocr-receipt-v2');
   }
 
   const requestBody = {
@@ -193,15 +198,12 @@ async function analyzeReceiptImageViaEdgeFunction(
     language,
   };
 
-  const userAccessToken = resolveOcrUserAccessToken(supabaseAnonKey);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     apikey: supabaseAnonKey,
+    Authorization: `Bearer ${userAccessToken}`,
     'x-device-id': deviceId,
   };
-  if (userAccessToken) {
-    headers.Authorization = `Bearer ${userAccessToken}`;
-  }
 
   // 2) OCR 请求发出前
   const tOcr0 = nowMs();
@@ -259,7 +261,7 @@ async function analyzeReceiptImageViaEdgeFunction(
 
   const responseText = await response.text();
 
-  if (response.status === 401) {
+  if (!response.ok) {
     if (__DEV__) {
       console.log('[ReceiptAnalyzer][OCR] Response <- Edge', {
         url: edgeFunctionUrl,
@@ -268,7 +270,12 @@ async function analyzeReceiptImageViaEdgeFunction(
         bodySnippet: '<redacted>',
       });
     }
-    throw new Error(formatSupabaseEdgeAuthFailure(responseText));
+    const failure = new Error(formatSupabaseEdgeHttpFailure(response.status, responseText)) as Error & {
+      code?: string;
+    };
+    const safeCode = extractSafeEdgeErrorCode(responseText);
+    if (safeCode) failure.code = safeCode;
+    throw failure;
   }
 
   let responseData: any;
@@ -293,23 +300,6 @@ async function analyzeReceiptImageViaEdgeFunction(
       ok: response.ok,
       bodySnippet: responseText.substring(0, 200),
     });
-  }
-
-  if (!response.ok) {
-    // 404 表示 function 不存在，可以尝试 fallback
-    if (response.status === 404) {
-      throw new Error('FUNCTION_NOT_FOUND');
-    }
-
-    // Edge Function 即使非 2xx 也返回稳定 JSON（含 error.code）；优先透传 code 给上层映射
-    const errCode =
-      typeof responseData?.error?.code === 'string' ? responseData.error.code : 'SERVER_ERROR';
-    const errMsg = responseData?.error?.message || responseText.substring(0, 200);
-    const e = new Error(`Edge Function 请求失败 (HTTP ${response.status}): ${errMsg}`) as Error & {
-      code?: string;
-    };
-    e.code = errCode;
-    throw e;
   }
 
   if (!responseData.success) {
@@ -514,21 +504,7 @@ export async function analyzeReceiptImageWithProvenance(
     }
   }
 
-  try {
-    return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr-receipt', trace);
-  } catch (error: any) {
-    if (error.message === 'FUNCTION_NOT_FOUND') {
-      console.log('[ReceiptAnalyzer] ocr-receipt not found, falling back to ocr');
-      try {
-        return await analyzeReceiptImageViaEdgeFunction(uri, 'ocr', trace);
-      } catch (fallbackError: any) {
-        throw new Error(
-          `Edge Function 调用失败（ocr-receipt 404，ocr 也失败）: ${fallbackError.message}`
-        );
-      }
-    }
-    throw error;
-  }
+  return await analyzeReceiptImageViaEdgeFunction(uri, trace);
 }
 
 export async function analyzeReceiptImage(uri: string, trace?: ScanTrace): Promise<ReceiptAnalysis> {

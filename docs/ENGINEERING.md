@@ -13,8 +13,11 @@
 | `DEV_DIRECT_GEMINI` | 否 | 开发时 `true` 可直连 Gemini，需配 `GEMINI_API_KEY` |
 | `GEMINI_API_KEY` | 条件 | 仅当 `DEV_DIRECT_GEMINI=true` 时使用 |
 | `EXPO_PUBLIC_SUPPORT_EMAIL` / `SUPPORT_EMAIL` | 否 | 备用反馈邮箱，用于 send-feedback 不可用时提供 mailto 兜底 |
+| `ENABLE_ANON_AUTH` | 云端 OCR 需要 | 云端 OCR v2 需要有效的 Supabase 用户 access token。设为 `true` 后，没有现成会话时会按需匿名登录。应用里已有其他有效用户会话时可以直接复用。应用代码默认关闭；EAS 的 development、preview、validation、production 都显式设为 `true`。 |
 
 详见 `.env.example`。
+
+日常开发与预览构建指向 `.env` 中的远程 Supabase（staging/dev），那个项目必须允许匿名登录。本地 `supabase start` 不是默认的云端 OCR 路径，因此 `supabase/config.toml` 里的 `enable_anonymous_sign_ins` 保持 `false`。只有故意把云端 OCR 打到本地 Supabase 时，才把该项改为 `true`。
 
 ## Supabase Edge Functions 现状
 

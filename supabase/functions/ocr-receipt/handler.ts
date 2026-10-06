@@ -1,0 +1,1466 @@
+// supabase/functions/ocr-receipt/handler.ts
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  requiresTransactionDateVerification,
+  resolveFinalTransactionDate,
+  shouldBypassNegativeDateVerificationCache,
+  type VerifierAcceptOutcome,
+} from './transactionDateVerify.ts';
+import {
+  buildCacheHitProvenance,
+  buildFreshRunProvenance,
+  parseProvenanceFeatureFlags,
+  persistOcrRun,
+  provenanceToOcrRunRow,
+  type OcrProvenance,
+} from './ocrProvenance.ts';
+const GEMINI_MODEL = Deno.env.get('OCR_GEMINI_MODEL') || 'gemini-3.5-flash-lite';
+const DATE_VERIFY_MODEL =
+  Deno.env.get('OCR_DATE_VERIFY_MODEL') || 'gemini-3.5-flash';
+
+function geminiGenerateContentUrl(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+}
+
+// Configuration from secrets (set in Supabase dashboard)
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
+const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
+const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
+/** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
+const OCR_CACHE_VERSION = 15;
+const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
+const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
+
+// Cost tracking configuration
+const GEMINI_PRICE_INPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_INPUT_PER_1K') || '0.0'); // USD per 1K input tokens
+const GEMINI_PRICE_OUTPUT_PER_1K = parseFloat(Deno.env.get('GEMINI_PRICE_OUTPUT_PER_1K') || '0.0'); // USD per 1K output tokens
+const SERVER_SALT = Deno.env.get('SERVER_SALT') || ''; // Salt for hashing actor IDs (privacy)
+
+const PROVENANCE_FLAGS = parseProvenanceFeatureFlags({
+  OCR_PROVENANCE_RESPONSE: Deno.env.get('OCR_PROVENANCE_RESPONSE'),
+  OCR_PROVENANCE_WRITE: Deno.env.get('OCR_PROVENANCE_WRITE'),
+});
+
+// Log OCR model at cold start (no secrets)
+console.log(
+  `[ocr-receipt] boot model=${GEMINI_MODEL} dateVerifyModel=${DATE_VERIFY_MODEL} cacheVersion=${OCR_CACHE_VERSION} provenanceResponse=${PROVENANCE_FLAGS.responseEnabled} provenanceWrite=${PROVENANCE_FLAGS.writeEnabled}`
+);
+
+/** Cache lookup key: prompt/parser version + image content hash (not image hash alone). */
+function buildOcrCacheKey(imageContentHash: string): string {
+  return `v${OCR_CACHE_VERSION}:${imageContentHash}`;
+}
+
+interface OCRRequest {
+  imageBase64?: string;
+  mimeType?: 'image/jpeg' | 'image/png';
+  deviceId?: string;
+  appVersion?: string;
+  platform?: string;
+  language?: string;
+  ping?: boolean;
+  clientReceiptId?: string; // Optional client-side receipt ID for debugging (non-sensitive)
+}
+
+interface OCRResponse {
+  success: boolean;
+  analysis?: {
+    merchant?: string;
+    items: Array<{
+      name: string;
+      quantity: number;
+      unitPrice: number;
+      lineTotal: number;
+      categoryKey?: string;
+      kind?: 'item' | 'discount' | 'tax' | 'subtotal';
+      merchantProductCode?: string;
+      promoMarkers?: string[];
+    }>;
+    discounts?: Array<{ label: string; amount: number }>;
+    total: number;
+    tax: number;
+    currency: string;
+    transactionDate?: string;
+    printedIdentifiers?: {
+      transactionId?: string;
+      receiptNumber?: string;
+      registerId?: string;
+    };
+    evidenceCaptureVersion?: 1;
+  };
+  cached?: boolean;
+  hash?: string;
+  error?: {
+    code: string;
+    message: string;
+  };
+  provenance?: OcrProvenance;
+  /** Non-product diagnostic: cloud ocr_runs write outcome (authenticated requests only). */
+  provenancePersisted?: boolean;
+}
+
+// CORS headers
+export const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-device-id',
+};
+
+async function computeSHA256(data: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const dataBuffer = encoder.encode(data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Hash actor ID for privacy-preserving tracking
+ * Returns SHA256(actorId + SERVER_SALT)
+ */
+async function hashActorId(actorId: string): Promise<string> {
+  if (!SERVER_SALT) {
+    console.warn('SERVER_SALT not configured, using plain hash (less secure)');
+  }
+  const combined = `${actorId}${SERVER_SALT}`;
+  return computeSHA256(combined);
+}
+
+/**
+ * Calculate estimated cost in USD based on token usage
+ */
+function calculateCost(inputTokens: number | null, outputTokens: number | null): number | null {
+  if (inputTokens === null && outputTokens === null) return null;
+  if (GEMINI_PRICE_INPUT_PER_1K === 0 && GEMINI_PRICE_OUTPUT_PER_1K === 0) return null;
+
+  const inputCost = inputTokens ? (inputTokens / 1000) * GEMINI_PRICE_INPUT_PER_1K : 0;
+  const outputCost = outputTokens ? (outputTokens / 1000) * GEMINI_PRICE_OUTPUT_PER_1K : 0;
+  return inputCost + outputCost;
+}
+
+/**
+ * Record OCR usage event (for cost tracking and abuse prevention)
+ * Privacy: Only stores metrics, NO images, NO receipt content
+ */
+async function attachProvenanceToResponse(
+  supabase: any,
+  userId: string | null,
+  provenance: OcrProvenance
+): Promise<{ provenance?: OcrProvenance; provenancePersisted?: boolean }> {
+  let provenancePersisted: boolean | undefined;
+
+  if (userId) {
+    const persistResult = await persistOcrRun(
+      supabase,
+      provenanceToOcrRunRow(provenance, userId),
+      PROVENANCE_FLAGS.writeEnabled
+    );
+    if (persistResult.attempted) {
+      provenancePersisted = persistResult.persisted;
+    }
+  }
+
+  if (!PROVENANCE_FLAGS.responseEnabled) {
+    return provenancePersisted !== undefined ? { provenancePersisted } : {};
+  }
+
+  return {
+    provenance,
+    ...(provenancePersisted !== undefined ? { provenancePersisted } : {}),
+  };
+}
+
+async function recordUsageEvent(
+  supabase: any,
+  params: {
+    requestId: string;
+    actorType: 'anon' | 'user';
+    actorHash: string;
+    model: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+    estimatedCostUsd: number | null;
+    payloadBytes: number;
+    durationMs: number;
+    success: boolean;
+    errorCode: string | null;
+    edgeRegion?: string;
+  }
+): Promise<void> {
+  try {
+    await supabase.from('ocr_usage_events').insert({
+      request_id: params.requestId,
+      actor_type: params.actorType,
+      actor_hash: params.actorHash,
+      model: params.model,
+      input_tokens: params.inputTokens,
+      output_tokens: params.outputTokens,
+      total_tokens: params.totalTokens,
+      estimated_cost_usd: params.estimatedCostUsd,
+      payload_bytes: params.payloadBytes,
+      duration_ms: params.durationMs,
+      success: params.success,
+      error_code: params.errorCode,
+      edge_region: params.edgeRegion || null,
+    });
+  } catch (e) {
+    // Non-fatal: log but don't fail the request
+    console.error(`[${params.requestId}] Failed to record usage event:`, e);
+  }
+}
+
+async function checkCache(
+  supabase: any,
+  imageHash: string
+): Promise<{ cached: boolean; analysis?: any }> {
+  try {
+    const { data, error } = await supabase
+      .from('ocr_cache')
+      .select('analysis_json, created_at')
+      .eq('hash', imageHash)
+      .single();
+
+    if (error || !data) {
+      return { cached: false };
+    }
+
+    // Check TTL
+    const createdAt = new Date(data.created_at).getTime();
+    const now = Date.now();
+    const ttlMs = OCR_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+    if (now - createdAt > ttlMs) {
+      // Expired, delete and return not cached
+      await supabase.from('ocr_cache').delete().eq('hash', imageHash);
+      return { cached: false };
+    }
+
+    // Update last_access_at
+    await supabase
+      .from('ocr_cache')
+      .update({ last_access_at: new Date().toISOString() })
+      .eq('hash', imageHash);
+
+    return { cached: true, analysis: JSON.parse(data.analysis_json) };
+  } catch (e) {
+    console.error('Cache check error:', e);
+    return { cached: false };
+  }
+}
+
+async function saveToCache(
+  supabase: any,
+  imageHash: string,
+  analysis: any,
+  deviceId: string
+): Promise<void> {
+  try {
+    await supabase.from('ocr_cache').upsert({
+      hash: imageHash,
+      analysis_json: JSON.stringify(analysis),
+      device_id: deviceId,
+      created_at: new Date().toISOString(),
+      last_access_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('Cache save error:', e);
+    // Non-fatal, continue
+  }
+}
+
+async function checkRateLimit(supabase: any, deviceId: string): Promise<boolean> {
+  try {
+    const now = Date.now();
+    const oneHourAgo = now - 60 * 60 * 1000;
+
+    // Clean old entries
+    await supabase
+      .from('ocr_rate_limit')
+      .delete()
+      .lt('window_start', new Date(oneHourAgo).toISOString());
+
+    // Count requests in current hour
+    const { data, error } = await supabase
+      .from('ocr_rate_limit')
+      .select('count')
+      .eq('device_id', deviceId)
+      .gte('window_start', new Date(oneHourAgo).toISOString())
+      .single();
+
+    const currentCount = data?.count || 0;
+
+    if (currentCount >= OCR_RATE_LIMIT_PER_HOUR) {
+      return false; // Rate limited
+    }
+
+    // Increment counter
+    const windowStart = new Date(Math.floor(now / (60 * 60 * 1000)) * 60 * 60 * 1000);
+    await supabase.from('ocr_rate_limit').upsert({
+      device_id: deviceId,
+      window_start: windowStart.toISOString(),
+      count: currentCount + 1,
+    });
+
+    return true;
+  } catch (e) {
+    console.error('Rate limit check error:', e);
+    // On error, allow request (fail open for availability)
+    return true;
+  }
+}
+
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function sanitizeMerchantProductCode(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return trimNonEmptyString(value);
+}
+
+function sanitizePromoMarkers(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function sanitizePrintedIdentifiers(value: unknown):
+  | { transactionId?: string; receiptNumber?: string; registerId?: string }
+  | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const transactionId = trimNonEmptyString(row.transactionId);
+  const receiptNumber = trimNonEmptyString(row.receiptNumber);
+  const registerId = trimNonEmptyString(row.registerId);
+  if (!transactionId && !receiptNumber && !registerId) return undefined;
+  return {
+    ...(transactionId ? { transactionId } : {}),
+    ...(receiptNumber ? { receiptNumber } : {}),
+    ...(registerId ? { registerId } : {}),
+  };
+}
+
+function sanitizeOcrItemEvidence(row: Record<string, unknown>): {
+  merchantProductCode?: string;
+  promoMarkers?: string[];
+} {
+  const merchantProductCode = sanitizeMerchantProductCode(row.merchantProductCode);
+  const promoMarkers = sanitizePromoMarkers(row.promoMarkers);
+  return {
+    ...(merchantProductCode ? { merchantProductCode } : {}),
+    ...(promoMarkers ? { promoMarkers } : {}),
+  };
+}
+
+function sanitizeGeminiItems(items: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(items)) return [];
+  return items.map((raw) => {
+    const row = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+    const evidence = sanitizeOcrItemEvidence(row);
+    return {
+      name: typeof row.name === 'string' ? row.name : '',
+      quantity: typeof row.quantity === 'number' && Number.isFinite(row.quantity) ? row.quantity : 1,
+      unitPrice: typeof row.unitPrice === 'number' && Number.isFinite(row.unitPrice) ? row.unitPrice : 0,
+      lineTotal: typeof row.lineTotal === 'number' && Number.isFinite(row.lineTotal) ? row.lineTotal : 0,
+      categoryKey: typeof row.categoryKey === 'string' ? row.categoryKey : undefined,
+      kind:
+        row.kind === 'item' ||
+        row.kind === 'discount' ||
+        row.kind === 'tax' ||
+        row.kind === 'subtotal'
+          ? row.kind
+          : undefined,
+      ...evidence,
+    };
+  });
+}
+
+function extractJsonFromText(text: string): any {
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  try {
+    const matchJson = text.match(/```json([\s\S]*?)```/i);
+    if (matchJson?.[1]) return JSON.parse(matchJson[1].trim());
+  } catch {}
+
+  try {
+    const matchFence = text.match(/```([\s\S]*?)```/);
+    if (matchFence?.[1]) return JSON.parse(matchFence[1].trim());
+  } catch {}
+
+  try {
+    const braceMatch = text.match(/\{[\s\S]*\}/);
+    if (braceMatch?.[0]) return JSON.parse(braceMatch[0]);
+  } catch {}
+
+  throw new Error('No valid JSON found in response');
+}
+
+function buildOcrPrompt(): string {
+  return [
+    'あなたは日本のスーパー/コンビニのレシート画像を読み取る OCR パーサーです。',
+    '出力は有効な JSON のみ。Markdown・コードフェンス・説明文は一切出力しないこと。',
+    '',
+    'スキーマ:',
+    '{',
+    '  "merchant": string|null,            // 店名（例: セブン-イレブン）',
+    '  "transactionDate": string|null,     // 例 "YYYY/MM/DD HH:MM"（原文の形式のまま）',
+    '  "total": number|null,               // 印刷された最終支払合計（整数 JPY）。自己計算しない',
+    '  "tax": number|null,                 // 印刷された消費税額（整数 JPY）。無ければ null（0 で埋めない）',
+    '  "taxBreakdown": [ { "rate": number, "amount": number } ]|null, // 8%/10% 等の内訳があれば amount を転記',
+    '  "currency": "JPY",',
+    '  "items": [ {',
+    '     "name": string, "quantity": number, "unitPrice": number, "lineTotal": number,',
+    '     "categoryKey": string,            // 下記 enum のみ（参考用。最終分類はクライアントが決定）',
+    '     "kind": "item"|"discount"|"tax"|"subtotal",',
+    '     "merchantProductCode": string|null, // 店舗/商品コード（文字列のみ。先頭ゼロ保持。数値化禁止）',
+    '     "promoMarkers": string[]|null     // 商品行に印刷された短い販促記号（例: 特, 特価）。価格から推測禁止',
+    '  } ],',
+    '  "discounts": [ { "label": string, "amount": number } ],   // amount は負数（例 -50）',
+    '  "printedIdentifiers": {',
+    '     "transactionId": string|null,     // 伝票番号 / 取引番号 等（文字列のみ）',
+    '     "receiptNumber": string|null,     // レシートNo. 等（文字列のみ）',
+    '     "registerId": string|null         // レジNo. 等（文字列のみ）',
+    '  }|null',
+    '}',
+    '',
+    'ルール:',
+    '- すべての金額は整数の JPY。小数や通貨記号（¥ 等）を付けない。',
+    '- 値引・割引・クーポン・セール・ポイント利用 などの行は商品ではない。kind="discount"。amount は負数。',
+    '  【商品直下の値引・印刷順を保持】商品行の直後に印刷された商品値引は、items 配列内に kind="discount" の負数行として、',
+    '  印刷された順序のまま残すこと。クライアントが直前商品へ割当する（adjacent index は計算しない）。',
+    '  対象ラベル例: 値引 / 割引 / 10%割引 / 割引 10% / 20%割引 / 割引 20% / 50%割引 / 割引 50% / ○%引 / 値下 / 値下げ。',
+    '  例: {name:"鶏肉",lineTotal:372} の次に {name:"割引 10%",lineTotal:-38,kind:"discount"}。',
+    '  同じ文言・同じ金額の値引が2行印刷されていれば items にも2行残す（1行にまとめない）。',
+    '  これらの直近商品値引は discounts[] に重複して入れない（未紐付けの discounts[] だけだと割当できない）。',
+    '  まとめ売り値引 / まとめ値引 は従来どおり discounts に入れるだけでなく、items にも kind="discount" の負数行として残す',
+    '  （直前商品への割当に必要）。組価格（例: 2個¥203）が印刷されていれば label か隣接行名に残す。',
+    '  Costco の CPN 等、どの商品に付くか不明なレシート全体クーポンは discounts[] のみ（items に商品として入れない）。',
+    '',
+    '  【レシート全体のポイント還元（LOYALTY REDEMPTION）】',
+    '  支払合計を実際に減額するポイント利用・ポイント支払・ポイント値引は kind="discount"、amount は負数。',
+    '  レシート全体（receipt-level）であり、直前商品への隣接値引ではない。items の商品や tax・支払 tender にしない。',
+    '  例: 中間合計 1545・楽天ポイント(税込) 13・支払合計 1532 のとき:',
+    '    discounts: [{ label:"楽天ポイント(税込)", amount:-13 }]',
+    '  商品行・税行・交通系などの支払手段にしない。',
+    '',
+    '  【ポイント情報行（METADATA — 割引にしない）】',
+    '  利用可能ポイント / ポイント対象金額 / 獲得予定ポイント / 獲得予定ポイント数 / ポイント残高 /',
+    '  楽天ポイント明細 などは情報・残高・明細であり、割引でも商品でもない（items / discounts に入れない）。',
+    '  「ポイント」という語だけでは割引証拠にならない。',
+    '',
+    '- 消費税・小計・合計の行は商品 items に入れない（税額は tax、合計は total に入れる）。',
+    '  ただし Costco の「御買上げ点数」行は items に残してよい（合計金額ではない）。',
+    '- quantity は「購入点数」のみ。unitPrice は印刷された単価。lineTotal は当該商品行の合計金額。',
+    '  例: 2 × 108 = 216 → quantity=2, unitPrice=108, lineTotal=216。',
+    '  明示的な購入乗数があるとき、quantity=1 / unitPrice=216 / lineTotal=216 に畳み込まないこと。',
+    '',
+    '  【購入点数（PURCHASE COUNT）— quantity/unitPrice に使う】',
+    '  例: 2個 × 単108 / 2点 × 単108 / 2本 × 単108 / 2コ × @108 / 2 × ¥108 / 3個 @108円 / (¥108 × 3個)。',
+    '  「単」「単価」はこの文脈で単価マーカー。円 / ¥ / ￥ / @ も単価を示す。',
+    '  乗算記号: × / x / X / * / ＊ / @。',
+    '  購入カウンタ例: 個 / コ / 点 / 本 / 枚 / 袋 / パック / 箱。',
+    '  数量欄や上記の明示乗数があるときだけその N を quantity にし、単価を unitPrice に入れる。',
+    '',
+    '  【商品直下の購入乗数行 — 別商品にしない】',
+    '  印刷が次のようなとき:',
+    '    世界TEAチャイラテ',
+    '    2個 × 単108',
+    '    216',
+    '  は1商品として出力する: name="世界TEAチャイラテ", quantity=2, unitPrice=108, lineTotal=216。',
+    '  「2個 × 単108」行を独立の merchandise item にしてはならない（値引行の kind=discount とは別規則）。',
+    '',
+    '  【包装数（PACKAGE / CONTENT）— quantity にしない】',
+    '  商品名中の包装・内容数だけでは購入点数にしない（購入証拠が無い限り quantity=1）。',
+    '  例: 10個入 / 4個パック / 12PC / 2個セット / 20本入り / 3本組 / 卵 10個入 / ヨーグルト 4個パック /',
+    '  電池 4個 / 水 12PC / 商品 2個セット / 飲料 3本組。',
+    '',
+    '【total / tax の厳守ルール】',
+    '- total は、レシート上に明確に印刷された最終支払合計行を優先してそのまま転記すること。',
+    '  例ラベル: 合計 / お買上計 / お買上げ計 / 支払合計 / 合計金額。',
+    '- 最終合計（final printed total）が印刷されている場合、その金額を必ず total に入れる。',
+    '  items / 小計 / tax / discounts から total を再計算・再構成してはならない。',
+    '- 支払手段の金額は total ではない。現金 / クレジット / プリカ / リワード / クオ・カード支払 /',
+    '  電子マネー などは tender（支払内訳）であり、分割払いの一部でも total に選ばない。',
+    '  例: お買上計 18229・プリカ/リワード 7002・現金 11227 → total=18229（11227 は禁止）。',
+    '- クオ・カード預り / 残高 / お釣り も total ではない。支払額と合計が一致しても、',
+    '  total は「合計」行を優先（例: 合計 814・クオ支払 814 → total=814）。',
+    '- ヘッダーが欠けて WHOLESALE / BIZ/GOLD だけ読める Costco レシートは、merchant を',
+    '  「コストコ」または "WHOLESALE BIZ/GOLD" の両方を含む文字列にしてよい（WHOLESALE 単独不可）。',
+    '- tax は印刷された消費税額を転記する。total に税を足し直してはならない。',
+    '- 【最終決済に対応する tax（FINAL SETTLEMENT TAX）】',
+    '  値引・ポイント利用などの前後で税額が複数印刷されている場合、',
+    '  top-level tax は最終支払合計（支払合計 / 合計）に対応する決済状態の税額のみを入れる。',
+    '  値引前（pre-adjustment）と値引後（post-adjustment）の税は別の決済状態であり、',
+    '  両方を tax に入れたり合算してはならない（114 + 113 = 227 は禁止）。',
+    '  最終決済状態の税が明示印刷されている場合（例: 消費税額(値引後) 113）、それを tax に使う。',
+    '  例（Receipt065 型）:',
+    '    消費税額 114 / 合計 1545 / 楽天ポイント(税込) 13 /',
+    '    税抜金額対象(値引後) 1419 / 消費税額(値引後) 113 / 支払合計 1532',
+    '    → total=1532, tax=113（114 ではない）, discounts=[{label:"楽天ポイント(税込)",amount:-13}]',
+    '  taxBreakdown も選択した最終決済状態の内訳のみ。値引前後の両状態を混在させない。',
+    '  最終決済状態に 8% と 10% の税額が別々に印刷されていれば、その税額だけを taxBreakdown に入れ、',
+    '  tax にはその合計を入れてよい（例: 8% 79 + 10% 20 → tax=99）。',
+    '  印刷された税額の転記のみ。total−税抜対象 などから税を推算・再構成してはならない。',
+    '  【禁止】内税合計や「8%対象 / 税率8%対象 ¥N」から',
+    '  round(N × 8/108) や round(N × 0.08) などで消費税を計算して tax に入れない。',
+    '  印刷に「消費税 / 内消費税等 / 消費税額」の金額があればその数字をそのまま税として転記する。',
+    '  例: 8%対象 9534・消費税 708 → tax=708（706=round(9534×8/108) は禁止）。',
+    '  印刷税額が読めない場合のみ tax=null（推測値で埋めない）。',
+    '- 税率から税額を推算しない。tax が読めない場合は null（0 で埋めない）。',
+    '- 【重要】課税対象額 / 対象額 / 税抜対象額 / 「税率10%対象 ¥N」は税額ではない。',
+    '  これらを tax や taxBreakdown[].amount に入れない（N は taxable base）。',
+    '- taxBreakdown[].amount には実際の税額のみ（消費税 / 消費税等 / 外税額 / 内消費税等 / 税額）。',
+    '  例: 8%税額72・10%対象額3・合計985 → tax=72, taxBreakdown=[{rate:8,amount:72}]（amount:3 は禁止）。',
+    '- 内税の「（内消費税等 8%）¥129」なども含め、印刷された税額は必ず tax に入れる（null にしない）。',
+    '- 8%/10% の税額内訳が印刷されていれば taxBreakdown[].amount に転記し、tax にはその合計を入れてよい。',
+    '- 日本のレシートは内税（total に税込み）でも外税（小計+税=合計が印刷）でもよい。',
+    '  どちらの場合も、印刷された最終合計があれば total はその金額であり、税を二重加算しない。',
+    '- 例（内税・正しい）: 合計 8351・消費税 619 → total=8351, tax=619。total=8970（8351+619）は禁止。',
+    '- 例（外税・正しい）: 小計 2442・税 195・合計 2637 → total=2637, tax=195。',
+    '- 「買上点数 / お買上点数 / 御買上げ点数」は商品ではない（summary metadata）。items に入れない。',
+    '- Costco の「商品スキャン品目開始」〜「商品スキャン品目終了」の外側・終了後の行は商品ではない。',
+    '  「コストコ コネクション / コストコ コネクション ムリョウ」および MR/MP/1-Z 等の接頭付き同一行は',
+    '  会報・会員情報であり merchandise ではない。items に入れない（金額 1 でも商品化禁止）。',
+    '- 直近の商品値引は上述のとおり items(kind=discount) に印刷順で残し、discounts[] へ重複させない。',
+    '  まとめ売り値引は discounts と items(kind=discount) の両方。曖昧な全体クーポンは discounts[] のみ。',
+    '  印刷された最終合計がある限り、items±discounts+tax で total を上書きしない。',
+    '',
+    '- 商品分類(categoryKey)は次の固定 enum のみから選ぶ:',
+    '  food_ingredients(食材), ready_to_eat(弁当・惣菜・即食), snacks_drinks(飲料・お菓子・酒),',
+    '  household(日用消耗品), uncategorized(不明), other(その他)。',
+    '- personal_care / pet_care は出力しない（V1 非アクティブ）。該当しそうでも household か uncategorized。',
+    '- 判別できない場合は "uncategorized" を返す（"other" を多用しない、新しい分類を作らない）。',
+    '- 中文/日本語などの分類名は返さない（必ず上記の英語 enum キーのみ）。',
+    '- 店舗の業態（コンビニ / スーパー / ドラッグストア / 非超市 / store / merchant 等）を商品分類に入れない。',
+    '- 商品分類はあくまで参考。最終的な分類はクライアント側のローカル分類器が決定する。',
+    '',
+    '【printed evidence — 推測禁止 / 証拠のみ】',
+    '- merchantProductCode: 店舗/商品ローカルコード（Costco 商品コード等）。文字列のみ。先頭ゼロを保持。数値型禁止。',
+    '  JAN/バーコード/部門コード/数量/単価/税率/レジ番号/会員番号/決済参照番号は merchantProductCode にしない。',
+    '- promoMarkers: その商品行に視覚的に付いた短い販促記号のみ（例: 特, 特価, セール）。',
+    '  値引き価格・クーポン・discounts[] から promoMarkers を合成しない。不明なら null。',
+    '- printedIdentifiers: 明確なラベル付きの伝票番号/レシートNo./レジNo. のみ。文字列のみ。先頭ゼロ保持。',
+    '  クレジット承認番号/会員番号/決済参照番号/バーコード/JAN/商品コードは識別子にしない（ラベルが明示的でない限り）。',
+    '- 商品コード/販促記号は対応する商品行にのみ付ける。曖昧なら null。',
+    '',
+    '- 日本のコンビニ（セブン-イレブン / ファミリーマート / ローソン / ミニストップ）のレシートは、',
+    '  「商品行 → 小計 → 値引 → 消費税(軽減税率含む) → 合計」の構造を優先して解釈する。',
+    '- merchant は印刷された店名・チェーン表記・明確に見えるロゴから転記する。',
+    '  レシート版式・商品構成・支払手段・書体・他チェーンとの類似・プロンプト内の例から推測しない。',
+    '  読めない場合は null（推測で埋めない）。',
+    '  SEIYU / 西友 の印刷証拠があるときだけ SEIYU または 西友。',
+    '  LAWSON / ローソン の印刷証拠があるときだけ ローソン。',
+    '  印刷証拠なしに SEIYU↔ローソン を互いに変換しない。',
+    '- 店名が 7-Eleven / セブンイレブン / セブンーイレブン の場合は merchant を "セブン-イレブン" に正規化してよい。',
+    '- イオンは店名を短くしない（例: イオン古川店 はそのまま）。',
+    '- レシート上に日時があれば transactionDate に原文の形式のまま入れる。',
+    '  【日時・画像全体】レシート画像は上端から底部・フッターまで見る。長い Costco レシートでは、',
+    '  取引日時が買上げ点数 / 御買上げ点数 の付近またはその下に印刷されていることが多い。',
+    '  印刷された日時が見える場合のみ transactionDate に区切り・順序・空白を原文のまま転記する。',
+    '  形式を YYYY/MM/DD に直さない。読めない・無い場合は null。推測・捏造は禁止。',
+    '  スキャン日時・現在日時・ファイル日時で埋めない。DD/MM と MM/DD の解釈はしない（クライアント側）。',
+    '  年は4桁を1桁ずつ独立して読む。年の数字を補正・正規化しない。',
+    '  月・日の数字も印刷どおり転記する。隣接する日付への丸め・±1日補正は禁止。',
+    '  年の桁が1つでも不確かな場合は transactionDate を null にする（欠けた桁を埋めない）。',
+  ].join('\n');
+}
+
+function buildDateVerifyPrompt(): string {
+  return [
+    'あなたは日本のレシート画像から、印刷された購入取引日時だけを読み取る専用 OCR です。',
+    '出力は有効な JSON のみ。Markdown・コードフェンス・説明文は一切出力しないこと。',
+    '',
+    'スキーマ:',
+    '{ "transactionDate": string|null }',
+    '',
+    'ルール:',
+    '- 印刷された購入取引日時のみを抽出する。merchant / items / total / tax / 割引 / 数量 / 分類は出力しない。',
+    '- レシート画像全体を見る。長い倉庫店 / Costco 形式のレシートでは、',
+    '  下部・フッター付近、買上げ点数 / 御買上げ点数 の周辺を特に注意深く確認する。',
+    '- 画像から数字を直接読む。年の4桁は1桁ずつ独立して読む。',
+    '- 印刷された生の日時形式をそのまま保持する（YYYY/MM/DD 等へ正規化しない）。',
+    '- 現在日時・スキャン日時・ファイル日時から年を推測しない。',
+    '- 年を補正・正規化・修復しない。',
+    '- 月・日も印刷どおり転記する。隣接する日付への ±1 日補正・丸めは禁止。',
+    '- 店舗履歴や他のレシート情報から推測しない。',
+    '- 必須の日付桁が本当に読めない場合のみ transactionDate を null にする。',
+  ].join('\n');
+}
+
+/**
+ * 调用 Gemini 并返回纯文本（含 usage）。上游错误/超时附带明确 error.code。
+ */
+async function requestGeminiText(
+  parts: any[],
+  model: string = GEMINI_MODEL
+): Promise<{ text: string; usage: any }> {
+  const body = {
+    contents: [{ parts }],
+  };
+  const maxRetry = 1;
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt <= maxRetry; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(geminiGenerateContentUrl(model), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-goog-api-key': GEMINI_API_KEY,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `[Gemini] Upstream non-OK status=${response.status} model=${model} body=${errorText.substring(0, 500)}`
+        );
+        if ((response.status === 429 || response.status === 503) && attempt < maxRetry) {
+          await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+          continue;
+        }
+        const e = new Error(`Gemini API error (${response.status})`) as Error & { code?: string };
+        e.code = response.status === 429 ? 'RATE_LIMIT' : 'GEMINI_UPSTREAM_ERROR';
+        throw e;
+      }
+
+      const rawText = await response.text();
+      let data: any;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const e = new Error('Gemini outer JSON parse failed') as Error & { code?: string };
+        e.code = 'GEMINI_UPSTREAM_ERROR';
+        throw e;
+      }
+      const partsOut = data?.candidates?.[0]?.content?.parts;
+      if (!Array.isArray(partsOut)) {
+        const e = new Error('Invalid Gemini response structure') as Error & { code?: string };
+        e.code = 'GEMINI_UPSTREAM_ERROR';
+        throw e;
+      }
+      const usage = data?.usageMetadata || null;
+      const text = partsOut.map((p: any) => (typeof p.text === 'string' ? p.text : '')).join('\n');
+      return { text, usage };
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      lastError = error;
+      if (error?.name === 'AbortError') {
+        const e = new Error('Request timeout') as Error & { code?: string };
+        e.code = 'OCR_TIMEOUT';
+        throw e;
+      }
+      if (attempt < maxRetry && (error?.message?.includes('429') || error?.message?.includes('503'))) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('Gemini API call failed');
+}
+
+async function callGemini(imageBase64: string): Promise<any> {
+  if (!GEMINI_API_KEY) {
+    const e = new Error('GEMINI_API_KEY not configured') as Error & { code?: string };
+    e.code = 'SERVER_ERROR';
+    throw e;
+  }
+
+  const { text: modelReplyText, usage } = await requestGeminiText([
+    { text: buildOcrPrompt() },
+    { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+  ]);
+
+  if (!modelReplyText) {
+    const e = new Error('Gemini returned no text content') as Error & { code?: string };
+    e.code = 'OCR_PARSE_ERROR';
+    throw e;
+  }
+
+  let parsed: any;
+  try {
+    parsed = extractJsonFromText(modelReplyText);
+  } catch {
+    // 目标七：JSON 不合法时做一次 repair retry，仍失败则返回 OCR_PARSE_ERROR（不裸奔 500）
+    console.warn(
+      `[ocr-receipt] JSON parse failed, attempting repair. raw(0..1000)=${modelReplyText.slice(0, 1000)}`
+    );
+    try {
+      const { text: repairedText } = await requestGeminiText([
+        {
+          text:
+            'あなたは JSON 修復器です。次の内容を、指定スキーマに従う有効な JSON のみに修正して出力してください。' +
+            'Markdown や説明は出力しないこと。' +
+            'total は印刷された最終合計の転記であり、items/小計/tax/discounts から再計算しないこと。' +
+            '印刷済み total に tax を足し直さないこと。\n' +
+            'スキーマ: {merchant, transactionDate, total, tax, currency, printedIdentifiers, ' +
+            'items:[{name,quantity,unitPrice,lineTotal,categoryKey,kind,merchantProductCode,promoMarkers}], ' +
+            'discounts:[{label,amount}]}。' +
+            '商品直下の値引（割引 10% 等）は印刷順で items に kind=discount 負数行として残し、discounts に重複させない。' +
+            'Costco CPN 等の全体クーポンは discounts のみ。まとめ売り値引は両方。\n\n' +
+            '--- 元の内容 ---\n' +
+            modelReplyText.slice(0, 6000),
+        },
+      ]);
+      parsed = extractJsonFromText(repairedText);
+    } catch {
+      const e = new Error('No valid JSON found in response (after repair)') as Error & {
+        code?: string;
+      };
+      e.code = 'OCR_PARSE_ERROR';
+      throw e;
+    }
+  }
+
+  const inputTokens = usage?.promptTokenCount || null;
+  const outputTokens = usage?.candidatesTokenCount || null;
+  const totalTokens = usage?.totalTokenCount || null;
+
+  const printedIdentifiers = sanitizePrintedIdentifiers(parsed.printedIdentifiers);
+
+  return {
+    merchant: typeof parsed.merchant === 'string' ? parsed.merchant : undefined,
+    items: sanitizeGeminiItems(parsed.items),
+    discounts: Array.isArray(parsed.discounts) ? parsed.discounts : [],
+    total: typeof parsed.total === 'number' ? parsed.total : 0,
+    // Prefer explicit number (including 0 only when model sent 0); otherwise null.
+    tax: typeof parsed.tax === 'number' && Number.isFinite(parsed.tax) ? parsed.tax : null,
+    taxBreakdown: Array.isArray(parsed.taxBreakdown) ? parsed.taxBreakdown : undefined,
+    currency:
+      typeof parsed.currency === 'string' && parsed.currency.trim() ? parsed.currency : 'JPY',
+    transactionDate:
+      typeof parsed.transactionDate === 'string' && parsed.transactionDate.trim()
+        ? parsed.transactionDate.trim()
+        : undefined,
+    ...(printedIdentifiers ? { printedIdentifiers } : {}),
+    evidenceCaptureVersion: 1 as const,
+    _usageMetadata: {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+    },
+  };
+}
+
+/** Distinguishes how verifier JSON was parsed (external date semantics unchanged). */
+type VerifierParseKind =
+  | 'string'
+  | 'json_null'
+  | 'non_string'
+  | 'missing'
+  | 'empty_string';
+
+async function callDateVerifier(
+  imageBase64: string
+): Promise<{
+  transactionDate: string | null;
+  parseKind: VerifierParseKind;
+  _usageMetadata: {
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+  };
+}> {
+  if (!GEMINI_API_KEY) {
+    const e = new Error('GEMINI_API_KEY not configured') as Error & { code?: string };
+    e.code = 'SERVER_ERROR';
+    throw e;
+  }
+
+  const { text: modelReplyText, usage } = await requestGeminiText(
+    [
+      { text: buildDateVerifyPrompt() },
+      { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+    ],
+    DATE_VERIFY_MODEL
+  );
+
+  if (!modelReplyText) {
+    throw new Error('Date verifier returned no text content');
+  }
+
+  const parsed = extractJsonFromText(modelReplyText);
+  let parseKind: VerifierParseKind;
+  let transactionDate: string | null;
+  if (!parsed || typeof parsed !== 'object' || !('transactionDate' in parsed)) {
+    parseKind = 'missing';
+    transactionDate = null;
+  } else if (parsed.transactionDate === null) {
+    parseKind = 'json_null';
+    transactionDate = null;
+  } else if (typeof parsed.transactionDate === 'string') {
+    const trimmed = parsed.transactionDate.trim();
+    if (!trimmed) {
+      parseKind = 'empty_string';
+      transactionDate = null;
+    } else {
+      parseKind = 'string';
+      transactionDate = trimmed;
+    }
+  } else {
+    parseKind = 'non_string';
+    transactionDate = null;
+  }
+
+  const inputTokens = usage?.promptTokenCount || null;
+  const outputTokens = usage?.candidatesTokenCount || null;
+  const totalTokens = usage?.totalTokenCount || null;
+
+  return {
+    transactionDate,
+    parseKind,
+    _usageMetadata: {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+    },
+  };
+}
+
+function logDateVerifyDiagnostic(fields: {
+  request_id: string;
+  merchant: string;
+  primaryTransactionDate: string | null | undefined;
+  verifierCandidate: string | null | undefined;
+  verifierParseKind?: VerifierParseKind | 'api_failure' | 'not_called';
+  acceptOutcome: VerifierAcceptOutcome;
+  finalTransactionDate: string | null | undefined;
+  negative_cache_bypassed?: boolean;
+}): void {
+  const merchant =
+    typeof fields.merchant === 'string' ? fields.merchant.slice(0, 40) : '';
+  console.log(
+    JSON.stringify({
+      tag: 'ocr_date_verify',
+      request_id: fields.request_id,
+      merchant,
+      primaryTransactionDate: fields.primaryTransactionDate ?? null,
+      verifierCandidate: fields.verifierCandidate ?? null,
+      verifierParseKind: fields.verifierParseKind ?? 'not_called',
+      acceptOutcome: fields.acceptOutcome,
+      finalTransactionDate: fields.finalTransactionDate ?? null,
+      ...(fields.negative_cache_bypassed ? { negative_cache_bypassed: true } : {}),
+    })
+  );
+}
+
+/**
+ * Check if a token is a JWT (has 3 parts separated by dots)
+ */
+export function isJwt(token: string): boolean {
+  return token.split('.').length === 3;
+}
+
+/**
+ * Parse authorization header and extract bearer token
+ */
+export function parseAuthHeader(authHeader: string | null): string {
+  if (!authHeader) return '';
+  const lower = authHeader.toLowerCase();
+  if (lower.startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+  return '';
+}
+
+/**
+ * Shared OCR receipt processing after an auth adapter has chosen the actor.
+ * Legacy ocr-receipt and ocr-receipt-v2 must both call this so Gemini parsing,
+ * provenance, and date verification stay identical.
+ */
+export type OcrReceiptActor = {
+  userId: string | null;
+  deviceId: string;
+  actorType: 'anon' | 'user';
+  actorId: string;
+};
+
+export async function handleOcrReceiptAfterAuth(
+  req: Request,
+  actor: OcrReceiptActor,
+  trace: { requestId: string; startTime: number }
+): Promise<Response> {
+  const requestId = trace.requestId;
+  const startTime = trace.startTime;
+  let actorType: 'anon' | 'user' = actor.actorType;
+  let actorHash = '';
+  let actorId = actor.actorId;
+  let userId: string | null = actor.userId;
+  const deviceId = actor.deviceId;
+  let supabase: any = null;
+  let payloadBytesForError = 0;
+
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+    if (!supabaseUrl || !supabaseServiceKey) {
+      throw new Error('Supabase configuration missing');
+    }
+
+    // Hash actor ID for privacy-preserving tracking
+    actorHash = await hashActorId(actorId);
+
+    // Create admin client with service role for DB operations
+    supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        persistSession: false,
+      },
+    });
+
+    // Parse request body
+    let requestData: OCRRequest;
+    try {
+      requestData = await req.json();
+    } catch (e) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: { code: 'INVALID_INPUT', message: 'Invalid JSON in request body' },
+        } as OCRResponse),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Minimal request receipt log (no image content)
+    try {
+      const payloadBytes = requestData?.imageBase64
+        ? Math.round((requestData.imageBase64.length * 3) / 4)
+        : 0;
+      payloadBytesForError = payloadBytes;
+      console.log(
+        `[${requestId}] Received OCR request: method=${req.method} actorType=${actorType} payloadBytes=${payloadBytes} model=${GEMINI_MODEL}`
+      );
+    } catch {
+      // ignore logging failures
+    }
+
+    // Handle ping request (fast path for deployment validation)
+    if (requestData.ping === true) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          mode: userId ? 'user' : 'anon',
+          userId: userId || null,
+          deviceId: deviceId.substring(0, 8),
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Validate input
+    if (!requestData.imageBase64 || typeof requestData.imageBase64 !== 'string') {
+      const responseTime = Date.now() - startTime;
+      await recordUsageEvent(supabase, {
+        requestId,
+        actorType,
+        actorHash,
+        model: GEMINI_MODEL,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        estimatedCostUsd: null,
+        payloadBytes: 0,
+        durationMs: responseTime,
+        success: false,
+        errorCode: 'INVALID_INPUT',
+        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: { code: 'INVALID_INPUT', message: 'Missing or invalid imageBase64' },
+        } as OCRResponse),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Validate image size (approximate - base64 is ~33% larger than binary)
+    const estimatedSize = (requestData.imageBase64.length * 3) / 4;
+    if (estimatedSize > MAX_IMAGE_SIZE_BYTES) {
+      const responseTime = Date.now() - startTime;
+      await recordUsageEvent(supabase, {
+        requestId,
+        actorType,
+        actorHash,
+        model: GEMINI_MODEL,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        estimatedCostUsd: null,
+        payloadBytes: Math.round(estimatedSize),
+        durationMs: responseTime,
+        success: false,
+        errorCode: 'PAYLOAD_TOO_LARGE',
+        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: `Image too large (max ${Math.round(MAX_IMAGE_SIZE_BYTES / 1024)}KB)`,
+          },
+        } as OCRResponse),
+        {
+          status: 413,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Validate mime type
+    if (!['image/jpeg', 'image/png'].includes(requestData.mimeType as string)) {
+      const responseTime = Date.now() - startTime;
+      const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
+      await recordUsageEvent(supabase, {
+        requestId,
+        actorType,
+        actorHash,
+        model: GEMINI_MODEL,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        estimatedCostUsd: null,
+        payloadBytes,
+        durationMs: responseTime,
+        success: false,
+        errorCode: 'INVALID_INPUT',
+        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: { code: 'INVALID_INPUT', message: 'Invalid mime type' },
+        } as OCRResponse),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Compute image content hash, then versioned cache key (invalidates old prompt results).
+    const imageContentHash = await computeSHA256(requestData.imageBase64);
+    const cacheKey = buildOcrCacheKey(imageContentHash);
+    const hashPrefix = imageContentHash.substring(0, 8);
+
+    // Check rate limit
+    const rateLimitOk = await checkRateLimit(supabase, deviceId);
+    if (!rateLimitOk) {
+      const responseTime = Date.now() - startTime;
+      const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
+
+      console.log(`[${requestId}] Rate limited: deviceId=${deviceId.substring(0, 8)} userId=${userId || 'none'}`);
+
+      // Record usage event for rate-limited request
+      await recordUsageEvent(supabase, {
+        requestId,
+        actorType,
+        actorHash,
+        model: GEMINI_MODEL,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        estimatedCostUsd: null,
+        payloadBytes,
+        durationMs: responseTime,
+        success: false,
+        errorCode: 'RATE_LIMIT',
+        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: {
+            code: 'RATE_LIMIT',
+            message: `Rate limit exceeded (max ${OCR_RATE_LIMIT_PER_HOUR} per hour)`,
+          },
+        } as OCRResponse),
+        {
+          status: 429,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Check cache
+    const cacheResult = await checkCache(supabase, cacheKey);
+    let negativeCacheBypassed = false;
+    if (cacheResult.cached && cacheResult.analysis) {
+      if (shouldBypassNegativeDateVerificationCache(cacheResult.analysis)) {
+        // Required-verification null/empty date must not permanently short-circuit retries.
+        negativeCacheBypassed = true;
+        console.log(
+          JSON.stringify({
+            tag: 'ocr_date_verify',
+            request_id: requestId,
+            merchant: String(cacheResult.analysis?.merchant || '').slice(0, 40),
+            negative_cache_bypassed: true,
+            cachedTransactionDate: null,
+          })
+        );
+        // Fall through to fresh OCR + verifier (do not return cached=true).
+      } else {
+      const responseTime = Date.now() - startTime;
+      const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
+
+      console.log(
+        `[${requestId}] Cache hit: deviceId=${deviceId.substring(0, 8)} userId=${userId || 'none'} hash=${hashPrefix} cacheKeyPrefix=v${OCR_CACHE_VERSION} time=${responseTime}ms`
+      );
+
+      // Record usage event for cache hit (no tokens, but still track request)
+      await recordUsageEvent(supabase, {
+        requestId,
+        actorType,
+        actorHash,
+        model: GEMINI_MODEL,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        estimatedCostUsd: null, // Cache hit = no cost
+        payloadBytes,
+        durationMs: responseTime,
+        success: true,
+        errorCode: null,
+        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+      });
+
+      const cacheProvenance = buildCacheHitProvenance({
+        requestId,
+        primaryModel: GEMINI_MODEL,
+        cacheVersion: OCR_CACHE_VERSION,
+        imageContentHash,
+        cachedAnalysis: cacheResult.analysis,
+      });
+      const provenanceFields = await attachProvenanceToResponse(
+        supabase,
+        userId,
+        cacheProvenance
+      );
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          analysis: cacheResult.analysis,
+          cached: true,
+          hash: imageContentHash,
+          ...provenanceFields,
+        } as OCRResponse),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+      }
+    }
+
+    // Call Gemini (primary OCR)
+    let analysis: any;
+    let usageMetadata: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null } | null = null;
+    let dateVerifierUsageMetadata: {
+      inputTokens: number | null;
+      outputTokens: number | null;
+      totalTokens: number | null;
+    } | null = null;
+    let shouldCache = true;
+    let verificationRequired = false;
+    let verifierCalled = false;
+    let verifierCallSucceeded = false;
+    let verifierDate: string | null | undefined;
+    let verifierParseKind: VerifierParseKind | 'api_failure' | 'not_called' = 'not_called';
+    let acceptOutcome: VerifierAcceptOutcome = 'empty_or_null';
+    let primaryDateFromGemini: string | null | undefined;
+    {
+      console.log(`[${requestId}] Calling Gemini model=${GEMINI_MODEL}`);
+      const geminiResult = await callGemini(requestData.imageBase64);
+      primaryDateFromGemini = geminiResult.transactionDate;
+      analysis = {
+        merchant: geminiResult.merchant,
+        items: geminiResult.items,
+        discounts: geminiResult.discounts,
+        total: geminiResult.total,
+        tax: geminiResult.tax,
+        taxBreakdown: geminiResult.taxBreakdown,
+        currency: geminiResult.currency,
+        transactionDate: geminiResult.transactionDate,
+      };
+      usageMetadata = geminiResult._usageMetadata || null;
+
+      verificationRequired = requiresTransactionDateVerification(
+        analysis.merchant,
+        analysis.transactionDate,
+        analysis.items
+      );
+
+      if (verificationRequired) {
+        console.log(
+          `[${requestId}] Date verification required merchant=${String(analysis.merchant || '').slice(0, 40)} model=${DATE_VERIFY_MODEL}`
+        );
+        verifierCalled = true;
+        try {
+          const verifierResult = await callDateVerifier(requestData.imageBase64);
+          verifierCallSucceeded = true;
+          verifierDate = verifierResult.transactionDate;
+          verifierParseKind = verifierResult.parseKind;
+          dateVerifierUsageMetadata = verifierResult._usageMetadata || null;
+        } catch (verifyErr: any) {
+          console.warn(
+            `[${requestId}] Date verifier failed (non-fatal):`,
+            String(verifyErr?.message || verifyErr).slice(0, 200)
+          );
+          verifierCallSucceeded = false;
+          verifierParseKind = 'api_failure';
+        }
+
+        const resolved = resolveFinalTransactionDate({
+          verificationRequired: true,
+          primaryDate: geminiResult.transactionDate,
+          verifierDate,
+          verifierCallSucceeded,
+          merchant: analysis.merchant,
+        });
+        analysis.transactionDate =
+          resolved.finalTransactionDate === null || resolved.finalTransactionDate === undefined
+            ? null
+            : resolved.finalTransactionDate;
+        shouldCache = resolved.shouldCache;
+        acceptOutcome = resolved.acceptOutcome;
+      } else {
+        acceptOutcome =
+          typeof analysis.transactionDate === 'string' && analysis.transactionDate.trim()
+            ? 'accepted'
+            : 'empty_or_null';
+      }
+
+      logDateVerifyDiagnostic({
+        request_id: requestId,
+        merchant: String(analysis.merchant || ''),
+        primaryTransactionDate: primaryDateFromGemini,
+        verifierCandidate: verifierDate,
+        verifierParseKind,
+        acceptOutcome,
+        finalTransactionDate: analysis.transactionDate,
+        negative_cache_bypassed: negativeCacheBypassed,
+      });
+    }
+
+    // Save to cache (final post-verification analysis only when safe)
+    if (shouldCache) {
+      await saveToCache(supabase, cacheKey, analysis, deviceId);
+    } else {
+      console.log(
+        `[${requestId}] Skipping cache: date verification required but no accepted transactionDate (acceptOutcome=${acceptOutcome})`
+      );
+    }
+
+    const responseTime = Date.now() - startTime;
+    const payloadBytes = Math.round((requestData.imageBase64.length * 3) / 4);
+
+    // Calculate cost (primary)
+    const inputTokens = usageMetadata?.inputTokens || null;
+    const outputTokens = usageMetadata?.outputTokens || null;
+    const totalTokens = usageMetadata?.totalTokens || null;
+    const estimatedCostUsd = calculateCost(inputTokens, outputTokens);
+
+    console.log(
+      `[${requestId}] Cache miss: deviceId=${deviceId.substring(0, 8)} userId=${userId || 'none'} hash=${hashPrefix} time=${responseTime}ms tokens=${totalTokens || 'N/A'} cost=$${estimatedCostUsd?.toFixed(6) || 'N/A'} dateVerified=${dateVerifierUsageMetadata != null}`
+    );
+
+    // Record usage event for successful primary OCR
+    await recordUsageEvent(supabase, {
+      requestId,
+      actorType,
+      actorHash,
+      model: GEMINI_MODEL,
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      estimatedCostUsd,
+      payloadBytes,
+      durationMs: responseTime,
+      success: true,
+      errorCode: null,
+      edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+    });
+
+    // Separate usage row for date verifier (request_id suffix — table UNIQUE on request_id)
+    if (dateVerifierUsageMetadata) {
+      const vIn = dateVerifierUsageMetadata.inputTokens;
+      const vOut = dateVerifierUsageMetadata.outputTokens;
+      const vTotal = dateVerifierUsageMetadata.totalTokens;
+      await recordUsageEvent(supabase, {
+        requestId: `${requestId}#date-verify`,
+        actorType,
+        actorHash,
+        model: DATE_VERIFY_MODEL,
+        inputTokens: vIn,
+        outputTokens: vOut,
+        totalTokens: vTotal,
+        estimatedCostUsd: calculateCost(vIn, vOut),
+        payloadBytes,
+        durationMs: responseTime,
+        success: true,
+        errorCode: null,
+        edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+      });
+    }
+
+    const freshProvenance = buildFreshRunProvenance({
+      requestId,
+      primaryModel: GEMINI_MODEL,
+      dateVerifyModel: DATE_VERIFY_MODEL,
+      cacheVersion: OCR_CACHE_VERSION,
+      imageContentHash,
+      verificationRequired,
+      verifierCalled,
+      verifierCallSucceeded,
+      primaryDate: primaryDateFromGemini,
+      verifierDate,
+      finalTransactionDate: analysis.transactionDate,
+    });
+    const provenanceFields = await attachProvenanceToResponse(
+      supabase,
+      userId,
+      freshProvenance
+    );
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        analysis,
+        cached: false,
+        hash: imageContentHash,
+        ...provenanceFields,
+      } as OCRResponse),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    );
+  } catch (error: any) {
+    const responseTime = Date.now() - startTime;
+    const payloadBytes = payloadBytesForError;
+
+    // Determine error code: prefer explicit code from callGemini, else infer from message
+    let errorCode: string = typeof error?.code === 'string' && error.code ? error.code : 'SERVER_ERROR';
+    if (errorCode === 'SERVER_ERROR') {
+      const msg = String(error?.message || '');
+      if (/rate limit/i.test(msg) || /429/.test(msg)) {
+        errorCode = 'RATE_LIMIT';
+      } else if (/too large|payload/i.test(msg)) {
+        errorCode = 'PAYLOAD_TOO_LARGE';
+      } else if (/timeout|aborted/i.test(msg)) {
+        errorCode = 'OCR_TIMEOUT';
+      } else if (/invalid input/i.test(msg)) {
+        errorCode = 'INVALID_INPUT';
+      } else if (/gemini api error|upstream/i.test(msg)) {
+        errorCode = 'GEMINI_UPSTREAM_ERROR';
+      } else if (/no valid json|parse/i.test(msg)) {
+        errorCode = 'OCR_PARSE_ERROR';
+      }
+    }
+
+    // HTTP 状态码：尽量与语义一致，但 body 始终是稳定 JSON（客户端不会再收到 HTML/text）
+    const statusByCode: Record<string, number> = {
+      RATE_LIMIT: 429,
+      PAYLOAD_TOO_LARGE: 413,
+      INVALID_INPUT: 400,
+      OCR_TIMEOUT: 504,
+      GEMINI_UPSTREAM_ERROR: 502,
+      OCR_PARSE_ERROR: 502,
+      SERVER_ERROR: 500,
+    };
+    const httpStatus = statusByCode[errorCode] ?? 500;
+
+    // 清洗对外消息，避免泄漏内部细节
+    const sanitizedMessage =
+      errorCode === 'OCR_PARSE_ERROR'
+        ? 'OCR 结果解析失败，请重试或更换更清晰的照片'
+        : errorCode === 'GEMINI_UPSTREAM_ERROR'
+          ? '识别服务暂时不可用，请稍后重试'
+          : errorCode === 'OCR_TIMEOUT'
+            ? '识别超时，请重试'
+            : errorCode === 'RATE_LIMIT'
+              ? `请求过于频繁，请稍后重试（每小时上限 ${OCR_RATE_LIMIT_PER_HOUR}）`
+              : String(error?.message || 'Internal server error').slice(0, 200);
+
+    console.error(
+      `[${requestId}] Error:`,
+      String(error?.message || error).slice(0, 300),
+      `time=${responseTime}ms code=${errorCode} http=${httpStatus}`
+    );
+
+    // Record usage event for failed request (best-effort，绝不让记录失败再抛出)
+    if (actorHash && supabase) {
+      try {
+        await recordUsageEvent(supabase, {
+          requestId,
+          actorType,
+          actorHash,
+          model: GEMINI_MODEL,
+          inputTokens: null,
+          outputTokens: null,
+          totalTokens: null,
+          estimatedCostUsd: null,
+          payloadBytes,
+          durationMs: responseTime,
+          success: false,
+          errorCode,
+          edgeRegion: Deno.env.get('EDGE_REGION') || undefined,
+        });
+      } catch (logErr) {
+        console.error(`[${requestId}] Failed to record error usage event:`, logErr);
+      }
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: {
+          code: errorCode,
+          message: sanitizedMessage,
+          requestId,
+          model: GEMINI_MODEL,
+        },
+      }),
+      {
+        status: httpStatus,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    );
+  }
+}

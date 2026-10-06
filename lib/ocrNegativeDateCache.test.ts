@@ -168,7 +168,7 @@ describe('Gate 1.1 edge contract + regression freeze', () => {
   const fs = require('fs') as typeof import('fs');
   const path = require('path') as typeof import('path');
   const edgeSource = fs.readFileSync(
-    path.resolve(__dirname, '../supabase/functions/ocr-receipt/index.ts'),
+    path.resolve(__dirname, '../supabase/functions/ocr-receipt/handler.ts'),
     'utf8'
   );
 

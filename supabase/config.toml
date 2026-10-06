@@ -386,3 +386,8 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 [functions.privacy-policy]
 # Disable JWT verification so the privacy-policy function is publicly accessible
 verify_jwt = false
+
+[functions.ocr-receipt-v2]
+# The function verifies the user access token with Supabase Auth getUser.
+# Gateway verification rejects current asymmetric access JWTs before that runs.
+verify_jwt = false

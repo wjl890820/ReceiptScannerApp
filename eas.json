@@ -8,12 +8,14 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
+        "ENABLE_ANON_AUTH": "true",
         "ENABLE_ANALYSIS_PRICE_CHANGES": "false"
       }
     },
     "preview": {
       "distribution": "internal",
       "env": {
+        "ENABLE_ANON_AUTH": "true",
         "ENABLE_ANALYSIS_PRICE_CHANGES": "false"
       }
     },

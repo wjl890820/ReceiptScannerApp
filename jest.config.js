@@ -7,6 +7,8 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/$1',
     // Test-only: RN/expo-crypto needs a Node stand-in; production uses real expo-crypto.
     '^expo-crypto$': '<rootDir>/lib/__mocks__/expo-crypto.js',
+    // Edge modules keep Deno's explicit .ts specifiers. Jest resolves the extensionless path.
+    '^(\\.{1,2}/.*)\\.ts$': '$1',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', { useESM: false }],

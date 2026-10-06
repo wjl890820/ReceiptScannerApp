@@ -472,7 +472,7 @@ describe('B3 Edge contract (source)', () => {
   const fs = require('fs') as typeof import('fs');
   const path = require('path') as typeof import('path');
   const edgeSource = fs.readFileSync(
-    path.resolve(__dirname, '../supabase/functions/ocr-receipt/index.ts'),
+    path.resolve(__dirname, '../supabase/functions/ocr-receipt/handler.ts'),
     'utf8'
   );
 
