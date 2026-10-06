@@ -19,6 +19,8 @@ import {
   type LocalReceiptBackupSource,
 } from './cloudBackupPayload';
 import { isCloudBackupEnabled } from './env';
+import { retryCurrentUserCloudRestoreIfFailed } from './currentUserCloudRestore';
+import { backupMayStartAfterCurrentUserRestore } from './currentUserRestoreBarrier';
 import { getSupabaseClient } from './supabaseClient';
 import { syncPersonalDecisionBackup } from './personalDecisionCloudSync';
 import {
@@ -172,6 +174,17 @@ async function runFlushOnce(): Promise<CloudBackupFlushResult> {
     clearRetryTimer();
     return { ran: false, reason: 'flag_off', processed: 0, succeeded: 0, failed: 0, skipped: 0 };
   }
+  const restoreGate = await backupMayStartAfterCurrentUserRestore();
+  if (!restoreGate.ok) {
+    return {
+      ran: false,
+      reason: restoreGate.reason,
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      skipped: 0,
+    };
+  }
   if (!_getDb) {
     return { ran: false, reason: 'no_db', processed: 0, succeeded: 0, failed: 0, skipped: 0 };
   }
@@ -315,7 +328,9 @@ function onAppStateChange(next: string): void {
   if (!isCloudBackupEnabled()) return;
   // background/inactive → active
   if (next === 'active' && prev != null && prev !== 'active') {
-    void requestCloudBackupFlush();
+    void retryCurrentUserCloudRestoreIfFailed().then(() => {
+      void requestCloudBackupFlush();
+    });
   }
 }
 

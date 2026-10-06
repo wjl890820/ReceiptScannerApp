@@ -45,6 +45,10 @@ import {
   userIdFromPersonalDecisionOwnerKey,
 } from './personalDecisionCloudSync';
 import { withPersonalDecisionLocalMutationGate } from './personalDecisionLocalMutationGate';
+import {
+  assertCurrentUserRestoreAllowsBusinessWrites,
+  CurrentUserRestoreBlockedError,
+} from './currentUserRestoreBarrier';
 
 const DB_NAME = 'receipts_v2.db';
 
@@ -114,7 +118,8 @@ export type RecordPersonalDecisionResult =
         | 'current_endpoint_context_incomplete'
         | 'personal_not_same_conflict'
         | 'personal_same_component_conflict'
-        | 'decision_conflict';
+        | 'decision_conflict'
+        | 'restore_blocked';
       existingDecision?: PersonalProductIdentityDecision;
       missingMerchantProductIds?: string[];
     };
@@ -308,6 +313,16 @@ export async function recordPersonalProductIdentityDecisionWithDb(
     code: 'decision_conflict',
   };
   let scheduleBackup = false;
+
+  try {
+    const restoreGate = assertCurrentUserRestoreAllowsBusinessWrites();
+    if (restoreGate) await restoreGate;
+  } catch (error: unknown) {
+    if (error instanceof CurrentUserRestoreBlockedError) {
+      return { ok: false, code: 'restore_blocked' };
+    }
+    throw error;
+  }
 
   try {
     await withPersonalDecisionLocalMutationGate(() =>

@@ -123,6 +123,10 @@ import {
   requestCloudBackupFlush,
   startCloudBackupWorker,
 } from './cloudBackupWorker';
+import {
+  __resetCurrentUserCloudRestoreForTests,
+  startCurrentUserCloudRestore,
+} from './currentUserCloudRestore';
 import { isCloudBackupEnabled } from './env';
 import { shouldAutoAdoptUnownedReceipts } from './legacyReceiptAdoption';
 import { normalizeOcrAnalysis } from './receiptOcrNormalize';
@@ -1104,5 +1108,40 @@ describe('K. sync reliability — drain / cold-start / foreground / retry', () =
     __handleAppStateForTests('background');
     __handleAppStateForTests('active');
     expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it('does not bootstrap while current-user restore has failed', async () => {
+    (isCloudBackupEnabled as jest.Mock).mockReturnValue(true);
+    try {
+      await startCurrentUserCloudRestore({
+        isEnabled: () => true,
+        getDb: async () =>
+          ({
+            async execAsync() {
+              return undefined;
+            },
+            async getAllAsync() {
+              return [];
+            },
+            async getFirstAsync(sql: string) {
+              if (/receipts|sync_outbox|personal_product_identity_decisions/i.test(sql)) {
+                return { c: 0 };
+              }
+              return null;
+            },
+          }) as never,
+        readSession: async () => ({
+          userId: 'user-a',
+          accessToken: 'eyJ.session.token',
+          isAnonymous: true,
+        }),
+        restore: async () => ({ status: 'fetch_failed', restored: 0, error: 'offline' }),
+      });
+      const result = await __runCloudBackupFlushForTests(async () => ({}) as never);
+      expect(result).toMatchObject({ ran: false, reason: 'restore_failed' });
+      expect(upsertMock).not.toHaveBeenCalled();
+    } finally {
+      __resetCurrentUserCloudRestoreForTests();
+    }
   });
 });

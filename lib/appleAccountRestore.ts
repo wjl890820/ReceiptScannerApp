@@ -23,6 +23,11 @@ import {
 import { getOrCreateInstallationId } from './installationId';
 import { registerInstallationForUser } from './installationRegistration';
 import { getSupabaseClient } from './supabaseClient';
+import {
+  beginCurrentUserAccountSwitch,
+  reconcileCurrentUserRestoreBarrier,
+  waitForCurrentUserRestoreAttempt,
+} from './currentUserRestoreBarrier';
 
 export type AppleRestoreStatus =
   | 'ok'
@@ -100,6 +105,20 @@ function resolveRestoreDeps(partial: Partial<AppleRestoreDeps>): AppleRestoreDep
   };
 }
 
+async function readSignedInUserId(
+  getClient: AppleRestoreDeps['getClient']
+): Promise<string | null> {
+  const client = getClient();
+  if (!client) return null;
+  try {
+    const { data, error } = await client.auth.getSession();
+    if (error) return null;
+    return data.session?.user?.id?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Sign in to an existing Apple-linked account and run Phase 6 restore.
  * Blocks BEFORE Apple sign-in if local data/outbox present.
@@ -112,106 +131,131 @@ export async function restoreExistingAppleAccount(
     return { status: 'flag_off' };
   }
 
-  const authBefore = deps.getAuth();
-  const temporaryUserId = authBefore.userId;
-
-  let db: import('expo-sqlite').SQLiteDatabase;
+  // Suppress anonymous foreground retry before the first await.
+  const endAccountSwitch = beginCurrentUserAccountSwitch();
   try {
-    db = await deps.getDb();
-  } catch (e: any) {
-    return { status: 'auth_unavailable', temporaryUserId, error: String(e?.message || e) };
-  }
+    // Let an in-flight current-user restore finish before Apple sign-in.
+    // A failed attempt leaves the local DB clean, so Apple restore may continue.
+    await waitForCurrentUserRestoreAttempt();
 
-  const localCount = await countLocalReceipts(db);
-  if (localCount > 0) {
-    return {
-      status: 'blocked_local_data_present',
-      temporaryUserId,
-    };
-  }
-  const pending = await countPendingSyncOutbox(db);
-  if (pending > 0) {
-    return {
-      status: 'blocked_pending_local_changes',
-      temporaryUserId,
-    };
-  }
+    const authBefore = deps.getAuth();
+    const temporaryUserId = authBefore.userId;
 
-  const apple = await deps.requestAppleCredential();
-  if (apple.status === 'canceled') {
-    return { status: 'canceled', temporaryUserId };
-  }
-  if (apple.status === 'unavailable') {
-    return { status: 'apple_unavailable', temporaryUserId, error: apple.error };
-  }
-  if (apple.status === 'missing_identity_token') {
-    return { status: 'missing_identity_token', temporaryUserId };
-  }
-  if (apple.status !== 'ok') {
-    return { status: 'sign_in_failed', temporaryUserId, error: apple.error };
-  }
+    let db: import('expo-sqlite').SQLiteDatabase;
+    try {
+      db = await deps.getDb();
+    } catch (e: any) {
+      return { status: 'auth_unavailable', temporaryUserId, error: String(e?.message || e) };
+    }
 
-  const client = deps.getClient();
-  if (!client) {
-    return { status: 'auth_unavailable', temporaryUserId };
-  }
+    const localCount = await countLocalReceipts(db);
+    if (localCount > 0) {
+      return {
+        status: 'blocked_local_data_present',
+        temporaryUserId,
+      };
+    }
+    const pending = await countPendingSyncOutbox(db);
+    if (pending > 0) {
+      return {
+        status: 'blocked_pending_local_changes',
+        temporaryUserId,
+      };
+    }
 
-  // CRITICAL: signInWithIdToken — account switch to Apple-linked user A.
-  const { data, error } = await client.auth.signInWithIdToken({
-    provider: 'apple',
-    token: apple.identityToken,
-    nonce: apple.rawNonce,
-  });
+    const apple = await deps.requestAppleCredential();
+    if (apple.status === 'canceled') {
+      return { status: 'canceled', temporaryUserId };
+    }
+    if (apple.status === 'unavailable') {
+      return { status: 'apple_unavailable', temporaryUserId, error: apple.error };
+    }
+    if (apple.status === 'missing_identity_token') {
+      return { status: 'missing_identity_token', temporaryUserId };
+    }
+    if (apple.status !== 'ok') {
+      return { status: 'sign_in_failed', temporaryUserId, error: apple.error };
+    }
 
-  if (error || !data?.session?.user?.id) {
-    return {
-      status: 'sign_in_failed',
-      temporaryUserId,
-      error: error?.message || 'sign_in_failed',
-    };
-  }
+    const client = deps.getClient();
+    if (!client) {
+      return { status: 'auth_unavailable', temporaryUserId };
+    }
 
-  const session = data.session;
-  const restoredUserId = session.user.id;
-  deps.applySession(session);
-
-  try {
-    const installationId = await deps.getInstallationId();
-    await deps.registerInstallation({
-      supabase: client,
-      userId: restoredUserId,
-      installationId,
-      platform: deps.getPlatform(),
-      appVersion: deps.getAppVersion(),
+    // CRITICAL: signInWithIdToken — account switch to Apple-linked user A.
+    const { data, error } = await client.auth.signInWithIdToken({
+      provider: 'apple',
+      token: apple.identityToken,
+      nonce: apple.rawNonce,
     });
-  } catch (e) {
-    console.warn('[AppleRestore] installation register failed (nonfatal):', e);
-  }
 
-  // Phase 6 restore as user A. Failure must NOT sign out.
-  const restore = await deps.restoreCloud({
-    getAuth: () => deps.getAuth(),
-    getClient: deps.getClient,
-    getDb: deps.getDb,
-    getInstallationId: deps.getInstallationId,
-  });
+    if (error || !data?.session?.user?.id) {
+      return {
+        status: 'sign_in_failed',
+        temporaryUserId,
+        error: error?.message || 'sign_in_failed',
+      };
+    }
 
-  if (restore.status === 'ok') {
+    const session = data.session;
+    const restoredUserId = session.user.id;
+    deps.applySession(session);
+
+    try {
+      const installationId = await deps.getInstallationId();
+      await deps.registerInstallation({
+        supabase: client,
+        userId: restoredUserId,
+        installationId,
+        platform: deps.getPlatform(),
+        appVersion: deps.getAppVersion(),
+      });
+    } catch (e) {
+      console.warn('[AppleRestore] installation register failed (nonfatal):', e);
+    }
+
+    // Shared core for the new Apple user only. Failure must NOT sign out.
+    let restore: CloudRestoreResult;
+    try {
+      restore = await deps.restoreCloud({
+        getAuth: () => deps.getAuth(),
+        getClient: deps.getClient,
+        getDb: deps.getDb,
+        getInstallationId: deps.getInstallationId,
+        confirmAuthenticatedUserId: () => readSignedInUserId(deps.getClient),
+      });
+    } catch {
+      reconcileCurrentUserRestoreBarrier('failed');
+      return {
+        status: 'restore_failed',
+        temporaryUserId,
+        restoredUserId,
+        restoredCount: 0,
+        error: 'restore_failed',
+      };
+    }
+
+    if (restore.status === 'ok') {
+      reconcileCurrentUserRestoreBarrier('settled');
+      return {
+        status: restore.restored === 0 ? 'ok_empty' : 'ok',
+        temporaryUserId,
+        restoredUserId,
+        restoredCount: restore.restored,
+        restore,
+      };
+    }
+
+    reconcileCurrentUserRestoreBarrier('failed');
     return {
-      status: restore.restored === 0 ? 'ok_empty' : 'ok',
+      status: 'restore_failed',
       temporaryUserId,
       restoredUserId,
-      restoredCount: restore.restored,
+      restoredCount: 0,
       restore,
+      error: restore.error || restore.status,
     };
+  } finally {
+    endAccountSwitch();
   }
-
-  return {
-    status: 'restore_failed',
-    temporaryUserId,
-    restoredUserId,
-    restoredCount: 0,
-    restore,
-    error: restore.error || restore.status,
-  };
 }

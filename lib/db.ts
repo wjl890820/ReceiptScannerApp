@@ -39,6 +39,7 @@ import {
   replaceSyncOutboxIntent,
 } from './syncOutbox';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
+import { assertCurrentUserRestoreAllowsBusinessWrites } from './currentUserRestoreBarrier';
 import { assertLogicalPurchaseEditPartition } from './logicalPurchaseEditPartition';
 import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
 import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
@@ -1039,6 +1040,8 @@ export async function saveReceipt(
   params: SaveReceiptParams,
   trace?: { id: string; t0: number }
 ): Promise<string> {
+  const restoreGate = assertCurrentUserRestoreAllowsBusinessWrites();
+  if (restoreGate) await restoreGate;
   // Timing: write start/end around DB ops
   const tSave0 = Date.now();
   if (__DEV__ && trace) {
@@ -1485,6 +1488,8 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
  */
 export async function deleteReceipts(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
+  const restoreGate = assertCurrentUserRestoreAllowsBusinessWrites();
+  if (restoreGate) await restoreGate;
   await initIfNeeded();
   const scope = await resolveCurrentLocalReceiptOwnerScope();
   if (scope.status !== 'ready') {
@@ -1593,6 +1598,8 @@ export async function clearReceipts(options: {
  * 也支持更新用户手动编辑字段：user_edited, final_total, final_category, note
  */
 export async function updateReceipt(params: UpdateReceiptParams): Promise<void> {
+  const restoreGate = assertCurrentUserRestoreAllowsBusinessWrites();
+  if (restoreGate) await restoreGate;
   await initIfNeeded();
   const scope = await resolveCurrentLocalReceiptOwnerScope();
   if (scope.status !== 'ready') {
@@ -1926,6 +1933,8 @@ export async function updateLogicalPurchaseItemEdit(
     throw new LogicalPurchaseItemEditError('user_items_json is required');
   }
 
+  const restoreGate = assertCurrentUserRestoreAllowsBusinessWrites();
+  if (restoreGate) await restoreGate;
   await initIfNeeded();
   const scope = await resolveCurrentLocalReceiptOwnerScope();
   if (scope.status !== 'ready') {

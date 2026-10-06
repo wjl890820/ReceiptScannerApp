@@ -26,6 +26,7 @@ import {
 import { getAccountProtectionStatus } from './accountProtectionStatus';
 import { protectCurrentAccountWithApple } from './appleAccountProtect';
 import { restoreExistingAppleAccount } from './appleAccountRestore';
+import { __resetCurrentUserCloudRestoreForTests } from './currentUserCloudRestore';
 import { requestAppleIdentityToken } from './appleAuthCredential';
 import { generateAppleRawNonce } from './appleNonce';
 import { classifyAppleAuthFailure } from './appleAuthDiagnostics';
@@ -502,6 +503,10 @@ describe('Protection status 7/8', () => {
 });
 
 describe('Restore flow', () => {
+  afterEach(() => {
+    __resetCurrentUserCloudRestoreForTests();
+  });
+
   it('16/17 — local receipts / pending outbox blocked BEFORE Apple', async () => {
     const requestApple = jest.fn();
     const signIn = jest.fn();

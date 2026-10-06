@@ -241,6 +241,45 @@ describe('restore personal product identity decisions', () => {
     expect(db.appKv.get(personalDecisionBackupGenerationKvKey('user-a'))).toBe('0');
   });
 
+  it('uses generation 0 because it is the local mutation epoch, not a cloud revision', async () => {
+    const db = createRestoreDb();
+    const result = await restoreWith(db, [cloudDecision('same_product')]);
+    expect(result.status).toBe('ok');
+    expect(db.appKv.get(personalDecisionBackupDirtyKvKey('user-a'))).toBe('0');
+    expect(db.appKv.get(personalDecisionBackupBootstrapKvKey('user-a'))).toBe('1');
+    expect(db.appKv.get(personalDecisionBackupGenerationKvKey('user-a'))).toBe('0');
+  });
+
+  it('restores four receipts and one decision in one materialization', async () => {
+    const db = createRestoreDb();
+    const result = await restoreWith(
+      db,
+      [cloudDecision('same_product', {
+        left_merchant_product_id: 'mp_8f467fb775089ca1',
+        right_merchant_product_id: 'mp_ccbd9d53493cc4e7',
+        created_at: 1791254742710,
+        updated_at: 1791254742710,
+      })],
+      [
+        cloudReceipt('dix4jsUkZYTuv__vhwdzO'),
+        cloudReceipt('vYF7T3eAunb76AeaWlojk'),
+        cloudReceipt('dQHlTPNFjl4Gd8kASuLsR'),
+        cloudReceipt('fP5ATXnWhKEjfC_vMoJWd'),
+      ]
+    );
+    expect(result).toMatchObject({ status: 'ok', restored: 4 });
+    expect(db.receipts.size).toBe(4);
+    expect(db.decisions).toHaveLength(1);
+    expect(db.decisions[0]).toMatchObject({
+      decision: 'same_product',
+      left_merchant_product_id: 'mp_8f467fb775089ca1',
+      right_merchant_product_id: 'mp_ccbd9d53493cc4e7',
+      created_at: 1791254742710,
+      updated_at: 1791254742710,
+    });
+    expect(db.appKv.get(personalDecisionBackupGenerationKvKey('user-a'))).toBe('0');
+  });
+
   it('restores not_same_product and unsure exactly', async () => {
     const db = createRestoreDb();
     const result = await restoreWith(db, [
@@ -295,7 +334,7 @@ describe('restore personal product identity decisions', () => {
     expect(db.decisions).toEqual([]);
   });
 
-  it('still restores receipts when the decision table is absent on the server', async () => {
+  it('does not commit receipts when the decision table is unavailable', async () => {
     const db = createRestoreDb();
     const result = await restoreCloudReceiptsForCurrentUser({
       getDb: async () => db as never,
@@ -307,11 +346,14 @@ describe('restore personal product identity decisions', () => {
         throw new PersonalDecisionTableMissingError();
       },
     });
-    expect(result).toMatchObject({ status: 'ok', restored: 1 });
+    expect(result.status).toBe('decision_schema_unavailable');
+    expect(result.restored).toBe(0);
+    expect(db.receipts.size).toBe(0);
     expect(db.decisions).toEqual([]);
     expect(db.appKv.has(personalDecisionBackupBootstrapKvKey('user-a'))).toBe(false);
     expect(db.appKv.has(personalDecisionBackupDirtyKvKey('user-a'))).toBe(false);
     expect(db.appKv.has(personalDecisionBackupGenerationKvKey('user-a'))).toBe(false);
+    expect(db.appKv.has('cloud_backup_bootstrap_v1:user-a')).toBe(false);
   });
 
   it('does not treat a decision fetch network error as a missing table', async () => {
@@ -415,7 +457,7 @@ describe('restore refuses nonempty personal decision state', () => {
     expect(db.kv.get(personalDecisionBackupGenerationKvKey('user-a'))).toBe('3');
   });
 
-  it('refuses when a decision is created while the remote fetch is in flight', async () => {
+  it('holds the mutation gate so a decision started during fetch commits only after restore', async () => {
     const db = createMemoryPersonalProductIdentityDatabase();
     let releaseFetch!: () => void;
     const holdFetch = new Promise<void>((resolve) => {
@@ -438,23 +480,43 @@ describe('restore refuses nonempty personal decision state', () => {
       fetchActiveCloudDecisions: async () => [cloudDecision('same_product')],
     });
     await entered;
-    const left = restoreEndpoint('mp_a');
-    const right = restoreEndpoint('mp_b');
-    await recordPersonalProductIdentityDecisionWithDb(
+    const restoredLeft = restoreEndpoint('mp_a');
+    const restoredRight = restoreEndpoint('mp_b');
+    const left = restoreEndpoint('mp_c');
+    const right = restoreEndpoint('mp_d');
+    let decisionSettled = false;
+    const decisionPromise = recordPersonalProductIdentityDecisionWithDb(
       db,
       'user:user-a',
       left,
       right,
       'unsure',
-      { nowMs: 44, currentEndpoints: new Map([['mp_a', left], ['mp_b', right]]) }
-    );
+      {
+        nowMs: 44,
+        currentEndpoints: new Map([
+          ['mp_a', restoredLeft],
+          ['mp_b', restoredRight],
+          ['mp_c', left],
+          ['mp_d', right],
+        ]),
+      }
+    ).then((recorded) => {
+      decisionSettled = true;
+      return recorded;
+    });
+    await flushQueuedWork();
+    expect(decisionSettled).toBe(false);
     releaseFetch();
     const result = await restorePromise;
-    expect(result.status).toBe('blocked_local_data_present');
-    expect(db.rows.size).toBe(1);
-    expect([...db.rows.values()][0]?.decision).toBe('unsure');
-    expect([...db.rows.values()][0]?.created_at).toBe(44);
-    expect(db.kv.get(personalDecisionBackupDirtyKvKey('user-a'))).toBe('1');
+    const recorded = await decisionPromise;
+    expect(result.status).toBe('ok');
+    expect(recorded).toEqual({ ok: true, outcome: 'created' });
+    expect(decisionSettled).toBe(true);
+    expect(db.rows.size).toBe(2);
+    expect([...db.rows.values()].map((row) => row.decision).sort()).toEqual([
+      'same_product',
+      'unsure',
+    ]);
   });
 
   it('still restores the current account when only an installation decision exists', async () => {
@@ -609,8 +671,6 @@ describe('restore refuses nonempty personal decision state', () => {
 
   it('refuses a decision committed after the pre-transaction guard', async () => {
     const db = createMemoryPersonalProductIdentityDatabase();
-    const left = restoreEndpoint('mp_a');
-    const right = restoreEndpoint('mp_b');
     const result = await restoreCloudReceiptsForCurrentUser({
       getDb: async () => db as never,
       getAuth: () => auth,
@@ -619,14 +679,23 @@ describe('restore refuses nonempty personal decision state', () => {
       fetchActiveCloudReceipts: async () => [cloudReceipt()],
       fetchActiveCloudDecisions: async () => [cloudDecision('not_same_product')],
       beforeLocalMutationGate: async () => {
-        await recordPersonalProductIdentityDecisionWithDb(
-          db,
-          'user:user-a',
-          left,
-          right,
-          'unsure',
-          { nowMs: 55, currentEndpoints: new Map([['mp_a', left], ['mp_b', right]]) }
-        );
+        db.rows.set('injected', {
+          owner_key: 'user:user-a',
+          left_merchant_product_id: 'mp_a',
+          right_merchant_product_id: 'mp_b',
+          left_merchant_scope_key: 'merchant:a',
+          right_merchant_scope_key: 'merchant:b',
+          left_comparison_key: 'cmp-a',
+          right_comparison_key: 'cmp-b',
+          left_structural_signature: 'struct-v1:old',
+          right_structural_signature: 'struct-v1:empty',
+          identity_pipeline_version: 'resolver-v1+personal-endpoint-v1',
+          decision: 'unsure',
+          created_at: 55,
+          updated_at: 55,
+        });
+        db.kv.set(personalDecisionBackupDirtyKvKey('user-a'), '1');
+        db.kv.set(personalDecisionBackupGenerationKvKey('user-a'), '1');
       },
     });
     expect(result.status).toBe('blocked_local_data_present');
@@ -733,40 +802,191 @@ describe('restore refuses nonempty personal decision state', () => {
     }
   });
 
-  it('finishes remote fetch before acquiring the production gate', async () => {
+  it('holds the production gate across the remote fetch', async () => {
     const events: string[] = [];
+    let probeRan = false;
     const result = await restoreCloudReceiptsForCurrentUser({
       getDb: async () => createRestoreDb() as never,
       getAuth: () => auth,
       getClient: () => ({}) as never,
       getInstallationId: async () => 'install-now',
+      beforeLocalMutationGate: async () => {
+        events.push('inside-gate-before-fetch');
+      },
       fetchActiveCloudReceipts: async () => {
         events.push('fetch-receipts');
-        const probe = withPersonalDecisionLocalMutationGate(async () => {
-          events.push('gate-free-during-receipt-fetch');
+        void withPersonalDecisionLocalMutationGate(async () => {
+          probeRan = true;
+          events.push('gate-after-restore');
         });
-        await probe;
+        await flushQueuedWork();
+        expect(probeRan).toBe(false);
+        events.push('fetch-still-holding');
         return [cloudReceipt()];
       },
       fetchActiveCloudDecisions: async () => {
         events.push('fetch-decisions');
-        await withPersonalDecisionLocalMutationGate(async () => {
-          events.push('gate-free-during-decision-fetch');
-        });
         return [];
       },
-      beforeLocalMutationGate: async () => {
-        events.push('before-gate');
-      },
     });
+    await flushQueuedWork();
     expect(result.status).toBe('ok');
     expect(events).toEqual([
+      'inside-gate-before-fetch',
       'fetch-receipts',
-      'gate-free-during-receipt-fetch',
+      'fetch-still-holding',
       'fetch-decisions',
-      'gate-free-during-decision-fetch',
-      'before-gate',
+      'gate-after-restore',
     ]);
+  });
+
+  it('releases the mutation gate after a failed restore', async () => {
+    const db = createRestoreDb();
+    const result = await restoreCloudReceiptsForCurrentUser({
+      getDb: async () => db as never,
+      getAuth: () => auth,
+      getClient: () => ({}) as never,
+      getInstallationId: async () => 'install-now',
+      fetchActiveCloudReceipts: async () => {
+        throw new Error('network boom');
+      },
+      fetchActiveCloudDecisions: async () => [cloudDecision('same_product')],
+    });
+    expect(result.status).toBe('fetch_failed');
+    let ran = false;
+    await withPersonalDecisionLocalMutationGate(async () => {
+      ran = true;
+    });
+    expect(ran).toBe(true);
+    expect(db.receipts.size).toBe(0);
+  });
+});
+
+describe('restore user id is confirmed again after remote work', () => {
+  function writeCountingDb() {
+    const db = createRestoreDb();
+    let writes = 0;
+    const runAsync = db.runAsync.bind(db);
+    db.runAsync = async (sql: string, params?: unknown[]) => {
+      writes += 1;
+      return runAsync(sql, params);
+    };
+    return { db, writeCount: () => writes };
+  }
+
+  it('writes nothing when the uid changes during the receipt fetch', async () => {
+    let uid = 'user-a';
+    const { db, writeCount } = writeCountingDb();
+    let decisionsFetched = false;
+    const result = await restoreCloudReceiptsForCurrentUser({
+      getDb: async () => db as never,
+      getAuth: () => auth,
+      getClient: () => ({}) as never,
+      getInstallationId: async () => 'install-now',
+      confirmAuthenticatedUserId: async () => uid,
+      fetchActiveCloudReceipts: async () => {
+        uid = 'user-b';
+        return [cloudReceipt()];
+      },
+      fetchActiveCloudDecisions: async () => {
+        decisionsFetched = true;
+        return [cloudDecision('same_product')];
+      },
+    });
+    expect(result).toMatchObject({
+      status: 'auth_unavailable',
+      error: 'session_user_changed',
+      restored: 0,
+    });
+    expect(decisionsFetched).toBe(false);
+    expect(writeCount()).toBe(0);
+    expect(db.receipts.size).toBe(0);
+    expect(db.decisions).toEqual([]);
+    expect(db.appKv.size).toBe(0);
+  });
+
+  it('writes nothing when the uid changes during the decision fetch', async () => {
+    let uid = 'user-a';
+    const { db, writeCount } = writeCountingDb();
+    const result = await restoreCloudReceiptsForCurrentUser({
+      getDb: async () => db as never,
+      getAuth: () => auth,
+      getClient: () => ({}) as never,
+      getInstallationId: async () => 'install-now',
+      confirmAuthenticatedUserId: async () => uid,
+      fetchActiveCloudReceipts: async () => [cloudReceipt()],
+      fetchActiveCloudDecisions: async () => {
+        uid = 'user-b';
+        return [cloudDecision('same_product')];
+      },
+    });
+    expect(result).toMatchObject({
+      status: 'auth_unavailable',
+      error: 'session_user_changed',
+      restored: 0,
+    });
+    expect(writeCount()).toBe(0);
+    expect(db.receipts.size).toBe(0);
+    expect(db.decisions).toEqual([]);
+    expect(db.appKv.size).toBe(0);
+  });
+
+  it('writes nothing when the uid changes after validation and before materialization', async () => {
+    const { db, writeCount } = writeCountingDb();
+    let confirms = 0;
+    const result = await restoreCloudReceiptsForCurrentUser({
+      getDb: async () => db as never,
+      getAuth: () => auth,
+      getClient: () => ({}) as never,
+      getInstallationId: async () => 'install-now',
+      confirmAuthenticatedUserId: async () => {
+        confirms += 1;
+        return confirms >= 3 ? 'user-b' : 'user-a';
+      },
+      fetchActiveCloudReceipts: async () => [cloudReceipt()],
+      fetchActiveCloudDecisions: async () => [cloudDecision('same_product')],
+    });
+    expect(confirms).toBe(3);
+    expect(result).toMatchObject({
+      status: 'auth_unavailable',
+      error: 'session_user_changed',
+      restored: 0,
+    });
+    expect(writeCount()).toBe(0);
+    expect(db.receipts.size).toBe(0);
+    expect(db.decisions).toEqual([]);
+    expect(db.appKv.size).toBe(0);
+  });
+
+  it('does not commit a mixed receipt and decision snapshot', async () => {
+    let uid = 'user-a';
+    const { db, writeCount } = writeCountingDb();
+    const result = await restoreCloudReceiptsForCurrentUser({
+      getDb: async () => db as never,
+      getAuth: () => auth,
+      getClient: () => ({}) as never,
+      getInstallationId: async () => 'install-now',
+      confirmAuthenticatedUserId: async () => uid,
+      fetchActiveCloudReceipts: async () => [cloudReceipt('receipt-user-a')],
+      fetchActiveCloudDecisions: async () => {
+        uid = 'user-b';
+        return [
+          cloudDecision('unsure', {
+            left_merchant_product_id: 'mp_c',
+            right_merchant_product_id: 'mp_d',
+          }),
+        ];
+      },
+    });
+    expect(result).toMatchObject({
+      status: 'auth_unavailable',
+      error: 'session_user_changed',
+      restored: 0,
+    });
+    expect(writeCount()).toBe(0);
+    expect(db.receipts.size).toBe(0);
+    expect(db.decisions).toEqual([]);
+    expect([...db.appKv.keys()]).toEqual([]);
   });
 });
 

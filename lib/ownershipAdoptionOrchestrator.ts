@@ -15,6 +15,10 @@ import {
   type AdoptionAuthEligibility,
 } from './legacyReceiptAdoption';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
+import {
+  assertCurrentUserRestoreAllowsBusinessWrites,
+  CurrentUserRestoreBlockedError,
+} from './currentUserRestoreBarrier';
 import { invalidatePersonalProductEndpointInventory } from './personalProductEndpointInventoryCache';
 import { invalidateAnalyticsReceiptSelection } from './analyticsReceiptSelectionCache';
 
@@ -78,6 +82,19 @@ async function runAdoptionForSnapshot(
   getDb: GetDbFn
 ): Promise<OwnershipAdoptionSettleResult> {
   try {
+    try {
+      const restoreGate = assertCurrentUserRestoreAllowsBusinessWrites();
+      if (restoreGate) await restoreGate;
+    } catch (error: unknown) {
+      if (error instanceof CurrentUserRestoreBlockedError) {
+        return {
+          status: 'failed',
+          reason: 'restore_blocked',
+          userId: adoptionSnapshot.userId,
+        };
+      }
+      throw error;
+    }
     if (!authStillMatchesSnapshot(adoptionSnapshot)) {
       return {
         status: 'failed',

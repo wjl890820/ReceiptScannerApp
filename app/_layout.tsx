@@ -4,11 +4,11 @@ import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { initI18n, subscribeLocaleChange } from '@/lib/i18n';
 import { runCategoryBackfillOnceOnStartup } from '@/lib/categoryBackfill';
-import { runReceiptItemIndexMaintenanceBatch } from '@/lib/db';
+import { getReceiptsDatabase, runReceiptItemIndexMaintenanceBatch } from '@/lib/db';
 import { bootstrapAnonAuth } from '@/lib/anonAuth';
 import { startOwnershipAdoptionOrchestrator } from '@/lib/ownershipAdoptionOrchestrator';
 import { startCloudBackupWorker } from '@/lib/cloudBackupWorker';
-import { getReceiptsDatabase } from '@/lib/db';
+import { startCurrentUserCloudRestore } from '@/lib/currentUserCloudRestore';
 
 // Prevent auto-hiding splash screen until i18n is ready
 SplashScreen.preventAutoHideAsync();
@@ -18,6 +18,8 @@ export default function RootLayout() {
   const [localeEpoch, setLocaleEpoch] = useState(0);
 
   useEffect(() => {
+    // Arm before auth, adoption, or backup so a clean local DB cannot be written first.
+    startCurrentUserCloudRestore();
     // Auth must not block UI / splash. When ENABLE_ANON_AUTH=false this is a no-op.
     bootstrapAnonAuth();
     // Best-effort local ownership adoption when auth becomes available (Phase 4).
