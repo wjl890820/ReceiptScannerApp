@@ -310,6 +310,14 @@ export function __authStillMatchesAdoptionSnapshotForTests(
   return authStillMatchesSnapshot(snapshot);
 }
 
+/**
+ * Already-settled anonymous adoption user in this process.
+ * Read-only: does not settle, adopt receipts, or touch the network.
+ */
+export function readSettledOwnershipAdoptionUserId(): string | null {
+  return _settledAdoptionUserId;
+}
+
 /** Test-only: whether a user id is in the successful settled cache. */
 export function __isAdoptionSettledForUserForTests(userId: string): boolean {
   return _settledAdoptionUserId === userId;

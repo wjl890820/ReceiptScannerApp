@@ -68,6 +68,12 @@ import {
   formatExperimentSnapshotExportSummary,
 } from '@/lib/experimentSnapshotExport';
 import {
+  exportAndShareUsageRelationResearchData,
+  formatUsageRelationResearchExportSummary,
+  USAGE_RELATION_RESEARCH_EXPORT_NAME,
+  USAGE_RELATION_RESEARCH_PRIVACY_WARNING,
+} from '@/lib/usageRelationResearchExport';
+import {
   exportAndShareTargetReceiptEvidence,
   resolveTargetReceiptEvidenceSpec,
   TARGET_RECEIPT_EVIDENCE_PRIVACY_WARNING,
@@ -224,6 +230,7 @@ export default function SettingsScreen() {
   });
   const [diagnosticsExportBusy, setDiagnosticsExportBusy] = useState(false);
   const [experimentSnapshotBusy, setExperimentSnapshotBusy] = useState(false);
+  const usageRelationResearchGuardRef = useRef(false);
   const [targetReceiptEvidenceBusy, setTargetReceiptEvidenceBusy] =
     useState(false);
   const showTargetReceiptEvidence =
@@ -645,6 +652,55 @@ export default function SettingsScreen() {
     experimentSequence,
     experimentSnapshotBusy,
   ]);
+
+  const runExportUsageRelationResearch = useCallback(() => {
+    if (usageRelationResearchGuardRef.current) return;
+    usageRelationResearchGuardRef.current = true;
+    const releaseGuard = () => {
+      usageRelationResearchGuardRef.current = false;
+    };
+    Alert.alert(
+      USAGE_RELATION_RESEARCH_EXPORT_NAME,
+      USAGE_RELATION_RESEARCH_PRIVACY_WARNING,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: releaseGuard },
+        {
+          text: 'Export',
+          onPress: () => {
+            void (async () => {
+              try {
+                const result = await exportAndShareUsageRelationResearchData({
+                  app: {
+                    version: currentVersion || null,
+                    build: currentBuild || null,
+                  },
+                  cacheDirectory: FileSystem.cacheDirectory,
+                  writeAsStringAsync: FileSystem.writeAsStringAsync,
+                  deleteAsync: async (uri) => {
+                    await FileSystem.deleteAsync(uri, { idempotent: true });
+                  },
+                  isAvailableAsync: Sharing.isAvailableAsync,
+                  shareAsync: Sharing.shareAsync,
+                });
+                Alert.alert(
+                  'Export ready',
+                  `${result.filename}\n${formatUsageRelationResearchExportSummary(result.doc)}`
+                );
+              } catch (e: unknown) {
+                Alert.alert(
+                  'Export failed',
+                  e instanceof Error ? e.message : String(e)
+                );
+              } finally {
+                releaseGuard();
+              }
+            })();
+          },
+        },
+      ],
+      { cancelable: true, onDismiss: releaseGuard }
+    );
+  }, [currentBuild, currentVersion]);
 
   const runExportTargetReceiptEvidence = useCallback(() => {
     if (targetReceiptEvidenceBusy) return;
@@ -1408,6 +1464,13 @@ export default function SettingsScreen() {
                   subtitle={`Phase ${experimentSequence.phase} · completed ${experimentSequence.completedReceiptSequence} → next ${experimentSequence.nextReceiptSequence}`}
                   onPress={runExportExperimentSnapshot}
                   accessibilityLabel="Export Experiment Snapshot"
+                />
+                <View style={styles.separator} />
+                <SettingsRow
+                  title="Export Usage Relation Research Data"
+                  subtitle="Read-only canonical baskets + product identity"
+                  onPress={runExportUsageRelationResearch}
+                  accessibilityLabel="Export Usage Relation Research Data"
                 />
                 <View style={styles.separator} />
                 <SettingsRow
