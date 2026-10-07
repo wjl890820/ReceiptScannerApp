@@ -78,9 +78,18 @@ describe('classifyLineKind: 折扣 / 税 / 小计行识别', () => {
     expect(classifyLineKind('引き出し', 800)).toBe('item');
     expect(classifyLineKind('10%off', 50)).toBe('discount');
     expect(classifyLineKind('10%引き', 50)).toBe('discount');
+    expect(classifyLineKind('OFF', 50)).toBe('discount');
+    expect(classifyLineKind('10円引き', 50)).toBe('discount');
     expect(classifyLineKind('値引き', 50)).toBe('discount');
     expect(classifyLineKind('クオ・カード支払', 814)).toBe('payment');
     expect(classifyLineKind('クオ支払', 814)).toBe('payment');
+    expect(classifyLineKind('プリカ支払', 7002)).toBe('payment');
+    expect(classifyLineKind('プリカ 支払', 7002)).toBe('payment');
+    expect(classifyLineKind('プリカ：支払', 7002)).toBe('payment');
+    expect(classifyLineKind('（プリカ）', 7002)).toBe('payment');
+    expect(classifyLineKind('QUO支払', 814)).toBe('payment');
+    expect(classifyLineKind('QUO 支払', 814)).toBe('payment');
+    expect(classifyLineKind('QUO：支払', 814)).toBe('payment');
   });
 });
 

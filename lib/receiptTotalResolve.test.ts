@@ -23,11 +23,28 @@ describe('payment vs authoritative total', () => {
     expect(isPaymentAllocationLabel('プリカ/リワード')).toBe(true);
   });
 
+  it('accepts explicit プリカ and QUO tender syntax', () => {
+    expect(isPaymentAllocationLabel('プリカ')).toBe(true);
+    expect(isPaymentAllocationLabel('プリカ/リワード')).toBe(true);
+    expect(isPaymentAllocationLabel('プリカ支払')).toBe(true);
+    expect(isPaymentAllocationLabel('プリカ 支払')).toBe(true);
+    expect(isPaymentAllocationLabel('プリカ：支払')).toBe(true);
+    expect(isPaymentAllocationLabel('（プリカ）')).toBe(true);
+    expect(isPaymentAllocationLabel('QUO支払')).toBe(true);
+    expect(isPaymentAllocationLabel('QUO 支払')).toBe(true);
+    expect(isPaymentAllocationLabel('QUO：支払')).toBe(true);
+    expect(isPaymentAllocationLabel('クオ支払')).toBe(true);
+    expect(isPaymentAllocationLabel('クオ・カード支払')).toBe(true);
+  });
+
   it('does not treat liquor or quartz as a QUO tender', () => {
     expect(isPaymentAllocationLabel('liquor')).toBe(false);
     expect(isPaymentAllocationLabel('Liquor 750ml')).toBe(false);
     expect(isPaymentAllocationLabel('Quorn')).toBe(false);
     expect(isPaymentAllocationLabel('クオーツ')).toBe(false);
+    expect(isPaymentAllocationLabel('パプリカ')).toBe(false);
+    expect(isPaymentAllocationLabel('赤パプリカ')).toBe(false);
+    expect(isPaymentAllocationLabel('国産パプリカ')).toBe(false);
     expect(isPaymentAllocationLabel('クオ・カード支払')).toBe(true);
     expect(isPaymentAllocationLabel('クオ支払')).toBe(true);
     expect(isPaymentAllocationLabel('quo')).toBe(true);

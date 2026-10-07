@@ -30,36 +30,47 @@ const AUTHORITATIVE_TOTAL_MARKERS = [
 const PURICA_PAYMENT_TOKEN = 'プリカ';
 
 /**
- * `プリカ` only when it is a standalone tender token.
- * Splits on whitespace and tender punctuation. No lookbehind (Hermes).
- * `パプリカ` contains the same kana and must not match.
+ * Separators around a tender token. The token must fill one part, or one
+ * part plus an explicit settlement suffix. This is not a substring search.
+ * No lookbehind (Hermes).
  */
-function hasPuricaPaymentToken(name: string): boolean {
-  if (!name.includes(PURICA_PAYMENT_TOKEN)) return false;
-  const tokens = name.split(/[\s/／・･]+/);
-  for (let i = 0; i < tokens.length; i += 1) {
-    if (tokens[i] === PURICA_PAYMENT_TOKEN) return true;
+const TENDER_TOKEN_BOUNDARIES = /[\s/／・･：:()（）【】［］\[\]「」『』]+/;
+
+const PURICA_PAYMENT_SUFFIXES = ['支払'];
+const QUO_PAYMENT_SUFFIXES = ['支払', 'カード', 'カード支払'];
+
+function hasBoundedTenderToken(
+  name: string,
+  token: string,
+  suffixes: readonly string[]
+): boolean {
+  const parts = name.split(TENDER_TOKEN_BOUNDARIES);
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (!part) continue;
+    if (part === token) return true;
+    if (!part.startsWith(token) || part.length === token.length) continue;
+    const rest = part.slice(token.length);
+    if (suffixes.indexOf(rest) !== -1) return true;
   }
   return false;
 }
 
-const QUO_PAYMENT_SUFFIXES = ['支払', 'カード', 'カード支払'];
+/** `プリカ` as its own tender token. `パプリカ` contains the kana and must not match. */
+function hasPuricaPaymentToken(name: string): boolean {
+  return hasBoundedTenderToken(name, PURICA_PAYMENT_TOKEN, PURICA_PAYMENT_SUFFIXES);
+}
 
 /**
  * QUO card tender. Latin `quo` and kana `クオ` must be their own token
  * so liquor / Quorn / クオーツ stay merchandise.
- * Glued forms seen in production copy, such as クオ支払, stay payment.
+ * Glued settlement forms such as クオ支払 / QUO支払 stay payment.
  */
 function hasQuoPaymentToken(name: string): boolean {
-  const tokens = name.split(/[\s/／・･]+/);
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
-    if (token === 'quo' || token === 'クオ') return true;
-    if (!token.startsWith('クオ') || token.length === 'クオ'.length) continue;
-    const rest = token.slice('クオ'.length);
-    if (QUO_PAYMENT_SUFFIXES.indexOf(rest) !== -1) return true;
-  }
-  return false;
+  return (
+    hasBoundedTenderToken(name, 'quo', QUO_PAYMENT_SUFFIXES) ||
+    hasBoundedTenderToken(name, 'クオ', QUO_PAYMENT_SUFFIXES)
+  );
 }
 
 /**
