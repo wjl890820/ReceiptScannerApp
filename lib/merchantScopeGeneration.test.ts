@@ -88,7 +88,8 @@ describe('H3-B1 merchant scope generation plumbing', () => {
     const insertStart = DB_SOURCE.indexOf('const insertSql = `');
     const insertEnd = DB_SOURCE.indexOf('const insertParams', insertStart);
     const insertSql = DB_SOURCE.slice(insertStart, insertEnd);
-    expect(insertSql).not.toContain('merchant_scope_generation');
+    expect(insertSql).toContain('merchant_scope_generation');
+    expect(DB_SOURCE).toContain('MERCHANT_SCOPE_GENERATION_V2');
   });
 
   it('adds a nullable cloud column that allows only NULL or 2', () => {

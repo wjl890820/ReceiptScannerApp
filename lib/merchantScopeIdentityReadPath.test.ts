@@ -388,18 +388,8 @@ describe('H3-B2 phase 2 identity read path', () => {
     expect(a?.merchantScopeKey).not.toBe(item?.merchantScopeKey);
   });
 
-  it('does not write merchant_scope_generation=2', () => {
+  it('does not assign a literal generation 2 outside the save constant', () => {
     const root = path.resolve(__dirname);
-    const db = fs.readFileSync(path.join(root, 'db.ts'), 'utf8');
-    const marker = db.indexOf(
-      'merchant_scope_generation is intentionally omitted'
-    );
-    const insertStart = db.indexOf('const insertSql', marker);
-    const insertEnd = db.indexOf('VALUES', insertStart);
-    expect(insertStart).toBeGreaterThan(marker);
-    expect(db.slice(insertStart, insertEnd)).not.toContain(
-      'merchant_scope_generation'
-    );
     for (const file of [
       'db.ts',
       'productIdentityConsumer.ts',

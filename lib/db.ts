@@ -38,6 +38,7 @@ import {
   generateSyncIntentId,
   replaceSyncOutboxIntent,
 } from './syncOutbox';
+import { MERCHANT_SCOPE_GENERATION_V2 } from './merchantScopeGeneration';
 import { requestCloudBackupFlush } from './cloudBackupWorker';
 import { assertCurrentUserRestoreAllowsBusinessWrites } from './currentUserRestoreBarrier';
 import { assertLogicalPurchaseEditPartition } from './logicalPurchaseEditPartition';
@@ -1144,8 +1145,7 @@ export async function saveReceipt(
     ocrRequestId = null;
   }
 
-  // merchant_scope_generation is intentionally omitted: INSERT stores NULL (legacy v1).
-  // H3-B1 must not write 2. H3-B2 will set it in the same receipt transaction.
+  // New receipts are store-aware from this INSERT. Edits must not assign the column.
   const insertSql = `
     INSERT INTO receipts (
       id, created_at, transaction_at,
@@ -1163,8 +1163,9 @@ export async function saveReceipt(
       installation_id,
       transaction_source,
       ocr_request_id,
-      client_updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      client_updated_at,
+      merchant_scope_generation
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const insertParams = [
     id,
@@ -1190,6 +1191,7 @@ export async function saveReceipt(
     ownership.transactionSource || TRANSACTION_SOURCE_RECEIPT_OCR,
     ocrRequestId,
     now,
+    MERCHANT_SCOPE_GENERATION_V2,
   ];
   const placeholderCount = (insertSql.match(/\?/g) ?? []).length;
   if (__DEV__ && trace) {
@@ -1199,7 +1201,7 @@ export async function saveReceipt(
     });
     // eslint-disable-next-line no-console
     console.log('[DB][saveReceipt] insert shape', {
-      insertColumnsCount: 23,
+      insertColumnsCount: 24,
       placeholderCount,
       paramsCount: insertParams.length,
       preview,
