@@ -185,9 +185,34 @@ const DISCOUNT_KEYWORDS = [
   'point',
   '％off',
   '%off',
-  'off',
-  '引き',
 ];
+
+/**
+ * Latin discount marker `off` as its own token.
+ * Unanchored includes() also matches coffee / toffee.
+ */
+function hasDiscountOffToken(name: string): boolean {
+  const parts = name.split(/[^a-z0-9]+/i);
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i].toLowerCase() === 'off') return true;
+  }
+  return false;
+}
+
+/**
+ * `引き` as a discount label, not as a substring of merchandise such as 引き出し.
+ * Covers a bare token and printed forms like 10%引き / 10円引き.
+ * 値引き still matches the 値引 keyword.
+ */
+function hasDiscountHikiLabel(name: string): boolean {
+  if (!name.includes('引き')) return false;
+  if (/\d\s*[%％円]\s*引き/.test(name)) return true;
+  const tokens = name.split(/[\s/／・･%％]+/);
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i] === '引き') return true;
+  }
+  return false;
+}
 
 const TAX_KEYWORDS = ['消費税', '内税', '外税', '軽減税率', '税率', '（税', '(税', 'tax'];
 
@@ -415,7 +440,9 @@ export function classifyLineKind(name: string, lineTotal: number): OcrLineKind {
   if (isTaxableBaseLabel(name)) return 'subtotal';
   // Actual tax labels before DISCOUNT_KEYWORDS — 「消費税額(値引後)」contains 値引.
   if (includesAny(n, TAX_KEYWORDS) || isActualTaxAmountLabel(name)) return 'tax';
-  if (includesAny(n, DISCOUNT_KEYWORDS)) return 'discount';
+  if (includesAny(n, DISCOUNT_KEYWORDS) || hasDiscountOffToken(n) || hasDiscountHikiLabel(n)) {
+    return 'discount';
+  }
   if (isNonMerchandiseMetaLabel(name) || isPurchaseCountMetaLabel(name)) return 'subtotal';
   // Tender / payment allocation — before bare 合計 subtotal matching.
   if (isPaymentAllocationLabel(name)) return 'payment';

@@ -63,6 +63,25 @@ describe('classifyLineKind: 折扣 / 税 / 小计行识别', () => {
     expect(classifyLineKind('おにぎり 鮭', 150)).toBe('item');
     expect(classifyLineKind('コーヒー', 120)).toBe('item');
   });
+
+  it('Receipt093: パプリカ stays merchandise; プリカ/リワード stays payment', () => {
+    expect(classifyLineKind('パプリカ', 170)).toBe('item');
+    expect(classifyLineKind('プリカ/リワード', 7002)).toBe('payment');
+  });
+
+  it('does not treat coffee, toffee, liquor, or 引き出し as metadata', () => {
+    expect(classifyLineKind('coffee', 120)).toBe('item');
+    expect(classifyLineKind('ACME COFFEE', 500)).toBe('item');
+    expect(classifyLineKind('toffee', 200)).toBe('item');
+    expect(classifyLineKind('liquor', 1000)).toBe('item');
+    expect(classifyLineKind('クオーツ', 3000)).toBe('item');
+    expect(classifyLineKind('引き出し', 800)).toBe('item');
+    expect(classifyLineKind('10%off', 50)).toBe('discount');
+    expect(classifyLineKind('10%引き', 50)).toBe('discount');
+    expect(classifyLineKind('値引き', 50)).toBe('discount');
+    expect(classifyLineKind('クオ・カード支払', 814)).toBe('payment');
+    expect(classifyLineKind('クオ支払', 814)).toBe('payment');
+  });
 });
 
 describe('Receipt065 loyalty redemption classification', () => {
@@ -854,6 +873,43 @@ describe('Receipt065 final tax normalization', () => {
       true
     );
     expect(receiptLevelUnallocatedDiscountSum(out.items as any, out.discounts as any)).toBe(-13);
+  });
+});
+
+describe('Receipt093 paprika merchandise normalization', () => {
+  it('keeps five merchandise lines, including パプリカ 170', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'ヨークベニマル古川南店',
+      currency: 'JPY',
+      total: 1382,
+      tax: 102,
+      items: [
+        { name: '国産若鶏もも肉唐揚', quantity: 1, unitPrice: 324, lineTotal: 324 },
+        { name: 'パプリカ', quantity: 1, unitPrice: 170, lineTotal: 170 },
+        { name: 'イカの塩こうじ天ぷ', quantity: 1, unitPrice: 288, lineTotal: 288 },
+        { name: 'のむYG糖質オフ', quantity: 1, unitPrice: 300, lineTotal: 300 },
+        { name: '7Pシュレッド', quantity: 1, unitPrice: 300, lineTotal: 300 },
+      ],
+    });
+
+    expect(out.items).toHaveLength(5);
+    expect(out.items.map((item) => item.name)).toEqual([
+      '国産若鶏もも肉唐揚',
+      'パプリカ',
+      'イカの塩こうじ天ぷ',
+      'のむYG糖質オフ',
+      '7Pシュレッド',
+    ]);
+    const paprika = out.items.find((item) => item.name === 'パプリカ');
+    expect(paprika).toEqual(
+      expect.objectContaining({ quantity: 1, unitPrice: 170, lineTotal: 170 })
+    );
+    expect(out.reconciliation?.itemsPositiveSum).toBe(1382);
+    expect(out.items.reduce((sum, item) => sum + item.lineTotal, 0)).toBe(1382);
+    expect(out.total).toBe(1382);
+    expect(out.reconciliation?.diff).toBe(0);
+    expect(out.amount_mismatch).toBe(false);
+    expect(classifyLineKind('パプリカ', 170)).toBe('item');
   });
 });
 

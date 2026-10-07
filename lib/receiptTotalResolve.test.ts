@@ -15,6 +15,24 @@ describe('payment vs authoritative total', () => {
     expect(isPaymentAllocationLabel('残高')).toBe(false);
   });
 
+  it('Receipt093: パプリカ is not a プリカ tender', () => {
+    expect(isPaymentAllocationLabel('パプリカ')).toBe(false);
+    expect(isPaymentAllocationLabel('赤パプリカ')).toBe(false);
+    expect(isPaymentAllocationLabel('国産パプリカ')).toBe(false);
+    expect(isPaymentAllocationLabel('プリカ')).toBe(true);
+    expect(isPaymentAllocationLabel('プリカ/リワード')).toBe(true);
+  });
+
+  it('does not treat liquor or quartz as a QUO tender', () => {
+    expect(isPaymentAllocationLabel('liquor')).toBe(false);
+    expect(isPaymentAllocationLabel('Liquor 750ml')).toBe(false);
+    expect(isPaymentAllocationLabel('Quorn')).toBe(false);
+    expect(isPaymentAllocationLabel('クオーツ')).toBe(false);
+    expect(isPaymentAllocationLabel('クオ・カード支払')).toBe(true);
+    expect(isPaymentAllocationLabel('クオ支払')).toBe(true);
+    expect(isPaymentAllocationLabel('quo')).toBe(true);
+  });
+
   it('Sample 051: split prepaid+cash must not override purchase total', () => {
     const total = resolveAuthoritativeReceiptTotal({
       ocrTotal: 11227,

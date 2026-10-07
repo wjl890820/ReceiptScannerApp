@@ -26,6 +26,42 @@ const AUTHORITATIVE_TOTAL_MARKERS = [
   'grand total',
 ];
 
+/** Prepaid-card tender. Must be its own token so パプリカ stays merchandise. */
+const PURICA_PAYMENT_TOKEN = 'プリカ';
+
+/**
+ * `プリカ` only when it is a standalone tender token.
+ * Splits on whitespace and tender punctuation. No lookbehind (Hermes).
+ * `パプリカ` contains the same kana and must not match.
+ */
+function hasPuricaPaymentToken(name: string): boolean {
+  if (!name.includes(PURICA_PAYMENT_TOKEN)) return false;
+  const tokens = name.split(/[\s/／・･]+/);
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i] === PURICA_PAYMENT_TOKEN) return true;
+  }
+  return false;
+}
+
+const QUO_PAYMENT_SUFFIXES = ['支払', 'カード', 'カード支払'];
+
+/**
+ * QUO card tender. Latin `quo` and kana `クオ` must be their own token
+ * so liquor / Quorn / クオーツ stay merchandise.
+ * Glued forms seen in production copy, such as クオ支払, stay payment.
+ */
+function hasQuoPaymentToken(name: string): boolean {
+  const tokens = name.split(/[\s/／・･]+/);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === 'quo' || token === 'クオ') return true;
+    if (!token.startsWith('クオ') || token.length === 'クオ'.length) continue;
+    const rest = token.slice('クオ'.length);
+    if (QUO_PAYMENT_SUFFIXES.indexOf(rest) !== -1) return true;
+  }
+  return false;
+}
+
 /**
  * Payment / tender allocation lines (cash, prepaid, card charge, etc.).
  * Deposits/balances alone are excluded — they are not settlement tenders.
@@ -41,7 +77,9 @@ export function isPaymentAllocationLabel(name: string): boolean {
   if (
     (n.includes('合計') || n.includes('総計') || n === 'total' || n.includes('subtotal')) &&
     !n.includes('カード支払') &&
-    !/クオ|quo|プリカ|リワード|現金|クレジット|電子マネー/.test(n)
+    !hasPuricaPaymentToken(n) &&
+    !hasQuoPaymentToken(n) &&
+    !/リワード|現金|クレジット|電子マネー/.test(n)
   ) {
     return false;
   }
@@ -52,24 +90,25 @@ export function isPaymentAllocationLabel(name: string): boolean {
   ) {
     return false;
   }
-  return [
-    '現金',
-    'クレジット',
-    'プリカ',
-    'リワード',
-    'カード支払',
-    'クオ',
-    'quo',
-    '電子マネー',
-    'paypay',
-    'aupay',
-    '楽天pay',
-    'waon',
-    'nanaco',
-    'edy',
-    'id支払',
-    '交通系',
-  ].some((k) => n.includes(k));
+  return (
+    hasPuricaPaymentToken(n) ||
+    hasQuoPaymentToken(n) ||
+    [
+      '現金',
+      'クレジット',
+      'リワード',
+      'カード支払',
+      '電子マネー',
+      'paypay',
+      'aupay',
+      '楽天pay',
+      'waon',
+      'nanaco',
+      'edy',
+      'id支払',
+      '交通系',
+    ].some((k) => n.includes(k))
+  );
 }
 
 /**
