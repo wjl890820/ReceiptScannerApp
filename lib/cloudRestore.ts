@@ -131,7 +131,8 @@ const CLOUD_SELECT = `
   ocr_request_id, client_updated_at, deleted_at,
   verified_purchase_occurrence_id,
   verified_purchase_occurrence_source,
-  verified_purchase_occurrence_verified_at
+  verified_purchase_occurrence_verified_at,
+  merchant_scope_generation
 `.replace(/\s+/g, ' ').trim();
 
 const INSERT_RESTORE_SQL = `
@@ -147,8 +148,9 @@ const INSERT_RESTORE_SQL = `
     client_updated_at,
     verified_purchase_occurrence_id,
     verified_purchase_occurrence_source,
-    verified_purchase_occurrence_verified_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    verified_purchase_occurrence_verified_at,
+    merchant_scope_generation
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 function insertParams(row: LocalRestoredReceiptInsert): SQLite.SQLiteBindValue[] {
@@ -184,6 +186,7 @@ function insertParams(row: LocalRestoredReceiptInsert): SQLite.SQLiteBindValue[]
     row.verified_purchase_occurrence_id,
     row.verified_purchase_occurrence_source,
     row.verified_purchase_occurrence_verified_at,
+    row.merchant_scope_generation,
   ];
 }
 

@@ -14,6 +14,7 @@ import {
   classifyVerifiedPurchaseOccurrenceBundle,
   verifiedAtMsToIso,
 } from './verifiedPurchaseOccurrenceProvenance';
+import { classifyMerchantScopeGeneration } from './merchantScopeGeneration';
 
 export type LocalReceiptBackupSource = {
   id: string;
@@ -47,6 +48,11 @@ export type LocalReceiptBackupSource = {
   verified_purchase_occurrence_id?: string | null;
   verified_purchase_occurrence_source?: string | null;
   verified_purchase_occurrence_verified_at?: number | null;
+  /**
+   * NULL / absent = legacy v1 and is omitted from the upsert body.
+   * Exact 2 is sent. Unsupported values reject the payload.
+   */
+  merchant_scope_generation?: number | null;
 };
 
 export type CloudUserReceiptUpsertPayload = {
@@ -82,6 +88,12 @@ export type CloudUserReceiptUpsertPayload = {
   verified_purchase_occurrence_id: string | null;
   verified_purchase_occurrence_source: string | null;
   verified_purchase_occurrence_verified_at: string | null;
+  /**
+   * Present only for exact integer 2.
+   * Omitted for legacy NULL so an older upsert cannot reset a future 2,
+   * and so H3-B1 backups do not require the cloud column yet.
+   */
+  merchant_scope_generation?: 2;
 };
 
 function msToIso(ms: number | null | undefined): string | null {
@@ -161,6 +173,22 @@ export function buildCloudUserReceiptUpsertPayload(
           verified_purchase_occurrence_verified_at: null,
         };
 
+  const scopePresence =
+    'merchant_scope_generation' in row ? 'present' : 'absent';
+  const scopeGeneration = classifyMerchantScopeGeneration(
+    (row as { merchant_scope_generation?: unknown }).merchant_scope_generation,
+    scopePresence
+  );
+  if (scopeGeneration.state === 'invalid') {
+    throw new Error(
+      'Cannot backup receipt with malformed merchant_scope_generation'
+    );
+  }
+  const scopeCloud =
+    scopeGeneration.state === 'v2'
+      ? { merchant_scope_generation: scopeGeneration.persisted }
+      : {};
+
   return {
     id: row.id,
     user_id: userId,
@@ -215,6 +243,7 @@ export function buildCloudUserReceiptUpsertPayload(
     client_updated_at: msToIso(clientUpdatedAtMs) || new Date().toISOString(),
     deleted_at: null,
     ...verifiedCloud,
+    ...scopeCloud,
   };
 }
 
@@ -240,5 +269,6 @@ export const BACKUP_SELECT_COLUMNS = `
   final_total, final_category, note, ocr_request_id, client_updated_at,
   verified_purchase_occurrence_id,
   verified_purchase_occurrence_source,
-  verified_purchase_occurrence_verified_at
+  verified_purchase_occurrence_verified_at,
+  merchant_scope_generation
 `;

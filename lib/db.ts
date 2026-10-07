@@ -123,6 +123,13 @@ export type ReceiptRow = {
   verified_purchase_occurrence_source?: string | null;
   /** Epoch ms — verification audit time, not purchase time. */
   verified_purchase_occurrence_verified_at?: number | null;
+
+  /**
+   * Merchant/store scope generation.
+   * NULL / absent = legacy v1. Exact 2 = future store-aware v2.
+   * H3-B1 does not write 2. Resolvers must ignore this column until H3-B2.
+   */
+  merchant_scope_generation?: number | null;
 };
 
 /** 列表用：不含 image_uri，减少内存/IO（历史列表不展示缩略图） */
@@ -630,6 +637,17 @@ async function initIfNeeded() {
         }
       }
 
+      // H3-B1: nullable scope generation. NULL = legacy v1. No default and no backfill.
+      if (!columnNames.has('merchant_scope_generation')) {
+        try {
+          await db.runAsync(
+            `ALTER TABLE receipts ADD COLUMN merchant_scope_generation INTEGER`
+          );
+        } catch (e: any) {
+          if (!e?.message?.includes('duplicate column')) throw e;
+        }
+      }
+
       try {
         await db.execAsync(
           `CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id)`
@@ -1126,6 +1144,8 @@ export async function saveReceipt(
     ocrRequestId = null;
   }
 
+  // merchant_scope_generation is intentionally omitted: INSERT stores NULL (legacy v1).
+  // H3-B1 must not write 2. H3-B2 will set it in the same receipt transaction.
   const insertSql = `
     INSERT INTO receipts (
       id, created_at, transaction_at,
@@ -1467,6 +1487,7 @@ export async function getReceipt(id: string): Promise<ReceiptRow | null> {
       final_category,
       note,
       user_items_json,
+      merchant_scope_generation,
       ${verifiedPurchaseOccurrenceColumnsSql()}
     FROM receipts
     WHERE id = ?

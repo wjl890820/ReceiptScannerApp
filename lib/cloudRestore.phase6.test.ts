@@ -194,6 +194,7 @@ function createRestoreDb(opts?: {
           verified_purchase_occurrence_id,
           verified_purchase_occurrence_source,
           verified_purchase_occurrence_verified_at,
+          merchant_scope_generation,
         ] = params as unknown[];
         receipts.set(String(id), {
           id,
@@ -230,6 +231,10 @@ function createRestoreDb(opts?: {
             verified_purchase_occurrence_source ?? null,
           verified_purchase_occurrence_verified_at:
             verified_purchase_occurrence_verified_at ?? null,
+          merchant_scope_generation:
+            merchant_scope_generation == null
+              ? null
+              : Number(merchant_scope_generation),
         });
         return { changes: 1 };
       }

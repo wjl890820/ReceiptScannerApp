@@ -14,6 +14,7 @@ import {
   classifyVerifiedPurchaseOccurrenceBundle,
   parseVerifiedPurchaseOccurrenceCloudTimestamp,
 } from './verifiedPurchaseOccurrenceProvenance';
+import { classifyMerchantScopeGeneration } from './merchantScopeGeneration';
 
 export type CloudUserReceiptRow = {
   id: string;
@@ -47,6 +48,8 @@ export type CloudUserReceiptRow = {
   verified_purchase_occurrence_id?: string | null;
   verified_purchase_occurrence_source?: string | null;
   verified_purchase_occurrence_verified_at?: string | null;
+  /** Absent or null = legacy v1. Exact 2 is preserved. Other values reject the row. */
+  merchant_scope_generation?: number | null;
 };
 
 export type LocalRestoredReceiptInsert = {
@@ -81,6 +84,8 @@ export type LocalRestoredReceiptInsert = {
   verified_purchase_occurrence_id: string | null;
   verified_purchase_occurrence_source: string | null;
   verified_purchase_occurrence_verified_at: number | null;
+  /** NULL = legacy v1. Exact 2 is stored as 2. Never coerced from malformed input. */
+  merchant_scope_generation: number | null;
 };
 
 function isoToMs(iso: string | null | undefined): number | null {
@@ -205,6 +210,18 @@ export function mapCloudReceiptToLocalInsert(
           verified_purchase_occurrence_verified_at: null,
         };
 
+  const scopePresence =
+    'merchant_scope_generation' in cloud ? 'present' : 'absent';
+  const scopeGeneration = classifyMerchantScopeGeneration(
+    (cloud as { merchant_scope_generation?: unknown }).merchant_scope_generation,
+    scopePresence
+  );
+  if (scopeGeneration.state === 'invalid') {
+    throw new Error(
+      'Cannot restore receipt with malformed merchant_scope_generation'
+    );
+  }
+
   return {
     id: cloud.id.trim(),
     created_at: createdAt,
@@ -262,5 +279,6 @@ export function mapCloudReceiptToLocalInsert(
         : null,
     client_updated_at: clientUpdatedAt,
     ...verifiedLocal,
+    merchant_scope_generation: scopeGeneration.persisted,
   };
 }
