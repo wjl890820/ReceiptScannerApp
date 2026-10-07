@@ -36,7 +36,8 @@ import {
   receiptFieldCorrectionInput,
   applyItemFieldCorrections,
 } from '@/lib/userCorrections';
-import { applyUserLineAmountEdit, invalidateProductCouponOwnershipMetadata } from '@/lib/receiptDiscountAllocation';
+import { applyUserLineAmountEdit } from '@/lib/receiptDiscountAllocation';
+import { evaluateReviewedReceiptSaveEligibility } from '@/lib/reviewedDerivedAnalysis';
 import { mergeReviewSnapshotPreservingEvidence } from '@/lib/receiptPrintedEvidence';
 import { materializeScanReviewItemCategorySemantics } from '@/lib/reviewCategorySemantics';
 import { taxFieldPrefillFromSnapshot } from '@/lib/receiptListHelpers';
@@ -74,11 +75,7 @@ import {
   type ScanReviewDuplicateGateContext,
   type ScanReviewDuplicateGateMatch,
 } from '@/lib/scanReviewDuplicateGate';
-import {
-  evaluateScanReviewSaveEligibility,
-  sumPositiveMerchandiseLineTotals,
-  sumReceiptDiscountAmounts,
-} from '@/lib/scanReviewSaveSafety';
+import { reviewedAmountWarningVisible } from '@/lib/scanReviewSaveSafety';
 import {
   executeDuplicateGateTerminalFlow,
   reduceTerminalDuplicateDestinationId,
@@ -822,9 +819,9 @@ export default function ScanReviewScreen() {
     const taxTrimmed = taxStr.trim();
     const parsedTax = taxTrimmed ? toNum(taxTrimmed, NaN) : NaN;
     const taxValue = Number.isFinite(parsedTax) ? parsedTax : 0;
-    return evaluateScanReviewSaveEligibility({
-      itemsPositiveSum: sumPositiveMerchandiseLineTotals(finalItemsForSave as any),
-      discountsSum: sumReceiptDiscountAmounts(snapDiscounts),
+    return evaluateReviewedReceiptSaveEligibility({
+      items: finalItemsForSave as never,
+      discounts: snapDiscounts as never,
       tax: taxValue,
       total: toNum(totalStr, 0),
     });
@@ -902,9 +899,9 @@ export default function ScanReviewScreen() {
       : [];
     const taxTrimmedForGate = taxStr.trim();
     const parsedTaxForGate = taxTrimmedForGate ? toNum(taxTrimmedForGate, NaN) : NaN;
-    const saveGate = evaluateScanReviewSaveEligibility({
-      itemsPositiveSum: sumPositiveMerchandiseLineTotals(finalItemsForSave as any),
-      discountsSum: sumReceiptDiscountAmounts(snapDiscounts),
+    const saveGate = evaluateReviewedReceiptSaveEligibility({
+      items: finalItemsForSave as never,
+      discounts: snapDiscounts as never,
       tax: Number.isFinite(parsedTaxForGate) ? parsedTaxForGate : 0,
       total: toNum(totalStr, 0),
     });
@@ -1007,28 +1004,8 @@ export default function ScanReviewScreen() {
       const snapshotDiscounts = Array.isArray(
         (snapshot as { discounts?: unknown }).discounts
       )
-        ? ((snapshot as { discounts: unknown[] }).discounts as Array<
-            Record<string, unknown>
-          >)
+        ? (snapshot as { discounts: unknown[] }).discounts
         : [];
-      const safeDiscounts = invalidateProductCouponOwnershipMetadata(
-        snapshotDiscounts.map((d) => ({
-          label: typeof d.label === 'string' ? d.label : '値引',
-          amount: Number(d.amount) || 0,
-          adjacentPrecedingItemIndex:
-            typeof d.adjacentPrecedingItemIndex === 'number'
-              ? d.adjacentPrecedingItemIndex
-              : null,
-          ownershipStatus:
-            d.ownershipStatus === 'bound' || d.ownershipStatus === 'unbound'
-              ? d.ownershipStatus
-              : null,
-          boundItemIndex:
-            typeof d.boundItemIndex === 'number' ? d.boundItemIndex : null,
-          ownershipReason:
-            typeof d.ownershipReason === 'string' ? d.ownershipReason : null,
-        }))
-      );
 
       const finalAnalysis = appendUserCorrections(
         mergeReviewSnapshotPreservingEvidence(snapshot as Record<string, unknown>, {
@@ -1043,9 +1020,9 @@ export default function ScanReviewScreen() {
           tax_is_known: taxIsKnown,
           currency: currency.trim() || 'JPY',
           items: finalItemsForSave,
-          // Receipt074 Round 3 A1: Review mutations invalidate product-coupon
-          // ownership stamps so save/reload recomputes deterministically.
-          discounts: safeDiscounts,
+          // Ownership is reconciled by projectReviewedMonetaryTruth at save.
+          // Recognition snapshot discounts stay on draft.recognitionSnapshot.
+          discounts: snapshotDiscounts,
           review_meta,
         }),
         receiptCorrectionEvents
@@ -1223,9 +1200,7 @@ export default function ScanReviewScreen() {
           taxStr={taxStr}
           currency={currency}
           note={note}
-          amountMismatch={
-            Boolean(snapshot?.amount_mismatch) || saveBlockedByOverage
-          }
+          amountMismatch={reviewedAmountWarningVisible(scanReviewSaveEligibility)}
           dateNeedsConfirm={reviewDateNeedsConfirm(dateStr, merchant)}
           editable={!saving}
           onMerchantChange={setMerchant}

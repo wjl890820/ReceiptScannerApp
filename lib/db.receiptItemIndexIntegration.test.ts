@@ -686,4 +686,195 @@ describe('receipt mutation derived-index integration', () => {
       expect.objectContaining({ operation: 'clear' })
     );
   });
+
+  it('reviewedSave defense keeps a malformed applied discount', async () => {
+    const id = await saveReceipt({
+      imageUri: 'file://malformed-applied.jpg',
+      reviewedSave: true,
+      analysis: {
+        merchant: 'Test',
+        total: 100,
+        tax: 0,
+        currency: 'JPY',
+        items: [
+          {
+            name: '品',
+            quantity: 1,
+            lineTotal: 100,
+            effectiveLineTotal: 100,
+            discountAllocated: 0,
+            review_source_index: 0,
+          },
+        ],
+        discounts: [
+          {
+            label: '値引',
+            amount: -10,
+            reviewedMonetaryRole: 'applied',
+            ownershipStatus: 'bound',
+            boundItemIndex: 0,
+            sourceBoundItemIndex: 0,
+          },
+        ],
+      },
+    });
+    const saved = JSON.parse((await getReceipt(id))!.analysis_json) as {
+      amount_mismatch: boolean;
+      discounts: { amount: number; reviewedMonetaryRole: string; boundItemIndex: number | null }[];
+      reconciliation: { itemsPositiveSum: number; discountsSum: number; diff: number };
+      analysis_outputs_v1: {
+        receipt_level: { shopping_signals: { key: string; value?: number }[] };
+      };
+    };
+    const signal = (key: string) =>
+      saved.analysis_outputs_v1.receipt_level.shopping_signals.find((row) => row.key === key)?.value;
+    expect(saved.reconciliation.itemsPositiveSum).toBe(100);
+    expect(saved.reconciliation.discountsSum).toBe(-10);
+    expect(saved.reconciliation.itemsPositiveSum + saved.reconciliation.discountsSum).toBe(90);
+    expect(saved.amount_mismatch).toBe(true);
+    expect(saved.discounts[0]).toMatchObject({
+      amount: -10,
+      reviewedMonetaryRole: 'unapplied',
+      boundItemIndex: null,
+    });
+    expect(signal('merchandise_amount')).toBe(100);
+    expect(signal('receipt_level_discount')).toBe(-10);
+  });
+
+  it('reviewedSave keeps explicit unapplied beside a final-paid host', async () => {
+    const id = await saveReceipt({
+      imageUri: 'file://unapplied-final-paid.jpg',
+      reviewedSave: true,
+      analysis: {
+        merchant: 'Test',
+        total: 90,
+        tax: 0,
+        currency: 'JPY',
+        items: [
+          {
+            name: '品',
+            quantity: 1,
+            lineTotal: 100,
+            effectiveLineTotal: 100,
+            discountAllocated: 0,
+            amountUserEdited: true,
+            review_source_index: 0,
+          },
+        ],
+        discounts: [
+          {
+            label: '値引',
+            amount: -10,
+            reviewedMonetaryRole: 'unapplied',
+            ownershipStatus: 'unbound',
+            boundItemIndex: null,
+            sourceBoundItemIndex: 0,
+          },
+        ],
+      },
+    });
+    const saved = JSON.parse((await getReceipt(id))!.analysis_json) as {
+      amount_mismatch: boolean;
+      discounts: {
+        amount: number;
+        reviewedMonetaryRole: string;
+        sourceBoundItemIndex: number | null;
+      }[];
+      reconciliation: { itemsPositiveSum: number; discountsSum: number };
+    };
+    expect(saved.reconciliation.itemsPositiveSum).toBe(100);
+    expect(saved.reconciliation.discountsSum).toBe(-10);
+    expect(saved.amount_mismatch).toBe(false);
+    expect(saved.discounts[0]).toMatchObject({
+      amount: -10,
+      reviewedMonetaryRole: 'unapplied',
+      sourceBoundItemIndex: 0,
+    });
+  });
+
+  it('reviewedSave does not persist a positive amount as authoritative applied', async () => {
+    const id = await saveReceipt({
+      imageUri: 'file://positive-reviewed.jpg',
+      reviewedSave: true,
+      analysis: {
+        merchant: 'Test',
+        total: 100,
+        tax: 0,
+        currency: 'JPY',
+        items: [
+          {
+            name: '品',
+            quantity: 1,
+            lineTotal: 100,
+            effectiveLineTotal: 100,
+            discountAllocated: 0,
+            review_source_index: 0,
+          },
+        ],
+        discounts: [
+          {
+            label: '値引',
+            amount: 10,
+            reviewedMonetaryRole: 'applied',
+            ownershipStatus: 'bound',
+            boundItemIndex: 0,
+            sourceBoundItemIndex: 0,
+          },
+        ],
+      },
+    });
+    const saved = JSON.parse((await getReceipt(id))!.analysis_json) as {
+      discounts: { reviewedMonetaryRole: string; amount: number }[];
+      reconciliation: { itemsPositiveSum: number; discountsSum: number };
+    };
+    expect(saved.discounts[0].reviewedMonetaryRole).not.toBe('applied');
+    expect(saved.reconciliation.itemsPositiveSum + saved.reconciliation.discountsSum).toBe(90);
+  });
+
+  it('reviewedSave normalizes a stale absorbed allocation instead of trusting it', async () => {
+    const id = await saveReceipt({
+      imageUri: 'file://stale-absorbed.jpg',
+      reviewedSave: true,
+      analysis: {
+        merchant: 'Test',
+        total: 100,
+        tax: 0,
+        currency: 'JPY',
+        items: [
+          {
+            name: '品',
+            quantity: 1,
+            lineTotal: 100,
+            effectiveLineTotal: 100,
+            discountAllocated: -10,
+            amountUserEdited: true,
+            review_source_index: 0,
+          },
+        ],
+        discounts: [
+          {
+            label: '値引',
+            amount: -10,
+            reviewedMonetaryRole: 'absorbed',
+            ownershipStatus: 'absorbed',
+            boundItemIndex: null,
+            sourceBoundItemIndex: 0,
+          },
+        ],
+      },
+    });
+    const saved = JSON.parse((await getReceipt(id))!.analysis_json) as {
+      items: { discountAllocated?: number; lineTotal: number }[];
+      discounts: { reviewedMonetaryRole: string; amount: number }[];
+      reconciliation: { itemsPositiveSum: number; discountsSum: number };
+    };
+    expect(saved.items[0].discountAllocated).toBe(0);
+    expect(saved.items[0].lineTotal).toBe(100);
+    expect(saved.discounts[0]).toMatchObject({
+      reviewedMonetaryRole: 'absorbed',
+      amount: -10,
+    });
+    expect(saved.reconciliation.itemsPositiveSum).toBe(100);
+    expect(saved.reconciliation.discountsSum).toBe(0);
+  });
 });

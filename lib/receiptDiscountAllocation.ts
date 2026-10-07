@@ -3,6 +3,404 @@
  * Source of truth remains analysis_json items + discounts[].
  */
 
+export function isAbsorbedReviewedDiscount(discount: {
+  ownershipStatus?: unknown;
+  reviewedMonetaryRole?: unknown;
+}): boolean {
+  return (
+    discount.ownershipStatus === 'absorbed' ||
+    discount.reviewedMonetaryRole === 'absorbed'
+  );
+}
+
+function reviewedRoleOf(
+  discount: DiscountLine
+): 'applied' | 'unapplied' | 'absorbed' | null {
+  const role = discount.reviewedMonetaryRole;
+  if (role === 'applied' || role === 'unapplied' || role === 'absorbed') return role;
+  return null;
+}
+
+/**
+ * Index of the reviewed item that still hosts this discount.
+ * `sourceBoundItemIndex` is the original row. When items carry
+ * `review_source_index`, a missing match means the host was removed.
+ * Without source indexes, the original index is the current array index.
+ */
+export function findReviewedDiscountHostIndex(
+  items: readonly DiscountableItem[],
+  originalIndex: number | null
+): number | null {
+  if (originalIndex == null || !Number.isInteger(originalIndex)) return null;
+  const hasSource = items.some(
+    (item) =>
+      typeof item.review_source_index === 'number' &&
+      Number.isInteger(item.review_source_index)
+  );
+  if (hasSource) {
+    const found = items.findIndex(
+      (item) => item.review_source_index === originalIndex
+    );
+    return found >= 0 ? found : null;
+  }
+  if (originalIndex >= 0 && originalIndex < items.length) return originalIndex;
+  return null;
+}
+
+function activeAllocatedAmount(item: DiscountableItem | null | undefined): number {
+  if (!item || item.amountUserEdited === true) return 0;
+  const allocated = Number(item.discountAllocated);
+  if (!Number.isFinite(allocated) || allocated === 0) return 0;
+  return allocated < 0 ? allocated : -Math.abs(allocated);
+}
+
+export function reviewedDiscountAmount(amount: unknown): number | null {
+  const n = typeof amount === 'number' ? amount : Number(amount);
+  if (!Number.isFinite(n) || n === 0) return null;
+  return n < 0 ? n : -Math.abs(n);
+}
+
+/**
+ * Amount passed into reviewed-role assessment.
+ * Rows with a reviewed role keep the persisted sign.
+ * Rows without a role keep the historical negative normalization.
+ */
+export function persistedDiscountAmount(
+  amount: unknown,
+  reviewedMonetaryRole: unknown
+): number | null {
+  const reviewed =
+    reviewedMonetaryRole === 'applied' ||
+    reviewedMonetaryRole === 'unapplied' ||
+    reviewedMonetaryRole === 'absorbed';
+  if (reviewed) {
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount === 0) return null;
+    return amount;
+  }
+  const n = typeof amount === 'number' ? amount : Number(amount);
+  if (!Number.isFinite(n) || n === 0) return null;
+  return n < 0 ? n : -Math.abs(n);
+}
+
+/** Authoritative reviewed rows must already be finite and strictly negative. */
+function strictReviewedDiscountAmount(amount: unknown): number | null {
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount >= 0) return null;
+  return amount;
+}
+
+/** Persisted allocation, including a stale value on a final-paid line. */
+function persistedDiscountAllocation(item: DiscountableItem | null | undefined): number {
+  if (!item) return 0;
+  const allocated = Number(item.discountAllocated);
+  if (!Number.isFinite(allocated) || allocated === 0) return 0;
+  return allocated < 0 ? allocated : -Math.abs(allocated);
+}
+
+function reviewedIndex(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null;
+}
+
+function itemGrossAmount(item: DiscountableItem): number | null {
+  const camel = Number(item.lineTotal);
+  const snake = Number(item.line_total);
+  const camelOk = Number.isFinite(camel);
+  const snakeOk = Number.isFinite(snake);
+  if (camelOk && snakeOk && camel !== snake) return null;
+  if (camelOk) return camel;
+  if (snakeOk) return snake;
+  return null;
+}
+
+function itemEffectiveAmount(item: DiscountableItem): number | null {
+  const effective = Number(item.effectiveLineTotal);
+  return Number.isFinite(effective) ? effective : null;
+}
+
+function itemAllocatedAmount(item: DiscountableItem): number | null {
+  const allocated = Number(item.discountAllocated);
+  if (!Number.isFinite(allocated)) return null;
+  if (allocated === 0) return 0;
+  return allocated < 0 ? allocated : -Math.abs(allocated);
+}
+
+/** Gross + negative allocation equals effective. Final-paid lines are not this proof. */
+export function hostAllocationEquationHolds(item: DiscountableItem): boolean {
+  if (item.amountUserEdited === true) return false;
+  const gross = itemGrossAmount(item);
+  const allocated = itemAllocatedAmount(item);
+  const effective = itemEffectiveAmount(item);
+  if (gross == null || allocated == null || effective == null) return false;
+  if (allocated >= 0) return false;
+  return effective === gross + allocated;
+}
+
+/**
+ * Host a reviewed discount still points at.
+ * `boundItemIndex` must be that current index when both indexes are present.
+ * A contradiction yields null so the amount is not treated as inside an item.
+ */
+export function reviewedDiscountHostIndex(
+  items: readonly DiscountableItem[],
+  discount: DiscountLine
+): number | null {
+  const source = reviewedIndex(discount.sourceBoundItemIndex);
+  const bound = reviewedIndex(discount.boundItemIndex);
+  const original = source ?? bound;
+  if (original == null) return null;
+  const host = findReviewedDiscountHostIndex(items, original);
+  if (host == null) return null;
+  if (source != null && bound != null && bound !== host) return null;
+  return host;
+}
+
+function discountsTargetingHost(
+  items: readonly DiscountableItem[],
+  discounts: readonly { discount: DiscountLine; amount: number }[],
+  hostIndex: number
+): { discount: DiscountLine; amount: number }[] {
+  return discounts.filter(
+    (row) => reviewedDiscountHostIndex(items, row.discount) === hostIndex
+  );
+}
+
+/**
+ * Receipt-level portion that keeps every finite discount exactly once.
+ * Money already proven inside an item effective amount is not added again.
+ * Money that is not proven inside an item is added once and not rebound.
+ */
+export function conservativeReviewedReceiptLevel(
+  items: readonly DiscountableItem[],
+  discounts: readonly DiscountLine[]
+): number {
+  const rows: { discount: DiscountLine; amount: number }[] = [];
+  let receiptLevel = 0;
+  for (const discount of discounts) {
+    const amount = reviewedDiscountAmount(discount?.amount);
+    if (amount == null || !discount) continue;
+    // Explicit unapplied is receipt-level ownership. A provenance source
+    // index, including one that still points at a final-paid host, is not
+    // monetary absorption.
+    if (reviewedRoleOf(discount) === 'unapplied') {
+      receiptLevel += amount;
+      continue;
+    }
+    rows.push({ discount, amount });
+  }
+  const consumed = new Set<DiscountLine>();
+  for (let index = 0; index < items.length; index += 1) {
+    const targeted = discountsTargetingHost(items, rows, index);
+    if (targeted.length === 0) continue;
+    for (const row of targeted) consumed.add(row.discount);
+    const host = items[index];
+    const sum = targeted.reduce((total, row) => total + row.amount, 0);
+    if (host?.amountUserEdited === true && activeAllocatedAmount(host) === 0) {
+      continue;
+    }
+    if (hostAllocationEquationHolds(host)) {
+      const allocated = itemAllocatedAmount(host) ?? 0;
+      const residual = sum - allocated;
+      if (residual < 0) receiptLevel += residual;
+      continue;
+    }
+    const gross = itemGrossAmount(host);
+    const effective = itemEffectiveAmount(host);
+    if (gross != null && effective != null && effective === gross + sum) {
+      continue;
+    }
+    receiptLevel += sum;
+  }
+  for (const row of rows) {
+    if (!consumed.has(row.discount)) receiptLevel += row.amount;
+  }
+  return Math.round(receiptLevel);
+}
+
+export type ReviewedRoleSetKind = 'legacy' | 'valid_reviewed' | 'invalid_reviewed';
+
+export type ReviewedRoleSetAssessment = {
+  kind: ReviewedRoleSetKind;
+  /** Null only for legacy. Valid and invalid both carry a once-counted remainder. */
+  receiptLevelDiscount: number | null;
+  evidence: string;
+};
+
+function appliedGroupIsProven(
+  items: readonly DiscountableItem[],
+  hostIndex: number,
+  rows: readonly { discount: DiscountLine; amount: number }[]
+): boolean {
+  const host = items[hostIndex];
+  if (!host || host.amountUserEdited === true) return false;
+  if (!hostAllocationEquationHolds(host)) return false;
+  const allocated = itemAllocatedAmount(host);
+  if (allocated == null || allocated >= 0) return false;
+  const sum = rows.reduce((total, row) => total + row.amount, 0);
+  if (sum !== allocated) return false;
+  return rows.every((row) => {
+    if (row.discount.ownershipStatus != null && row.discount.ownershipStatus !== 'bound') {
+      return false;
+    }
+    return reviewedIndex(row.discount.boundItemIndex) === hostIndex;
+  });
+}
+
+/**
+ * LEGACY: no reviewed roles. VALID_REVIEWED: every role is internally consistent.
+ * INVALID_REVIEWED: any reviewed role is missing, partial, or contradicted by money.
+ */
+export function assessReviewedDiscountRoleSet(
+  items: readonly DiscountableItem[],
+  discounts: readonly DiscountLine[]
+): ReviewedRoleSetAssessment {
+  const list = Array.isArray(discounts) ? discounts.filter((row) => row && typeof row === 'object') : [];
+  if (list.length === 0) {
+    return {
+      kind: 'legacy',
+      receiptLevelDiscount: null,
+      evidence: 'reviewed_role_set=legacy',
+    };
+  }
+  const roles = list.map((discount) => reviewedRoleOf(discount));
+  const present = roles.filter((role) => role != null).length;
+  const receiptLevel = conservativeReviewedReceiptLevel(items, list);
+  if (present === 0) {
+    return {
+      kind: 'legacy',
+      receiptLevelDiscount: null,
+      evidence: 'reviewed_role_set=legacy',
+    };
+  }
+  if (present !== list.length) {
+    return {
+      kind: 'invalid_reviewed',
+      receiptLevelDiscount: receiptLevel,
+      evidence: 'reviewed_role_set=partial',
+    };
+  }
+
+  const appliedByHost = new Map<number, { discount: DiscountLine; amount: number }[]>();
+  let structurallyValid = true;
+  for (const discount of list) {
+    const role = reviewedRoleOf(discount);
+    const amount = strictReviewedDiscountAmount(discount.amount);
+    if (!role || amount == null) {
+      structurallyValid = false;
+      break;
+    }
+    const hostIndex = reviewedDiscountHostIndex(items, discount);
+    if (role === 'applied') {
+      if (hostIndex == null) {
+        structurallyValid = false;
+        break;
+      }
+      const group = appliedByHost.get(hostIndex) ?? [];
+      group.push({ discount, amount });
+      appliedByHost.set(hostIndex, group);
+      continue;
+    }
+    if (role === 'absorbed') {
+      const host = hostIndex == null ? null : items[hostIndex];
+      if (
+        !host ||
+        host.amountUserEdited !== true ||
+        persistedDiscountAllocation(host) !== 0
+      ) {
+        structurallyValid = false;
+        break;
+      }
+    }
+  }
+
+  if (structurallyValid) {
+    for (const discount of list) {
+      if (reviewedRoleOf(discount) !== 'unapplied') continue;
+      const amount = strictReviewedDiscountAmount(discount.amount);
+      const hostIndex = reviewedDiscountHostIndex(items, discount);
+      if (amount == null || hostIndex == null) continue;
+      const host = items[hostIndex];
+      const applied = appliedByHost.get(hostIndex) ?? [];
+      const appliedExplainsHost =
+        applied.length > 0 && appliedGroupIsProven(items, hostIndex, applied);
+      if (appliedExplainsHost) continue;
+      if (hostAllocationEquationHolds(host)) {
+        structurallyValid = false;
+        break;
+      }
+      const gross = itemGrossAmount(host);
+      const effective = itemEffectiveAmount(host);
+      if (gross != null && effective != null && effective === gross + amount) {
+        structurallyValid = false;
+        break;
+      }
+    }
+  }
+
+  if (structurallyValid) {
+    for (const [hostIndex, group] of appliedByHost) {
+      if (!appliedGroupIsProven(items, hostIndex, group)) {
+        structurallyValid = false;
+        break;
+      }
+    }
+  }
+
+  if (!structurallyValid) {
+    return {
+      kind: 'invalid_reviewed',
+      receiptLevelDiscount: receiptLevel,
+      evidence: 'reviewed_role_set=contradictory',
+    };
+  }
+  return {
+    kind: 'valid_reviewed',
+    receiptLevelDiscount: receiptLevel,
+    evidence: 'reviewed_role_set=valid',
+  };
+}
+
+/**
+ * Receipt-level amount for one persisted reviewed discount.
+ * Prefer assessReviewedDiscountRoleSet for a whole discount list.
+ * Null means this row has no reviewed role.
+ * Applied contributes 0 only when this discount alone reconciles the host.
+ */
+export function reviewedDiscountReceiptLevelAmount(
+  items: readonly DiscountableItem[],
+  discount: DiscountLine
+): number | null {
+  const role = reviewedRoleOf(discount);
+  if (!role) return null;
+  const normalized = reviewedDiscountAmount(discount.amount);
+  if (normalized == null) return 0;
+  const hostIndex = reviewedDiscountHostIndex(items, discount);
+  const host = hostIndex == null ? null : items[hostIndex];
+
+  if (role === 'unapplied') return normalized;
+
+  if (role === 'applied') {
+    if (!host || !hostAllocationEquationHolds(host)) return normalized;
+    return itemAllocatedAmount(host) === normalized ? 0 : normalized;
+  }
+
+  if (!host || host.amountUserEdited !== true || activeAllocatedAmount(host) !== 0) {
+    return normalized;
+  }
+  return 0;
+}
+
+/**
+ * Receipt-level sum for a complete valid reviewed set.
+ * Null means the set is legacy or invalid — callers must not treat null as zero.
+ */
+export function authoritativeReviewedReceiptLevelDiscount(
+  items: readonly DiscountableItem[],
+  discounts: readonly DiscountLine[]
+): number | null {
+  const assessed = assessReviewedDiscountRoleSet(items, discounts);
+  if (assessed.kind !== 'valid_reviewed') return null;
+  return assessed.receiptLevelDiscount;
+}
+
 export type DiscountLine = {
   label: string;
   amount: number;
@@ -16,9 +414,18 @@ export type DiscountLine = {
    * When present, product-affecting coupons must be proven individually —
    * never via aggregate allocated magnitude.
    */
-  ownershipStatus?: 'bound' | 'unbound' | null;
+  ownershipStatus?: 'bound' | 'unbound' | 'absorbed' | null;
   boundItemIndex?: number | null;
   ownershipReason?: string | null;
+  /**
+   * Reviewed monetary role. `absorbed` means a final-paid line edit already
+   * includes this discount, so receipt-level summation must skip it.
+   * Recognition snapshots do not use this field.
+   */
+  reviewedMonetaryRole?: 'applied' | 'unapplied' | 'absorbed' | null;
+  /** Original item index this discount was bound to, before review compaction. */
+  sourceBoundItemIndex?: number | null;
+  sourceAdjacentPrecedingItemIndex?: number | null;
 };
 
 export type DiscountBinding = {
@@ -1162,6 +1569,7 @@ export function receiptLevelUnallocatedDiscountSum(
 ): number {
   const discList = Array.isArray(discounts) ? discounts : [];
   const discountsSum = discList.reduce((s, d) => {
+    if (isAbsorbedReviewedDiscount(d)) return s;
     const amount = Number(d?.amount);
     if (!Number.isFinite(amount) || amount === 0) return s;
     return s + (amount < 0 ? amount : -Math.abs(amount));

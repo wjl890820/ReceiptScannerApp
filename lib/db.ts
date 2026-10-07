@@ -1054,22 +1054,19 @@ export async function saveReceipt(
   // Defense-in-depth for Scan Review: refuse unexplained positive overage.
   // Production home path uses Review; this blocks reviewedSave bypasses.
   if (params.reviewedSave) {
-    const { evaluateScanReviewSaveEligibility, sumPositiveMerchandiseLineTotals, sumReceiptDiscountAmounts } =
-      await import('./scanReviewSaveSafety');
+    const { evaluateReviewedReceiptSaveEligibility } = await import(
+      './reviewedDerivedAnalysis'
+    );
     const analysis = (params.analysis ?? {}) as {
       items?: { lineTotal?: unknown; line_total?: unknown }[];
-      discounts?: { amount?: unknown }[];
+      discounts?: { amount?: unknown; label?: string }[];
       tax?: unknown;
       total?: unknown;
     };
     const taxN = Number(analysis.tax);
-    const gate = evaluateScanReviewSaveEligibility({
-      itemsPositiveSum: sumPositiveMerchandiseLineTotals(
-        Array.isArray(analysis.items) ? analysis.items : []
-      ),
-      discountsSum: sumReceiptDiscountAmounts(
-        Array.isArray(analysis.discounts) ? analysis.discounts : []
-      ),
+    const gate = evaluateReviewedReceiptSaveEligibility({
+      items: Array.isArray(analysis.items) ? (analysis.items as never) : [],
+      discounts: Array.isArray(analysis.discounts) ? (analysis.discounts as never) : [],
       tax: Number.isFinite(taxN) ? taxN : 0,
       total: Number(analysis.total) || 0,
     });

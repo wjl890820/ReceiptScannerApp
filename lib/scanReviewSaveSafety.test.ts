@@ -131,7 +131,7 @@ describe('scanReviewSaveSafety — Receipt080 A1', () => {
       path.join(__dirname, '../app/scan-review/[draftId].tsx'),
       'utf8'
     );
-    expect(reviewSrc).toContain('evaluateScanReviewSaveEligibility');
+    expect(reviewSrc).toContain('evaluateReviewedReceiptSaveEligibility');
     expect(reviewSrc).toContain('saveBlocked={saveBlockedByOverage}');
     expect(reviewSrc).toContain('if (!saveGate.allowed)');
     // Block happens before saveReceipt
@@ -143,8 +143,8 @@ describe('scanReviewSaveSafety — Receipt080 A1', () => {
 
   it('saveReceipt defense-in-depth guards reviewedSave overage', () => {
     const dbSrc = fs.readFileSync(path.join(__dirname, 'db.ts'), 'utf8');
-    expect(dbSrc).toContain('scanReviewSaveSafety');
+    expect(dbSrc).toContain('reviewedDerivedAnalysis');
     expect(dbSrc).toContain('params.reviewedSave');
-    expect(dbSrc).toContain('evaluateScanReviewSaveEligibility');
+    expect(dbSrc).toContain('evaluateReviewedReceiptSaveEligibility');
   });
 });

@@ -12,8 +12,11 @@ import {
   hasUnresolvedProductAffectingCoupons,
   isBundleSummaryDiscountLabel,
   isProductAffectingCouponLabel,
+  assessReviewedDiscountRoleSet,
+  isAbsorbedReviewedDiscount,
   itemAmountForAnalytics,
   receiptLevelUnallocatedDiscountSum,
+  reviewedDiscountReceiptLevelAmount,
   type DiscountableItem,
   type DiscountLine,
 } from '../receiptDiscountAllocation';
@@ -252,6 +255,73 @@ export function resolveDiscountOwnership(input: {
   const hasDiscounts = ocrDiscounts.length > 0;
   const hasPersisted = anyPersistedOwnership(ocrItems);
   const persistedOk = allItemsPersistedConsistent(ocrItems);
+
+  // Reviewed roles are a set, not a single nullable amount.
+  // Legacy: no roles, keep the resolver below.
+  // Valid: roles are authoritative and are not reallocated.
+  // Invalid: do not trust the role and do not reallocate. Count each finite
+  // discount once. Unproven applied money stays at receipt level.
+  const reviewedRoles = assessReviewedDiscountRoleSet(ocrItems, ocrDiscounts);
+  if (reviewedRoles.kind === 'invalid_reviewed') {
+    evidence.push('discount_ownership=reviewed_role_invalid');
+    evidence.push(reviewedRoles.evidence);
+    reasonCodes.push('invalid_reviewed_monetary_role');
+    const evidenceTexts = extractDiscountEvidenceTexts(
+      input.analysis ?? null,
+      ocrItems
+    );
+    if (
+      hasUnresolvedProductAffectingCoupons(ocrItems, ocrDiscounts, {
+        evidenceTexts,
+      })
+    ) {
+      return unresolvedProductCouponOwnership(ocrItems, evidence, reasonCodes);
+    }
+    return {
+      status: 'persisted_resolved',
+      items: ocrItems,
+      analyticsItemSum: sumAnalytics(ocrItems),
+      genuineReceiptLevelRemainder: reviewedRoles.receiptLevelDiscount ?? 0,
+      boundDiscountTotal: sumAllocated(ocrItems),
+      evidence,
+      reasonCodes,
+    };
+  }
+  if (reviewedRoles.kind === 'valid_reviewed') {
+    evidence.push('discount_ownership=reviewed_role_authoritative');
+    evidence.push(reviewedRoles.evidence);
+    if (!persistedOk) {
+      evidence.push('persisted_items_inconsistent_reviewed_roles_not_reallocated');
+      reasonCodes.push('persisted_discount_allocation_inconsistent');
+    }
+    // Valid absorbed rows already live inside a final-paid item. They must not
+    // be re-probed into unresolved. Every other reviewed row, including an
+    // unbound product coupon, still fails closed on the Receipt074 check.
+    const discountsForCouponProbe = ocrDiscounts.filter((discount) => {
+      if (!isAbsorbedReviewedDiscount(discount)) return true;
+      return reviewedDiscountReceiptLevelAmount(ocrItems, discount) !== 0;
+    });
+    const evidenceTexts = extractDiscountEvidenceTexts(
+      input.analysis ?? null,
+      ocrItems
+    );
+    if (
+      hasUnresolvedProductAffectingCoupons(ocrItems, discountsForCouponProbe, {
+        evidenceTexts,
+      })
+    ) {
+      return unresolvedProductCouponOwnership(ocrItems, evidence, reasonCodes);
+    }
+    return {
+      status: 'persisted_resolved',
+      items: ocrItems,
+      analyticsItemSum: sumAnalytics(ocrItems),
+      genuineReceiptLevelRemainder: reviewedRoles.receiptLevelDiscount ?? 0,
+      boundDiscountTotal: sumAllocated(ocrItems),
+      evidence,
+      reasonCodes,
+    };
+  }
 
   // Persisted fields present but mathematically inconsistent → do not trust.
   if (!persistedOk) {

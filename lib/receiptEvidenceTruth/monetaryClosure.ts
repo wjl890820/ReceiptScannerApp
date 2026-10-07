@@ -8,7 +8,11 @@
 import type { ReceiptRow } from '../db';
 import { AMOUNT_BASIS_TOLERANCE_JPY } from '../analysisFoundation/amountBasis';
 import { resolveDiscountOwnership } from '../analysisFoundation/discountOwnership';
-import type { DiscountableItem, DiscountLine } from '../receiptDiscountAllocation';
+import {
+  persistedDiscountAmount,
+  type DiscountableItem,
+  type DiscountLine,
+} from '../receiptDiscountAllocation';
 import {
   hasFinitePositive,
   type ReceiptMonetarySourceBundle,
@@ -49,24 +53,36 @@ function readAnalysisDiscounts(analysis: Record<string, unknown> | null): Discou
   for (const d of discounts) {
     if (!d || typeof d !== 'object') continue;
     const row = d as Record<string, unknown>;
-    const amount = Number(row.amount);
-    if (!Number.isFinite(amount) || amount === 0) continue;
+    const amount = persistedDiscountAmount(row.amount, row.reviewedMonetaryRole);
+    if (amount == null) continue;
     const label = typeof row.label === 'string' ? row.label : '';
     out.push({
       label,
-      amount: amount < 0 ? amount : -Math.abs(amount),
+      amount,
       adjacentPrecedingItemIndex:
         typeof row.adjacentPrecedingItemIndex === 'number'
           ? row.adjacentPrecedingItemIndex
           : null,
       ownershipStatus:
-        row.ownershipStatus === 'bound' || row.ownershipStatus === 'unbound'
+        row.ownershipStatus === 'bound' ||
+        row.ownershipStatus === 'unbound' ||
+        row.ownershipStatus === 'absorbed'
           ? row.ownershipStatus
           : null,
       boundItemIndex:
         typeof row.boundItemIndex === 'number' ? row.boundItemIndex : null,
       ownershipReason:
         typeof row.ownershipReason === 'string' ? row.ownershipReason : null,
+      reviewedMonetaryRole:
+        row.reviewedMonetaryRole === 'applied' ||
+        row.reviewedMonetaryRole === 'unapplied' ||
+        row.reviewedMonetaryRole === 'absorbed'
+          ? row.reviewedMonetaryRole
+          : null,
+      sourceBoundItemIndex:
+        typeof row.sourceBoundItemIndex === 'number'
+          ? row.sourceBoundItemIndex
+          : null,
     });
   }
   return out;

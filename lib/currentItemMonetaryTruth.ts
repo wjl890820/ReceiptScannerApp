@@ -20,6 +20,7 @@ import {
 } from './analysisFoundation/discountOwnership';
 import {
   ownershipBaseIdentityKey,
+  persistedDiscountAmount,
   type DiscountableItem,
   type DiscountLine,
 } from './receiptDiscountAllocation';
@@ -28,6 +29,7 @@ export type CurrentItemMonetaryTruthSource = {
   recovered: boolean;
   ownershipStatus: DiscountOwnershipResolution['status'] | null;
   items: DiscountableItem[];
+  reasonCodes: string[];
 };
 
 type AnalysisObject = Record<string, unknown>;
@@ -87,23 +89,33 @@ function readAnalysisDiscounts(analysis: AnalysisObject): DiscountLine[] {
   for (const row of raw) {
     if (!row || typeof row !== 'object') continue;
     const d = row as Record<string, unknown>;
-    const amount = Number(d.amount);
-    if (!Number.isFinite(amount) || amount === 0) continue;
+    const amount = persistedDiscountAmount(d.amount, d.reviewedMonetaryRole);
+    if (amount == null) continue;
     const label = typeof d.label === 'string' ? d.label : '値引';
     const adj = d.adjacentPrecedingItemIndex;
     out.push({
       label,
-      amount: amount < 0 ? amount : -Math.abs(amount),
+      amount,
       adjacentPrecedingItemIndex:
         typeof adj === 'number' && Number.isInteger(adj) ? adj : null,
       ownershipStatus:
-        d.ownershipStatus === 'bound' || d.ownershipStatus === 'unbound'
+        d.ownershipStatus === 'bound' ||
+        d.ownershipStatus === 'unbound' ||
+        d.ownershipStatus === 'absorbed'
           ? d.ownershipStatus
           : null,
       boundItemIndex:
         typeof d.boundItemIndex === 'number' ? d.boundItemIndex : null,
       ownershipReason:
         typeof d.ownershipReason === 'string' ? d.ownershipReason : null,
+      reviewedMonetaryRole:
+        d.reviewedMonetaryRole === 'applied' ||
+        d.reviewedMonetaryRole === 'unapplied' ||
+        d.reviewedMonetaryRole === 'absorbed'
+          ? d.reviewedMonetaryRole
+          : null,
+      sourceBoundItemIndex:
+        typeof d.sourceBoundItemIndex === 'number' ? d.sourceBoundItemIndex : null,
     });
   }
   return out;
@@ -142,18 +154,19 @@ export function resolveCurrentAnalysisItemMonetaryTruth(
 ): CurrentItemMonetaryTruthSource {
   const analysis = parseAnalysisObject(analysisJson);
   if (!analysis) {
-    return { recovered: false, ownershipStatus: null, items: [] };
+    return { recovered: false, ownershipStatus: null, items: [], reasonCodes: [] };
   }
   const ocrItems = readAnalysisItems(analysis);
   const ocrDiscounts = readAnalysisDiscounts(analysis);
   if (ocrItems.length === 0) {
-    return { recovered: false, ownershipStatus: 'no_discounts', items: ocrItems };
+    return { recovered: false, ownershipStatus: 'no_discounts', items: ocrItems, reasonCodes: [] };
   }
   if (ocrDiscounts.length === 0) {
     return {
       recovered: false,
       ownershipStatus: 'no_discounts',
       items: ocrItems,
+      reasonCodes: [],
     };
   }
 
@@ -171,6 +184,7 @@ export function resolveCurrentAnalysisItemMonetaryTruth(
       recovered: false,
       ownershipStatus: ownership.status,
       items: ocrItems,
+      reasonCodes: ownership.reasonCodes,
     };
   }
 
@@ -185,6 +199,7 @@ export function resolveCurrentAnalysisItemMonetaryTruth(
     recovered,
     ownershipStatus: ownership.status,
     items: ownership.items,
+    reasonCodes: ownership.reasonCodes,
   };
 }
 

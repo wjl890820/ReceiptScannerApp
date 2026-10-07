@@ -69,6 +69,17 @@ export function evaluateScanReviewSaveEligibility(input: {
   };
 }
 
+/**
+ * User-facing amount warning follows the live reviewed reconciliation.
+ * A stale recognition snapshot.amount_mismatch must not keep the banner up
+ * after the current basket closes, and must not hide a real current mismatch.
+ */
+export function reviewedAmountWarningVisible(
+  eligibility: Pick<ScanReviewSaveEligibility, 'reconciliationOk'>
+): boolean {
+  return eligibility.reconciliationOk === false;
+}
+
 /** Sum positive merchandise line amounts from Review/OCR item rows. */
 export function sumPositiveMerchandiseLineTotals(
   items: readonly { lineTotal?: unknown; line_total?: unknown }[]

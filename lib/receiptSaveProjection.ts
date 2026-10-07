@@ -5,6 +5,7 @@ import {
 import { resolvePersistedMerchantObservation } from './merchantObservationPersist';
 import type { ReceiptAnalysis } from './receiptAnalyzer';
 import { persistReceiptTaxFields } from './receiptOcrNormalize';
+import { refreshReviewedDerivedAnalysis } from './reviewedDerivedAnalysis';
 
 export type ReceiptSaveMaterialProjection = {
   merchantRaw: string | null;
@@ -85,8 +86,13 @@ export function projectReceiptSaveMaterialEvidence(input: {
     }
   }
   const items = Array.isArray(analysis.items) ? analysis.items : [];
+  // Review saves describe the current basket. Recognition saves keep the
+  // normalizer's own reconciliation and must not be rebuilt here.
+  const derivedAnalysis = input.reviewedSave
+    ? refreshReviewedDerivedAnalysis(analysis)
+    : analysis;
   const persistedAnalysis = {
-    ...analysis,
+    ...derivedAnalysis,
     merchant: merchant.merchantRaw ?? undefined,
     merchant_normalized: merchant.merchantNormalized,
     merchant_type: merchant.merchantType,
