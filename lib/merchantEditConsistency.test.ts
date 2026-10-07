@@ -377,6 +377,47 @@ describe('R1-B3b merchant edit consistency', () => {
     expect(row?.recognition_snapshot_json).toContain('scan-review');
   });
 
+  it('H3-A — reviewed full branch does not rewrite the recognition snapshot', async () => {
+    const id = await saveReceipt({
+      imageUri: 'file://branch-review.jpg',
+      reviewedSave: true,
+      recognitionSnapshot: { merchant: '架空スーパー', source: 'ocr' },
+      analysis: {
+        merchant: '架空スーパー古川南店',
+        total: 500,
+        tax: 0,
+        currency: 'JPY',
+        items: [{ name: 'パン' }],
+      },
+    });
+    const row = await getReceipt(id);
+    expect(row?.merchant_raw).toBe('架空スーパー古川南店');
+    expect(row?.merchant_normalized).toBe(
+      canonicalizeMerchantChain('架空スーパー古川南店')
+    );
+    const snapshot = JSON.parse(String(row?.recognition_snapshot_json));
+    expect(snapshot.merchant).toBe('架空スーパー');
+  });
+
+  it('H3-A — full-branch recognition snapshot stays the original evidence', async () => {
+    const id = await saveReceipt({
+      imageUri: 'file://branch-ocr.jpg',
+      reviewedSave: true,
+      recognitionSnapshot: { merchant: '架空スーパー古川南店', source: 'ocr' },
+      analysis: {
+        merchant: '架空スーパー古川南店',
+        total: 500,
+        tax: 0,
+        currency: 'JPY',
+        items: [{ name: 'パン' }],
+      },
+    });
+    const row = await getReceipt(id);
+    expect(row?.merchant_raw).toBe('架空スーパー古川南店');
+    const snapshot = JSON.parse(String(row?.recognition_snapshot_json));
+    expect(snapshot.merchant).toBe('架空スーパー古川南店');
+  });
+
   it('B — unknown → 7-Eleven → convenience + supported', async () => {
     const id = await saveReceipt({
       imageUri: 'file://seven.jpg',

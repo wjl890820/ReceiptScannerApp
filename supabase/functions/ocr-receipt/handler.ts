@@ -27,7 +27,7 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || '';
 const OCR_RATE_LIMIT_PER_HOUR = parseInt(Deno.env.get('OCR_RATE_LIMIT_PER_HOUR') || '30', 10);
 const OCR_CACHE_TTL_DAYS = parseInt(Deno.env.get('OCR_CACHE_TTL_DAYS') || '30', 10);
 /** Bump when OCR prompt / parser semantics change so stale cached totals cannot be reused. */
-const OCR_CACHE_VERSION = 15;
+const OCR_CACHE_VERSION = 16; // v16: merchant keeps the printed branch; do not invent one
 const MAX_IMAGE_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB decoded
 const REQUEST_TIMEOUT_MS = 25000; // 25 seconds
 
@@ -417,7 +417,7 @@ function buildOcrPrompt(): string {
     '',
     'スキーマ:',
     '{',
-    '  "merchant": string|null,            // 店名（例: セブン-イレブン）',
+    '  "merchant": string|null,            // 印刷され読み取れる最も具体的な店名（例はルール参照）',
     '  "transactionDate": string|null,     // 例 "YYYY/MM/DD HH:MM"（原文の形式のまま）',
     '  "total": number|null,               // 印刷された最終支払合計（整数 JPY）。自己計算しない',
     '  "tax": number|null,                 // 印刷された消費税額（整数 JPY）。無ければ null（0 で埋めない）',
@@ -560,14 +560,26 @@ function buildOcrPrompt(): string {
     '',
     '- 日本のコンビニ（セブン-イレブン / ファミリーマート / ローソン / ミニストップ）のレシートは、',
     '  「商品行 → 小計 → 値引 → 消費税(軽減税率含む) → 合計」の構造を優先して解釈する。',
-    '- merchant は印刷された店名・チェーン表記・明確に見えるロゴから転記する。',
-    '  レシート版式・商品構成・支払手段・書体・他チェーンとの類似・プロンプト内の例から推測しない。',
+    '- merchant は、レシートに明確に印刷され読み取れる、最も具体的な店名を転記する。',
+    '  印刷された店名・チェーン表記・明確に見えるロゴから転記する。',
+    '  レシート版式、住所だけ（印刷された店名の一部として明示されていない限り）、',
+    '  商品構成、支払手段、書体、他チェーンとの類似、チェーン知識、過去のレシート、',
+    '  モデルの一般知識、プロンプト内の例からは推測しない。',
     '  読めない場合は null（推測で埋めない）。',
+    '- チェーン名と支店・店舗・地域名が一緒に印刷され読み取れるときは、印刷された店名全文を残す。',
+    '  全文の店名をチェーン名だけに短くしない。この規則はすべての店に適用する。',
+    '  例（支店が印刷されている）: 印刷が「○○スーパー古川南店」→ merchant="○○スーパー古川南店"。',
+    '  例（チェーン名だけが確実に読める）: 印刷が「○○スーパー」→ merchant="○○スーパー"。',
+    '  印刷証拠がチェーン名だけならチェーン名だけを返す。存在しない支店を作らない。',
+    '  読めない支店を補うより、支店を省く方が正しい。',
+    '- 表記ゆれの正規化はブランド部分だけに限り、印刷された支店・地域の接尾を残す。',
+    '  ブランド部分が 7-Eleven / セブンイレブン / セブンーイレブン のとき、',
+    '  その部分だけ "セブン-イレブン" に正規化してよい。',
+    '  例: 印刷が「セブンイレブン仙台中央店」→ merchant="セブン-イレブン仙台中央店"。',
+    '  支店が印刷されているとき "セブン-イレブン" だけに短くしてはならない。',
     '  SEIYU / 西友 の印刷証拠があるときだけ SEIYU または 西友。',
     '  LAWSON / ローソン の印刷証拠があるときだけ ローソン。',
     '  印刷証拠なしに SEIYU↔ローソン を互いに変換しない。',
-    '- 店名が 7-Eleven / セブンイレブン / セブンーイレブン の場合は merchant を "セブン-イレブン" に正規化してよい。',
-    '- イオンは店名を短くしない（例: イオン古川店 はそのまま）。',
     '- レシート上に日時があれば transactionDate に原文の形式のまま入れる。',
     '  【日時・画像全体】レシート画像は上端から底部・フッターまで見る。長い Costco レシートでは、',
     '  取引日時が買上げ点数 / 御買上げ点数 の付近またはその下に印刷されていることが多い。',

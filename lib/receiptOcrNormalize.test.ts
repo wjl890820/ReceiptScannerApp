@@ -856,3 +856,109 @@ describe('Receipt065 final tax normalization', () => {
     expect(receiptLevelUnallocatedDiscountSum(out.items as any, out.discounts as any)).toBe(-13);
   });
 });
+
+describe('H3-A merchant observation passthrough (normalization semantics unchanged)', () => {
+  it('keeps a fictional full printed branch on merchant', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: '架空スーパー古川南店',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.merchant).toBe('架空スーパー古川南店');
+    expect(out.merchant_normalized).toBe('架空スーパー古川南店');
+  });
+
+  it('keeps a fictional chain-only merchant and does not invent a branch', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: '架空スーパー',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.merchant).toBe('架空スーパー');
+    expect(out.merchant_normalized).toBe('架空スーパー');
+  });
+
+  it('keeps a null merchant null and does not invent a branch', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: null as unknown as string,
+      items: [],
+      total: 0,
+      tax: null,
+      currency: 'JPY',
+    });
+    expect(out.merchant).toBeNull();
+    expect(out.merchant_normalized).toBe('');
+  });
+
+  it('does not strip a spelling-variant branch from merchant; chain collapse stays on normalized', () => {
+    const out = normalizeOcrAnalysis({
+      merchant: 'セブンイレブン仙台中央店',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(out.merchant).toBe('セブンイレブン仙台中央店');
+    expect(out.merchant_normalized).toBe('セブン-イレブン');
+  });
+
+  it('locks deferred chain-scope behavior for Aeon and Lawson', () => {
+    const aeon = normalizeOcrAnalysis({
+      merchant: 'イオン古川店',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(aeon.merchant).toBe('イオン古川店');
+    expect(aeon.merchant_normalized).toBe('イオン');
+
+    const lawson = normalizeOcrAnalysis({
+      merchant: 'ローソン架空町店',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    // Katakana ローソン is not chain-collapsed today: the matcher rewrites ー to '-'
+    // before looking for ローソン. H3-A leaves that behavior unchanged.
+    expect(lawson.merchant).toBe('ローソン架空町店');
+    expect(lawson.merchant_normalized).toBe('ローソン架空町店');
+
+    const lawsonAscii = normalizeOcrAnalysis({
+      merchant: 'LAWSON架空町店',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(lawsonAscii.merchant).toBe('LAWSON架空町店');
+    expect(lawsonAscii.merchant_normalized).toBe('ローソン');
+  });
+
+  it('locks current York and Gyomu passthrough, including normalized', () => {
+    const york = normalizeOcrAnalysis({
+      merchant: 'ヨークベニマル古川南店',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(york.merchant).toBe('ヨークベニマル古川南店');
+    expect(york.merchant_normalized).toBe('ヨークベニマル古川南店');
+
+    const gyomu = normalizeOcrAnalysis({
+      merchant: '業務スーパー古川店',
+      items: [],
+      total: 0,
+      tax: 0,
+      currency: 'JPY',
+    });
+    expect(gyomu.merchant).toBe('業務スーパー古川店');
+    expect(gyomu.merchant_normalized).toBe('業務スーパー古川店');
+  });
+});
