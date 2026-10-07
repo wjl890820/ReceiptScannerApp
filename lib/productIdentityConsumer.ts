@@ -25,6 +25,7 @@ import {
 } from './productIdentityPriceObservationQuality';
 import { resolveMerchantProductDisplayName } from './productIdentityPresentationContract';
 import type { ProductIdentityLevel } from './productIdentityContract';
+import { merchantKeyForIdentityObservation } from './merchantScopeGeneration';
 import {
   isUnknownMerchantScopeKey,
   resolveReceiptItemIdentity,
@@ -676,6 +677,9 @@ export function identityObservationsFromPriceHistoryRows(
     occurredAt: number;
     merchantRaw: string | null;
     merchantNormalized: string | null;
+    storeRaw?: string | null;
+    storeNormalized?: string | null;
+    merchantScopeGeneration?: unknown;
     displayName: string;
     lineTotal: number | null;
     purchaseQuantity: number | null;
@@ -685,8 +689,17 @@ export function identityObservationsFromPriceHistoryRows(
     receiptId: r.receiptId,
     itemSourceIndex: r.sourceIndex,
     rawName: r.displayName,
-    merchantKey:
-      (r.merchantNormalized || r.merchantRaw || '').trim() || 'unknown_merchant',
+    merchantKey: merchantKeyForIdentityObservation({
+      receiptId: r.receiptId,
+      merchantRaw: r.merchantRaw,
+      merchantNormalized: r.merchantNormalized,
+      storeRaw: r.storeRaw,
+      storeNormalized: r.storeNormalized,
+      merchantScopeGeneration: r.merchantScopeGeneration,
+      legacyMerchantKey:
+        (r.merchantNormalized || r.merchantRaw || '').trim() ||
+        'unknown_merchant',
+    }),
     occurredAt: r.occurredAt,
     lineTotal: r.lineTotal,
     quantity: r.purchaseQuantity,

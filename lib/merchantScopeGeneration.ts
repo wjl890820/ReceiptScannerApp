@@ -4,8 +4,8 @@
  * NULL / absent = legacy v1. Exact integer 2 = future store-aware v2.
  * Malformed values never become v2.
  *
- * resolveReceiptMerchantScope is not wired into Product Identity yet.
- * H3-B1 still does not write generation 2.
+ * Product Identity read paths call resolveReceiptMerchantScope before
+ * resolveReceiptItemIdentity. Saves still do not write generation 2.
  */
 
 import { scopeMerchantKeyForIdentity } from './productIdentityResolver';
@@ -193,4 +193,20 @@ export function resolveReceiptMerchantScope(
     return legacyScope(input, classified.state === 'invalid');
   }
   return v2Scope(input);
+}
+
+/**
+ * Merchant key for an identity observation built from receipt columns.
+ *
+ * Generation 2 uses the versioned scope key.
+ * Any other generation keeps `legacyMerchantKey`, the exact string that
+ * observation builder used before H3-B2, so Product Identity scopes it
+ * the same way as before.
+ */
+export function merchantKeyForIdentityObservation(
+  input: ResolveReceiptMerchantScopeInput & { legacyMerchantKey: string }
+): string {
+  const scope = resolveReceiptMerchantScope(input);
+  if (scope.generation === 2) return scope.scopeKey;
+  return input.legacyMerchantKey;
 }

@@ -3,6 +3,7 @@ import * as ExpoSQLite from 'expo-sqlite';
 
 import { initIfNeeded } from './db';
 import { merchantAnalyticsKey } from './merchantAnalytics';
+import { merchantKeyForIdentityObservation } from './merchantScopeGeneration';
 import {
   buildOwnerScopedInventoryPredicates,
   buildPersonalProductInventoryRowKey,
@@ -690,6 +691,7 @@ async function loadMerchantProductHistorySummaryWithDb(
         purchasedAt: number;
         merchantRaw: string | null;
         merchantNormalized: string | null;
+        merchantScopeGeneration: number | null;
         rawName: string | null;
       }>(
         `SELECT
@@ -708,6 +710,7 @@ async function loadMerchantProductHistorySummaryWithDb(
        COALESCE(receipts.transaction_at, receipts.created_at) AS purchasedAt,
        receipts.merchant_raw AS merchantRaw,
        receipts.merchant_normalized AS merchantNormalized,
+       receipts.merchant_scope_generation AS merchantScopeGeneration,
        ${CONSUMER_MONETARY_RECEIPT_SELECT_SQL},
        receipt_items.raw_name AS rawName
      FROM receipt_items
@@ -743,7 +746,14 @@ async function loadMerchantProductHistorySummaryWithDb(
     receiptId: r.receiptId,
     itemSourceIndex: r.sourceIndex,
     rawName: (r.rawName || r.displayName || '').trim(),
-    merchantKey: (r.merchantNormalized || r.merchantRaw || '').trim(),
+    merchantKey: merchantKeyForIdentityObservation({
+      receiptId: r.receiptId,
+      merchantRaw: r.merchantRaw,
+      merchantNormalized: r.merchantNormalized,
+      merchantScopeGeneration: r.merchantScopeGeneration,
+      merchantScopeGenerationPresence: 'present',
+      legacyMerchantKey: (r.merchantNormalized || r.merchantRaw || '').trim(),
+    }),
     occurredAt: Number(r.purchasedAt) || 0,
     lineTotal: r.lineTotal,
     quantity: r.purchaseQuantity,

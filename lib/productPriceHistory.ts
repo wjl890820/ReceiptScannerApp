@@ -28,10 +28,8 @@ import type { ResolvedPersonalProductTarget } from './personalProductTargetResol
 import type { ProductIdentityLevel } from './productIdentityContract';
 import { isMerchantProductIdentityPriceComparable } from './productIdentityGenericLabel';
 import { normalizeProductForIdentity } from './normalizeProductForIdentity';
-import {
-  resolveReceiptItemIdentity,
-  scopeMerchantKeyForIdentity,
-} from './productIdentityResolver';
+import { resolveReceiptMerchantScope } from './merchantScopeGeneration';
+import { resolveReceiptItemIdentity } from './productIdentityResolver';
 import {
   createMemoryProductIdentityStore,
   type ProductIdentityStore,
@@ -230,6 +228,11 @@ export type ProductPriceHistoryRow = {
   /** Distinct from occurredAt when transaction_at is null. */
   receiptTransactionAt?: number | null;
   receiptCreatedAt?: number | null;
+  /**
+   * Receipt merchant_scope_generation. Absent on older in-memory fixtures
+   * means legacy v1. Never defaulted to 2.
+   */
+  merchantScopeGeneration?: number | null;
   /** Copied onto synthesized receipts so canonical occurrence can see lineage. */
   verifiedPurchaseOccurrenceId?: string | null;
   verifiedPurchaseOccurrenceSource?: string | null;
@@ -1174,14 +1177,19 @@ function buildRowIdentityMetadataByKey(
   for (const row of rows) {
     const key = rowObservationKey(row);
     if (metadataByKey.has(key)) continue;
-    const merchantScopeKey = scopeMerchantKeyForIdentity(
-      row.merchantNormalized ?? row.merchantRaw ?? 'unknown_merchant',
-      row.receiptId
-    );
+    const merchantScope = resolveReceiptMerchantScope({
+      receiptId: row.receiptId,
+      merchantRaw: row.merchantRaw,
+      merchantNormalized: row.merchantNormalized,
+      merchantScopeGeneration: row.merchantScopeGeneration,
+      merchantScopeGenerationPresence:
+        row.merchantScopeGeneration === undefined ? 'absent' : 'present',
+    });
+    const merchantScopeKey = merchantScope.scopeKey;
     const resolved = resolveReceiptItemIdentity(
       {
         rawName: row.displayName,
-        merchantKey: row.merchantNormalized ?? row.merchantRaw ?? 'unknown_merchant',
+        merchantKey: merchantScopeKey,
         receiptId: row.receiptId,
         itemSourceIndex: row.sourceIndex,
         quantity: row.purchaseQuantity,
@@ -2244,6 +2252,7 @@ const PRICE_HISTORY_SELECT_SQL = `
     COALESCE(receipts.transaction_at, receipts.created_at) AS occurredAt,
     receipts.merchant_raw AS merchantRaw,
     receipts.merchant_normalized AS merchantNormalized,
+    receipts.merchant_scope_generation AS merchantScopeGeneration,
     COALESCE(
       NULLIF(receipt_items.normalized_full_name, ''),
       NULLIF(receipt_items.raw_name, ''),

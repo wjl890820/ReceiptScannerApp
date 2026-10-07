@@ -226,13 +226,10 @@ describe('H3-B1 merchant scope generation plumbing', () => {
     expect(effectiveMerchantScopeGeneration(null, 'present')).toBe(1);
   });
 
-  it('does not let identity, DS1, or outbox code read the generation yet', () => {
+  it('keeps the resolver, DS1, and outbox off the generation column', () => {
     const root = path.resolve(__dirname);
     for (const file of [
       'productIdentityResolver.ts',
-      'productIdentityConsumer.ts',
-      'personalProductEndpointInventory.ts',
-      'productPriceHistory.ts',
       'personalDecisionCloudSync.ts',
       'personalProductIdentitySchema.ts',
       'outboxWakeupScheduler.ts',
@@ -448,13 +445,10 @@ describe('H3-B2 phase 1 resolveReceiptMerchantScope', () => {
     );
   });
 
-  it('is not called by product identity, price history, or decisions', () => {
+  it('does not teach the resolver or save/cloud paths about receipt scope', () => {
     const root = path.resolve(__dirname);
     for (const file of [
       'productIdentityResolver.ts',
-      'productIdentityConsumer.ts',
-      'personalProductEndpointInventory.ts',
-      'productPriceHistory.ts',
       'personalDecisionCloudSync.ts',
       'db.ts',
       'cloudBackupPayload.ts',

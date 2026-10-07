@@ -13,6 +13,7 @@
  */
 
 import type { ReceiptRow } from './db';
+import { merchantKeyForIdentityObservation } from './merchantScopeGeneration';
 import type {
   EngagementProductRow,
   MilestoneFrequentProduct,
@@ -77,6 +78,7 @@ export type RepeatProductRowInput = Pick<
   | 'displayName'
   | 'merchantNormalized'
   | 'merchantRaw'
+  | 'merchantScopeGeneration'
   | 'lineTotal'
   | 'purchaseQuantity'
 >;
@@ -364,9 +366,15 @@ function observationsFromProductRows(
       receiptId: row.receiptId,
       itemSourceIndex: row.sourceIndex,
       rawName,
-      merchantKey:
-        (row.merchantNormalized || row.merchantRaw || '').trim() ||
-        'unknown_merchant',
+      merchantKey: merchantKeyForIdentityObservation({
+        receiptId: row.receiptId,
+        merchantRaw: row.merchantRaw,
+        merchantNormalized: row.merchantNormalized,
+        merchantScopeGeneration: row.merchantScopeGeneration,
+        legacyMerchantKey:
+          (row.merchantNormalized || row.merchantRaw || '').trim() ||
+          'unknown_merchant',
+      }),
       occurredAt: row.occurredAt,
       lineTotal: row.lineTotal,
       quantity: row.purchaseQuantity,

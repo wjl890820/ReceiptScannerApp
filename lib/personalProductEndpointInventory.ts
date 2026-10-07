@@ -26,10 +26,10 @@ import {
   resolveProductIdentityNormalizePassCache,
   type ProductIdentityNormalizePassCache,
 } from './normalizeProductForIdentity';
+import { resolveReceiptMerchantScope } from './merchantScopeGeneration';
 import {
   isUnknownMerchantScopeKey,
   resolveReceiptItemIdentity,
-  scopeMerchantKeyForIdentity,
 } from './productIdentityResolver';
 import {
   createMemoryProductIdentityStore,
@@ -162,6 +162,8 @@ export type PersonalProductEndpointInventorySourceRow = {
   occurredAt: number;
   merchantRaw: string | null;
   merchantNormalized: string | null;
+  /** Absent means legacy v1. Never defaulted to 2. */
+  merchantScopeGeneration?: number | null;
   displayName: string;
   rawName: string;
   lineTotal: number | null;
@@ -178,6 +180,7 @@ const INVENTORY_ITEM_SELECT_SQL = `
     COALESCE(receipts.transaction_at, receipts.created_at) AS occurredAt,
     receipts.merchant_raw AS merchantRaw,
     receipts.merchant_normalized AS merchantNormalized,
+    receipts.merchant_scope_generation AS merchantScopeGeneration,
     COALESCE(
       NULLIF(receipt_items.normalized_full_name, ''),
       NULLIF(receipt_items.raw_name, ''),
@@ -296,15 +299,19 @@ export function buildPersonalProductEndpointInventory(
     const rowKey = buildPersonalProductInventoryRowKey(row.receiptId, row.sourceIndex);
     if (itemsByRowKey.has(rowKey)) continue;
 
-    const merchantEvidence = row.merchantNormalized ?? row.merchantRaw ?? '';
-    const merchantScopeKey = scopeMerchantKeyForIdentity(
-      merchantEvidence,
-      row.receiptId
-    );
+    const merchantScope = resolveReceiptMerchantScope({
+      receiptId: row.receiptId,
+      merchantRaw: row.merchantRaw,
+      merchantNormalized: row.merchantNormalized,
+      merchantScopeGeneration: row.merchantScopeGeneration,
+      merchantScopeGenerationPresence:
+        row.merchantScopeGeneration === undefined ? 'absent' : 'present',
+    });
+    const merchantScopeKey = merchantScope.scopeKey;
     const resolved = resolveReceiptItemIdentity(
       {
         rawName: row.displayName || row.rawName,
-        merchantKey: merchantEvidence,
+        merchantKey: merchantScopeKey,
         receiptId: row.receiptId,
         itemSourceIndex: row.sourceIndex,
         quantity: row.purchaseQuantity,

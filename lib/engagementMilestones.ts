@@ -1327,6 +1327,7 @@ export function buildEngagementProductInsightSelectSql(options: {
        COALESCE(receipts.transaction_at, receipts.created_at) AS occurredAt,
        receipts.merchant_raw AS merchantRaw,
        receipts.merchant_normalized AS merchantNormalized,
+       receipts.merchant_scope_generation AS merchantScopeGeneration,
        receipts.merchant_raw AS merchant_raw,
        receipts.merchant_normalized AS merchant_normalized,
        receipts.merchant_type AS merchant_type,
