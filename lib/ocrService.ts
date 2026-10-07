@@ -13,6 +13,7 @@ import {
   formatSupabaseEdgeHttpFailure,
   SUPABASE_EDGE_AUTH_FAILURE_MESSAGE,
 } from './ocrAuthHeaders';
+import { fetchOcrEdge } from './ocrEdgeTransport';
 
 /**
  * Compress and encode image to base64
@@ -159,7 +160,7 @@ export async function pingOcrEdge(): Promise<{ status: number; body: any }> {
       Authorization: `Bearer ${userAccessToken}`,
       'x-device-id': deviceId,
     };
-    const response = await fetch(edgeFunctionUrl, {
+    const response = await fetchOcrEdge(edgeFunctionUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({ ping: true }),
@@ -264,7 +265,7 @@ export async function analyzeReceiptImageViaEdge(uri: string): Promise<ReceiptAn
       Authorization: `Bearer ${userAccessToken}`,
       'x-device-id': deviceId,
     };
-    const response = await fetch(edgeFunctionUrl, {
+    const response = await fetchOcrEdge(edgeFunctionUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),

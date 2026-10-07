@@ -32,6 +32,12 @@ jest.mock('expo-constants', () => ({
   default: { expoConfig: { version: '1.0.0', extra: {} } },
 }));
 
+jest.mock('expo/fetch', () => ({
+  fetch: jest.fn((...args: unknown[]) =>
+    (globalThis as { fetch?: (...call: unknown[]) => unknown }).fetch?.(...args)
+  ),
+}));
+
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
   AppState: {
@@ -55,6 +61,8 @@ jest.mock('./anonAuth', () => ({
 
 import fs from 'fs';
 import path from 'path';
+
+import { fetch as expoFetch } from 'expo/fetch';
 
 import { createClient } from '@supabase/supabase-js';
 
@@ -127,6 +135,7 @@ function setOcrSessionToken(token: string | null): void {
 
 beforeEach(() => {
   setOcrSessionToken(null);
+  (expoFetch as jest.Mock).mockClear();
   (getAccessTokenIfReady as jest.Mock).mockReturnValue(null);
   delete process.env.RUN_SEMANTIC_LIVE_EVAL;
   (global as unknown as { fetch: jest.Mock }).fetch = jest.fn(async () =>
@@ -326,6 +335,7 @@ describe('Edge callers', () => {
       /authentication failed/
     );
     expect(global.fetch).not.toHaveBeenCalled();
+    expect(expoFetch).not.toHaveBeenCalled();
   });
 
   it('signed-in OCR sends the user JWT to ocr-receipt-v2 and keeps the project key in apikey', async () => {
@@ -335,14 +345,16 @@ describe('Edge callers', () => {
     await pingOcrEdge();
     const analysis = await analyzeReceiptImageViaEdge('file://receipt.jpg');
     expect(analysis.total).toBe(1);
-    const fetchMock = global.fetch as jest.Mock;
+    const fetchMock = expoFetch as jest.Mock;
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(fetchMock.mock.calls.length);
     for (const call of fetchMock.mock.calls) {
       const headers = requestHeaders(call);
       expect(new URL(String(call[0])).pathname).toBe('/functions/v1/ocr-receipt-v2');
       expect(headers.apikey).toBe(PUBLISHABLE);
       expect(headers.Authorization).toBe(`Bearer ${userJwt}`);
       expect(headers.Authorization).not.toContain(PUBLISHABLE);
+      expect(headers['x-device-id']).toBe('device-test');
     }
   });
 
@@ -352,6 +364,28 @@ describe('Edge callers', () => {
     expect(ping.status).toBe(401);
     await expect(analyzeReceiptImageViaEdge('file://receipt.jpg')).rejects.toThrow(/unsupported/);
     expect(global.fetch).not.toHaveBeenCalled();
+    expect(expoFetch).not.toHaveBeenCalled();
+  });
+
+  it('pingOcrEdge does not send a second POST when the HTTP 200 body cannot be read', async () => {
+    useClientKey(PUBLISHABLE);
+    setOcrSessionToken(userJwt);
+    const globalFetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new Error('Unable to resolve data for blob: test-blob');
+      },
+    }));
+    (global as unknown as { fetch: jest.Mock }).fetch = globalFetch;
+
+    const ping = await pingOcrEdge();
+
+    expect(ping.status).toBe(0);
+    expect(String(ping.body.error)).toMatch(/Unable to resolve data for blob/);
+    expect(expoFetch).toHaveBeenCalledTimes(1);
+    expect(globalFetch).toHaveBeenCalledTimes(1);
+    expect(String((expoFetch as jest.Mock).mock.calls[0][0])).toContain('/functions/v1/ocr-receipt-v2');
   });
 
   it('sanitizes non-2xx Edge bodies and keeps a constrained error code', async () => {
@@ -500,6 +534,7 @@ describe('Edge callers', () => {
       expect(headers.apikey).toBe(PUBLISHABLE);
       expect(headers.Authorization).toBeUndefined();
     }
+    expect(expoFetch).not.toHaveBeenCalled();
   });
 
   it('feedback sends apikey without Authorization', async () => {
@@ -510,6 +545,7 @@ describe('Edge callers', () => {
     expect(String((global.fetch as jest.Mock).mock.calls[0][0])).toContain('/functions/v1/send-feedback');
     expect(headers.apikey).toBe(PUBLISHABLE);
     expect(headers.Authorization).toBeUndefined();
+    expect(expoFetch).not.toHaveBeenCalled();
   });
 
   it('live semantic eval sends apikey without Authorization', async () => {
@@ -536,5 +572,26 @@ describe('Edge callers', () => {
     expect(String((global.fetch as jest.Mock).mock.calls[0][0])).toContain('/functions/v1/classify-items');
     expect(headers.apikey).toBe(PUBLISHABLE);
     expect(headers.Authorization).toBeUndefined();
+    expect(expoFetch).not.toHaveBeenCalled();
+  });
+
+  it('analyzeReceiptImageViaEdge does not send a second POST when the HTTP 200 body cannot be read', async () => {
+    useClientKey(PUBLISHABLE);
+    setOcrSessionToken(userJwt);
+    const globalFetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new Error('Unable to resolve data for blob: test-blob');
+      },
+    }));
+    (global as unknown as { fetch: jest.Mock }).fetch = globalFetch;
+
+    await expect(analyzeReceiptImageViaEdge('file://receipt.jpg')).rejects.toThrow(
+      /Unable to resolve data for blob/
+    );
+
+    expect(expoFetch).toHaveBeenCalledTimes(1);
+    expect(globalFetch).toHaveBeenCalledTimes(1);
   });
 });

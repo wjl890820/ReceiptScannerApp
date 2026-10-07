@@ -25,6 +25,7 @@ import {
   extractSafeEdgeErrorCode,
   formatSupabaseEdgeHttpFailure,
 } from './ocrAuthHeaders';
+import { fetchOcrEdge } from './ocrEdgeTransport';
 import { extractOcrRequestIdFromEdgeResponse } from './ocrRequestId';
 
 export {
@@ -236,7 +237,7 @@ async function analyzeReceiptImageViaEdgeFunction(
 
   let response: Response;
   try {
-    response = await fetch(edgeFunctionUrl, {
+    response = await fetchOcrEdge(edgeFunctionUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),

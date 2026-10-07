@@ -24,6 +24,12 @@ jest.mock('./anonAuth', () => ({
   getAccessTokenIfReady: jest.fn(() => null),
   ensureAnonAuth: jest.fn(async () => ({ status: 'unavailable', accessToken: null })),
 }));
+jest.mock('expo/fetch', () => ({
+  fetch: jest.fn((...args: unknown[]) =>
+    (globalThis as { fetch?: (...call: unknown[]) => unknown }).fetch?.(...args)
+  ),
+}));
+
 jest.mock('./supabaseClient', () => ({
   getSupabaseClient: jest.fn(() => ({
     auth: {
@@ -41,6 +47,7 @@ jest.mock('./supabaseClient', () => ({
   })),
 }));
 
+import { fetch as expoFetch } from 'expo/fetch';
 import * as ImageManipulator from 'expo-image-manipulator';
 
 import { ensureAnonAuth, getAccessTokenIfReady } from './anonAuth';
@@ -86,6 +93,10 @@ afterAll(() => {
 });
 
 describe('receiptAnalyzer project key', () => {
+  beforeEach(() => {
+    (expoFetch as jest.Mock).mockClear();
+  });
+
   it('rejects an unsafe key before image preprocessing or fetch', async () => {
     (global as unknown as { fetch: jest.Mock }).fetch = jest.fn();
     for (const key of [SECRET, serviceJwt, 'not-a-key']) {
@@ -96,6 +107,7 @@ describe('receiptAnalyzer project key', () => {
     }
     expect(ImageManipulator.manipulateAsync).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
+    expect(expoFetch).not.toHaveBeenCalled();
   });
 
   it('does not call ocr-receipt-v2 when there is no session and anonymous auth is off', async () => {
@@ -107,6 +119,7 @@ describe('receiptAnalyzer project key', () => {
       /authentication failed/
     );
     expect(global.fetch).not.toHaveBeenCalled();
+    expect(expoFetch).not.toHaveBeenCalled();
     expect(ImageManipulator.manipulateAsync).not.toHaveBeenCalled();
     expect(ensureAnonAuth).not.toHaveBeenCalled();
   });
@@ -121,13 +134,15 @@ describe('receiptAnalyzer project key', () => {
       text: async () => '{}',
     }));
     await expect(analyzeReceiptImageWithProvenance('file://receipt.jpg')).rejects.toThrow();
-    const calls = (global.fetch as jest.Mock).mock.calls;
+    const calls = (expoFetch as jest.Mock).mock.calls;
     expect(calls).toHaveLength(1);
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(1);
     expect(new URL(String(calls[0][0])).pathname).toBe('/functions/v1/ocr-receipt-v2');
     const headers = calls[0][1].headers;
     expect(headers.apikey).toBe(PUBLISHABLE);
     expect(headers.Authorization).toBe(`Bearer ${userJwt}`);
     expect(headers.Authorization).not.toContain(PUBLISHABLE);
+    expect(headers['x-device-id']).toBe('device-test');
   });
 
   it('does not fall back from ocr-receipt-v2 to the legacy OCR endpoints', async () => {
@@ -142,8 +157,9 @@ describe('receiptAnalyzer project key', () => {
         text: async () => JSON.stringify({ error: { message: 'fallback failed' } }),
       });
     await expect(analyzeReceiptImageWithProvenance('file://receipt.jpg')).rejects.toThrow();
-    const calls = (global.fetch as jest.Mock).mock.calls;
+    const calls = (expoFetch as jest.Mock).mock.calls;
     expect(calls).toHaveLength(1);
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(1);
     expect(String(calls[0][0])).toContain('/functions/v1/ocr-receipt-v2');
   });
 
@@ -159,6 +175,7 @@ describe('receiptAnalyzer project key', () => {
       );
       expect(ensureAnonAuth).toHaveBeenCalled();
       expect(global.fetch).not.toHaveBeenCalled();
+      expect(expoFetch).not.toHaveBeenCalled();
       expect(ImageManipulator.manipulateAsync).not.toHaveBeenCalled();
     } finally {
       delete process.env.ENABLE_ANON_AUTH;
@@ -186,8 +203,9 @@ describe('receiptAnalyzer project key', () => {
       const outcome = await analyzeReceiptImageWithProvenance('file://receipt.jpg');
       expect(outcome.analysis.total).toBe(1);
       expect(ensureAnonAuth).toHaveBeenCalled();
-      const calls = (global.fetch as jest.Mock).mock.calls;
+      const calls = (expoFetch as jest.Mock).mock.calls;
       expect(calls).toHaveLength(1);
+      expect((global.fetch as jest.Mock).mock.calls).toHaveLength(1);
       expect(String(calls[0][0])).toContain('/functions/v1/ocr-receipt-v2');
       expect(calls[0][1].headers.apikey).toBe(PUBLISHABLE);
       expect(calls[0][1].headers.Authorization).toBe(`Bearer ${userJwt}`);
@@ -314,5 +332,30 @@ describe('receiptAnalyzer project key', () => {
     } finally {
       (global as unknown as { __DEV__: boolean }).__DEV__ = dev;
     }
+  });
+
+  it('does not send a second OCR POST when the HTTP 200 body cannot be read', async () => {
+    configureClientKey(PUBLISHABLE);
+    setOcrSessionToken(userJwt);
+    const globalFetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new Error('Unable to resolve data for blob: test-blob');
+      },
+    }));
+    (global as unknown as { fetch: jest.Mock }).fetch = globalFetch;
+
+    await expect(analyzeReceiptImageWithProvenance('file://receipt.jpg')).rejects.toThrow(
+      /Unable to resolve data for blob/
+    );
+
+    expect(expoFetch).toHaveBeenCalledTimes(1);
+    expect(globalFetch).toHaveBeenCalledTimes(1);
+    expect(String((expoFetch as jest.Mock).mock.calls[0][0])).toContain('/functions/v1/ocr-receipt-v2');
+    const headers = (expoFetch as jest.Mock).mock.calls[0][1].headers;
+    expect(headers.apikey).toBe(PUBLISHABLE);
+    expect(headers.Authorization).toBe(`Bearer ${userJwt}`);
+    expect(headers['x-device-id']).toBe('device-test');
   });
 });
