@@ -172,28 +172,46 @@ export async function listDueSyncOutboxForUser(
   return rows ?? [];
 }
 
+export type EarliestPendingSyncOutboxRetry = {
+  receiptId: string;
+  intentId: string;
+  nextRetryAt: number;
+};
+
 /**
- * Earliest next_retry_at strictly in the future for this user, or null.
- * Used to schedule a single bounded wakeup (no polling).
+ * Earliest pending retry for this user, including rows already due.
+ * Identity only — no payload blobs.
  */
-export async function getEarliestFutureSyncOutboxRetryAt(
+export async function getEarliestPendingSyncOutboxRetryAt(
   db: SQLite.SQLiteDatabase,
-  userId: string,
-  nowMs: number
-): Promise<number | null> {
-  const row = await db.getFirstAsync<{ next_retry_at: number }>(
+  userId: string
+): Promise<EarliestPendingSyncOutboxRetry | null> {
+  const row = await db.getFirstAsync<{
+    receipt_id: string;
+    intent_id: string;
+    next_retry_at: number;
+  }>(
     `
-    SELECT next_retry_at
+    SELECT receipt_id, intent_id, next_retry_at
     FROM sync_outbox
-    WHERE user_id = ? AND next_retry_at > ?
+    WHERE user_id = ?
     ORDER BY next_retry_at ASC
     LIMIT 1
     `,
-    [userId, nowMs]
+    [userId]
   );
-  if (!row || row.next_retry_at == null) return null;
-  const n = Number(row.next_retry_at);
-  return Number.isFinite(n) ? n : null;
+  if (!row) return null;
+  const nextRetryAt = Number(row.next_retry_at);
+  if (!Number.isFinite(nextRetryAt) || !row.receipt_id || !row.intent_id) return null;
+  return {
+    receiptId: String(row.receipt_id),
+    intentId: String(row.intent_id),
+    nextRetryAt,
+  };
+}
+
+export function pendingOutboxRetryToken(row: EarliestPendingSyncOutboxRetry): string {
+  return `${row.receiptId}\u0000${row.intentId}\u0000${row.nextRetryAt}`;
 }
 
 export async function getSyncOutboxRow(

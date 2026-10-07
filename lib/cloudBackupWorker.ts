@@ -6,7 +6,8 @@
  * - One flush request drains due intents in batches (bounded).
  * - Restored authenticated session triggers flush on worker start + auth emit.
  * - AppState active resumes flush.
- * - Future next_retry_at schedules a single wakeup timer.
+ * - The earliest pending next_retry_at schedules one wakeup.
+ *   Overdue rows wake immediately; future rows wait for that deadline.
  */
 import type * as SQLite from 'expo-sqlite';
 
@@ -19,6 +20,8 @@ import {
   type LocalReceiptBackupSource,
 } from './cloudBackupPayload';
 import { isCloudBackupEnabled } from './env';
+import { logger } from './logger';
+import { OutboxWakeupScheduler } from './outboxWakeupScheduler';
 import { retryCurrentUserCloudRestoreIfFailed } from './currentUserCloudRestore';
 import { backupMayStartAfterCurrentUserRestore } from './currentUserRestoreBarrier';
 import { getSupabaseClient } from './supabaseClient';
@@ -26,8 +29,9 @@ import { syncPersonalDecisionBackup } from './personalDecisionCloudSync';
 import {
   clearSyncOutboxIntentIfCurrent,
   computeBackoffMs,
-  getEarliestFutureSyncOutboxRetryAt,
+  getEarliestPendingSyncOutboxRetryAt,
   listDueSyncOutboxForUser,
+  pendingOutboxRetryToken,
   type SyncOutboxRow,
   updateSyncOutboxRetryIfCurrent,
 } from './syncOutbox';
@@ -55,11 +59,72 @@ export const CLOUD_BACKUP_MAX_FLUSH_MS = 90_000;
 
 let _getDb: GetDbFn | null = null;
 let _inflight: Promise<CloudBackupFlushResult> | null = null;
+let _flushRequestGeneration = 0;
+let _cloudBackupPassCount = 0;
+let _activeFlushLoops = 0;
+let _afterFinalScheduleObservationForTests: (() => Promise<void>) | null = null;
+let _beforeCloudBackupPassWorkForTests: (() => Promise<void>) | null = null;
+let _throwNextCloudBackupPass: Error | null = null;
 let _started = false;
 let _unsubscribeAuth: (() => void) | null = null;
 let _appStateSub: { remove: () => void } | null = null;
-let _retryTimer: ReturnType<typeof setTimeout> | null = null;
 let _lastAppState: string | null = null;
+let _scheduledUserId: string | null = null;
+let _armedToken: string | null = null;
+let _lastFiredToken: string | null = null;
+let _wakeupScheduler: OutboxWakeupScheduler | null = null;
+
+function isForeground(): boolean {
+  return _lastAppState == null || _lastAppState === 'active';
+}
+
+function wakeupScheduler(): OutboxWakeupScheduler {
+  if (!_wakeupScheduler) {
+    _wakeupScheduler = new OutboxWakeupScheduler(
+      {
+        now: () => Date.now(),
+        setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+        clearTimeout: (handle) => clearTimeout(handle),
+      },
+      onWakeupFire
+    );
+  }
+  return _wakeupScheduler;
+}
+
+function onWakeupFire(_deadline: number | null): void {
+  logger.info('OutboxWakeup', 'timer fired');
+  const scheduledFor = _scheduledUserId;
+  const armedToken = _armedToken;
+  _scheduledUserId = null;
+  _armedToken = null;
+
+  if (!isCloudBackupEnabled()) {
+    logger.info('OutboxWakeup', 'blocked auth_or_flag');
+    return;
+  }
+  const auth = getAuthState();
+  if (auth.status !== 'authenticated' || !auth.userId) {
+    logger.info('OutboxWakeup', 'blocked auth_or_flag');
+    return;
+  }
+  if (scheduledFor && auth.userId !== scheduledFor) {
+    logger.info('OutboxWakeup', 'blocked user_mismatch');
+    _lastFiredToken = null;
+    wakeupScheduler().clearSuppression();
+    void requestCloudBackupFlush();
+    return;
+  }
+  if (_inflight) {
+    logger.info('OutboxWakeup', 'worker already running');
+    if (armedToken) _lastFiredToken = armedToken;
+    // Join the active pass and latch a fresh one. Do not start a second worker.
+    void requestCloudBackupFlush();
+    return;
+  }
+  _lastFiredToken = armedToken;
+  void requestCloudBackupFlush();
+}
 
 async function loadLocalReceiptForBackup(
   db: SQLite.SQLiteDatabase,
@@ -135,47 +200,114 @@ async function processDelete(
   return 'ok';
 }
 
-function clearRetryTimer(): void {
-  if (_retryTimer != null) {
-    clearTimeout(_retryTimer);
-    _retryTimer = null;
+function cancelOutboxWakeup(reason: 'auth_or_flag' | 'background' | 'reset'): void {
+  const hadTimer = wakeupScheduler().hasTimer();
+  wakeupScheduler().cancel();
+  _scheduledUserId = null;
+  _armedToken = null;
+  if (hadTimer && reason !== 'reset') {
+    logger.info('OutboxWakeup', 'timer cancelled', { reason });
   }
 }
 
 /**
- * Schedule at most one wakeup for the earliest future next_retry_at.
- * No polling loop; cancelled when disabled / unauthenticated / reset.
+ * One wakeup for the earliest pending retry.
+ * Overdue (next_retry_at <= now) uses a single immediate timer, never a negative delay.
+ * Unchanged overdue intents are suppressed after one wakeup so a failed clear cannot spin.
  */
 async function scheduleRetryWakeup(
   db: SQLite.SQLiteDatabase,
   userId: string,
   nowMs: number = Date.now()
 ): Promise<void> {
-  clearRetryTimer();
-  if (!isCloudBackupEnabled()) return;
+  if (!isCloudBackupEnabled()) {
+    _lastFiredToken = null;
+    cancelOutboxWakeup('auth_or_flag');
+    wakeupScheduler().clearSuppression();
+    return;
+  }
   const auth = getAuthState();
-  if (auth.status !== 'authenticated' || auth.userId !== userId) return;
+  if (auth.status !== 'authenticated' || auth.userId !== userId) {
+    _lastFiredToken = null;
+    cancelOutboxWakeup('auth_or_flag');
+    wakeupScheduler().clearSuppression();
+    return;
+  }
+  if (!isForeground()) {
+    _lastFiredToken = null;
+    cancelOutboxWakeup('background');
+    return;
+  }
 
-  const earliest = await getEarliestFutureSyncOutboxRetryAt(db, userId, nowMs);
-  if (earliest == null) return;
+  const earliest = await getEarliestPendingSyncOutboxRetryAt(db, userId);
+  const authNow = getAuthState();
+  if (
+    authNow.status !== 'authenticated' ||
+    authNow.userId !== userId ||
+    !isCloudBackupEnabled()
+  ) {
+    _lastFiredToken = null;
+    cancelOutboxWakeup('auth_or_flag');
+    wakeupScheduler().clearSuppression();
+    return;
+  }
+  if (!isForeground()) {
+    _lastFiredToken = null;
+    cancelOutboxWakeup('background');
+    return;
+  }
 
-  const delay = Math.max(250, Math.min(earliest - nowMs, 60 * 60 * 1000));
-  _retryTimer = setTimeout(() => {
-    _retryTimer = null;
-    if (!isCloudBackupEnabled()) return;
-    const s = getAuthState();
-    if (s.status !== 'authenticated' || !s.userId) return;
-    void requestCloudBackupFlush();
-  }, delay);
+  const token = earliest ? pendingOutboxRetryToken(earliest) : null;
+  const firedToken = _lastFiredToken;
+  _lastFiredToken = null;
+  if (firedToken) wakeupScheduler().queueSuppressIfUnchanged(firedToken);
+  const plan = wakeupScheduler().reevaluate({
+    nowMs,
+    earliestRetryAt: earliest?.nextRetryAt ?? null,
+    earliestToken: token,
+    foreground: true,
+    eligible: true,
+    workerRunning: false,
+  });
+
+  if (plan.action === 'arm') {
+    _scheduledUserId = userId;
+    _armedToken = token;
+    logger.info('OutboxWakeup', 'timer scheduled', { delayMs: plan.delayMs });
+  } else if (plan.action === 'cancel' || plan.action === 'suppress') {
+    _scheduledUserId = null;
+    _armedToken = null;
+    if (plan.action === 'suppress') {
+      logger.info('OutboxWakeup', 'suppressed unchanged overdue');
+    }
+  }
+  const afterObservation = _afterFinalScheduleObservationForTests;
+  if (afterObservation) {
+    await afterObservation();
+  }
 }
 
-async function runFlushOnce(): Promise<CloudBackupFlushResult> {
+async function runOneCloudBackupPass(): Promise<CloudBackupFlushResult> {
+  _cloudBackupPassCount += 1;
+  const beforeWork = _beforeCloudBackupPassWorkForTests;
+  if (beforeWork) {
+    _beforeCloudBackupPassWorkForTests = null;
+    await beforeWork();
+  }
+  if (_throwNextCloudBackupPass) {
+    const error = _throwNextCloudBackupPass;
+    _throwNextCloudBackupPass = null;
+    throw error;
+  }
   if (!isCloudBackupEnabled()) {
-    clearRetryTimer();
+    _lastFiredToken = null;
+    cancelOutboxWakeup('auth_or_flag');
     return { ran: false, reason: 'flag_off', processed: 0, succeeded: 0, failed: 0, skipped: 0 };
   }
   const restoreGate = await backupMayStartAfterCurrentUserRestore();
   if (!restoreGate.ok) {
+    _lastFiredToken = null;
+    logger.info('OutboxWakeup', 'blocked restore');
     return {
       ran: false,
       reason: restoreGate.reason,
@@ -186,11 +318,13 @@ async function runFlushOnce(): Promise<CloudBackupFlushResult> {
     };
   }
   if (!_getDb) {
+    _lastFiredToken = null;
     return { ran: false, reason: 'no_db', processed: 0, succeeded: 0, failed: 0, skipped: 0 };
   }
 
   const auth = getAuthState();
   if (auth.status !== 'authenticated' || !auth.userId || !auth.accessToken) {
+    _lastFiredToken = null;
     return {
       ran: false,
       reason: 'auth_unavailable',
@@ -298,27 +432,82 @@ async function runFlushOnce(): Promise<CloudBackupFlushResult> {
   };
 }
 
+const EMPTY_FLUSH_RESULT: CloudBackupFlushResult = {
+  ran: false,
+  processed: 0,
+  succeeded: 0,
+  failed: 0,
+  skipped: 0,
+};
+
+/**
+ * One active worker. Requests that arrive during a pass bump the generation
+ * and coalesce into a single later pass. The generation check and the
+ * _inflight release happen in the same turn, with no await between them.
+ */
+async function runCoalescedCloudBackupLoop(
+  shared: Promise<CloudBackupFlushResult>,
+  resolveOut: (result: CloudBackupFlushResult) => void,
+  rejectOut: (error: unknown) => void
+): Promise<void> {
+  let last = EMPTY_FLUSH_RESULT;
+  try {
+    for (;;) {
+      const seen = _flushRequestGeneration;
+      try {
+        last = await runOneCloudBackupPass();
+      } catch (error) {
+        if (_flushRequestGeneration !== seen) continue;
+        if (_inflight === shared) {
+          _inflight = null;
+          _activeFlushLoops = Math.max(0, _activeFlushLoops - 1);
+        }
+        rejectOut(error);
+        return;
+      }
+      if (_flushRequestGeneration !== seen) continue;
+      if (_inflight === shared) {
+        _inflight = null;
+        _activeFlushLoops = Math.max(0, _activeFlushLoops - 1);
+      }
+      resolveOut(last);
+      return;
+    }
+  } catch (error) {
+    if (_inflight === shared) {
+      _inflight = null;
+      _activeFlushLoops = Math.max(0, _activeFlushLoops - 1);
+    }
+    rejectOut(error);
+  }
+}
+
 /**
  * Request a backup flush. Serialized in-process (single-flight).
  * Not async: must return the exact shared Promise reference.
+ * A request during an active pass never disappears: it latches one fresh pass.
  */
 export function requestCloudBackupFlush(): Promise<CloudBackupFlushResult> {
+  _flushRequestGeneration += 1;
   if (_inflight) return _inflight;
-  _inflight = runFlushOnce().finally(() => {
-    _inflight = null;
+
+  let resolveOut!: (result: CloudBackupFlushResult) => void;
+  let rejectOut!: (error: unknown) => void;
+  const shared = new Promise<CloudBackupFlushResult>((resolve, reject) => {
+    resolveOut = resolve;
+    rejectOut = reject;
   });
-  return _inflight;
+  _inflight = shared;
+  _activeFlushLoops += 1;
+  void runCoalescedCloudBackupLoop(shared, resolveOut, rejectOut);
+  return shared;
 }
 
 function onAuthState(state: AuthState): void {
-  if (!isCloudBackupEnabled()) {
-    clearRetryTimer();
-    return;
-  }
-  if (state.status !== 'authenticated' || !state.userId) {
-    clearRetryTimer();
-    return;
-  }
+  cancelOutboxWakeup('auth_or_flag');
+  wakeupScheduler().clearSuppression();
+  if (!isCloudBackupEnabled()) return;
+  if (state.status !== 'authenticated' || !state.userId) return;
   void requestCloudBackupFlush();
 }
 
@@ -326,8 +515,13 @@ function onAppStateChange(next: string): void {
   const prev = _lastAppState;
   _lastAppState = next;
   if (!isCloudBackupEnabled()) return;
+  if (next !== 'active') {
+    cancelOutboxWakeup('background');
+    return;
+  }
   // background/inactive → active
-  if (next === 'active' && prev != null && prev !== 'active') {
+  if (prev != null && prev !== 'active') {
+    wakeupScheduler().clearSuppression();
     void retryCurrentUserCloudRestoreIfFailed().then(() => {
       void requestCloudBackupFlush();
     });
@@ -366,7 +560,9 @@ export function startCloudBackupWorker(getDb: GetDbFn): void {
 
 /** Test helpers */
 export function __resetCloudBackupWorkerForTests(): void {
-  clearRetryTimer();
+  cancelOutboxWakeup('reset');
+  wakeupScheduler().clearSuppression();
+  _lastFiredToken = null;
   if (_unsubscribeAuth) {
     _unsubscribeAuth();
     _unsubscribeAuth = null;
@@ -381,6 +577,12 @@ export function __resetCloudBackupWorkerForTests(): void {
   }
   _started = false;
   _inflight = null;
+  _flushRequestGeneration = 0;
+  _cloudBackupPassCount = 0;
+  _activeFlushLoops = 0;
+  _afterFinalScheduleObservationForTests = null;
+  _beforeCloudBackupPassWorkForTests = null;
+  _throwNextCloudBackupPass = null;
   _getDb = null;
   _lastAppState = null;
 }
@@ -398,5 +600,40 @@ export function __handleAppStateForTests(next: string): void {
 }
 
 export function __getRetryTimerPendingForTests(): boolean {
-  return _retryTimer != null;
+  return wakeupScheduler().hasTimer();
+}
+
+export function __isCloudBackupFlushInFlightForTests(): boolean {
+  return _inflight != null;
+}
+
+export function __getCloudBackupPassCountForTests(): number {
+  return _cloudBackupPassCount;
+}
+
+export function __getActiveCloudBackupFlushCountForTests(): number {
+  return _activeFlushLoops;
+}
+
+export function __setAfterFinalScheduleObservationForTests(
+  hook: (() => Promise<void>) | null
+): void {
+  _afterFinalScheduleObservationForTests = hook;
+}
+
+export function __setBeforeCloudBackupPassWorkForTests(
+  hook: (() => Promise<void>) | null
+): void {
+  _beforeCloudBackupPassWorkForTests = hook;
+}
+
+export function __throwNextCloudBackupPassForTests(
+  message = 'unexpected_pass_failure'
+): void {
+  _throwNextCloudBackupPass = new Error(message);
+}
+
+/** Test-only: invoke the scheduler wakeup callback without a second worker. */
+export function __fireScheduledOutboxWakeupForTests(): void {
+  onWakeupFire(wakeupScheduler().pendingDeadline());
 }

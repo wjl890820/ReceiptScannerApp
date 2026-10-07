@@ -116,10 +116,17 @@ import {
   buildCloudUserReceiptUpsertPayload,
 } from './cloudBackupPayload';
 import {
+  __fireScheduledOutboxWakeupForTests,
+  __getActiveCloudBackupFlushCountForTests,
+  __getCloudBackupPassCountForTests,
   __getRetryTimerPendingForTests,
   __handleAppStateForTests,
+  __isCloudBackupFlushInFlightForTests,
   __resetCloudBackupWorkerForTests,
   __runCloudBackupFlushForTests,
+  __setAfterFinalScheduleObservationForTests,
+  __setBeforeCloudBackupPassWorkForTests,
+  __throwNextCloudBackupPassForTests,
   requestCloudBackupFlush,
   startCloudBackupWorker,
 } from './cloudBackupWorker';
@@ -216,17 +223,18 @@ function createPhase5Db(seed: ReceiptSeed[] = []) {
         return (outbox.get(id) as T) ?? null;
       }
       if (
-        /SELECT next_retry_at[\s\S]*FROM sync_outbox[\s\S]*next_retry_at > \?/i.test(
-          sql
-        )
+        /SELECT receipt_id, intent_id, next_retry_at[\s\S]*FROM sync_outbox/i.test(sql)
       ) {
         const uid = String(params?.[0]);
-        const now = Number(params?.[1]);
-        const future = [...outbox.values()]
-          .filter((r) => r.user_id === uid && r.next_retry_at > now)
+        const pending = [...outbox.values()]
+          .filter((r) => r.user_id === uid)
           .sort((a, b) => a.next_retry_at - b.next_retry_at);
-        return future.length
-          ? ({ next_retry_at: future[0].next_retry_at } as T)
+        return pending.length
+          ? ({
+              receipt_id: pending[0].receipt_id,
+              intent_id: pending[0].intent_id,
+              next_retry_at: pending[0].next_retry_at,
+            } as T)
           : null;
       }
       if (/FROM receipts WHERE id = \?/i.test(sql)) {
@@ -1140,8 +1148,484 @@ describe('K. sync reliability — drain / cold-start / foreground / retry', () =
       const result = await __runCloudBackupFlushForTests(async () => ({}) as never);
       expect(result).toMatchObject({ ran: false, reason: 'restore_failed' });
       expect(upsertMock).not.toHaveBeenCalled();
+      expect(__getRetryTimerPendingForTests()).toBe(false);
     } finally {
       __resetCurrentUserCloudRestoreForTests();
     }
+  });
+
+  it('D4 — overdue outbox row wakes in the foreground without another receipt save', async () => {
+    jest.useFakeTimers();
+    const db = createPhase5Db([sampleReceipt({ id: 'r092' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'r092',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i092',
+      nowMs: 1,
+    });
+
+    let releaseFirst: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const upsertStarted = new Promise<void>((resolve) => {
+      upsertMock.mockImplementationOnce(async () => {
+        resolve();
+        await gate;
+        return { error: null };
+      });
+    });
+
+    const firstFlush = __runCloudBackupFlushForTests(async () => db as any);
+    await upsertStarted;
+    db.receipts.set('r093', sampleReceipt({ id: 'r093' }));
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'r093',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i093',
+      nowMs: Date.now(),
+    });
+    releaseFirst();
+    const first = await firstFlush;
+
+    expect(first.succeeded).toBe(1);
+    expect(db.outbox.has('r092')).toBe(false);
+    const stuck = db.outbox.get('r093');
+    expect(stuck?.attempt_count).toBe(0);
+    expect(stuck?.last_error).toBeNull();
+    expect(stuck && stuck.next_retry_at <= Date.now()).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+
+    const callsAfterFirst = upsertMock.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(1);
+
+    expect(db.outbox.has('r093')).toBe(false);
+    expect(upsertMock.mock.calls.length).toBe(callsAfterFirst + 1);
+    const payloads = upsertMock.mock.calls.map((call) => (call as unknown[])[0] as { id?: string });
+    expect(payloads.some((payload) => payload?.id === 'r093')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+  });
+
+  it('future retry waits for the deadline, then settles once and drops the timer', async () => {
+    jest.useFakeTimers();
+    const now = Date.now();
+    const db = createPhase5Db([sampleReceipt({ id: 'later' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'later',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-later',
+      nowMs: now + 30_000,
+    });
+    const before = upsertMock.mock.calls.length;
+    await __runCloudBackupFlushForTests(async () => db as any);
+    expect(upsertMock.mock.calls.length).toBe(before);
+    expect(db.outbox.has('later')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(29_000);
+    expect(db.outbox.has('later')).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(db.outbox.has('later')).toBe(false);
+    expect(upsertMock.mock.calls.length).toBe(before + 1);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+  });
+
+  it('reschedules to the earlier deadline, then back to the remaining row', async () => {
+    jest.useFakeTimers();
+    const now = Date.now();
+    const db = createPhase5Db([sampleReceipt({ id: 'row-a' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'row-a',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-a',
+      nowMs: now + 60_000,
+    });
+    await __runCloudBackupFlushForTests(async () => db as any);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+
+    db.receipts.set('row-b', sampleReceipt({ id: 'row-b' }));
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'row-b',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-b',
+      nowMs: now + 10_000,
+    });
+    await __runCloudBackupFlushForTests(async () => db as any);
+    expect(upsertMock).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(db.outbox.has('row-b')).toBe(false);
+    expect(db.outbox.has('row-a')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(50_000);
+    expect(db.outbox.has('row-a')).toBe(false);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    expect(upsertMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a retryable failure arms one future timer and does not spin', async () => {
+    jest.useFakeTimers();
+    const db = createPhase5Db([sampleReceipt({ id: 'backoff' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'backoff',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-backoff',
+      nowMs: 1,
+    });
+    upsertMock.mockImplementationOnce(async () => ({ error: { message: 'temp fail' } }));
+
+    const first = await __runCloudBackupFlushForTests(async () => db as any);
+    expect(first.failed).toBe(1);
+    const row = db.outbox.get('backoff');
+    expect(row?.attempt_count).toBe(1);
+    expect(row && row.next_retry_at > Date.now()).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+    const calls = upsertMock.mock.calls.length;
+
+    await jest.advanceTimersByTimeAsync(4_000);
+    expect(upsertMock.mock.calls.length).toBe(calls);
+    expect(db.outbox.has('backoff')).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(2_000);
+    expect(db.outbox.has('backoff')).toBe(false);
+    expect(upsertMock.mock.calls.length).toBe(calls + 1);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+  });
+
+  it('returning to the foreground flushes an overdue row without another save', async () => {
+    jest.useFakeTimers();
+    const now = Date.now();
+    const db = createPhase5Db([sampleReceipt({ id: 'resume' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'resume',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-resume',
+      nowMs: now + 30_000,
+    });
+    await __runCloudBackupFlushForTests(async () => db as any);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+
+    __handleAppStateForTests('background');
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    await jest.advanceTimersByTimeAsync(31_000);
+    expect(db.outbox.has('resume')).toBe(true);
+    expect(upsertMock).not.toHaveBeenCalled();
+
+    __handleAppStateForTests('active');
+    await requestCloudBackupFlush();
+    expect(db.outbox.has('resume')).toBe(false);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a timer armed for user A does not flush that row after switching to user B', async () => {
+    jest.useFakeTimers();
+    const now = Date.now();
+    const db = createPhase5Db([sampleReceipt({ id: 'owned-by-a' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'owned-by-a',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-a-only',
+      nowMs: now + 30_000,
+    });
+    startCloudBackupWorker(async () => db as any);
+    await requestCloudBackupFlush();
+    expect(db.outbox.has('owned-by-a')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+    const calls = upsertMock.mock.calls.length;
+
+    authState.userId = 'user-b';
+    emitAuthState();
+    await requestCloudBackupFlush();
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(db.outbox.has('owned-by-a')).toBe(true);
+    expect(upsertMock.mock.calls.length).toBe(calls);
+  });
+
+  it('restart flushes a persisted overdue row once auth is settled', async () => {
+    const db = createPhase5Db([sampleReceipt({ id: 'persisted' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'persisted',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-persisted',
+      nowMs: 1,
+    });
+    startCloudBackupWorker(async () => db as any);
+    await requestCloudBackupFlush();
+    expect(db.outbox.has('persisted')).toBe(false);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+  });
+
+  it('does not spin when an overdue row cannot advance retry metadata', async () => {
+    jest.useFakeTimers();
+    const db = createPhase5Db([]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'missing-local',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-missing',
+      nowMs: 1,
+    });
+    const first = await __runCloudBackupFlushForTests(async () => db as any);
+    expect(first.skipped).toBe(1);
+    expect(__getRetryTimerPendingForTests()).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(db.outbox.has('missing-local')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(db.outbox.has('missing-local')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it('a successful immediate backup leaves no retry timer', async () => {
+    const db = createPhase5Db([sampleReceipt({ id: 'immediate' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'immediate',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-immediate',
+      nowMs: 1,
+    });
+    const result = await __runCloudBackupFlushForTests(async () => db as any);
+    expect(result.succeeded).toBe(1);
+    expect(db.outbox.has('immediate')).toBe(false);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+  });
+
+  async function pauseAtFinalScheduleObservation(): Promise<{
+    reached: Promise<void>;
+    release: () => void;
+  }> {
+    let markReached: () => void = () => {};
+    let releasePause: () => void = () => {};
+    const reached = new Promise<void>((resolve) => {
+      markReached = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releasePause = resolve;
+    });
+    __setAfterFinalScheduleObservationForTests(async () => {
+      __setAfterFinalScheduleObservationForTests(null);
+      markReached();
+      await gate;
+    });
+    return { reached, release: () => releasePause() };
+  }
+
+  it('A1 — overdue insert after the empty final query latches a second pass', async () => {
+    const db = createPhase5Db([]);
+    const pause = await pauseAtFinalScheduleObservation();
+    const first = __runCloudBackupFlushForTests(async () => db as any);
+    await pause.reached;
+    expect(__isCloudBackupFlushInFlightForTests()).toBe(true);
+    expect(__getActiveCloudBackupFlushCountForTests()).toBe(1);
+
+    db.receipts.set('r094', sampleReceipt({ id: 'r094' }));
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'r094',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i094',
+      nowMs: Date.now(),
+    });
+    const joined = requestCloudBackupFlush();
+    expect(joined).toBe(first);
+
+    pause.release();
+    await first;
+    expect(__getCloudBackupPassCountForTests()).toBe(2);
+    expect(db.outbox.has('r094')).toBe(false);
+    expect(upsertMock).toHaveBeenCalledTimes(1);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    expect(__isCloudBackupFlushInFlightForTests()).toBe(false);
+    expect(__getActiveCloudBackupFlushCountForTests()).toBe(0);
+  });
+
+  it('timer fire during the final window latches a rerun without a second worker', async () => {
+    const db = createPhase5Db([]);
+    const pause = await pauseAtFinalScheduleObservation();
+    const first = __runCloudBackupFlushForTests(async () => db as any);
+    await pause.reached;
+    expect(__getActiveCloudBackupFlushCountForTests()).toBe(1);
+
+    db.receipts.set('due-late', sampleReceipt({ id: 'due-late' }));
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'due-late',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-due-late',
+      nowMs: Date.now(),
+    });
+    __fireScheduledOutboxWakeupForTests();
+    expect(__getActiveCloudBackupFlushCountForTests()).toBe(1);
+    expect(__isCloudBackupFlushInFlightForTests()).toBe(true);
+
+    pause.release();
+    await first;
+    expect(__getCloudBackupPassCountForTests()).toBe(2);
+    expect(db.outbox.has('due-late')).toBe(false);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    expect(__getActiveCloudBackupFlushCountForTests()).toBe(0);
+  });
+
+  it('several flush requests during one pass coalesce into one fresh pass', async () => {
+    const db = createPhase5Db([sampleReceipt({ id: 'held' })]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'held',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-held',
+      nowMs: 1,
+    });
+    const pause = await pauseAtFinalScheduleObservation();
+    const first = __runCloudBackupFlushForTests(async () => db as any);
+    await pause.reached;
+    const joined = [
+      requestCloudBackupFlush(),
+      requestCloudBackupFlush(),
+      requestCloudBackupFlush(),
+    ];
+    expect(joined.every((promise) => promise === first)).toBe(true);
+    expect(__getActiveCloudBackupFlushCountForTests()).toBe(1);
+    pause.release();
+    await first;
+    expect(__getCloudBackupPassCountForTests()).toBe(2);
+    expect(db.outbox.has('held')).toBe(false);
+  });
+
+  it('a request during the rerun pass latches one more pass', async () => {
+    const db = createPhase5Db([]);
+    let phase = 0;
+    let releaseSecond: () => void = () => {};
+    let markSecondPaused: () => void = () => {};
+    const secondPaused = new Promise<void>((resolve) => {
+      markSecondPaused = resolve;
+    });
+    __setAfterFinalScheduleObservationForTests(async () => {
+      phase += 1;
+      if (phase === 1) {
+        db.receipts.set('first-late', sampleReceipt({ id: 'first-late' }));
+        await replaceSyncOutboxIntent(db as any, {
+          receiptId: 'first-late',
+          userId: 'user-a',
+          operation: 'upsert',
+          intentId: 'i-first-late',
+          nowMs: Date.now(),
+        });
+        requestCloudBackupFlush();
+        return;
+      }
+      if (phase === 2) {
+        db.receipts.set('second-late', sampleReceipt({ id: 'second-late' }));
+        await replaceSyncOutboxIntent(db as any, {
+          receiptId: 'second-late',
+          userId: 'user-a',
+          operation: 'upsert',
+          intentId: 'i-second-late',
+          nowMs: Date.now(),
+        });
+        requestCloudBackupFlush();
+        __setAfterFinalScheduleObservationForTests(null);
+        markSecondPaused();
+        await new Promise<void>((resolvePause) => {
+          releaseSecond = resolvePause;
+        });
+      }
+    });
+
+    const first = __runCloudBackupFlushForTests(async () => db as any);
+    await secondPaused;
+    expect(__getCloudBackupPassCountForTests()).toBe(2);
+    expect(__isCloudBackupFlushInFlightForTests()).toBe(true);
+    releaseSecond();
+    await first;
+    expect(__getCloudBackupPassCountForTests()).toBe(3);
+    expect(db.outbox.has('first-late')).toBe(false);
+    expect(db.outbox.has('second-late')).toBe(false);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+  });
+
+  it('an unexpected pass failure does not drop a latched rerun or poison single-flight', async () => {
+    const db = createPhase5Db([]);
+    let release: () => void = () => {};
+    const reached = new Promise<void>((resolve) => {
+      __setBeforeCloudBackupPassWorkForTests(async () => {
+        resolve();
+        await new Promise<void>((resolvePause) => {
+          release = resolvePause;
+        });
+        db.receipts.set('after-throw', sampleReceipt({ id: 'after-throw' }));
+        await replaceSyncOutboxIntent(db as any, {
+          receiptId: 'after-throw',
+          userId: 'user-a',
+          operation: 'upsert',
+          intentId: 'i-after-throw',
+          nowMs: Date.now(),
+        });
+        requestCloudBackupFlush();
+        __throwNextCloudBackupPassForTests();
+      });
+    });
+
+    const first = __runCloudBackupFlushForTests(async () => db as any);
+    await reached;
+    release();
+    await first;
+    expect(__getCloudBackupPassCountForTests()).toBe(2);
+    expect(db.outbox.has('after-throw')).toBe(false);
+    expect(__isCloudBackupFlushInFlightForTests()).toBe(false);
+
+    db.receipts.set('later-req', sampleReceipt({ id: 'later-req' }));
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'later-req',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-later-req',
+      nowMs: 1,
+    });
+    await requestCloudBackupFlush();
+    expect(__getCloudBackupPassCountForTests()).toBe(3);
+    expect(db.outbox.has('later-req')).toBe(false);
+    expect(__isCloudBackupFlushInFlightForTests()).toBe(false);
+  });
+
+  it('explicit flush after overdue suppression runs one fresh pass and does not spin', async () => {
+    jest.useFakeTimers();
+    const db = createPhase5Db([]);
+    await replaceSyncOutboxIntent(db as any, {
+      receiptId: 'stuck',
+      userId: 'user-a',
+      operation: 'upsert',
+      intentId: 'i-stuck',
+      nowMs: 1,
+    });
+    await __runCloudBackupFlushForTests(async () => db as any);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    const passesAfterSuppression = __getCloudBackupPassCountForTests();
+
+    await requestCloudBackupFlush();
+    expect(__getCloudBackupPassCountForTests()).toBe(passesAfterSuppression + 1);
+    expect(db.outbox.has('stuck')).toBe(true);
+    expect(__getRetryTimerPendingForTests()).toBe(false);
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(__getCloudBackupPassCountForTests()).toBe(passesAfterSuppression + 1);
   });
 });
